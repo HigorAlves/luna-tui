@@ -30,7 +30,7 @@ import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } 
 import { containerRunning, removeContainer } from "../adapters/docker/docker.ts";
 import type { Credentials } from "../adapters/credentials/index.ts";
 import { type RunSpan, type Telemetry, noTelemetry } from "./telemetry.ts";
-import { type DecisionTruth, escalationResumedTruth, findingTruth, planTruth, sizeTruth, triageConfirmTruth, triageEditTruth, triageOutcomeTruth, worthLearningTruth } from "./decision-truth.ts";
+import { type DecisionTruth, QUESTIONS_OF, escalationResumedTruth, findingTruth, planTruth, sizeTruth, triageConfirmTruth, triageEditTruth, triageOutcomeTruth, worthLearningTruth } from "./decision-truth.ts";
 import { fallbackCandidates } from "../domain/engine-choice.ts";
 import { type ConfigChange, DECLINE_DAYS, type ProposalInput, choicesOf, renderProposal } from "../domain/config-proposal.ts";
 import type { EngineBudgetWatch } from "./engine-gates.ts";
@@ -1994,6 +1994,9 @@ export class Pipeline {
       const task = await this.get(taskId);
       const recordId = task.classification?.recordId;
       const edited = new Set((task.record?.editedFields ?? []).flatMap((f) => (f === "kind" ? ["kind"] : f === "typeOfWork" ? ["type_of_work"] : f === "size" ? ["size"] : f === "riskPrelim" ? ["risk_prelim"] : [])));
+      // A field the council settled is not a person's reading either, even when it re-read above its bar: only what a person saw and let stand confirms.
+      const settledByCouncil = (task.record?.qa ?? []).flatMap((q) => (q.by === "council" && q.field ? ((QUESTIONS_OF as Record<string, string[]>)[q.field] ?? []) : []));
+      const skipped = new Set([...edited, ...settledByCouncil]);
       const edits = task.record ? triageEditTruth(task.record) : {};
       if (gate.kind === "awaiting_approval" && recordId && (requested.outcome === "conversation" || requested.outcome === "archive")) {
         await truth.learned({ pack: "triage_signals", recordId, label: { ...edits, ...triageOutcomeTruth(requested.outcome, decision) }, kind: "person", source: decision === "sent_back" ? "triage_sent_back" : "triage_outcome_approved", taskId });
@@ -2001,7 +2004,7 @@ export class Pipeline {
         // An approval that left the signals alone confirms the ones the machine acted on; a correction stands in for its own question.
         const policy = await this.policyFor(task.repoPath);
         const verdicts = triageVerdicts(task.classification, policy.factory.triage, { ...(policy.decisions.triage_signals ? { overrides: policy.decisions.triage_signals } : {}) });
-        await truth.learned({ pack: "triage_signals", recordId, label: { ...triageConfirmTruth(task.classification, verdicts, edited), ...edits }, kind: "person", source: "plan_approved", taskId });
+        await truth.learned({ pack: "triage_signals", recordId, label: { ...triageConfirmTruth(task.classification, verdicts, skipped), ...edits }, kind: "person", source: "plan_approved", taskId });
       }
       if (gate.kind === "awaiting_approval" && isSplitOutcome(requested.outcome)) {
         // A split approved as proposed confirms split_check; sent back, rejected or kept whole contradicts it.

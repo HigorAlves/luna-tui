@@ -163,7 +163,7 @@ export class DecisionTruth implements TruthSink {
 // ---- triage_signals: what a person's correction, a one-tap reply or archive, or an approval with no edit says about the signals ----
 
 /** The questions each field of the record answers. */
-const QUESTIONS_OF: Record<TriageField, string[]> = { kind: ["kind"], size: ["size"], urgency: ["who", "what", "impact", "time", "demand"], risk: ["risk_prelim"], archive: ["archive"] };
+export const QUESTIONS_OF: Record<TriageField, string[]> = { kind: ["kind"], size: ["size"], urgency: ["who", "what", "impact", "time", "demand"], risk: ["risk_prelim"], archive: ["archive"] };
 /** The record fields a person may correct, and the question each one corrects (priority has no question of its own: it is five sub-scores). */
 const EDIT_QUESTION: Partial<Record<NonNullable<TriageRecord["editedFields"]>[number], { question: string; value: (r: Partial<TriageRecord>) => string | undefined }>> = {
   kind: { question: "kind", value: (r) => r.kind },

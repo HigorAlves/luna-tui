@@ -31,6 +31,8 @@ interface Settled {
   answer: string;
   confidence: number;
   evidence: string[];
+  /** The machine's field this question was (`kind`, `size`, `risk`); absent for the agent's own questions. */
+  field?: string;
 }
 
 /** Results of an entry that ran again after the council settled something: the stage is over for the entry that asked. */
@@ -95,7 +97,7 @@ function recordOf(context: StageContext, result: StageResult, task: TaskRow, dec
       const text = typeof answer === "string" ? answer : null;
       const by = council.get(question);
       // The council's mark stays only while the answer is the council's: a person who answered the same question owns it.
-      return by && by.answer === text ? { question, answer: text, by: "council" as const, evidence: by.evidence } : { question, answer: text };
+      return by && by.answer === text ? { question, answer: text, by: "council" as const, evidence: by.evidence, ...(by.field ? { field: by.field } : {}) } : { question, answer: text };
     });
   });
   return composeRecord({
@@ -182,7 +184,7 @@ export function withTriageSignals(triage: StageRunner, deps: TriageSignalDeps): 
         if (!given || given.answer === null || given.answer.trim() === "") return [];
         // A machine question has its field's own bar (the repo's per-question bar first); the agent's questions have the council's.
         const own = q.field === null ? undefined : (repo?.decisions?.triage_signals?.[QUESTION_OF[q.field]!]?.proceed ?? caps.confidence[q.field as keyof typeof caps.confidence]);
-        return given.confidence >= (own ?? councilCaps.bar) ? [{ question: q.question.slice(0, MAX_ANSWER_CHARS), answer: given.answer.slice(0, MAX_ANSWER_CHARS), confidence: given.confidence, evidence: given.evidence }] : [];
+        return given.confidence >= (own ?? councilCaps.bar) ? [{ question: q.question.slice(0, MAX_ANSWER_CHARS), answer: given.answer.slice(0, MAX_ANSWER_CHARS), confidence: given.confidence, evidence: given.evidence, ...(q.field === null ? {} : { field: q.field }) }] : [];
       });
       if (settled.length === 0) return null;
       council.settled.push(...settled);

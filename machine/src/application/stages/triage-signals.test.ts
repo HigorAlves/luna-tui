@@ -370,7 +370,7 @@ describe("withTriageSignals and the question council", () => {
     expect(issues.map((i) => i.answers ?? [])).toEqual([[], [{ question: KIND, answer: "bug" }]]);
     expect(decisions).toEqual([[expect.objectContaining({ answers: { [KIND]: "bug" } })]]);
     const record = TriageRecord.parse(saved.find((p) => p.record)!.record);
-    expect(record.qa).toEqual([{ question: KIND, answer: "bug", by: "council", evidence: ["src/app.ts:12"] }]);
+    expect(record.qa).toEqual([{ question: KIND, answer: "bug", by: "council", field: "kind", evidence: ["src/app.ts:12"] }]);
   });
 
   it("asks only what is left, and tells the person what the council settled so they can overrule it", async () => {
