@@ -1,17 +1,20 @@
 // Against Docker, for real: a container on a card network can reach only what its proxy lets through. Skipped, with the reason, when
 // docker or the test image is not there: RUNNER_TEST_IMAGE names a runner image built under a test tag
 // (`RUNNER_REPO=hardness-runner-test-11c pnpm --filter @hardness/machine runner:build`, never `hardness-runner:dev`).
+// RUNNER_TEST_RUNTIME (`runsc`, gVisor) runs every probe container on that runtime, the way the sandbox policy runs an untrusted card;
+// the proxy stays on runc, as in production. See docs/runbooks/turn-on-gvisor.md.
 // Everything this file makes is named hardness-egress-test-*, hardness-card-test-* or labelled, and removed in afterAll, also when a test fails.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { execInSandbox } from "./docker.ts";
+import { DEFAULT_SANDBOX_SIZE, execInSandbox } from "./docker.ts";
 import { type CardNetwork, openCardNetwork } from "./egress.ts";
 
 const image = process.env.RUNNER_TEST_IMAGE ?? "";
+const runtime = process.env.RUNNER_TEST_RUNTIME;
 const docker = (...args: string[]): string => execFileSync("docker", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 60_000 }).trim();
 const tryDocker = (...args: string[]): string | null => {
   try {
@@ -79,12 +82,17 @@ const http = (url) => new Promise((resolve) => {
 
 type Probe = { ok?: boolean; code?: string; address?: string; status?: string; body?: string };
 const work = ready ? mkdtempSync(join(tmpdir(), "egress-test-")) : "";
-if (ready) writeFileSync(join(work, "probe.js"), PROBE);
+// The probe holds no secret, so its folder is 0755: gVisor shows files that Docker Desktop shares from macOS as root's, and a stage's
+// uid could not enter a 0700 one (a native Linux disk keeps their owner).
+if (ready) {
+  chmodSync(work, 0o755);
+  writeFileSync(join(work, "probe.js"), PROBE);
+}
 const opened: CardNetwork[] = [];
 
 /** Runs the probe script in a container on `net`; its results, one per op. */
 async function probe(net: CardNetwork, ops: unknown[], name: string): Promise<Probe[]> {
-  const result = await execInSandbox({ name: `hardness-egress-test-probe-${tag}-${name}`, image, worktree: work, argv: ["/opt/luna/bin/node", "/work/probe.js"], env: { PROBE: JSON.stringify(ops), PROXY: net.dns }, cardNetwork: net }, { timeoutMs: 90_000 });
+  const result = await execInSandbox({ name: `hardness-egress-test-probe-${tag}-${name}`, image, worktree: work, argv: ["/opt/luna/bin/node", "/work/probe.js"], env: { PROBE: JSON.stringify(ops), PROXY: net.dns }, cardNetwork: net, ...(runtime ? { limits: { ...DEFAULT_SANDBOX_SIZE, runtime } } : {}) }, { timeoutMs: 90_000 });
   const line = result.stdout.split("\n").find((l) => l.startsWith("RESULT "));
   if (!line) throw new Error(`the probe printed no result: ${result.stdout.slice(-300)} ${result.stderr.slice(-300)}`);
   return JSON.parse(line.slice("RESULT ".length)) as Probe[];
@@ -125,6 +133,11 @@ describe.skipIf(!ready)("a container on a card network, against Docker", () => {
     rmSync(work, { recursive: true, force: true });
   }, 120_000);
 
+  it.runIf(runtime === "runsc")("runs the probe inside gVisor when RUNNER_TEST_RUNTIME is runsc", async () => {
+    const result = await execInSandbox({ name: `hardness-egress-test-probe-${tag}-kernel`, image, worktree: work, argv: ["/opt/luna/bin/node", "-e", "console.log(require('node:os').release())"], cardNetwork: list, limits: { ...DEFAULT_SANDBOX_SIZE, runtime: "runsc" } }, { timeoutMs: 90_000 });
+    expect(result.stdout).toContain("gvisor");
+  });
+
   it("reaches no outside address directly: IPv4 and IPv6 literals fail", async () => {
     const [v4, v6, metadata] = await probe(list, [{ op: "tcp", host: "1.1.1.1", port: 443 }, { op: "tcp", host: "2606:4700:4700::1111", port: 443 }, { op: "tcp", host: "169.254.169.254", port: 80 }], "direct");
     for (const r of [v4, v6, metadata]) expect(r!.ok).toBe(false);
@@ -133,6 +146,8 @@ describe.skipIf(!ready)("a container on a card network, against Docker", () => {
   it("resolves no outside name, and the lookup shows in blocked() as a dns row", async () => {
     const [looked] = await probe(list, [{ op: "lookup", name: "outside.example.org" }], "dns");
     expect(looked!.ok).toBe(false);
+    // gVisor's own network stack does not run Docker's embedded resolver, so the query fails before it reaches the proxy: no row to show.
+    if (runtime === "runsc") return;
     const rows = await list.blocked();
     expect(rows).toContainEqual(expect.objectContaining({ host: "outside.example.org", via: "dns", port: 53 }));
   }, 120_000);
