@@ -1164,6 +1164,13 @@ describe("planStage's council", () => {
     expect(result.detail).toMatchObject({ council: { passed: false, rounds: 1, transcript: [{ member: "security", summary: "nothing to add" }, { member: "second", round: 1, summary: "did not answer: engine down", findings: [] }] } });
   });
 
+  it("does not convene for a plan that plan_check still refuses after its retries: a person reads that plan", async () => {
+    const { run, calls } = setup({ answers: { plan_check: [bad, bad, bad] } }, cfg());
+    const result = await run(context({ task: highTask }));
+    expect(councilCalls(calls)).toEqual([]);
+    expect(result.detail).not.toHaveProperty("council");
+  });
+
   it("skips the fast lane, and a council that is switched off", async () => {
     const fastHigh = { ...fastTask, record: { ...fastTask.record, risk: "high", size: "L" } } as unknown as TaskRow;
     const fast = setup({}, cfg());

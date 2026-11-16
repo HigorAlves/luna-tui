@@ -560,7 +560,9 @@ export function planStage(deps: PlanDeps): StageRunner {
     const councilCfg: CouncilConfig = { ...FACTORY_DEFAULTS.plan.council, ...repoPlan?.council };
     const councilFiles = (finalPlan?.steps ?? []).flatMap((s) => s.files ?? s.touchpoints);
     let council: { passed: boolean; rounds: number; transcript: CouncilTurn[] } | undefined;
-    if (plan && councilDue(controlPlaneFiles(councilFiles).length > 0 ? "high" : level, task.classification?.sizeBucket ?? task.record?.size, councilCfg, lane === "fast")) {
+    // A plan the check still refuses, or cannot judge, is flagged for a person already: the council has nothing to add.
+    const checked = planCheck.problems.length === 0 && planCheck.verdict !== "ask";
+    if (plan && checked && councilDue(controlPlaneFiles(councilFiles).length > 0 ? "high" : level, task.classification?.sizeBucket ?? task.record?.size, councilCfg, lane === "fast")) {
       const transcript: CouncilTurn[] = [];
       /** One member's turn: its answer, or a turn that says it did not answer. */
       const turn = async (who: Member, round: 1 | 2, current: NonNullable<typeof plan>): Promise<CouncilTurn> => {
