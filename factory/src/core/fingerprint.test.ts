@@ -73,7 +73,7 @@ describe("runInfo with a mask", () => {
 
 describe("sdkInfo", () => {
   it("reads an SDK's version from its own package.json", () => {
-    expect(sdkInfo("eve")).toEqual({ name: "eve", version: "1.0.0-rc.1" });
+    expect(sdkInfo("eve")).toEqual({ name: "eve", version: "1.0.0" });
     expect(sdkInfo("@anthropic-ai/claude-agent-sdk").version).toMatch(/^\d+\.\d+\.\d+/);
   });
 

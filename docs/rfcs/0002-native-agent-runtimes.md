@@ -52,7 +52,7 @@ Every pack runs on the Claude Agent SDK today, and the pack names a Claude model
 
 ### What the other SDKs offer (as read on 2026-11-02)
 
-- **eve** (`eve@1.0.0-rc.1`): an agent is a directory (`agent/agent.ts`, `instructions.md`, `skills/`, `tools/`, `subagents/`, `hooks/`, `sandbox/`). `chatgpt()` from `eve/models/openai` bills the ChatGPT subscription; with `codex` on the PATH it gets tokens from `codex app-server`, otherwise it needs an OS keychain. Subagents each set their own model. A client turn takes an `outputSchema` and the server validates the result. eve is server-shaped: a run is a session against `eve start` through `eve/client`.
+- **eve** (`eve@1.0.0`): an agent is a directory (`agent/agent.ts`, `instructions.md`, `skills/`, `tools/`, `subagents/`, `hooks/`, `sandbox/`). `chatgpt()` from `eve/models/openai` bills the ChatGPT subscription; with `codex` on the PATH it gets tokens from `codex app-server`, otherwise it needs an OS keychain. Subagents each set their own model. A client turn takes an `outputSchema` and the server validates the result. eve is server-shaped: a run is a session against `eve start` through `eve/client`.
 - **Jev** (`@typesafe-ai/sdk`): a decision model, not a chat model. `TypeSafeClient.systemOne({ state, questions })` answers typed choice, score and yes/no questions (yes/no is `noul` on the wire). It reads `TYPESAFE_API_KEY` and honours `TYPESAFE_BASE_URL`. These names come from secondary sources; the spike confirms them.
 
 ## Proposed design
@@ -243,7 +243,7 @@ eve ships `decide()` defaulting to Jev. Rejected: it routes through AI Gateway, 
 ## Risks & unknowns
 
 - **TypeSafe SDK surface.** An account is available; the SDK names above come from secondary sources, and the spike confirms them.
-- **eve is a release candidate** (`1.0.0-rc.1`). Pin it and keep it behind `Runtime`.
+- **eve is a release candidate** (`1.0.0`). Pin it and keep it behind `Runtime`.
 - **No verified pre-tool hook in eve.** If the spike cannot block a call before it runs, eve's built-in `bash` and `write_file` are replaced with guarded tools; until then writable packs stay Claude-only.
 - **Codex auth in a container.** Refresh rewrites the auth file; concurrent stages must not share one copy.
 - **eve start-up per stage** needs measuring.
@@ -267,7 +267,7 @@ Run in a container built on `hardness-runner:dev` with the stage's own flags (re
 | Refuse a tool call before it runs | Yes, through `approval` | A `defineTool` wrapper over `bash` and `write_file` whose `approval` returns `{ type: "denied", reason }`; the call never starts and the model gets the reason. Hooks fire after the fact and can only cancel the turn |
 | Commands in `/work` without nested Docker | Yes | A custom `defineSandboxProvider` (~90 lines) with `workspaceRoot: "/work"`, running `bash -lc` children of the server |
 
-eve 1.0.0-rc.1 (Node 24+), ai 7.0.161. The server is healthy in under 0.7 s and a whole one-turn container exits in about 2 s warm. The image grows by ~700 MB on disk (~185 MB compressed), 381 MB of it the Codex CLI.
+eve 1.0.0 (Node 24+), ai 7.0.161. The server is healthy in under 0.7 s and a whole one-turn container exits in about 2 s warm. The image grows by ~700 MB on disk (~185 MB compressed), 381 MB of it the Codex CLI.
 
 What the eve runtime has to do because of them:
 
