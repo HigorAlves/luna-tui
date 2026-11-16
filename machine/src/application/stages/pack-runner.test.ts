@@ -1185,6 +1185,14 @@ describe("the engine a stage runs on", () => {
       expect(note).toHaveBeenCalledWith("triage was asked to run at low effort and reported none: the runner image may be older than this build (pnpm images)");
     });
 
+    it("says nothing on a re-attached run: its container started with the input of before the restart, not the luna.yaml of now", async () => {
+      asked();
+      const note = vi.fn(async (_text: string) => {});
+      const result = await runAgent(deps(fakeSandbox(output({ run: runInfo("high") }))), { ...context("triage"), note, resume: { container: "hardness-abcd1234-triage-1", inputCommit: null, engine: "claude:opus" } }, "triage");
+      expect(note).not.toHaveBeenCalled();
+      expect(result.events?.find((e) => e.kind === "engine")).toBeUndefined();
+    });
+
     it("says nothing when the result ran at the effort asked for, or no effort was set", async () => {
       asked();
       const note = vi.fn(async (_text: string) => {});
