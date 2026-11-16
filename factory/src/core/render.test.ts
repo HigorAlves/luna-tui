@@ -522,6 +522,28 @@ describe("renderPrompt", () => {
     expect(renderPrompt({ pack: PACKS.foreman, input, template })).toContain("now (none)\nquestion:\n(none)\nhistory:\n(none)\ncards:\n(none)\npacks:\n(none)");
   });
 
+  it("shows foreman a card's flags, council, settled questions and trust, and the pending approvals", () => {
+    const template = "cards:\n{{context.foreman.cards}}\npending:\n{{context.foreman.pending}}";
+    const card = { id: "t1", title: "Plan it", repo: "luna", state: "awaiting_plan", column: "plan", gate: "awaiting_approval", gateSummary: null, gateOutcome: null, route: "feature", approvalId: null, escalation: null, questions: [], engines: {}, updatedAt: "2026-11-16T10:00:00.000Z" };
+    const render = (cards: unknown[], pending?: unknown[]) =>
+      renderQuoted({ pack: PACKS.foreman, input: { ...input, pack: "foreman", stage: "foreman", context: { projectContext: null, foreman: { question: "q", history: [], board: { now: "n", cards, packs: [], ...(pending ? { pending } : {}) } } } } as never, template });
+    const prompt = render([{ ...card, flagged: ["coverage", "council.security"], council: { passed: false, open: 2 }, settledByCouncil: 1, trust: "untrusted" }], [{ repo: "luna", kind: "base", ref: "node:24" }, { repo: "site", kind: "dockerfile", ref: "Dockerfile" }]);
+    expect(prompt).toContain("| t1 · luna · awaiting_plan · plan · gate awaiting_approval · flagged: coverage, council.security · council: 2 findings open · 1 question settled by the council · untrusted · Plan it");
+    expect(prompt).toContain("| luna: base image node:24 awaits approval\n| site: Dockerfile Dockerfile awaits approval");
+    expect(render([{ ...card, council: { passed: true, open: 0 }, trust: "trusted" }])).toContain("| t1 · luna · awaiting_plan · plan · gate awaiting_approval · council: passed · Plan it");
+    expect(render([card])).toContain("pending:\n(none)");
+  });
+
+  it("tells foreman how many open cards the board left out", () => {
+    const template = "left out: {{context.foreman.truncated}}";
+    const board = { now: "2026-11-16T12:00:00.000Z", cards: [], packs: [] };
+    const render = (truncated?: number) => renderPrompt({ pack: PACKS.foreman, input: { ...input, pack: "foreman", stage: "foreman", context: { projectContext: null, foreman: { question: "q", history: [], board: { ...board, truncated } } } }, template });
+    expect(render(3)).toContain("left out: 3");
+    expect(render(0)).toContain("left out: 0");
+    expect(render()).toContain("left out: 0");
+    expect(renderPrompt({ pack: PACKS.foreman, input, template })).toContain("left out: (none)");
+  });
+
   it("renders the issue for jira_intake: the facts line, the description, the comments and the repo", () => {
     const template = "issue:\n{{context.jira.issue}}\ndescription:\n{{context.jira.description}}\ncomments:\n{{context.jira.comments}}\nrepo: {{context.jira.repoPath}}";
     const jira = { key: "PLAT-123", url: "https://acme.atlassian.net/browse/PLAT-123", summary: "Login page", description: "Users sign in.\n\n- bad password errors", issueType: "Story", priority: "High", labels: ["luna"], dueAt: "2026-10-31", comments: ["Marta: please", "Lee: by Friday"], repoPath: "/work" };

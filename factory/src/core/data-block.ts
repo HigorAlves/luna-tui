@@ -54,7 +54,7 @@ export type VariableKind = "machine" | "line" | "block";
 // Only what the machine alone writes (a constant, a count, an enum, a hash, a path it chose). Traced one by one: the checks and QA targets
 // are the repository's own text, the scenario tests and the video's narration and sheets carry names a model or a tool wrote, the coverage
 // report lists paths from a report the container wrote, and a classification holds labels a model answered: all foreign.
-const machine = ["agent", "attempt", "skills", "plan.risk", "context.plan.risk", "context.baseCommit", "context.testsCommit", "context.docsOnly", "context.unlockedTests.note", "context.browserScenarios", "context.plan.docsOnly", "context.graph", "context.chat.source", "context.jira.repoPath", "plan.fallback", "context.video.budgetS", "context.conversation.relation", "context.conversation.note", "context.foreman.now", "context.foreman.packs"];
+const machine = ["agent", "attempt", "skills", "plan.risk", "context.plan.risk", "context.baseCommit", "context.testsCommit", "context.docsOnly", "context.unlockedTests.note", "context.browserScenarios", "context.plan.docsOnly", "context.graph", "context.chat.source", "context.jira.repoPath", "plan.fallback", "context.video.budgetS", "context.conversation.relation", "context.conversation.note", "context.foreman.now", "context.foreman.truncated", "context.foreman.packs"];
 const line = ["task.title", "task.branch", "task.goal", "task.classification", "context.jira.classification", "context.slack.me", "context.chat.me", "context.eval.pack", "context.eval.case"];
 const block = [
   "task.description", "task.criteria", "task.record", "task.evidence", "plan.brief", "plan.criteria", "plan.criteria.ids", "plan.assumptions", "plan.slices",
@@ -63,7 +63,7 @@ const block = [
   "context.sweepFailures", "context.blastRadius", "context.checks", "context.scenarioTests", "context.testsCommit.files", "context.unlockedTests", "context.coverage", "context.qaTargets", "context.video.narration", "context.video.sheets", "decisions", "priorFindings", "context.projectContext", "context.testCases", "context.ci", "context.review", "context.threads", "context.ship", "context.retro",
   "context.video.scenarios", "context.video.steps", "context.video.chapters", "context.video.target", "context.video.timeline", "context.video.report", "context.video.transcript", "context.video.fixCards",
   "context.slack.watches", "context.slack.rules", "context.slack.items", "context.chat.rules", "context.chat.items",
-  "context.foreman.question", "context.foreman.history", "context.foreman.cards",
+  "context.foreman.question", "context.foreman.history", "context.foreman.cards", "context.foreman.pending",
   "context.split", "context.jira.issue", "context.jira.description", "context.jira.comments", "context.intake", "context.ticket", "context.check", "context.propose", "context.factCandidates",
   "context.conversation.thread", "context.conversation.card", "context.conversation.evidence", "context.conversation.docs", "context.conversation.tone",
   "context.eval.rubric", "context.eval.input", "context.eval.checks", "context.eval.answer",
@@ -143,6 +143,7 @@ export const CAPS: Readonly<Record<string, number>> = {
   "context.foreman.question": 2_000,
   "context.foreman.history": 24_000,
   "context.foreman.cards": 32_000,
+  "context.foreman.pending": 4_000,
   // The video packs.
   "context.video.scenarios": 200_000,
   "context.video.steps": 32_000,

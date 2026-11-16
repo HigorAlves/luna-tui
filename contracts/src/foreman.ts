@@ -42,6 +42,11 @@ export function foremanActionProblem(action: ForemanAction, board: ForemanContex
   const card = board.cards.find((c) => c.id === action.taskId);
   if (!card) return `card ${action.taskId} is not on the board`;
   if (action.kind === "approve" && card.gate === null) return `card ${card.id} has no gate to approve`;
+  if (card.route === "config" && (action.kind === "archive" || action.kind === "abort" || action.kind === "send_back")) {
+    return `card ${card.id}: a config change is not declined from here (an archive is not a decline, and the proposal would come back); ${action.kind} is refused`;
+  }
+  if (action.kind === "approve" && (card.flagged?.length ?? 0) > 0) return `card ${card.id} has flagged findings (${card.flagged!.join(", ")}); approving it from here is refused`;
+  if (action.kind === "approve" && (card.council?.open ?? 0) > 0) return `card ${card.id} has an open council finding; approving it from here is refused`;
   if (action.kind === "approve") {
     const outward = card.route === "config" ? "a config change" : OWN_FLOW_GATES.has(card.gateOutcome ?? "") ? `the ${card.gateOutcome} gate` : null;
     if (outward !== null) return `card ${card.id}: ${outward} has its own confirm flow on the board; approving it from here is refused`;

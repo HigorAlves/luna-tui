@@ -1,6 +1,6 @@
 import type { HostRunInput, PackRunsPort } from "../../application/pack-runs.ts";
 import { RunFailedError } from "../../application/pack-runs.ts";
-import { type RunResult } from "@hardness/contracts";
+import { type RepoHealth, type RunResult } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -27,7 +27,7 @@ interface Call {
   client: string | null;
 }
 
-function setup(first: Record<string, unknown> | Error) {
+function setup(first: Record<string, unknown> | Error, repoHealth?: () => Promise<RepoHealth[]>) {
   let answer = first;
   const calls: Call[] = [];
   const runs: PackRunsPort = {
@@ -38,7 +38,7 @@ function setup(first: Record<string, unknown> | Error) {
     },
   };
   const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
-  const app = createApp({ db, pipeline, bus: new Bus(), runs });
+  const app = createApp({ db, pipeline, bus: new Bus(), runs, ...(repoHealth ? { repoHealth } : {}) });
   const ask = (body: unknown) => app.request("/foreman", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   return { calls, pipeline, app, ask, willAnswer: (next: Record<string, unknown>) => void (answer = next) };
 }
@@ -98,6 +98,29 @@ describe("POST /foreman", () => {
     willAnswer({ reply: "", actions: [{ kind: "answer", taskId: task.id, why: "w", answers: { q1: "csv" } }, { kind: "start", taskId: plain.id, why: "w" }] });
     const body = await (await ask({ question: "go" })).json();
     expect(body.actions.map((a: { taskId: string; approvalId: string | null }) => [a.taskId, a.approvalId])).toEqual([[task.id, row!.id], [plain.id, null]]);
+  });
+
+  it("tells the foreman which base images and Dockerfiles wait for approval, from the repos' health", async () => {
+    const health = (repo: string, image: Partial<RepoHealth["image"]>): RepoHealth => ({ repo, image: { inUse: "img", base: null, builtAt: null, lastFailure: null, pendingBase: null, ...image }, graph: { on: false, commit: null, behind: null, graphify: null, builtAt: null, building: false, lastFailure: null } }) as RepoHealth;
+    const { calls, ask } = setup({ reply: "", actions: [] }, async () => [
+      health("/work/luna", { pendingBase: "node:24" }),
+      health("/work/site", { pendingDockerfile: { path: "ci/Dockerfile", key: "k", changed: false } }),
+      health("/work/quiet", {}),
+    ]);
+    await ask({ question: "what waits?" });
+    const board = (calls[0]!.input.context as { foreman: { board: { pending: unknown } } }).foreman.board;
+    expect(board.pending).toEqual([
+      { repo: "luna", kind: "base", ref: "node:24" },
+      { repo: "site", kind: "dockerfile", ref: "ci/Dockerfile" },
+    ]);
+  });
+
+  it("goes on with no pending list when the repos' health cannot be read", async () => {
+    const { calls, ask } = setup({ reply: "", actions: [] }, async () => {
+      throw new Error("boom");
+    });
+    expect((await ask({ question: "x" })).status).toBe(200);
+    expect((calls[0]!.input.context as { foreman: { board: { pending: unknown } } }).foreman.board.pending).toEqual([]);
   });
 
   it("rejects a body with no question, a long history or a bad turn", async () => {

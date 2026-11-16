@@ -2259,7 +2259,10 @@ pub(crate) fn render_foreman(frame: &mut Frame, app: &App, state: &crate::forema
     match state.phase {
         Phase::Typing => {
             if !state.reply.is_empty() {
-                lines.push(Line::from(Span::from(state.reply.clone())));
+                lines.push(Line::from(Span::from(crate::text::sanitize(
+                    &state.reply,
+                    false,
+                ))));
                 lines.push(Line::default());
             }
             lines.push(Line::from(vec![
@@ -2271,7 +2274,10 @@ pub(crate) fn render_foreman(frame: &mut Frame, app: &App, state: &crate::forema
             Span::from("The foreman is reading the board…").fg(c(SUBTEXT0)),
         )),
         Phase::Walk => {
-            lines.push(Line::from(Span::from(state.reply.clone())));
+            lines.push(Line::from(Span::from(crate::text::sanitize(
+                &state.reply,
+                false,
+            ))));
             lines.push(Line::default());
             if state.rows.is_empty() {
                 lines.push(Line::from(Span::from("No action to take.").fg(c(SUBTEXT0))));

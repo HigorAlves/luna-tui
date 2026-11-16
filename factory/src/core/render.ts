@@ -128,7 +128,7 @@ const chatText = (chat: StageInput["context"]["chat"]) => {
 
 /** The board, as the foreman reads it: the question and turns as text, one line per card (all of it a person's or a model's, so quoted as data), and each pack's allowed engines (the machine's own). */
 const foremanText = (foreman: StageInput["context"]["foreman"]) => {
-  if (!foreman) return { now: NONE, question: NONE, history: NONE, cards: NONE, packs: NONE };
+  if (!foreman) return { now: NONE, question: NONE, history: NONE, cards: NONE, truncated: NONE, pending: NONE, packs: NONE };
   const cards = foreman.board.cards.map((card) => {
     const engines = Object.entries(card.engines).map(([pack, engine]) => `${pack}=${engine}`);
     const head = [
@@ -138,6 +138,10 @@ const foremanText = (foreman: StageInput["context"]["foreman"]) => {
       card.column,
       card.gate ? `gate ${card.gate}${card.gateSummary ? ` (${card.gateSummary})` : ""}` : null,
       card.escalation ? `escalated: ${card.escalation}` : null,
+      card.flagged && card.flagged.length > 0 ? `flagged: ${card.flagged.join(", ")}` : null,
+      card.council ? (card.council.open > 0 ? `council: ${card.council.open} finding${card.council.open === 1 ? "" : "s"} open` : card.council.passed ? "council: passed" : "council: did not pass") : null,
+      card.settledByCouncil ? `${card.settledByCouncil} question${card.settledByCouncil === 1 ? "" : "s"} settled by the council` : null,
+      card.trust === "untrusted" ? "untrusted" : null,
       engines.length > 0 ? `engines ${engines.join(", ")}` : null,
       card.title,
     ]
@@ -151,6 +155,8 @@ const foremanText = (foreman: StageInput["context"]["foreman"]) => {
     question: foreman.question,
     history: foreman.history.length > 0 ? foreman.history.map((turn) => `${turn.who}: ${turn.text}`).join("\n") : NONE,
     cards: cards.length > 0 ? cards.join("\n") : NONE,
+    truncated: String(foreman.board.truncated ?? 0),
+    pending: foreman.board.pending && foreman.board.pending.length > 0 ? foreman.board.pending.map((p) => `${p.repo}: ${p.kind === "base" ? "base image" : "Dockerfile"} ${p.ref} awaits approval`).join("\n") : NONE,
     packs: foreman.board.packs.length > 0 ? foreman.board.packs.map((pack) => `${pack.id}: ${pack.allowed.join(", ")}`).join("\n") : NONE,
   };
 };
@@ -591,6 +597,8 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.foreman.question}}": foreman.question,
     "{{context.foreman.history}}": foreman.history,
     "{{context.foreman.cards}}": foreman.cards,
+    "{{context.foreman.truncated}}": foreman.truncated,
+    "{{context.foreman.pending}}": foreman.pending,
     "{{context.foreman.packs}}": foreman.packs,
     "{{context.jira.issue}}": jira.issue,
     "{{context.jira.description}}": jira.description,

@@ -14621,9 +14621,13 @@ mod foreman_tests {
             "csv, and delete the old exports".to_string(),
         )]));
         let approve = action("approve", &id, "plan is fine");
+        // Model text steers the person: the reply, the why and the card title are cleaned as the payload is.
+        retry.why = "stuck\u{202E}for\u{200B}days\u{1b}[31mred".into();
+        app.tasks[0].title = "Plan\u{202E}the\u{200B}export\u{1b}[2Jnow".into();
         let Mode::Foreman(state) = &mut app.mode else {
             panic!("the popup is not open")
         };
+        state.reply = "Read\u{202E}this\u{200B}reply\u{1b}[31mcarefully".into();
         state.rows = vec![retry, answer, approve]
             .into_iter()
             .map(|action| crate::foreman::Row {
@@ -14638,6 +14642,25 @@ mod foreman_tests {
             "{screen}"
         );
         assert!(!screen.contains('\u{202E}'), "sanitised: {screen}");
+        for hostile in ['\u{202E}', '\u{200B}', '\u{1b}'] {
+            assert!(
+                !screen.contains(hostile),
+                "{hostile:?} reached the screen: {screen}"
+            );
+        }
+        // The terminal buffer drops some of these itself, so the row's own text is checked too.
+        let text = {
+            let Mode::Foreman(popup) = &app.mode else {
+                panic!("the popup is not open")
+            };
+            crate::foreman::row_text(&popup.rows[0].action, app.task(&id))
+        };
+        for hostile in ['\u{202E}', '\u{200B}', '\u{1b}'] {
+            assert!(!text.contains(hostile), "{hostile:?} in the row: {text:?}");
+        }
+        for clean in ["stuck", "days", "Plan", "export", "Read", "carefully"] {
+            assert!(screen.contains(clean), "{clean}: {screen}");
+        }
         press(&mut app, KeyCode::Char('j'));
         let screen = render(&mut app, 140, 40);
         assert!(screen.contains("Which format?"), "{screen}");
