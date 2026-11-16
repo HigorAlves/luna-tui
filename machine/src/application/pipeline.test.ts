@@ -3223,7 +3223,7 @@ describe("timer-approved plans", () => {
   });
 
   it("never approves a re-planned gate or a gate with any flag, however confident its verdicts", async () => {
-    for (const over of [{ replan: { raised_by: "verifying", reason: "wrong" } }, { flagged: ["plan outside map"] }, { flagged: ["map stale"], replan: undefined }]) {
+    for (const over of [{ replan: { raised_by: "verifying", reason: "wrong" } }, { flagged: ["plan outside map"] }, { flagged: ["map stale"], replan: undefined }, { flagged: ["triage.council"] }]) {
       stubs.reset();
       pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: policies(10) });
       stubs.plan("test_design", confident(over));

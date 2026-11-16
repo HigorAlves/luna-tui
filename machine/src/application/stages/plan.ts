@@ -651,10 +651,15 @@ export function planStage(deps: PlanDeps): StageRunner {
       for (const v of Object.values(triage)) if (v.verdict !== "proceed") flagged.add(`triage.${v.field}`);
     }
 
+    // Answers the question council settled stand in the record: a person sees them at this gate, and the clock never approves past them.
+    const settledByCouncil = (task.record?.qa ?? []).filter((q) => q.by === "council" && q.answer !== null).map((q) => ({ question: q.question, answer: q.answer, evidence: q.evidence ?? [] }));
+    if (settledByCouncil.length > 0) flagged.add("triage.council");
+
     return {
       outcome: "pass",
       ...combine(results),
       detail: {
+        ...(settledByCouncil.length > 0 ? { settledByCouncil } : {}),
         summary: plan!.summary ?? plan!.brief,
         brief: plan!.brief,
         criteria: plan!.criteria,

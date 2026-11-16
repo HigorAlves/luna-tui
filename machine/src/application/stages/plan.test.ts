@@ -1189,3 +1189,20 @@ describe("planStage's council", () => {
     expect(councilCalls(off.calls)).toEqual([]);
   });
 });
+
+describe("planStage's council-settled answers", () => {
+  const settled = { question: "Round half up?", answer: "half to even", by: "council", evidence: ["src/round.rs:12"] };
+  const withQa = (qa: unknown[]) => ({ ...task, record: { ...record, qa } }) as unknown as TaskRow;
+
+  it("flags the gate triage.council when the question council settled an answer", async () => {
+    const { run } = setup();
+    const result = await run(context({ task: withQa([settled, { question: "Which file?", answer: "keys.rs", by: "person" }]) }));
+    expect(result.detail?.flagged).toContain("triage.council");
+  });
+
+  it("does not flag it when only a person answered", async () => {
+    const { run } = setup();
+    const result = await run(context({ task: withQa([{ question: "Which file?", answer: "keys.rs", by: "person" }, { question: "Old?", answer: "yes" }]) }));
+    expect(result.detail?.flagged).not.toContain("triage.council");
+  });
+});
