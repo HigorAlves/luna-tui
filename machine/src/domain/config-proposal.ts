@@ -202,6 +202,21 @@ export function choicesOf(text: string): ProposalInput["current"] {
   return { engines: config.engines ?? {}, effort: config.effort ?? {} };
 }
 
+/** The first field a card changes that a person edited since the card was made (`engines.plan`, `effort.plan`), or null. A field counts as
+ *  edited when the value the repo runs (the file's, else the pack's default) is not what it was when the card was built. Throws a
+ *  `PolicyParseError` for a file that does not load. */
+export function editedByHand(previousText: string, currentText: string, changes: ConfigChange[]): string | null {
+  const was = choicesOf(previousText);
+  const now = choicesOf(currentText);
+  for (const { pack, engine, effort } of changes) {
+    const def = PACKS[pack];
+    if (engine && (now.engines[pack] ?? def.engines.default) !== (was.engines[pack] ?? def.engines.default)) return `engines.${pack}`;
+    const base = def.kind === "decision" ? null : def.effort;
+    if (effort && (now.effort[pack] ?? base) !== (was.effort[pack] ?? base)) return `effort.${pack}`;
+  }
+  return null;
+}
+
 function parseMapping(text: string): unknown {
   let raw: unknown;
   try {

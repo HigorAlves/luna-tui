@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DataSource } from "typeorm";
@@ -123,6 +123,57 @@ describe("POST /repos/proposals", () => {
     const res = await app.request(`/tasks/${made.taskId}/decision`, post({ decision: "approved" }));
     expect(res.status).toBe(409);
     expect(await res.json()).toMatchObject({ error: "config_changed" });
+  });
+
+  it("answers 409 config_changed when a person edited a field the card changes, and leaves the edit alone", async () => {
+    const p = pipeline();
+    const repoSignals: RepoSignals = { forRepo: async () => ({ plan: { runs: 12, escalations: 4, stuck: 0, costUsd: 3 } }) };
+    const app = createApp({ db, pipeline: p, bus: new Bus(), repoSignals, knownRepos });
+    const dir = repo();
+    const made = (await (await app.request("/repos/proposals", post({ repo: dir, candidates }))).json()) as { taskId: string };
+    writeFileSync(join(dir, "luna.yaml"), "engines:\n  plan: codex:sol\n");
+    const res = await app.request(`/tasks/${made.taskId}/decision`, post({ decision: "approved" }));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: "config_changed" });
+    expect(readFileSync(join(dir, "luna.yaml"), "utf8")).toBe("engines:\n  plan: codex:sol\n");
+  });
+
+  it("still applies the changes when the edit was to something else", async () => {
+    const p = pipeline();
+    const repoSignals: RepoSignals = { forRepo: async () => ({ plan: { runs: 12, escalations: 4, stuck: 0, costUsd: 3 } }) };
+    const app = createApp({ db, pipeline: p, bus: new Bus(), repoSignals, knownRepos });
+    const dir = repo();
+    const made = (await (await app.request("/repos/proposals", post({ repo: dir, candidates }))).json()) as { taskId: string };
+    writeFileSync(join(dir, "luna.yaml"), "engines:\n  plan: claude:opus\n# edited\n");
+    const res = await app.request(`/tasks/${made.taskId}/decision`, post({ decision: "approved" }));
+    expect(res.status).toBe(200);
+    expect(readFileSync(join(dir, "luna.yaml"), "utf8")).toContain("# edited");
+    expect(readFileSync(join(dir, "luna.yaml"), "utf8")).toContain("plan: codex:sol");
+  });
+
+  it("answers 422 invalid_config to a luna.yaml that does not load, and makes no card", async () => {
+    const p = pipeline();
+    const repoSignals: RepoSignals = { forRepo: async () => ({ plan: { runs: 12, escalations: 4, stuck: 0, costUsd: 3 } }) };
+    const app = createApp({ db, pipeline: p, bus: new Bus(), repoSignals, knownRepos });
+    const dir = repo();
+    writeFileSync(join(dir, "luna.yaml"), "engines: [broken\n");
+    const res = await app.request("/repos/proposals", post({ repo: dir, candidates }));
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({ error: "invalid_config" });
+    expect((await p.list()).filter((t) => t.route === "config")).toEqual([]);
+  });
+
+  it("answers 422 to a repo whose policy is in PIPELINE.md: a luna.yaml would override it", async () => {
+    const p = pipeline();
+    const repoSignals: RepoSignals = { forRepo: async () => ({ plan: { runs: 12, escalations: 4, stuck: 0, costUsd: 3 } }) };
+    const app = createApp({ db, pipeline: p, bus: new Bus(), repoSignals, knownRepos });
+    const dir = mkdtempSync(join(tmpdir(), "proposals-legacy-"));
+    writeFileSync(join(dir, "PIPELINE.md"), "max_concurrent: 2\n");
+    known.push(dir);
+    const res = await app.request("/repos/proposals", post({ repo: dir, candidates }));
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({ error: "invalid_config", message: expect.stringContaining("PIPELINE.md") });
+    expect((await p.list()).filter((t) => t.route === "config")).toEqual([]);
   });
 
   it("answers 400 to a body without a repo or with a bad candidate", async () => {

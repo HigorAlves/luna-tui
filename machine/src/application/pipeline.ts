@@ -32,7 +32,7 @@ import type { Credentials } from "../adapters/credentials/index.ts";
 import { type RunSpan, type Telemetry, noTelemetry } from "./telemetry.ts";
 import { type DecisionTruth, QUESTIONS_OF, escalationResumedTruth, findingTruth, planTruth, sizeTruth, triageConfirmTruth, triageEditTruth, triageOutcomeTruth, worthLearningTruth } from "./decision-truth.ts";
 import { fallbackCandidates } from "../domain/engine-choice.ts";
-import { type ConfigChange, DECLINE_DAYS, type ProposalInput, choicesOf, renderProposal } from "../domain/config-proposal.ts";
+import { type ConfigChange, DECLINE_DAYS, type ProposalInput, choicesOf, editedByHand, renderProposal } from "../domain/config-proposal.ts";
 import type { EngineBudgetWatch } from "./engine-gates.ts";
 import { pickEngine } from "./engine.ts";
 import type { TaskUsage } from "./task-store.ts";
@@ -48,8 +48,8 @@ import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join, normalize } from "node:path";
 
-import type { Policy } from "../domain/policy.ts";
-import { CONFIG_FILE, PolicyStore } from "./policy.ts";
+import { PolicyParseError, type Policy } from "../domain/policy.ts";
+import { CONFIG_FILE, POLICY_FILE, PolicyStore } from "./policy.ts";
 
 import type { CommitFact, PriorityTruthEntry } from "./ground-truth.ts";
 import { budgetRowsOf, buildBudget, rateLimitWaitMs } from "../domain/build-budget.ts";
@@ -796,6 +796,7 @@ export class Pipeline {
 
   private async proposeConfigNow(repoPath: string, changes: ConfigChange[]): Promise<TaskRow> {
     const previous = await this.currentConfigText(repoPath);
+    await this.refuseLegacyPolicy(repoPath, previous);
     const config = renderProposal(previous, changes);
     const requested = { config, previous, changes };
     const title = `Config proposal: ${changes.length} ${changes.length === 1 ? "change" : "changes"}`;
@@ -834,7 +835,15 @@ export class Pipeline {
 
   /** The engines and efforts the repo's luna.yaml sets today, for the proposal rule. */
   async configChoices(repoPath: string): Promise<ProposalInput["current"]> {
-    return choicesOf(await this.currentConfigText(repoPath));
+    const text = await this.currentConfigText(repoPath);
+    await this.refuseLegacyPolicy(repoPath, text);
+    return choicesOf(text);
+  }
+
+  /** A repo with a PIPELINE.md and no luna.yaml: writing a luna.yaml would make the machine stop reading PIPELINE.md, so the proposal is refused. */
+  private async refuseLegacyPolicy(repoPath: string, configText: string): Promise<void> {
+    if (configText !== "" || existsSync(join(repoPath, CONFIG_FILE)) || !existsSync(join(repoPath, POLICY_FILE))) return;
+    throw new PolicyParseError(`${repoPath} sets its policy in ${POLICY_FILE} and has no ${CONFIG_FILE}: a new ${CONFIG_FILE} would override ${POLICY_FILE}. Move its keys to ${CONFIG_FILE} first`);
   }
 
   /** The repo's luna.yaml as text; an empty string when it has none. */
@@ -2628,7 +2637,11 @@ export class Pipeline {
       const current = await this.currentConfigText(task.repoPath);
       if (current !== open.requested.previous) {
         try {
-          text = renderProposal(current, Array.isArray(open.requested.changes) ? (open.requested.changes as ConfigChange[]) : []);
+          const changes = Array.isArray(open.requested.changes) ? (open.requested.changes as ConfigChange[]) : [];
+          // A person who changed a field the card changes made a choice: the card does not overwrite it.
+          const edited = editedByHand(open.requested.previous, current, changes);
+          if (edited) throw new Error(`${edited} was edited`);
+          text = renderProposal(current, changes);
         } catch (error) {
           throw new ConfigRebuildError(error instanceof Error ? error.message : String(error));
         }
