@@ -65,6 +65,8 @@ export interface Config {
   economy: boolean;
   /** The monthly change-management evidence job (RFC 0008). `MACHINE_COMPLIANCE_EVIDENCE=0` or `off` stops it. */
   complianceEvidence: boolean;
+  /** The quarterly GitHub org access review (RFC 0008). `MACHINE_ACCESS_REVIEW=0` or `off` stops it; it also needs `MACHINE_MANAGER_WIKI_REPO`. */
+  accessReview: boolean;
   /** `owner/name` whose wiki holds the org-wide pages (RFC 0008). */
   managerWikiRepo: string | null;
   /** Incidents from Slack, Jira, Sentry and Datadog (RFC 0008, wave 5): `MACHINE_INCIDENTS=off` stops them; the Slack channel id, the Jira JQL and the Jira project for postmortem action items. */
@@ -550,6 +552,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     groundTruth: env.MACHINE_GROUND_TRUTH !== "off",
     economy: env.MACHINE_ECONOMY !== "off",
     complianceEvidence: env.MACHINE_COMPLIANCE_EVIDENCE !== "off" && env.MACHINE_COMPLIANCE_EVIDENCE !== "0",
+    accessReview: env.MACHINE_ACCESS_REVIEW !== "off" && env.MACHINE_ACCESS_REVIEW !== "0",
     managerWikiRepo,
     incidents: { enabled: env.MACHINE_INCIDENTS !== "off" && env.MACHINE_INCIDENTS !== "0", slackChannel: incidentSlackChannel, jiraJql: env.MACHINE_INCIDENT_JIRA_JQL?.trim() || "issuetype = Incident AND updated >= -1d", jiraProject: incidentJiraProject },
     decisions: { enabled: env.MACHINE_DECISIONS !== "off", retentionDays: decisionRetentionDays, maxMb: decisionMaxMb },

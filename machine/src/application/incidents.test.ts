@@ -135,6 +135,100 @@ describe("IncidentJob", () => {
     expect((await stored())[0]!.breach).toEqual({ error: "agents are off" });
   });
 
+  describe("the postmortem retry", () => {
+    const HOUR = 3_600_000;
+    /** An incident that resolves when `resolve()` is called; `clock.at` moves the job's now. */
+    const resolving = (postmortem: NonNullable<IncidentJobDeps["postmortem"]>) => {
+      const clock = { at: NOW.getTime() };
+      let listed = [ddIncident()];
+      const port = { ...fakeDatadog(), incidents: async () => listed };
+      const log = vi.fn();
+      const j = job({ datadog: { port, scope: "" }, postmortem, now: () => new Date(clock.at), log });
+      return { j, log, clock, resolve: () => void (listed = []) };
+    };
+
+    it("runs the postmortem when the incident resolves, and a failed try is retried on a later tick", async () => {
+      const run = vi.fn<(i: Incident) => Promise<boolean>>().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+      const { j, clock, resolve } = resolving({ has: async () => false, run });
+      await j.tick();
+      expect(run).not.toHaveBeenCalled();
+      resolve();
+      await j.tick();
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(run.mock.calls[0]![0]).toMatchObject({ id: "datadog:incident:812", status: "resolved" });
+      clock.at += HOUR;
+      await j.tick();
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+
+    it("stops retrying once a try succeeds", async () => {
+      const run = vi.fn(async () => true);
+      const { j, clock, resolve } = resolving({ has: async () => false, run });
+      await j.tick();
+      resolve();
+      await j.tick();
+      for (let i = 0; i < 3; i++) {
+        clock.at += 2 * HOUR;
+        await j.tick();
+      }
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not run for an incident that already has its postmortem draft", async () => {
+      const run = vi.fn(async () => true);
+      const has = vi.fn(async (id: string) => id === "datadog:incident:812");
+      const { j, clock, resolve } = resolving({ has, run });
+      await j.tick();
+      resolve();
+      await j.tick();
+      clock.at += 2 * HOUR;
+      await j.tick();
+      expect(run).not.toHaveBeenCalled();
+    });
+
+    it("tries at most once an hour", async () => {
+      const run = vi.fn(async () => false);
+      const { j, clock, resolve } = resolving({ has: async () => false, run });
+      await j.tick();
+      resolve();
+      await j.tick();
+      clock.at += 30 * 60_000;
+      await j.tick();
+      clock.at += 29 * 60_000;
+      await j.tick();
+      expect(run).toHaveBeenCalledTimes(1);
+      clock.at += 2 * 60_000;
+      await j.tick();
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+
+    it("gives up after three tries, records them, and says the person can write it by hand", async () => {
+      const run = vi.fn(async () => false);
+      const { j, log, clock, resolve } = resolving({ has: async () => false, run });
+      await j.tick();
+      resolve();
+      for (let i = 0; i < 6; i++) {
+        await j.tick();
+        clock.at += 2 * HOUR;
+      }
+      expect(run).toHaveBeenCalledTimes(3);
+      expect((await stored())[0]!.postmortem).toMatchObject({ attempts: 3 });
+      expect(log.mock.calls.filter((c) => String(c[0]).includes("by hand"))).toHaveLength(1);
+    });
+
+    it("counts a try that throws as a failed one", async () => {
+      const run = vi.fn(async (): Promise<boolean> => Promise.reject(new Error("pack down")));
+      const { j, log, clock, resolve } = resolving({ has: async () => false, run });
+      await j.tick();
+      resolve();
+      await j.tick();
+      clock.at += 2 * HOUR;
+      await j.tick();
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("pack down"));
+    });
+  });
+
   it("answers an update of an incident it does not hold with null", async () => {
     expect(await job().update("nope", { breach: { error: "x" } })).toBeNull();
   });

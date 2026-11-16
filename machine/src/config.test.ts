@@ -52,6 +52,7 @@ describe("loadConfig", () => {
       groundTruth: true,
       economy: true,
       complianceEvidence: true,
+      accessReview: true,
       managerWikiRepo: null,
       incidents: { enabled: true, slackChannel: null, jiraJql: "issuetype = Incident AND updated >= -1d", jiraProject: null },
       decisions: { enabled: true, retentionDays: 365, maxMb: 4096 },
@@ -168,6 +169,11 @@ describe("loadConfig", () => {
     expect(loadConfig({ HOME: "/h", MACHINE_COMPLIANCE_EVIDENCE: "off" }).complianceEvidence).toBe(false);
     expect(loadConfig({ HOME: "/h", MACHINE_COMPLIANCE_EVIDENCE: "0" }).complianceEvidence).toBe(false);
     expect(loadConfig({ HOME: "/h", MACHINE_COMPLIANCE_EVIDENCE: "1" }).complianceEvidence).toBe(true);
+    expect(loadConfig({ HOME: "/h" }).accessReview).toBe(true);
+    expect(loadConfig({ HOME: "/h", MACHINE_ACCESS_REVIEW: "off" }).accessReview).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_ACCESS_REVIEW: "0" }).accessReview).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_ACCESS_REVIEW: "1" }).accessReview).toBe(true);
+    expect(loadConfig({ HOME: "/h", MACHINE_COMPLIANCE_EVIDENCE: "off" }).accessReview).toBe(true);
     expect(loadConfig({ HOME: "/h" }).managerWikiRepo).toBeNull();
     expect(loadConfig({ HOME: "/h", MACHINE_MANAGER_WIKI_REPO: " acme/handbook " }).managerWikiRepo).toBe("acme/handbook");
     expect(() => loadConfig({ HOME: "/h", MACHINE_MANAGER_WIKI_REPO: "nope" })).toThrow(/MACHINE_MANAGER_WIKI_REPO/);

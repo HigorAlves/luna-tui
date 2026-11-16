@@ -116,6 +116,21 @@ describe("JiraIntake with triage_signals", () => {
     expect(triaged).toContain("PLAT-1");
   });
 
+  it("makes no card for a compliance_request when the questionnaire job is wired, and says it went to the Compliance view", async () => {
+    const questionnaires = { fromJira: async () => ({}) };
+    const { intake, triaged, pipeline, logs } = wire({ questionnaires, classify: (issue) => classified(issue.source === "jira:PLAT-2" ? "compliance_request" : "feature") });
+    await intake.tick();
+    expect(triaged).not.toContain("PLAT-2");
+    expect((await pipeline.list()).map((t) => (t.source as { key?: string }).key)).not.toContain("PLAT-2");
+    expect(logs.filter((l) => l.includes("PLAT-2") && l.includes("Compliance view"))).toHaveLength(1);
+  });
+
+  it("keeps making a card for a compliance_request when no questionnaire job is wired", async () => {
+    const { intake, triaged } = wire({ classify: (issue) => classified(issue.source === "jira:PLAT-2" ? "compliance_request" : "feature") });
+    await intake.tick();
+    expect(triaged).toContain("PLAT-2");
+  });
+
   it("without a classification (no Jev credential, a failed run) behaves exactly as without the classifier", async () => {
     const plain = wire();
     const unclassified = wire({ classify: () => null });

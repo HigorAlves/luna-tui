@@ -1,6 +1,6 @@
 // The postmortem of a resolved incident (RFC 0008, wave 5): the `postmortem` pack writes the reading and the action items, the machine
 // renders the page and opens a draft that waits for the person. Approve writes it to the manager wiki and, when a Jira project is set,
-// files the action items there. A pack that fails or a text the drafts refuse is logged and opens nothing: the incident is untouched.
+// files the action items there. A pack that fails or a text the drafts refuse is logged and opens nothing; the incident job runs it again (see `postmortem` in its deps).
 import { PostmortemAnswer, type ComplianceDraft, type ComplianceTarget, type PostmortemContext } from "@hardness/contracts";
 
 import type { Incident } from "../domain/incident.ts";

@@ -24,6 +24,8 @@ export interface Incident {
   timeline: TimelineEntry[];
   /** The breach assessment, once made (when the incident starts, and again when it resolves). */
   breach?: IncidentBreach;
+  /** The postmortem tries so far: how many, and when the last one ran (the job retries a failed one, spaced and capped). */
+  postmortem?: { attempts: number; lastAttemptAt: string; opened?: true };
 }
 
 export const TIMELINE_TEXT_MAX = 300;

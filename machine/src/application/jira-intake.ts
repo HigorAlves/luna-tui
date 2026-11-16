@@ -185,7 +185,12 @@ export class JiraIntake {
 
   private async consider(issue: JiraIssue, repoPath: string, comments: "none" | "milestones" | "gates"): Promise<void> {
     const classification = (await this.options.classifier?.classify(issueContext(issue))) ?? null;
-    this.requested(issue, classification);
+    if (this.requested(issue, classification)) {
+      // A questionnaire is not agent work: it lives in the Compliance view, not on the board.
+      this.answered.set(issue.key, issue.updated);
+      this.log(`jira intake: ${issue.key} is a compliance request: went to the Compliance view, no card`);
+      return;
+    }
     const overrides = (await this.options.policies.for(repoPath)).decisions.triage_signals ?? {};
     if (confidentQuestion(classification, overrides)) {
       this.answered.set(issue.key, issue.updated);
@@ -219,10 +224,11 @@ export class JiraIntake {
     this.log(`jira intake: ${issue.key} not for an agent: ${answer.reason}`);
   }
 
-  /** A compliance request starts its questionnaire draft on the side: the issue goes on as it would, and a failure is a log line. */
-  private requested(issue: JiraIssue, classification: { kind: string } | null): void {
-    if (classification?.kind !== "compliance_request" || !this.options.questionnaires) return;
+  /** A compliance request starts its questionnaire draft on the side, not awaited, and a failure is a log line. True when the job took it. */
+  private requested(issue: JiraIssue, classification: { kind: string } | null): boolean {
+    if (classification?.kind !== "compliance_request" || !this.options.questionnaires) return false;
     void this.options.questionnaires.fromJira(issue).catch((error: unknown) => this.log(`jira intake: questionnaire for ${issue.key} failed: ${messageOf(error)}`));
+    return true;
   }
 
   private async comment(issue: JiraIssue, text: string): Promise<void> {

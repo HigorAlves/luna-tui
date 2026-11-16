@@ -203,8 +203,8 @@ export class Vulns {
       ].join("\n"),
       criteria: answer.acceptance_criteria,
       repoPath,
-      // A `security` label on the source still knocks the card's priority out to P0 when triage reads its signals.
-      source: { kind: "github", repo, number: a.number, url: a.url, labels: ["security"] },
+      // A `security` label on the source knocks the card's priority out to P0 when triage reads its signals: only a critical alert earns it.
+      source: { kind: "github", repo, number: a.number, url: a.url, labels: answer.severity === "critical" ? ["security"] : [] },
       originMachine: "automation",
       hints: { kind: "security", urgency: answer.severity },
     });

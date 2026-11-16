@@ -900,7 +900,9 @@ const incidentJob: IncidentJob = new IncidentJob({
   stateDir: config.stateDir,
   ...incidentSources,
   onStarted: async (incident) => void (await reassess(incident)),
-  onResolved: async (incident) => void (await writePostmortem(await reassess(incident))),
+  onResolved: async (incident) => void (await reassess(incident)),
+  // The job runs the postmortem (right after the resolve, then retried hourly, 3 tries) with the stored, reassessed incident.
+  postmortem: { has: async (id) => (await complianceDrafts.get(`postmortem:${id}`)) !== null, run: async (incident) => (await writePostmortem(incident)) !== null },
 });
 const questionnaires = new Questionnaires({
   slack: slackApi,
@@ -1104,7 +1106,7 @@ complianceFirst?.unref();
 complianceTicker?.start();
 console.log(complianceTicker ? "compliance: change-management evidence for each repo's previous month, checked daily; drafts wait in the Compliance view" : "compliance: monthly evidence off (MACHINE_COMPLIANCE_EVIDENCE=off); drafts still listed");
 /** The quarterly access review: its own daily tick, since the cursor says which orgs are done with the quarter; it needs MACHINE_MANAGER_WIKI_REPO and says so once without it. */
-const accessTicker = config.complianceEvidence ? new Ticker(() => void accessReview.tick().catch((error: unknown) => console.warn("compliance access review failed", error)), 24 * 60 * MINUTE_MS) : null;
+const accessTicker = config.accessReview ? new Ticker(() => void accessReview.tick().catch((error: unknown) => console.warn("compliance access review failed", error)), 24 * 60 * MINUTE_MS) : null;
 const accessFirst = accessTicker ? setTimeout(() => void accessReview.tick().catch((error: unknown) => console.warn("compliance access review failed", error)), 3 * MINUTE_MS) : null;
 accessFirst?.unref();
 accessTicker?.start();

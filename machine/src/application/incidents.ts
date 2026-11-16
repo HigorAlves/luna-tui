@@ -19,6 +19,8 @@ import type { RawMessage, Slack } from "./slack.ts";
 
 const INCIDENTS_DIR = "incidents";
 const FIRST_LOOK_MS = 24 * 3_600_000;
+const POSTMORTEM_SPACING_MS = 3_600_000;
+const POSTMORTEM_ATTEMPTS = 3;
 
 const CursorSchema = z.object({ schema: z.literal(1), sentry: z.string().optional(), slack: z.string().optional() });
 type Cursor = z.infer<typeof CursorSchema>;
@@ -33,6 +35,9 @@ export interface IncidentJobDeps {
   onStarted?(incident: Incident): Promise<void>;
   /** After an incident goes from open to resolved. */
   onResolved?(incident: Incident): Promise<void>;
+  /** The postmortem of a resolved incident: `has` says a draft for it already exists, `run` makes one (true when a draft opened).
+   *  A resolved incident with none is tried on each tick, at most once an hour and 3 times in all. */
+  postmortem?: { has(incidentId: string): Promise<boolean>; run(incident: Incident): Promise<boolean> };
   log?: (line: string) => void;
   now?: () => Date;
 }
@@ -105,7 +110,7 @@ export class IncidentJob {
   }
 
   /** Sets fields on a stored incident (the breach assessment, say); null when there is no such incident. */
-  async update(id: string, patch: Partial<Pick<Incident, "breach">>): Promise<Incident | null> {
+  async update(id: string, patch: Partial<Pick<Incident, "breach" | "postmortem">>): Promise<Incident | null> {
     const held = (await this.list()).find((i) => i.id === id);
     if (!held) return null;
     const next = { ...held, ...patch };
@@ -188,6 +193,33 @@ export class IncidentJob {
       if (incident.status === "resolved" && prev?.status !== "resolved") await this.hook("onResolved", incident);
     }
     await this.saveCursor(next);
+    await this.retryPostmortems(now);
+  }
+
+  /** A resolved incident with no postmortem draft gets the run again: an hour apart, 3 tries in all, then it is the person's to write. */
+  private async retryPostmortems(now: Date): Promise<void> {
+    const postmortem = this.deps.postmortem;
+    if (!postmortem) return;
+    for (const incident of await this.list()) {
+      if (incident.status !== "resolved" || incident.postmortem?.opened) continue;
+      const tried = incident.postmortem;
+      if (tried && (tried.attempts >= POSTMORTEM_ATTEMPTS || now.getTime() - Date.parse(tried.lastAttemptAt) < POSTMORTEM_SPACING_MS)) continue;
+      try {
+        if (await postmortem.has(incident.id)) continue;
+        const attempts = (tried?.attempts ?? 0) + 1;
+        await this.save({ ...incident, postmortem: { attempts, lastAttemptAt: now.toISOString() } });
+        let opened = false;
+        try {
+          opened = await postmortem.run(incident);
+        } catch (error) {
+          this.log(`incidents: postmortem for ${incident.id}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        if (opened) await this.save({ ...incident, postmortem: { attempts, lastAttemptAt: now.toISOString(), opened: true } });
+        if (!opened && attempts >= POSTMORTEM_ATTEMPTS) this.log(`incidents: no postmortem for ${incident.id} after ${attempts} tries: you can write it by hand`);
+      } catch (error) {
+        this.log(`incidents: postmortem for ${incident.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
   }
 
   private async hook(name: "onStarted" | "onResolved", incident: Incident | null): Promise<void> {

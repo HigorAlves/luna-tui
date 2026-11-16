@@ -97,11 +97,23 @@ describe("the vulnerability job", () => {
     expect(pipeline.createTask).toHaveBeenCalledTimes(1);
     const task = pipeline.createTask.mock.calls[0]![0] as { title: string; description: string; criteria: string[]; repoPath: string; source: unknown; hints: unknown; originMachine: string };
     expect(task).toMatchObject({ title: "Bump lodash to 4.17.21", criteria: ["The alert closes"], repoPath: "/repos/web", originMachine: "automation", hints: { kind: "security" } });
-    expect(task.source).toMatchObject({ kind: "github", repo: "acme/web", number: 7, url: "https://github.com/acme/web/security/dependabot/7", labels: ["security"] });
+    expect(task.source).toMatchObject({ kind: "github", repo: "acme/web", number: 7, url: "https://github.com/acme/web/security/dependabot/7" });
+    expect((task.source as { labels?: string[] }).labels ?? []).not.toContain("security");
     expect(task.description).toContain("Close alert 7.");
     expect(task.description).toContain("Lane: fast");
     expect(task.description).toContain("Deadline: 2026-12-01");
     expect(stateFile()).toEqual({ schema: 1, alerts: { "dependabot:7": { cardId: "card-1", deadline: "2026-12-01", lane: "fast", severity: "high", overdue: false } } });
+  });
+
+  it("labels a card security only for a critical alert, so a routine bump is not triaged up to P0", async () => {
+    const labelsFor = async (severity: string) => {
+      stateDir = mkdtempSync(join(tmpdir(), "vulns-"));
+      const { vulns, pipeline } = build({ dependabot: [dependabot()], triage: async () => answer({ severity }) });
+      await vulns.tick();
+      return (pipeline.createTask.mock.calls[0]![0] as { source: { labels?: string[] } }).source.labels ?? [];
+    };
+    expect(await labelsFor("critical")).toEqual(["security"]);
+    for (const severity of ["high", "medium", "low"]) expect(await labelsFor(severity)).not.toContain("security");
   });
 
   it("reads code-scanning alerts too, and a hold card says it waits for the person", async () => {
