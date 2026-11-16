@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { MachinePolicySchema } from "@hardness/contracts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { execFileSync } from "node:child_process";
@@ -114,5 +115,51 @@ describe("lockfiles in subfolders", () => {
     writeFileSync(join(repo, "target/Cargo.lock"), "x");
     expect((await trackedNestedLockfiles(repo)).sort()).toEqual(["a/b/go.sum", "board/Cargo.lock"]);
     expect(await trackedNestedLockfiles(join(repo, "no-such"))).toEqual([]);
+  });
+});
+
+describe("the machine's sandbox policy over every repo host", () => {
+  const lock = "packages:\n  a:\n    resolution: {tarball: https://cdn.pastebin.com/a.tgz}\n  b:\n    resolution: {tarball: https://artifacts.example.org/b.tgz}\n";
+  const repo = (): string => {
+    const dir = mkdtempSync(join(root, "bounded-"));
+    writeFileSync(join(dir, "luna.yaml"), "sandbox:\n  egress:\n    allow: [docs.example.com]\n");
+    writeFileSync(join(dir, "pnpm-lock.yaml"), lock);
+    return dir;
+  };
+  const build = (machinePolicy: ReturnType<typeof MachinePolicySchema.parse>) => egressPolicy({ policies: new PolicyStore({ warn: () => {}, machinePolicy }), proxyImage: "machine:dev", machinePolicy });
+
+  it("drops a lockfile host egress.deny covers, keeps the ecosystem's own, and says why", async () => {
+    const dir = repo();
+    const policy = build(MachinePolicySchema.parse({ egress: { deny: ["*.pastebin.com"] } }));
+    const spec = await policy.for({ repoPath: dir, kind: "check" });
+    expect(spec.allow).not.toContain("cdn.pastebin.com:443");
+    expect(spec.allow).toEqual(expect.arrayContaining(["registry.npmjs.org:443", "artifacts.example.org:443", "github.com:443"]));
+    expect(await policy.bounds!(dir)).toEqual(['lockfile: "cdn.pastebin.com" dropped, it matches egress.deny "*.pastebin.com" in the machine\'s sandbox policy']);
+  });
+
+  it("repo_hosts: deny drops the lockfile, QA and deploy hosts and keeps the machine's fixed ones", async () => {
+    const dir = repo();
+    const policy = build(MachinePolicySchema.parse({ egress: { repo_hosts: "deny" } }));
+    const spec = await policy.for({ repoPath: dir, kind: "agent", owners: ["claude"], targets: ["staging.example.com:443"], deploy: ["pr-1.preview.example.com:443"] });
+    for (const host of ["cdn.pastebin.com:443", "artifacts.example.org:443", "docs.example.com:443", "staging.example.com:443", "pr-1.preview.example.com:443"]) expect(spec.allow).not.toContain(host);
+    expect(spec.allow).toEqual(expect.arrayContaining(["github.com:443", "registry.npmjs.org:443", "api.anthropic.com:443"]));
+    expect(await policy.bounds!(dir)).toEqual(expect.arrayContaining([expect.stringMatching(/^lockfile: 2 hosts dropped.*repo_hosts: deny/)]));
+  });
+
+  it("holds QA and deploy hosts to egress.deny and max_repo_hosts together with the repo's allow list", async () => {
+    const dir = repo();
+    const policy = build(MachinePolicySchema.parse({ egress: { deny: ["bad.example.com"], max_repo_hosts: 2 } }));
+    const spec = await policy.for({ repoPath: dir, kind: "agent", owners: ["claude"], targets: ["bad.example.com:443", "qa.example.com:443"], deploy: ["pr.example.com:443"] });
+    expect(spec.allow).toContain("docs.example.com:443");
+    expect(spec.allow).not.toContain("bad.example.com:443");
+    expect(spec.allow).not.toContain("pr.example.com:443");
+    expect(spec.allow).toContain("artifacts.example.org:443");
+    expect(spec.allow).not.toContain("qa.example.com:443");
+  });
+
+  it("changes nothing without a machine policy", async () => {
+    const dir = repo();
+    const spec = await egressPolicy({ policies: policies(), proxyImage: "machine:dev" }).for({ repoPath: dir, kind: "check", deploy: ["pr.example.com:443"] });
+    expect(spec.allow).toEqual(expect.arrayContaining(["cdn.pastebin.com:443", "pr.example.com:443"]));
   });
 });

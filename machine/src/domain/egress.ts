@@ -32,6 +32,8 @@ export interface EgressInputs {
   engineHosts?: readonly string[];
   /** Hosts the repository's config names for a browser run. */
   targets?: readonly string[];
+  /** The host of the preview a deploy brings up, for an install, a check or an agent (the same list as a check, plus it). */
+  deploy?: readonly string[];
   /** The machine's own endpoints (its trace endpoint), reachable although they are private: exact `name:port`. */
   machineEntries?: readonly string[];
 }
@@ -67,6 +69,7 @@ export function egressFor(kind: EgressKind, inputs: EgressInputs): EgressSpec {
   } else {
     add(GITHUB_HOSTS);
     add(inputs.allow);
+    add(inputs.deploy ?? []);
     if (kind === "install" || inputs.registries === "always") add(inputs.registryHosts);
     if (kind === "agent") {
       engines();

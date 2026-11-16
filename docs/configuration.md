@@ -304,13 +304,15 @@ How the bounds apply to a repo's `luna.yaml`, each with a reason left where you 
 | Key | Effect | Where the reason is |
 |---|---|---|
 | `limits.max_cpu`, `limits.max_memory_gb` | a repo's `sandbox.cpu` and `sandbox.memory_gb` are capped | a note on the task, at the start of a stage |
-| `egress.deny` | repo `sandbox.egress.allow` hosts matching an entry (`*.x.com` covers subdomains) are dropped | `bounds` on the repo's row in `GET /repos` |
-| `egress.repo_hosts: deny` | every repo egress host is dropped | the same |
-| `egress.max_repo_hosts` | only the first N repo hosts are kept | the same |
+| `egress.deny` | every host the repo chose is dropped when it matches an entry (`*.x.com` covers subdomains): `sandbox.egress.allow`, the hosts a lockfile's `resolved` URLs name, the `qa_targets` hosts and the `deploy.url_pattern` host. A repo wildcard `*.S` goes too when a deny names `S` or a host under it. Case, a trailing dot and a port are ignored. GitHub, each ecosystem's own registries and the engines' hosts are the machine's and stay | `bounds` on the repo's row in `GET /repos` |
+| `egress.repo_hosts: deny` | every one of those repo hosts is dropped | the same |
+| `egress.max_repo_hosts` | only the first N repo hosts are kept, counted over all of them in that order: allow list, lockfile, QA targets, preview | the same |
 | `images.repo_base: deny` | `sandbox.image.base` is ignored (the machine's image runs) and `POST /repos/base/approve` refuses | the same, and the refusal |
 | `seccomp: <path>` | stage, check, app and service containers get `--security-opt seccomp=<path>` | none; it is the machine's own setting |
 | `images.devcontainer: deny` | `.devcontainer/devcontainer.json` is not read: no image and no `containerEnv` from it | none |
 | `limits.max_pids` | the `--pids-limit` of stage, check and app containers; a service gets the same value, at most 512 | none; it is the machine's own setting |
+| `limits.max_cpu`, `limits.max_memory_gb` on services | each service runs with `--cpus` and `--memory` of the bounded size of the container it runs beside | none |
+| every container | a luna.yaml proof (the setup stage's proposal or `POST /repos/config/prove`) runs on the file's sandbox held within the policy: cpu, memory and hosts, with the reasons in the proof's `bounds` and the setup notes. On-demand runs (`POST /runs`, Slack triage, Jira intake, evals) run as untrusted input; the graph build runs as trusted, the video tools by the card's trust. They all take the policy's seccomp, runtime, process limit, cpu and memory, and the daemon's seccomp and runtime are checked before a check session's or the app's services start | none; it is the machine's own setting |
 | `runtime.default`, `runtime.untrusted` | `--runtime` for stage, check, install, app and service containers of a trusted or an untrusted card (`runsc` is gVisor). `runc` adds no flag. A daemon without the runtime ends the card as `env_broken`, step `runtime`. The egress proxy stays on `runc` | a note on the task says an untrusted card runs untrusted |
 | `cache.split_by_trust` | an untrusted card (a GitHub issue or PR from outside `OWNER`, `MEMBER` or `COLLABORATOR`, or with no association on record) uses `hardness-cache-<repo>-untrusted`; `false` shares one volume | the same note |
 

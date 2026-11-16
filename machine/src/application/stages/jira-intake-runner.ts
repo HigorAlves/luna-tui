@@ -107,7 +107,7 @@ export function createJiraTriager(deps: JiraIntakeDeps): JiraTriager {
         }
         const run = await runPackOnce(
           { name: `hardness-jira-intake-${stamp.toLowerCase()}`, image: deps.image, runDir, worktree: work, input, engine, labels: { luna: "jira-intake" } },
-          { credentials: deps.credentials, sandbox: deps.sandbox, ...(deps.egress ? { egress: deps.egress } : {}) },
+          { credentials: deps.credentials, sandbox: deps.sandbox, ...(deps.policies ? { policies: deps.policies } : {}), ...(deps.egress ? { egress: deps.egress } : {}) },
         );
         if (run.error !== null) error = run.error;
         else {

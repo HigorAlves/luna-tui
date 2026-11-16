@@ -6,6 +6,7 @@ import { cacheVolumeFor, hostUser, makeSecretFolder, type SandboxExec, SecretsMi
 import { APP_ALIAS, appArgs, probeArgs } from "../adapters/docker/app.ts";
 import type { BlockedRow, CardNetwork, openCardNetwork, openPlainNetwork } from "../adapters/docker/egress.ts";
 import { RuntimeUnavailableError } from "../adapters/docker/runtimes.ts";
+import { SeccompUnavailableError } from "../adapters/docker/seccomp.ts";
 import type { startServices } from "../adapters/docker/services.ts";
 import type { Trust } from "../domain/trust.ts";
 import { envBrokenDetail } from "./env-broken.ts";
@@ -43,6 +44,8 @@ export interface AppDeps {
   startServices: typeof startServices;
   /** Throws `RuntimeUnavailableError` when the daemon lacks the runtime (the app container is started here, not through the sandbox). */
   checkRuntime?: (runtime: string) => Promise<void>;
+  /** Throws `SeccompUnavailableError` when the daemon has no seccomp filter. */
+  checkSeccomp?: () => Promise<void>;
   exec(run: SandboxExec, options: { timeoutMs?: number }): Promise<ExecResult & { blocked?: BlockedRow[] }>;
   docker(args: string[], options?: { env?: NodeJS.ProcessEnv }): Promise<ExecResult>;
   sleep?(ms: number): Promise<void>;
@@ -134,7 +137,8 @@ export async function openApp(deps: AppDeps, input: OpenAppInput): Promise<OpenA
   try {
     const limits = sandboxSizeOf(policy, input.trust);
     const cacheVolume = cacheVolumeFor(input.repoPath, limits.cacheTrust);
-    // The app container is started by `docker run` here, not through the sandbox: the runtime is checked here too.
+    // The app container is started by `docker run` here, not through the sandbox: the daemon's seccomp filter and the runtime are checked here too.
+    await deps.checkSeccomp?.();
     if (limits.runtime) await deps.checkRuntime?.(limits.runtime);
     services = await deps.startServices(runName, policy.services, { network: { name: card.name, dns: card.dns }, harden: serviceHardeningOf(limits) });
     const containerEnv = (await deps.containerEnvOf?.(input.repoPath)) ?? {};
@@ -160,7 +164,7 @@ export async function openApp(deps: AppDeps, input: OpenAppInput): Promise<OpenA
     }
   } catch (error) {
     await close();
-    if (error instanceof RuntimeUnavailableError) return { ok: false, detail: envBrokenDetail(error)! };
+    if (error instanceof RuntimeUnavailableError || error instanceof SeccompUnavailableError) return { ok: false, detail: envBrokenDetail(error)! };
     throw error;
   }
   return { ok: true, target: { name: "app", baseUrl: `http://${APP_ALIAS}:${start.port}` }, network: card.name, aliases: [APP_ALIAS, ...Object.keys(policy.services)], redactValues: values, close };
@@ -203,8 +207,8 @@ export async function openPreview(deps: AppDeps, input: OpenAppInput & { branch:
   const installed = await deps.install({ taskId: input.taskId, repoPath: input.repoPath, workspace: input.workspace, commit: input.commit, ...(input.trust ? { trust: input.trust } : {}), ...(input.signal ? { signal: input.signal } : {}) });
   if (!installed.ok) return { ok: false, detail: installed.detail };
   const image = await deps.imageFor(input.repoPath, input.taskId);
-  const base = deps.egress ? await deps.egress.for({ repoPath: input.repoPath, kind: "check" }) : { allow: [], allowPrivate: [], proxyImage: image };
-  const spec = { ...base, allow: [...new Set([...base.allow, `${host}:443`])].sort() };
+  // The preview's host is one the repo chose: the egress policy holds it within the machine's sandbox policy (egress.deny, repo_hosts, max_repo_hosts) like the rest.
+  const spec = deps.egress ? await deps.egress.for({ repoPath: input.repoPath, kind: "check", deploy: [`${host}:443`] }) : { allow: [], allowPrivate: [], proxyImage: image };
   const runName = `${input.taskId.slice(0, 8)}-deploy-${input.attempt}`;
   const card = deps.egress ? await deps.openCardNetwork(runName, spec, { proxyImage: spec.proxyImage }) : await deps.openPlainNetwork(runName);
   const seen = new Set<string>();

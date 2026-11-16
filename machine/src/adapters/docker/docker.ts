@@ -42,7 +42,7 @@ export const INIT_ARGS = ["--init"];
 
 export const sandboxLimits = (size: SandboxSize = DEFAULT_SANDBOX_SIZE): string[] => ["--memory", `${size.memoryGb}g`, "--cpus", `${size.cpu}`, "--pids-limit", `${size.pids ?? 1024}`, ...(size.seccomp ? ["--security-opt", `seccomp=${size.seccomp}`] : []), ...(size.runtime ? ["--runtime", size.runtime] : [])];
 /** What the services beside a container take from its size: the same limits, capped where `serviceArgs` caps them. */
-export const serviceHardeningOf = (size: SandboxSize | undefined): ServiceHardening => ({ ...(size?.pids ? { pids: size.pids } : {}), ...(size?.seccomp ? { seccomp: size.seccomp } : {}), ...(size?.runtime ? { runtime: size.runtime } : {}) });
+export const serviceHardeningOf = (size: SandboxSize | undefined): ServiceHardening => ({ ...(size ? { cpu: size.cpu, memoryGb: size.memoryGb } : {}), ...(size?.pids ? { pids: size.pids } : {}), ...(size?.seccomp ? { seccomp: size.seccomp } : {}), ...(size?.runtime ? { runtime: size.runtime } : {}) });
 export const SANDBOX_LIMITS = sandboxLimits();
 /** `docker wait` gets this long past the stage's own timeout before the container is forced down. */
 const WAIT_GRACE_MS = 60_000;
@@ -614,11 +614,13 @@ export function sandboxExecutor(
   const session = async (options: SessionOptions): Promise<ChecksSession> => {
     const spec = images.egress ? withAllow(await images.egress(options.repoPath), options.egressAllow) : null;
     const name = `hardness-checks-${randomUUID().slice(0, 8)}`;
-    const card = spec ? await deps.openCardNetwork(name, spec, { proxyImage: spec.proxyImage }) : null;
     const size = images.limitsOf ? await images.limitsOf(options.repoPath, options.trust) : undefined;
+    // The services start here, not through the sandbox: the daemon's seccomp filter and the size's runtime are asked for before anything starts.
+    await deps.checkSeccomp();
+    if (size?.runtime) await deps.checkRuntime?.(size.runtime);
+    const card = spec ? await deps.openCardNetwork(name, spec, { proxyImage: spec.proxyImage }) : null;
     let services: Awaited<ReturnType<RunDeps["startServices"]>>;
     try {
-      if (size?.runtime) await deps.checkRuntime?.(size.runtime);
       services = await deps.startServices(name, options.services, { harden: serviceHardeningOf(size), ...(card ? { network: { name: card.name, dns: card.dns } } : {}) });
     } catch (error) {
       await card?.teardown();

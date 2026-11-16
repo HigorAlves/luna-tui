@@ -1,7 +1,7 @@
 import { DEFAULT_MACHINE_POLICY, FACTORY_DEFAULTS, MachinePolicySchema } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { boundSandbox, baseRefusal, sandboxSizeOf } from "./sandbox-bounds.ts";
+import { boundRepoHosts, boundSandbox, baseRefusal, sandboxSizeOf } from "./sandbox-bounds.ts";
 
 const sandbox = (over: Partial<(typeof FACTORY_DEFAULTS)["sandbox"]> = {}) => ({ ...structuredClone(FACTORY_DEFAULTS.sandbox), ...over });
 const policy = (input: unknown) => MachinePolicySchema.parse(input);
@@ -35,6 +35,19 @@ describe("boundSandbox", () => {
     expect(out.sandbox.egress.allow).toEqual(["ok.example.com", "notpastebin.com"]);
     expect(out.bounds.egress).toHaveLength(4);
     expect(out.bounds.egress[0]).toBe('sandbox.egress.allow: "files.pastebin.com" dropped, it matches egress.deny "*.pastebin.com" in the machine\'s sandbox policy');
+  });
+
+  describe("a repo wildcard against a narrower deny", () => {
+    const bound = (allow: string[], deny: string[]) => boundSandbox(sandbox({ egress: { allow, registries: "always" } }), policy({ egress: { deny } })).sandbox.egress.allow;
+    it("drops a wildcard over a denied exact host", () => expect(bound(["*.githubusercontent.com", "ok.example.com"], ["gist.githubusercontent.com"])).toEqual(["ok.example.com"]));
+    it("drops a wildcard over a denied exact host one level below", () => expect(bound(["*.example.com"], ["a.b.example.com"])).toEqual([]));
+    it("drops a wildcard over a denied wildcard", () => expect(bound(["*.githubusercontent.com"], ["*.gist.githubusercontent.com"])).toEqual([]));
+    it("drops a wildcard whose suffix is the denied host itself", () => expect(bound(["*.pastebin.com"], ["pastebin.com"])).toEqual([]));
+    it("keeps a wildcard the deny does not sit under", () => expect(bound(["*.gist.example.com", "*.example.org"], ["example.com", "gist.example.org.evil.com"])).toEqual(["*.gist.example.com", "*.example.org"]));
+    it("compares case-insensitively", () => expect(bound(["*.GitHubUserContent.com"], ["Gist.githubusercontent.COM"])).toEqual([]));
+    it("ignores a trailing dot on the repo's entry", () => expect(bound(["*.githubusercontent.com.", "pastebin.com."], ["gist.githubusercontent.com", "pastebin.com"])).toEqual([]));
+    it("ignores a port on either side", () => expect(bound(["*.githubusercontent.com:8443"], ["gist.githubusercontent.com"])).toEqual([]));
+    it("ignores a port on the deny", () => expect(bound(["*.githubusercontent.com"], ["gist.githubusercontent.com:443"])).toEqual([]));
   });
 
   it("repo_hosts: deny drops every repo host, with one reason", () => {
@@ -89,6 +102,34 @@ describe("sandboxSizeOf", () => {
   it("takes the process limit, the split and the runtimes from the machine policy", () => {
     const out = boundSandbox(sandbox(), policy({ limits: { max_pids: 200 }, cache: { split_by_trust: false }, runtime: { untrusted: "runsc" } })).bounds;
     expect(out).toMatchObject({ maxPids: 200, splitCache: false, runtime: { default: "runc", untrusted: "runsc" } });
+  });
+});
+
+describe("boundRepoHosts", () => {
+  it("keeps everything under the default policy", () => {
+    expect(boundRepoHosts(["a.example.com", "b.example.com:8443"], DEFAULT_MACHINE_POLICY, "lockfile")).toEqual({ kept: ["a.example.com", "b.example.com:8443"], reasons: [] });
+  });
+
+  it("drops a host egress.deny covers, naming the source and the rule", () => {
+    const out = boundRepoHosts(["cdn.pastebin.com", "ok.example.com"], policy({ egress: { deny: ["*.pastebin.com"] } }), "lockfile");
+    expect(out.kept).toEqual(["ok.example.com"]);
+    expect(out.reasons).toEqual(['lockfile: "cdn.pastebin.com" dropped, it matches egress.deny "*.pastebin.com" in the machine\'s sandbox policy']);
+  });
+
+  it("drops a QA host with a port when its name is denied", () => {
+    expect(boundRepoHosts(["staging.example.com:8443"], policy({ egress: { deny: ["staging.example.com"] } }), "qa_targets").kept).toEqual([]);
+  });
+
+  it("repo_hosts: deny drops every host, with one reason", () => {
+    const out = boundRepoHosts(["a.example.com", "b.example.com"], policy({ egress: { repo_hosts: "deny" } }), "deploy.url_pattern");
+    expect(out.kept).toEqual([]);
+    expect(out.reasons).toEqual(["deploy.url_pattern: 2 hosts dropped, the machine's sandbox policy allows no repo hosts (egress.repo_hosts: deny)"]);
+  });
+
+  it("counts the hosts already taken against max_repo_hosts", () => {
+    const out = boundRepoHosts(["a.example.com", "b.example.com", "c.example.com"], policy({ egress: { max_repo_hosts: 3 } }), "lockfile", 2);
+    expect(out.kept).toEqual(["a.example.com"]);
+    expect(out.reasons).toEqual(["lockfile: 2 hosts dropped past egress.max_repo_hosts 3 in the machine's sandbox policy"]);
   });
 });
 

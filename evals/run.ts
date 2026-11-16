@@ -84,7 +84,9 @@ if (unrunnable) fail(unrunnable);
 const image = values.image!;
 const credentials = machineCredentials();
 // The same list a real run of the pack gets (kind agent: the engine's host, GitHub, the registries), so what is measured is what runs; MACHINE_EGRESS=off applies here too.
-const egress = buildEgress({ egress: loadConfig(process.env).egress, runnerImage: image, traces: tracesFromEnv() }, new PolicyStore());
+const machineConfig = loadConfig(process.env);
+const policies = new PolicyStore({ machinePolicy: machineConfig.sandboxPolicy });
+const egress = buildEgress({ egress: machineConfig.egress, runnerImage: image, traces: tracesFromEnv(), sandboxPolicy: machineConfig.sandboxPolicy }, policies);
 
 // Traces and evaluations go to the same local Laminar the machine reports to, when a key is set.
 // A collector that is down is one line and a run with no traces; the SDK is not even loaded.
@@ -128,7 +130,7 @@ async function runCase(evalCase: EvalCase, engine: EngineId, index: number, tria
   const started = Date.now();
   const run = await runPackOnce(
     { name: `hardness-eval-${slug(pack)}-${slug(evalCase.id)}-${slug(engine)}-${stamp.slice(11, 19)}${trial > 1 ? `-t${trial}` : ""}`, image, runDir, worktree, input: caseInput(evalCase.input, engine, effort), engine, labels: { luna: "eval" }, extraEnv: span.childEnv(), egressKind: "agent" },
-    { credentials, ...(egress ? { egress } : {}) },
+    { credentials, policies, ...(egress ? { egress } : {}) },
   ).catch((error: Error) => ({ output: null, error: error.message }) as const);
   const caseRun = { id: evalCase.id, output: run.output, error: run.error, wallMs: Date.now() - started };
   const { answer, schema } = gradeAnswer(pack, evalCase.expect, caseRun);
@@ -159,7 +161,7 @@ async function judgeAnswer(evalCase: EvalCase, answer: unknown, engine: EngineId
   mkdirSync(join(runDir, "work"), { recursive: true });
   const run = await runPackOnce(
     { name: `hardness-eval-judge-${slug(evalCase.id)}-${stamp.slice(11, 19)}-${Math.random().toString(36).slice(2, 6)}`, image, runDir, worktree: join(runDir, "work"), input: judgeInput(evalCase, answer, engine), engine, labels: { luna: "eval" }, egressKind: "agent" },
-    { credentials, ...(egress ? { egress } : {}) },
+    { credentials, policies, ...(egress ? { egress } : {}) },
   ).catch((error: Error) => ({ output: null, error: error.message }) as const);
   if (run.error !== null) return { error: `judge: ${run.error}` };
   if (!run.output.ok) return { error: `judge: ${outputError(run.output)}` };

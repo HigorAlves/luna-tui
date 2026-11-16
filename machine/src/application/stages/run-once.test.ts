@@ -2,12 +2,13 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { StageInput } from "@hardness/contracts";
+import { MachinePolicySchema, type StageInput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import { CredentialWaitError, NoCredentialError, type PrepareWait } from "../../adapters/credentials/index.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
 import { buildSlackTriageInput } from "../../domain/stage-input.ts";
+import { PolicyStore } from "../policy.ts";
 import { outputError, runPackOnce } from "./run-once.ts";
 
 const input: StageInput = buildSlackTriageInput({ me: { id: "U1", name: "a" }, watches: [], rules: "", items: [] }, "claude:haiku");
@@ -38,6 +39,23 @@ describe("runPackOnce", () => {
     expect(run.output?.answer).toEqual({ items: [] });
     expect(seen[0]).toMatchObject({ name: "c", image: "img", writable: false, gitDir: null, timeoutMs: input.limits.timeoutMs, credential: { env: { TOKEN: "t" }, mounts: [] }, labels: { luna: "x" } });
     expect(released).toEqual(["claude:haiku"]);
+  });
+
+  it("sizes the container by the machine's sandbox policy for an untrusted input: runtime, process limit, seccomp, cpu and memory", async () => {
+    const machinePolicy = MachinePolicySchema.parse({ limits: { max_cpu: 1, max_memory_gb: 2, max_pids: 200 }, runtime: { untrusted: "runsc" }, seccomp: "/etc/luna/s.json" });
+    const policies = new PolicyStore({ warn: () => {}, machinePolicy });
+    const runDir = mkdtempSync(join(tmpdir(), "run-once-"));
+    const seen: SandboxRun[] = [];
+    const sandbox = async (run: SandboxRun): Promise<SandboxResult> => (seen.push(run), { exitCode: 0, timedOut: false, aborted: false, transcriptPath: "" });
+    const credentials = { prepare: async () => ({ env: {}, mounts: [], release: async () => {} }) };
+    const base = { name: "c", image: "img", runDir, worktree: runDir, input, engine: "claude:haiku" as const, labels: {} };
+    await runPackOnce(base, { credentials, sandbox, policies });
+    expect(seen[0]!.limits).toMatchObject({ cpu: 1, memoryGb: 2, pids: 200, seccomp: "/etc/luna/s.json", runtime: "runsc", cacheTrust: "untrusted" });
+    await runPackOnce({ ...base, trust: "trusted" }, { credentials, sandbox, policies });
+    expect(seen[1]!.limits).toMatchObject({ pids: 200, cacheTrust: "trusted" });
+    expect(seen[1]!.limits).not.toHaveProperty("runtime");
+    await runPackOnce(base, { credentials, sandbox });
+    expect(seen[2]!.limits).toBeUndefined();
   });
 
   it("hands the run's extra env to the container, and an empty one when none is given", async () => {

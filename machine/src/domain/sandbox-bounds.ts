@@ -19,21 +19,44 @@ export interface SandboxBounds {
   splitCache: boolean;
 }
 
-const hostOf = (pattern: string): string => pattern.toLowerCase().split(":")[0]!;
+/** The name as the proxy compares it: trimmed, lowercased, no port, no trailing dot. */
+const hostOf = (pattern: string): string => pattern.trim().toLowerCase().split(":")[0]!.replace(/\.+$/, "");
 
-/** Whether the deny entry covers the repo's entry: a name, or a `*.suffix` (and every subdomain under a deny's `*.suffix`). Ports are ignored. */
-function denies(deny: string, entry: string): boolean {
+/** Whether the deny entry covers the repo's entry: a name, or a `*.suffix` (and every subdomain under a deny's `*.suffix`). A repo `*.S` is covered too when the deny's
+ *  name (without its `*.`) is `S` or sits under it, because the wildcard would let that name through. Ports and trailing dots are ignored. */
+export function denies(deny: string, entry: string): boolean {
   const d = hostOf(deny);
   const e = hostOf(entry);
   const entrySuffix = e.startsWith("*.") ? e.slice(2) : null;
-  if (d.startsWith("*.")) {
-    const suffix = d.slice(2);
-    return entrySuffix === null ? e.endsWith(`.${suffix}`) : entrySuffix === suffix || entrySuffix.endsWith(`.${suffix}`);
+  const denySuffix = d.startsWith("*.") ? d.slice(2) : null;
+  if (denySuffix !== null) {
+    return entrySuffix === null ? e.endsWith(`.${denySuffix}`) : entrySuffix === denySuffix || entrySuffix.endsWith(`.${denySuffix}`) || denySuffix.endsWith(`.${entrySuffix}`);
   }
-  return entrySuffix === null ? e === d : entrySuffix === d;
+  return entrySuffix === null ? e === d : d === entrySuffix || d.endsWith(`.${entrySuffix}`);
 }
 
 const plural = (count: number): string => `${count} host${count === 1 ? "" : "s"}`;
+
+/** The hosts a repo chose (`sandbox.egress.allow`, a lockfile's URLs, the QA targets, the deploy's preview), held within the machine's policy: `egress.deny` drops a host, `repo_hosts: deny` drops all,
+ *  and at most `max_repo_hosts` stay, counting the `taken` the repo already has from other sources. Each drop is a reason that starts with `source`. The machine's own hosts never pass through here. */
+export function boundRepoHosts(hosts: readonly string[], policy: Pick<MachinePolicy, "egress">, source: string, taken = 0): { kept: string[]; reasons: string[] } {
+  if (policy.egress.repo_hosts === "deny") {
+    return { kept: [], reasons: hosts.length > 0 ? [`${source}: ${plural(hosts.length)} dropped, the machine's sandbox policy allows no repo hosts (egress.repo_hosts: deny)`] : [] };
+  }
+  const reasons: string[] = [];
+  const kept: string[] = [];
+  for (const entry of hosts) {
+    const rule = policy.egress.deny.find((deny) => denies(deny, entry));
+    if (rule) reasons.push(`${source}: "${entry}" dropped, it matches egress.deny "${rule}" in the machine's sandbox policy`);
+    else kept.push(entry);
+  }
+  const room = Math.max(0, policy.egress.max_repo_hosts - taken);
+  if (kept.length > room) {
+    reasons.push(`${source}: ${plural(kept.length - room)} dropped past egress.max_repo_hosts ${policy.egress.max_repo_hosts} in the machine's sandbox policy`);
+    kept.length = room;
+  }
+  return { kept, reasons };
+}
 
 export function boundSandbox(sandbox: RepoSandbox, policy: MachinePolicy): { sandbox: RepoSandbox; bounds: SandboxBounds } {
   const out: RepoSandbox = structuredClone(sandbox);
@@ -48,22 +71,9 @@ export function boundSandbox(sandbox: RepoSandbox, policy: MachinePolicy): { san
     out.memory_gb = policy.limits.max_memory_gb;
   }
 
-  if (policy.egress.repo_hosts === "deny") {
-    if (out.egress.allow.length > 0) bounds.egress.push(`sandbox.egress.allow: ${plural(out.egress.allow.length)} dropped, the machine's sandbox policy allows no repo hosts (egress.repo_hosts: deny)`);
-    out.egress.allow = [];
-  } else {
-    const kept: string[] = [];
-    for (const entry of out.egress.allow) {
-      const rule = policy.egress.deny.find((deny) => denies(deny, entry));
-      if (rule) bounds.egress.push(`sandbox.egress.allow: "${entry}" dropped, it matches egress.deny "${rule}" in the machine's sandbox policy`);
-      else kept.push(entry);
-    }
-    if (kept.length > policy.egress.max_repo_hosts) {
-      bounds.egress.push(`sandbox.egress.allow: ${plural(kept.length - policy.egress.max_repo_hosts)} dropped past egress.max_repo_hosts ${policy.egress.max_repo_hosts} in the machine's sandbox policy`);
-      kept.length = policy.egress.max_repo_hosts;
-    }
-    out.egress.allow = kept;
-  }
+  const hosts = boundRepoHosts(out.egress.allow, policy, "sandbox.egress.allow");
+  bounds.egress.push(...hosts.reasons);
+  out.egress.allow = hosts.kept;
 
   if (out.image.base && policy.images.repo_base === "deny") {
     bounds.image.push(`sandbox.image.base "${out.image.base}" is refused by the machine's sandbox policy (images.repo_base: deny); the machine's image runs`);

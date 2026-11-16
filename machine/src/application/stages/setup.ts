@@ -4,6 +4,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import type { MachinePolicy } from "@hardness/contracts";
+
 import { gitIdentity as hostGitIdentity } from "../../adapters/git/worktree.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { renderLunaConfig, validateLunaConfig } from "../../domain/luna-config.ts";
@@ -19,6 +21,8 @@ export interface SetupDeps {
   exec: ProofExec;
   /** Where the proof runs (a throwaway clone) and how the app start is proven; without it (tests) the checks run in the checkout. */
   rig?: ProofRig;
+  /** The owner's sandbox policy: the proposal's egress list is held within it. */
+  machinePolicy?: MachinePolicy;
   stateDir: string;
   gitIdentity?: (repoPath: string) => Promise<{ name: string; email: string } | null>;
 }
@@ -53,7 +57,7 @@ export function setupRunner(deps: SetupDeps): StageRunner {
     const identityEnv = identity
       ? { GIT_AUTHOR_NAME: identity.name, GIT_AUTHOR_EMAIL: identity.email, GIT_COMMITTER_NAME: identity.name, GIT_COMMITTER_EMAIL: identity.email }
       : {};
-    const proven = await proveConfig(config, { exec: deps.exec, repoPath: task.repoPath, signal, env: identityEnv, stage: "setup", ...(deps.rig ? { rig: deps.rig } : {}) });
+    const proven = await proveConfig(config, { exec: deps.exec, repoPath: task.repoPath, signal, env: identityEnv, stage: "setup", ...(deps.rig ? { rig: deps.rig } : {}), ...(deps.machinePolicy ? { machinePolicy: deps.machinePolicy } : {}) });
     if (signal.aborted) return { outcome: "fail", detail: { error: "aborted" } };
     const { proof, refused } = proven;
     const runDir = join(deps.stateDir, "runs", context.runId);
@@ -73,6 +77,7 @@ export function setupRunner(deps: SetupDeps): StageRunner {
           ...(Array.isArray(answer?.notes) ? answer.notes : []),
           ...(proven.app ? [proven.app.ok ? `the app started from verify.e2e.start and answered in ${proven.app.seconds} s` : `the app did not start from verify.e2e.start: ${safe(proven.app.reason ?? "unknown").slice(0, 300)}`] : []),
           ...egressNotes,
+          ...(proven.bounds ?? []).map((line) => `the machine's sandbox policy: ${safe(line).slice(0, 300)}`),
         ],
         ...(refused.length > 0 ? { egressRefused: refused } : {}),
         config: text,

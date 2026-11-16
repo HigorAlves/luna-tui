@@ -59,6 +59,24 @@ describe("the frames tool", () => {
   });
 });
 
+describe("the policy's size on a video container", () => {
+  const size = { cpu: 1, memoryGb: 2, pids: 200, runtime: "runsc", cacheTrust: "untrusted" as const };
+  it("runs a tool on the limits it is given, and on none when it has none", async () => {
+    const seen: SandboxRun[] = [];
+    const base = { image: "v", id: "abcdefgh", jobDir, tool: "compose" as const, args: [], timeoutMs: 1, signal: new AbortController().signal };
+    await runVideoTool(async (run) => (seen.push(run), answer()(run)), { ...base, limits: size });
+    await runVideoTool(async (run) => (seen.push(run), answer()(run)), base);
+    expect(seen[0]!.limits).toEqual(size);
+    expect(seen[1]!.limits).toBeUndefined();
+  });
+
+  it("scans the images on the limits its deps name", async () => {
+    const seen: SandboxRun[] = [];
+    await scanImages({ image: "v", sandbox: async (run) => (seen.push(run), answer({ exitCode: 1 })(run)), limitsOf: async () => size }, { id: "shots", dir: jobDir, signal: new AbortController().signal });
+    expect(seen[0]!.limits).toEqual(size);
+  });
+});
+
 describe("scanImages", () => {
   const folder = () => realpathSync(mkdtempSync(join(tmpdir(), "shots-")));
   const deps = (frames: unknown | null, ok = true) => ({

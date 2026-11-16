@@ -17,7 +17,7 @@ import type { GraphJson } from "../../domain/blast-radius.ts";
 import { parseCodeowners, requiredOwners } from "../../domain/codeowners.ts";
 import { impact } from "../../domain/graph-impact.ts";
 import { type LocateGraph, locate } from "../../domain/graph-locate.ts";
-import type { SandboxResult, SandboxRun } from "../docker/docker.ts";
+import type { SandboxResult, SandboxRun, SandboxSize } from "../docker/docker.ts";
 import { checkoutHead, commitsBehind, defaultBranchFile, ensureCleanCheckout, graphCheckoutPath, isAncestor } from "../git/worktree.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { repoSlug } from "./slug.ts";
@@ -70,6 +70,8 @@ export interface GraphifyDeps {
   graphifyVersion?: () => Promise<string | null>;
   worktreesDir: string;
   sandbox: (run: SandboxRun) => Promise<SandboxResult>;
+  /** The size of the build container from the repo's bounded sandbox policy (runtime, process limit, seccomp, cpu, memory); absent, docker's defaults. */
+  limitsOf?: (repoPath: string) => Promise<SandboxSize>;
   git?: GraphGit;
 }
 
@@ -156,7 +158,9 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
     await mkdir(building, { recursive: true });
     let result: SandboxResult;
     try {
+      const limits = await deps.limitsOf?.(repoPath);
       result = await deps.sandbox({
+        ...(limits ? { limits } : {}),
         name: `luna-graph-${repoSlug(repoPath)}`,
         image,
         runDir: join(repoDir, "run"),
