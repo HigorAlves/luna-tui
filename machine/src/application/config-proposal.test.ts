@@ -142,6 +142,14 @@ describe("pipeline.proposeConfig", () => {
     expect((await p.proposeConfig(repo(), [toSol])).id).not.toBe(first.id);
   });
 
+  it("makes one card when two proposals for one repo arrive at once", async () => {
+    const p = make();
+    const dir = repo();
+    const [a, b] = await Promise.all([p.proposeConfig(dir, [toSol]), p.proposeConfig(dir, [toSol, lowTriage])]);
+    expect(b.id).toBe(a.id);
+    expect((await p.list()).filter((t) => t.route === "config")).toHaveLength(1);
+  });
+
   it("creates nothing when the new file does not render valid", async () => {
     const p = make();
     const dir = repo();

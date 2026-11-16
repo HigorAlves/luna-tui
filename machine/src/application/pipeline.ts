@@ -777,6 +777,24 @@ export class Pipeline {
    *  changes stay on it for `declinedConfigChanges`. A repo has one open proposal: a second replaces what the first asked. A file that would
    *  not load throws, and nothing is made. */
   async proposeConfig(repoPath: string, changes: ConfigChange[]): Promise<TaskRow> {
+    // One at a time per repo: the open-card check reads and then creates, so two calls at once would make two cards.
+    const before = this.proposing.get(repoPath) ?? Promise.resolve();
+    const run = before.then(() => this.proposeConfigNow(repoPath, changes));
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.proposing.set(repoPath, tail);
+    try {
+      return await run;
+    } finally {
+      if (this.proposing.get(repoPath) === tail) this.proposing.delete(repoPath);
+    }
+  }
+
+  private readonly proposing = new Map<string, Promise<void>>();
+
+  private async proposeConfigNow(repoPath: string, changes: ConfigChange[]): Promise<TaskRow> {
     const previous = await this.currentConfigText(repoPath);
     const config = renderProposal(previous, changes);
     const requested = { config, previous, changes };
