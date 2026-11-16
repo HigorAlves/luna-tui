@@ -27,6 +27,8 @@ export interface Incident {
   timeline: TimelineEntry[];
   /** The breach assessment, once made (when the incident starts, and again when it resolves). */
   breach?: IncidentBreach;
+  /** The board card of the breach notification, made once when an assessment first found a regime; a reassessment never makes another. */
+  breachCardId?: string;
   /** The postmortem tries so far: how many, and when the last one ran (the job retries a failed one, spaced and capped). */
   postmortem?: { attempts: number; lastAttemptAt: string; opened?: true };
 }

@@ -73,11 +73,11 @@ function world(over: Partial<StatusReportDeps> = {}) {
 }
 
 describe("StatusReport.build", () => {
-  it("opens one draft for the week: the page, the headline as summary, the channel and the wiki page as targets", async () => {
+  it("opens one draft for the week: the page, the headline as summary, the wiki page first, then the channel, as targets", async () => {
     const { job, drafts } = world();
     const draft = await job.build("2026-W46");
     expect(draft).toMatchObject({ id: "status_report:2026-W46", kind: "status_report", repo: "acme/home", title: "Status, 2026-W46", period: "2026-W46", summary: "Seven cards shipped", status: "waiting" });
-    expect(draft.targets).toEqual([{ kind: "slack_channel", channel: "C0123ABC" }, { kind: "wiki", repo: "acme/home", path: "Status/2026-W46.md" }]);
+    expect(draft.targets).toEqual([{ kind: "wiki", repo: "acme/home", path: "Status/2026-W46.md" }, { kind: "slack_channel", channel: "C0123ABC" }]);
     expect(draft.text).toContain("## Summary\n\nSeven shipped.");
     expect(draft.text).toContain("Cards: 9 created, 7 closed, 12 open, 2 waiting on you");
     expect((await drafts.list()).map((d) => d.id)).toEqual(["status_report:2026-W46"]);
@@ -106,6 +106,24 @@ describe("StatusReport.build", () => {
     expect(context.compliance.access).toEqual([{ org: "acme", period: "2026-Q4", flags: 4, signed: false }]);
     expect(context.compliance.incidents).toEqual([{ title: "Export bucket public", severity: "high", status: "open", nextDeadline: { regime: "GDPR", at: "2026-11-18T09:00:00.000Z" } }]);
     expect(context.compliance.vulns).toEqual([{ repo: "acme/api", severity: "high", deadline: "2026-11-20", overdue: true }]);
+  });
+
+  it("keeps a resolved incident whose breach clock is still running or ran out within the week, and drops the rest", async () => {
+    const inc = (id: string, status: "open" | "resolved", clocks?: Record<string, string>) => ({ id, title: id, severity: "high", status, startedAt: at(1).toISOString(), resolvedAt: status === "resolved" ? at(2).toISOString() : null, service: null, signals: [], timeline: [], ...(clocks ? { breach: { assessedAt: "x", answers: {}, regimes: Object.keys(clocks), clocks } } : {}) });
+    const { job, write } = world({
+      incidents: {
+        list: async () =>
+          [
+            inc("running", "resolved", { gdpr: "2026-11-18T09:00:00.000Z" }),
+            inc("ran-out-in-week", "resolved", { gdpr: "2026-11-12T09:00:00.000Z" }),
+            inc("ran-out-before", "resolved", { gdpr: "2026-11-02T09:00:00.000Z" }),
+            inc("resolved-no-breach", "resolved"),
+            inc("open", "open"),
+          ] as never,
+      },
+    });
+    await job.build("2026-W46");
+    expect(write.mock.calls[0]![0].compliance.incidents.map((i) => i.title)).toEqual(["running", "ran-out-in-week", "open"]);
   });
 
   it("asks capacity_check about the coming week: the top thirty by WSJF, the closed and reviewed counts of the last four weeks, the headroom", async () => {

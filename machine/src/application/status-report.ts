@@ -95,7 +95,7 @@ export class StatusReport {
     const { from, to } = weekBounds(week);
     const since = local(from, 0, 0, 0, 0);
     const until = local(to, 23, 59, 59, 999);
-    const [tasks, metrics, merged, compliance] = await Promise.all([this.deps.tasks(), this.deps.metrics(since, until), this.merged(since, until), this.complianceFacts(week, this.now())]);
+    const [tasks, metrics, merged, compliance] = await Promise.all([this.deps.tasks(), this.deps.metrics(since, until), this.merged(since, until), this.complianceFacts(week, since, this.now())]);
     const capacity = await this.capacity(week, until, tasks);
     const inWindow = (d: Date | null) => d !== null && d >= since && d <= until;
     const shipped = tasks.filter((t) => t.state === "closed" && t.archiveReason === null && inWindow(t.stateSince ?? t.updatedAt));
@@ -130,7 +130,8 @@ export class StatusReport {
       period: week,
       summary: answer.headline,
       text: statusPage(week, answer, facts),
-      targets: [...(this.deps.slackChannel ? [{ kind: "slack_channel" as const, channel: this.deps.slackChannel }] : []), { kind: "wiki" as const, repo: this.deps.wikiRepo, path: statusPath(week) }],
+      // The wiki first: a failure after the Slack post would leave a link to a page that is not there.
+      targets: [{ kind: "wiki" as const, repo: this.deps.wikiRepo, path: statusPath(week) }, ...(this.deps.slackChannel ? [{ kind: "slack_channel" as const, channel: this.deps.slackChannel }] : [])],
     });
   }
 
@@ -168,7 +169,7 @@ export class StatusReport {
     return out;
   }
 
-  private async complianceFacts(week: string, now: Date): Promise<StatusReportContext["compliance"]> {
+  private async complianceFacts(week: string, since: Date, now: Date): Promise<StatusReportContext["compliance"]> {
     const drafts = (await this.deps.drafts.list()).filter((d) => d.id !== `status_report:${week}`);
     const latest = (kind: string, key: (d: ComplianceDraft) => string) => {
       const best = new Map<string, ComplianceDraft>();
@@ -180,7 +181,7 @@ export class StatusReport {
       return [...best.values()];
     };
     const count = (text: string, pattern: RegExp) => Number(pattern.exec(text)?.[1] ?? 0);
-    const incidents = (await this.deps.incidents.list()).filter((i) => i.status === "open");
+    const incidents = (await this.deps.incidents.list()).filter((i) => i.status === "open" || clockRunning(i, since));
     const vulns = await this.deps.vulns.list();
     return {
       waitingDrafts: drafts.filter((d) => d.status === "waiting" || d.status === "edited").slice(0, 30).map((d) => ({ kind: d.kind, title: d.title.slice(0, 200) })),
@@ -271,6 +272,12 @@ const orgOf = (d: ComplianceDraft): string => {
   const target = d.targets.find((x) => x.kind === "access_slices");
   return target && target.kind === "access_slices" ? target.org : d.title;
 };
+
+/** A breach clock not yet past, or past within the report week (from `since`): a resolved incident still owes its notice. */
+function clockRunning(incident: Incident, since: Date): boolean {
+  const breach = assessedBreach(incident.breach);
+  return breach !== null && Object.values(breach.clocks).some((at) => new Date(at as string) >= since);
+}
 
 /** The next breach deadline of an open incident: the earliest clock still ahead, else the earliest there is. */
 function nextDeadline(incident: Incident, now: Date): { regime: string; at: string } | null {

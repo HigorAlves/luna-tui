@@ -43,9 +43,16 @@ describe("postmortemContext", () => {
 });
 
 describe("postmortemPath", () => {
-  it("is Incidents/<start date>-<slug>.md", () => {
-    expect(postmortemPath(incident())).toBe("Incidents/2026-11-10-export-bucket-public.md");
-    expect(postmortemPath(incident({ title: "!!!" }))).toBe("Incidents/2026-11-10-incident.md");
+  it("is Incidents/<start date>-<slug>-<short hash of the id>.md", () => {
+    expect(postmortemPath(incident())).toMatch(/^Incidents\/2026-11-10-export-bucket-public-[0-9a-f]{6}\.md$/);
+    expect(postmortemPath(incident({ title: "!!!" }))).toMatch(/^Incidents\/2026-11-10-incident-[0-9a-f]{6}\.md$/);
+  });
+
+  it("differs for two incidents with one title on one day, and is stable for one incident", () => {
+    const first = incident({ id: "datadog:monitor:7@2026-11-10T09:00:00.000Z" });
+    const second = incident({ id: "datadog:monitor:7@2026-11-10T14:00:00.000Z" });
+    expect(postmortemPath(first)).not.toBe(postmortemPath(second));
+    expect(postmortemPath(first)).toBe(postmortemPath({ ...first }));
   });
 });
 

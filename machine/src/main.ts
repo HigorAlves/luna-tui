@@ -81,6 +81,7 @@ import type { Incident } from "./domain/incident.ts";
 import { postmortemWriter } from "./application/incident-postmortem.ts";
 import { jiraActionsWriter } from "./application/jira-actions.ts";
 import { breachAssessor } from "./application/breach-assessment.ts";
+import { breachCards } from "./application/breach-card.ts";
 import { createSentry } from "./adapters/sentry/rest.ts";
 import { createDatadog } from "./adapters/datadog/rest.ts";
 import { Vulns } from "./application/vulns.ts";
@@ -887,7 +888,12 @@ const assessBreach = breachAssessor({
     return (await ownCalls(packRuns).run({ pack: "breach_assess", context: { breach } }, INTAKE_CLIENT)).answer;
   },
 });
-const reassess = async (incident: Incident): Promise<Incident> => (await incidentJob.update(incident.id, { breach: mergeBreach(incident.breach, await assessBreach(incident), new Date().toISOString()) })) ?? incident;
+/** An assessment that finds a regime opens the incident's one breach card, so the clocks are on the board. */
+const breachCard = breachCards({ pipeline, update: (id, patch) => incidentJob.update(id, patch) });
+const reassess = async (incident: Incident): Promise<Incident> => {
+  const assessed = (await incidentJob.update(incident.id, { breach: mergeBreach(incident.breach, await assessBreach(incident), new Date().toISOString()) })) ?? incident;
+  return breachCard(assessed);
+};
 /** On resolve, with the fresh assessment, the postmortem pack writes the page and a draft waits for the person. */
 const writePostmortem = postmortemWriter({
   drafts: complianceDrafts,
@@ -896,8 +902,10 @@ const writePostmortem = postmortemWriter({
     return (await ownCalls(packRuns).run({ pack: "postmortem", context: { postmortem } }, INTAKE_CLIENT)).answer;
   },
   wikiRepo: config.managerWikiRepo,
-  jiraProject: config.incidents.jiraProject,
+  // With no Jira the writer holds the no-token port, and approve would fail on the action items after the wiki page: they stay on the page.
+  jiraProject: config.jira ? config.incidents.jiraProject : null,
 });
+if (config.incidents.jiraProject && !config.jira) console.warn("incidents: MACHINE_INCIDENT_JIRA_PROJECT is set but Jira is not configured, so the postmortem action items stay on the page");
 const incidentJob: IncidentJob = new IncidentJob({
   stateDir: config.stateDir,
   ...incidentSources,
@@ -975,7 +983,8 @@ const statusReport = config.managerWikiRepo
       },
       repos: complianceRepos,
       wikiRepo: config.managerWikiRepo,
-      slackChannel: config.statusReport.slackChannel,
+      // The post goes out as the person, with the Slack user token: with none, approve would fail on it, so the report is wiki only.
+      slackChannel: config.slackInbox.userToken ? config.statusReport.slackChannel : null,
       day: config.statusReport.day,
       stateDir: config.stateDir,
     })
@@ -1145,7 +1154,7 @@ console.log(complianceTicker ? "compliance: change-management evidence for each 
 /** The weekly status report: an hourly tick, since the cursor says whether the week is done and the job itself waits for its day and hour. */
 const statusTicker = config.statusReport.enabled && statusReport ? new Ticker(() => void statusReport.tick().catch((error: unknown) => console.warn("status report failed", error)), 60 * MINUTE_MS) : null;
 statusTicker?.start();
-console.log(statusTicker ? `status report: the previous week's report drafted on ${config.statusReport.day} from 08:00, checked hourly${config.statusReport.slackChannel ? ", summary to its Slack channel on approve" : ", wiki only (no MACHINE_STATUS_SLACK_CHANNEL)"}` : "status report: weekly job off (needs MACHINE_MANAGER_WIKI_REPO, and MACHINE_STATUS_REPORT is not off)");
+console.log(statusTicker ? `status report: the previous week's report drafted on ${config.statusReport.day} from 08:00, checked hourly${config.statusReport.slackChannel && config.slackInbox.userToken ? ", summary to its Slack channel on approve" : config.statusReport.slackChannel ? ", wiki only (MACHINE_STATUS_SLACK_CHANNEL needs the Slack user token)" : ", wiki only (no MACHINE_STATUS_SLACK_CHANNEL)"}` : "status report: weekly job off (needs MACHINE_MANAGER_WIKI_REPO, and MACHINE_STATUS_REPORT is not off)");
 /** The quarterly access review: its own daily tick, since the cursor says which orgs are done with the quarter; it needs MACHINE_MANAGER_WIKI_REPO and says so once without it. */
 const accessTicker = config.accessReview ? new Ticker(() => void accessReview.tick().catch((error: unknown) => console.warn("compliance access review failed", error)), 24 * 60 * MINUTE_MS) : null;
 const accessFirst = accessTicker ? setTimeout(() => void accessReview.tick().catch((error: unknown) => console.warn("compliance access review failed", error)), 3 * MINUTE_MS) : null;

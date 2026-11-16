@@ -111,7 +111,7 @@ export class IncidentJob {
   }
 
   /** Sets fields on a stored incident (the breach assessment, say); null when there is no such incident. */
-  async update(id: string, patch: Partial<Pick<Incident, "breach" | "postmortem">>): Promise<Incident | null> {
+  async update(id: string, patch: Partial<Pick<Incident, "breach" | "breachCardId" | "postmortem">>): Promise<Incident | null> {
     const held = (await this.list()).find((i) => i.id === id);
     if (!held) return null;
     const next = { ...held, ...patch };

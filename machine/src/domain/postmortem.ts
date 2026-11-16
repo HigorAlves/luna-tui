@@ -1,6 +1,8 @@
 // The postmortem page of a resolved incident (RFC 0008, wave 5). The facts and the breach clocks are the machine's; the `postmortem`
 // pack only writes the reading and the follow-up. Pure: this renders the page, its path and its one-line summary.
 
+import { createHash } from "node:crypto";
+
 import type { PostmortemAnswer, PostmortemContext } from "@hardness/contracts";
 
 import { assessedBreach } from "./breach.ts";
@@ -31,8 +33,9 @@ const slugOf = (title: string): string =>
     .slice(0, 60)
     .replace(/-+$/, "") || "incident";
 
-/** `Incidents/YYYY-MM-DD-<slug>.md`, dated by when the incident started (UTC). */
-export const postmortemPath = (incident: Pick<Incident, "title" | "startedAt">): string => `Incidents/${incident.startedAt.slice(0, 10)}-${slugOf(incident.title)}.md`;
+/** `Incidents/YYYY-MM-DD-<slug>-<hash>.md`, dated by when the incident started (UTC); the short hash of the id keeps two incidents of one title and day apart. */
+export const postmortemPath = (incident: Pick<Incident, "id" | "title" | "startedAt">): string =>
+  `Incidents/${incident.startedAt.slice(0, 10)}-${slugOf(incident.title)}-${createHash("sha256").update(incident.id).digest("hex").slice(0, 6)}.md`;
 
 const clocksOf = (incident: Incident): Array<[string, string]> => {
   const breach = assessedBreach(incident.breach);

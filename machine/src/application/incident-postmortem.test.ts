@@ -39,7 +39,7 @@ describe("postmortemWriter", () => {
         title: "Postmortem: Checkout failing",
         period: null,
         summary: "critical · 1 action item · ⏱ gdpr by 2026-11-13",
-        targets: [{ kind: "wiki", repo: "acme/handbook", path: "Incidents/2026-11-10-checkout-failing.md" }],
+        targets: [{ kind: "wiki", repo: "acme/handbook", path: expect.stringMatching(/^Incidents\/2026-11-10-checkout-failing-[0-9a-f]{6}\.md$/) }],
       }),
     );
     expect(open.mock.calls[0]![0]).toMatchObject({ text: expect.stringContaining("- [ ] Add a check (owner: unassigned, due: none)") });
@@ -49,7 +49,7 @@ describe("postmortemWriter", () => {
     const { open, deps: d } = deps({ jiraProject: "OPS" });
     await postmortemWriter(d)(incident);
     expect((open.mock.calls[0]![0] as { targets: unknown[] }).targets).toEqual([
-      { kind: "wiki", repo: "acme/handbook", path: "Incidents/2026-11-10-checkout-failing.md" },
+      { kind: "wiki", repo: "acme/handbook", path: expect.stringMatching(/^Incidents\/2026-11-10-checkout-failing-[0-9a-f]{6}\.md$/) },
       { kind: "jira_actions", project: "OPS" },
     ]);
   });

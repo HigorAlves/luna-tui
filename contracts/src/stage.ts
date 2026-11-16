@@ -22,6 +22,8 @@ export const TaskSource = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("github"), repo: z.string(), number: z.number().int(), url: z.string(), labels: z.array(z.string()).optional(), authorAssociation: z.string().optional() }),
   /** A Dependabot or code-scanning alert a vulnerability card stands for. `alert` is the alert's own number, a count apart from issues and PRs: nothing reads it as `#N`. `labels` carry `security` for a critical one, as an issue's do. */
   z.object({ kind: z.literal("github_alert"), repo: z.string(), alert: z.number().int(), tool: z.enum(["dependabot", "code_scanning"]), url: z.string(), labels: z.array(z.string()).optional() }),
+  /** The breach-notification card of an incident (`id` is the incident's own id). `labels` carry `security`, as an issue's do, so triage reads the card as P0. */
+  z.object({ kind: z.literal("incident"), id: z.string(), labels: z.array(z.string()).optional() }),
   z.object({
     kind: z.literal("github_pr"),
     repo: z.string(),
