@@ -38,7 +38,7 @@ beforeEach(() => {
   mkdirSync(stateDir);
 });
 
-function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("pass" | "fail")[]; recorder?: "ok" | "escalated" | "no-timing" | "symlink" | "inside-link"; heads?: string[]; answerOnly?: boolean; concurrent?: boolean; narrateFails?: boolean; narrateWaitsForAbort?: boolean; recorderWaitsForAbort?: boolean; config?: { voice?: string | null; language?: string | null; budgetS?: number; regenerate?: number }; metaDurationS?: number; frames?: unknown[] | "none" | "bad-tool"; transcript?: string; privacy?: { choice: string; confidence: number } | "throw" | "off" } = {}) {
+function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("pass" | "fail")[]; recorder?: "ok" | "escalated" | "no-timing" | "symlink" | "inside-link"; heads?: string[]; answerOnly?: boolean; concurrent?: boolean; narrateFails?: boolean; narrateWaitsForAbort?: boolean; recorderWaitsForAbort?: boolean; config?: { voice?: string | null; language?: string | null; budgetS?: number; regenerate?: number }; metaDurationS?: number; frames?: unknown[] | "none" | "bad-tool"; transcript?: string; privacy?: { choice: string; confidence: number } | "throw" | "off"; limitsOf?: (repoPath: string | null, trust: "trusted" | "untrusted") => Promise<{ cpu: number; memoryGb: number }> } = {}) {
   const calls: { pack: string; runId: string; extra: AgentExtra; at: number; signal?: AbortSignal }[] = [];
   const flags = { recordingBeforeNarrateReturned: false, recorderSawAbort: false, narrateSawAbort: false, recInTimelineAtStart: null as string | null };
   const heads = [...(opts.heads ?? [])];
@@ -130,7 +130,7 @@ function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("p
     const p = opts.privacy ?? { choice: "none", confidence: 0.9 };
     return { exposure: p };
   };
-  const pipeline = videoPipeline({ decide: () => decide as never, sandbox, image: "video:1", stateDir, runPack, git, log: () => {}, ...(opts.config ? { config } : {}) });
+  const pipeline = videoPipeline({ decide: () => decide as never, sandbox, image: "video:1", stateDir, runPack, git, log: () => {}, ...(opts.limitsOf ? { limitsOf: opts.limitsOf } : {}), ...(opts.config ? { config } : {}) });
   const worktree = join(root, "wt");
   const context = (runId = "run-1"): StageContext =>
     ({ task: { id: "11111111-2222-3333-4444-555555555555", worktreePath: worktree }, stage: "evidence", attempt: 1, runId, approvals: [], signal: new AbortController().signal, note: async (t: string) => void notes.push(t) }) as unknown as StageContext;
@@ -143,6 +143,18 @@ function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("p
 }
 
 describe("videoPipeline", () => {
+  it("runs every tool container on the policy's size for the card's trust", async () => {
+    const asked: Array<[string | null, string]> = [];
+    const h = harness({ limitsOf: async (repo, trust) => (asked.push([repo, trust]), { cpu: 1, memoryGb: 2 }) });
+    const ctx = h.context();
+    (ctx.task as unknown as Record<string, unknown>).repoPath = "/repo";
+    (ctx.task as unknown as Record<string, unknown>).source = { kind: "github", authorAssociation: "NONE" };
+    await h.pipeline(ctx, h.input());
+    expect(h.tools.length).toBeGreaterThan(0);
+    for (const t of h.tools) expect(t.run.limits).toMatchObject({ cpu: 1, memoryGb: 2 });
+    expect(new Set(asked.map((a) => a.join("|")))).toEqual(new Set(["/repo|untrusted"]));
+  });
+
   it("resets the worktree after the recorder (its demo spec never lingers) and keeps the head it found", async () => {
     const h = harness();
     const out = await h.pipeline(h.context(), h.input());

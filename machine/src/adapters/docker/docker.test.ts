@@ -437,6 +437,24 @@ describe("sandboxExecutor's session: the services start once for a pass of check
     return { exec, events, runs, refuse: (rows: ReturnType<typeof row>[]) => void (refused = rows) };
   }
 
+  it("asks the daemon for seccomp and the size's runtime before it opens a network or starts a service, and opens nothing when one is missing", async () => {
+    const events: string[] = [];
+    const card = { name: "net-s", dns: "d", containerArgs: () => [], blocked: async () => [], teardown: async () => {} };
+    const given = {
+      checkSeccomp: async () => void events.push("seccomp"),
+      checkRuntime: async (runtime: string) => void events.push(`runtime ${runtime}`),
+      openCardNetwork: async () => (events.push("open network"), card as never),
+      startServices: async () => (events.push("start services"), { network: "net-s", env: {}, teardown: async () => {} }),
+    } as unknown as Partial<RunDeps>;
+    const fake = (async () => ({ code: 0, stdout: "", stderr: "" })) as never;
+    const make = (over: Partial<RunDeps> = {}) => sandboxExecutor({ machine: "m", imageOf: async () => "img", egress: async () => spec, limitsOf: async () => ({ cpu: 1, memoryGb: 1, runtime: "runsc" }) }, fake, { ...given, ...over });
+    await make().session!({ cwd: "/wt", services: { postgres: { image: "postgres:16" } } });
+    expect(events).toEqual(["seccomp", "runtime runsc", "open network", "start services"]);
+    events.length = 0;
+    await expect(make({ checkSeccomp: async () => { throw new Error("no seccomp"); } }).session!({ cwd: "/wt", services: {} })).rejects.toThrow("no seccomp");
+    expect(events).toEqual([]);
+  });
+
   it("opens the card network and starts the services once, however many checks run, and removes them on close", async () => {
     const { exec, events, runs } = setup();
     const session = await exec.session!({ cwd: "/wt/a/task-1", repoPath: "/a/shop", services: { postgres: { image: "postgres:16" } } });

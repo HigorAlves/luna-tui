@@ -14,7 +14,8 @@ import { z } from "zod";
 import { safe as safeLine } from "../../domain/evidence-markdown.ts";
 
 import { Timeline, checkTimeline } from "../../../runner-video/tools/lib/timeline.ts";
-import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
+import type { SandboxResult, SandboxRun, SandboxSize } from "../../adapters/docker/docker.ts";
+import { type Trust, trustOf } from "../../domain/trust.ts";
 import { headCommit as worktreeHead, resetWorktree } from "../../adapters/git/worktree.ts";
 import { copyRegularFile, readRegularFile } from "../../adapters/fs/bounded.ts";
 import type { TruthSink } from "../decision-truth.ts";
@@ -44,6 +45,8 @@ export interface VideoPipelineDeps {
   /** Where frame_privacy's later fact is written; absent, nothing is learned. */
   truth?: TruthSink | null;
   overrides?: (repoPath: string | null) => Promise<Record<string, DecisionOverrides>>;
+  /** The size of each tool container from the repo's bounded sandbox policy for the card's trust: ffmpeg reads recordings of an untrusted card's app. Absent, docker's defaults. */
+  limitsOf?: (repoPath: string | null, trust: Trust) => Promise<SandboxSize>;
 }
 
 export interface VideoInput {
@@ -146,7 +149,8 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
     };
     const tool = async (name: VideoTool, args: string[], signal: AbortSignal = context.signal) => {
       note(`${name}`);
-      const done = await runVideoTool(deps.sandbox, { image: deps.image, id: context.task.id, jobDir, tool: name, args, timeoutMs: TOOL_TIMEOUT[name], signal });
+      const limits = await deps.limitsOf?.(context.task.repoPath ?? null, trustOf(context.task));
+      const done = await runVideoTool(deps.sandbox, { image: deps.image, id: context.task.id, jobDir, tool: name, args, timeoutMs: TOOL_TIMEOUT[name], signal, ...(limits ? { limits } : {}) });
       return done.ok ? null : `the ${name} job ${done.timedOut ? "timed out" : done.aborted ? "was aborted" : `failed (exit ${done.exitCode})`}`;
     };
     const why = (result: StageResult) => String(result.detail?.reason ?? result.detail?.error ?? result.detail?.summary ?? result.outcome);

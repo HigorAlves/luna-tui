@@ -26,6 +26,7 @@
 // while the day is at its ceiling is refused before it runs. There is no monthly ceiling here:
 // that one is per repo (luna.yaml), and a call has no repo.
 import type { EgressPolicy } from "./egress-policy.ts";
+import type { PolicyStore } from "./policy.ts";
 import { type CredentialOwner, type DecisionRecord, type EngineId, type FactoryConfig, PACKS, type PackId, type RunInfo, type RunInput, type RunResult, credentialOwner, resolveEngine } from "@hardness/contracts";
 import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
@@ -141,6 +142,8 @@ export interface PackRunsDeps {
   sandbox?: (run: SandboxRun) => Promise<SandboxResult>;
   /** The list a pack run may reach; absent, the run joins an ordinary bridge as before. */
   egress?: EgressPolicy;
+  /** The machine's sandbox policy: each call's container is sized by it, as an untrusted input. */
+  policies?: Pick<PolicyStore, "for">;
   now?: () => Date;
   /** Calls at once; defaults to PACK_RUNS_MAX. */
   max?: number;
@@ -323,7 +326,7 @@ export class PackRuns implements PackRunsPort {
       const input = buildContextPackInput(pack, context, engine);
       const run = await runPackOnce(
         { name: `hardness-run-${pack.replace(/_/g, "-")}-${runDir.slice(-12)}`, image: this.deps.image, runDir, worktree: work, input, engine, labels: { luna: "run" }, extraEnv: mode === "full" ? span.childEnv() : {}, ...(origin.credentialWaitMs !== undefined ? { credentialWaitMs: origin.credentialWaitMs } : {}), signal },
-        { credentials: this.deps.credentials, sandbox: this.deps.sandbox, ...(this.deps.egress ? { egress: this.deps.egress } : {}) },
+        { credentials: this.deps.credentials, sandbox: this.deps.sandbox, ...(this.deps.policies ? { policies: this.deps.policies } : {}), ...(this.deps.egress ? { egress: this.deps.egress } : {}) },
       );
       if (run.error !== null) failure = signal?.aborted ? new RunAbortedError("the client left: the run was stopped") : run.credentialBusy ? new RunCredentialBusyError(run.error) : new RunFailedError(run.error);
       else {

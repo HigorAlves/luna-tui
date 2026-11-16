@@ -607,11 +607,13 @@ export function sandboxExecutor(
   const session = async (options: SessionOptions): Promise<ChecksSession> => {
     const spec = images.egress ? withAllow(await images.egress(options.repoPath), options.egressAllow) : null;
     const name = `hardness-checks-${randomUUID().slice(0, 8)}`;
-    const card = spec ? await deps.openCardNetwork(name, spec, { proxyImage: spec.proxyImage }) : null;
     const size = images.limitsOf ? await images.limitsOf(options.repoPath, options.trust) : undefined;
+    // The services start here, not through the sandbox: the daemon's seccomp filter and the size's runtime are asked for before anything starts.
+    await deps.checkSeccomp();
+    if (size?.runtime) await deps.checkRuntime?.(size.runtime);
+    const card = spec ? await deps.openCardNetwork(name, spec, { proxyImage: spec.proxyImage }) : null;
     let services: Awaited<ReturnType<RunDeps["startServices"]>>;
     try {
-      if (size?.runtime) await deps.checkRuntime?.(size.runtime);
       services = await deps.startServices(name, options.services, { harden: serviceHardeningOf(size), ...(card ? { network: { name: card.name, dns: card.dns } } : {}) });
     } catch (error) {
       await card?.teardown();

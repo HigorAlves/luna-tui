@@ -79,6 +79,7 @@ import { lockfilesAt } from "./adapters/git/worktree.ts";
 import { GraphWatch } from "./application/graph-watch.ts";
 import { approveRepoBase } from "./application/approve-base.ts";
 import { repoHealthOf } from "./application/repo-health.ts";
+import { sandboxSizeOf } from "./domain/sandbox-bounds.ts";
 import { EngineBudgetWatch, engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "./application/engine-gates.ts";
 import { PgTaskStore } from "./adapters/persistence/task-store.ts";
 import { machineCredentials } from "./adapters/credentials/index.ts";
@@ -246,7 +247,7 @@ let graphImage: (repoPath: string, signal?: AbortSignal) => Promise<string> = as
 /** The fact proposer: the `fact_propose` pack, run through PackRuns once it exists (bound below). */
 const factProposer: { run: Propose | null } = { run: null };
 const economy = config.economy ? economyOver(economyStore(config.stateDir), (line) => console.warn(line), (repoPath) => finishedRunsOf(db, repoPath, config.stateDir), (repoPath) => defaultBranchFile(repoPath, [CONTEXT_FILE])) : noEconomy();
-const graph = graphifyGraph({ stateDir: config.stateDir, image: (repoPath, signal) => graphImage(repoPath, signal), imageId, graphifyVersion: () => imageLabel(config.runnerImage, "dev.hardness.graphify"), worktreesDir: config.worktreesDir, sandbox: runSandbox });
+const graph = graphifyGraph({ stateDir: config.stateDir, image: (repoPath, signal) => graphImage(repoPath, signal), imageId, graphifyVersion: () => imageLabel(config.runnerImage, "dev.hardness.graphify"), worktreesDir: config.worktreesDir, sandbox: runSandbox, limitsOf: async (repoPath) => sandboxSizeOf(await policies.for(repoPath), "trusted") });
 /** The graph watch, built below once the pipeline and the repo map exist; a stage with no graph asks it for a first build. */
 let graphWatch: GraphWatch | null = null;
 /** Each engine's credential as every part of the machine sees it: an engine on a runtime
@@ -708,6 +709,7 @@ async function learningOf(taskId: string | undefined): Promise<{ repo: string | 
 /** Packs on demand (`POST /runs`): the stage image, each call with its own engine's credential;
  *  off only with MACHINE_AGENTS=off. Their cost counts toward the day's ceiling, which they obey. */
 const packRuns = buildPackRuns(config, {
+  policies,
   ...(config.egress.enabled && agentDeps?.egress ? { egress: agentDeps.egress } : {}),
   credentials,
   store: new PgPackRunStore(db),

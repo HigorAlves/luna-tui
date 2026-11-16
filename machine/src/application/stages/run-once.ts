@@ -8,7 +8,10 @@ import { join } from "node:path";
 
 import { CredentialWaitError, type Credentials } from "../../adapters/credentials/index.ts";
 import { type SandboxResult, type SandboxRun, runSandbox } from "../../adapters/docker/docker.ts";
+import type { Trust } from "../../domain/trust.ts";
+import { sandboxSizeOf } from "../../domain/sandbox-bounds.ts";
 import type { EgressPolicy } from "../egress-policy.ts";
+import type { PolicyStore } from "../policy.ts";
 
 const MINUTE = 60_000;
 
@@ -30,6 +33,8 @@ export interface OneRun {
   egressKind?: "pack" | "github" | "agent";
   /** How long to wait for a login another run holds (the Codex one is one run at a time); absent, the run's own time limit. */
   credentialWaitMs?: number;
+  /** Whose input the pack reads: `untrusted` (the default) for text from Slack, Jira, a client or a GitHub source with no trusted association; it picks the runtime and the cache. */
+  trust?: Trust;
   signal?: AbortSignal;
 }
 
@@ -39,6 +44,8 @@ export interface OneRunDeps {
   sandbox?: (run: SandboxRun) => Promise<SandboxResult>;
   /** The list a pack run with no repository may reach (its engine's hosts); absent, the run joins an ordinary bridge as before. */
   egress?: EgressPolicy;
+  /** The machine's sandbox policy, as the policy store bounds it: the run's container size comes from it. Absent (tests), docker's defaults. */
+  policies?: Pick<PolicyStore, "for">;
 }
 
 /** The run's result when the container left a readable one; `error` says why when it did not. */
@@ -55,8 +62,11 @@ export async function runPackOnce(run: OneRun, deps: OneRunDeps): Promise<OneRun
     throw error;
   }
   const egress = deps.egress ? await deps.egress.for({ repoPath: null, kind: run.egressKind ?? "pack", owners: [credentialOwner(run.engine)], ...(credential.relay ? { relayed: ["claude" as const] } : {}) }).catch((error) => credential.release().then(() => Promise.reject(error))) : undefined;
+  // The container is sized by the machine's sandbox policy (cpu, memory, process limit, seccomp, runtime, which also run the daemon's start checks); the input is text a stranger may have written.
+  const size = deps.policies ? sandboxSizeOf(await deps.policies.for(null).catch((error) => credential.release().then(() => Promise.reject(error))), run.trust ?? "untrusted") : undefined;
   const result = await (deps.sandbox ?? runSandbox)({
     ...(egress ? { egress } : {}),
+    ...(size ? { limits: size } : {}),
     name: run.name,
     image: run.image,
     runDir: run.runDir,

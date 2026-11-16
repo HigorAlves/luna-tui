@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
+import { SeccompUnavailableError } from "../adapters/docker/seccomp.ts";
 import type { ExecResult } from "../adapters/process/exec.ts";
 import { parseLunaConfig } from "../domain/luna-config.ts";
 import { type AppDeps, e2eModeOf, openApp, openPreview } from "./app-session.ts";
@@ -64,6 +65,25 @@ describe("e2eModeOf", () => {
     expect(p("verify:\n  e2e:\n    start:\n      command: x\nqa_targets:\n  - name: s\n    url: https://s.example.com\n")).toBe("start");
     expect(p("qa_targets:\n  - name: s\n    url: https://s.example.com\n")).toBe("target");
     expect(p("")).toBe("agent");
+  });
+});
+
+describe("openApp start checks", () => {
+  it("asks the daemon for seccomp before the services and the app container start, and stops with an env_broken escalation when it has none", async () => {
+    const ok = setup();
+    ok.deps.checkSeccomp = async () => void ok.events.push("seccomp");
+    await openApp(ok.deps, { ...input, onBlocked: ok.onBlocked });
+    expect(ok.events.indexOf("seccomp")).toBeGreaterThan(-1);
+    expect(ok.events.indexOf("seccomp")).toBeLessThan(ok.events.findIndex((e) => e.startsWith("services on")));
+
+    const broken = setup();
+    broken.deps.checkSeccomp = async () => {
+      throw new SeccompUnavailableError("the daemon has no seccomp filter");
+    };
+    const out = await openApp(broken.deps, { ...input, onBlocked: broken.onBlocked });
+    expect(out).toMatchObject({ ok: false, detail: { escalation: "env_broken", step: "seccomp" } });
+    expect(broken.events.some((e) => e.startsWith("services on") || e === "app")).toBe(false);
+    expect(broken.events).toContain("teardown network");
   });
 });
 

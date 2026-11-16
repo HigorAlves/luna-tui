@@ -53,6 +53,7 @@ import { type ProofRig, proofAppDeps } from "../application/config-proof.ts";
 import { sandboxSizeOf } from "../domain/sandbox-bounds.ts";
 import { type Trust, trustOf } from "../domain/trust.ts";
 import { runtimeChecker } from "../adapters/docker/runtimes.ts";
+import { seccompChecker } from "../adapters/docker/seccomp.ts";
 import { randomUUID } from "node:crypto";
 import { execInSandbox, imageExists, imageId, imageLabel, removeLeftoverContainers, runSandbox, sandboxExecutor, setSecretsRoot } from "../adapters/docker/docker.ts";
 import { removeLeftoverApps } from "../adapters/docker/app.ts";
@@ -275,6 +276,7 @@ export async function buildRealStages(
     exec: execInSandbox,
     docker: (args, options) => exec("docker", args, options ?? {}),
     checkRuntime: runtimeChecker(exec),
+    checkSeccomp: seccompChecker(exec),
   };
   // Where a luna.yaml is proven (the setup stage's proposal, `POST /repos/config/prove`): a throwaway clone made as a card's workspace is, never
   // the person's checkout (a check's install wrote Linux binaries into one), and the app started by the browser run's own `openApp`, on the
@@ -550,7 +552,7 @@ export async function buildRealStages(
         }
       },
       privacy: async (texts, repoPath, taskId) => judgePrivacy(verifyDecisions?.decide ?? null, (await policies.for(repoPath)).decisions, texts, repoPath, { truth, taskId }),
-      ...(videoImage ? { scanImages: (dir: string, signal: AbortSignal) => scanImages({ sandbox: runSandbox, image: config.runnerVideoImage }, { id: dir.split("/").pop() ?? "shots", dir, signal }) } : {}),
+      ...(videoImage ? { scanImages: (dir: string, signal: AbortSignal) => scanImages({ sandbox: runSandbox, image: config.runnerVideoImage, limitsOf: async () => sandboxSizeOf(await policies.for(null), "untrusted") }, { id: dir.split("/").pop() ?? "shots", dir, signal }) } : {}),
       video: videoImage
         ? videoPipeline({
             sandbox: runSandbox,
@@ -561,6 +563,7 @@ export async function buildRealStages(
             decide: () => verifyDecisions?.decide ?? null,
             truth: truth ?? null,
             overrides: async (repoPath) => (await policies.for(repoPath)).decisions,
+            limitsOf: async (repoPath, trust) => sandboxSizeOf(await policies.for(repoPath), trust),
           })
         : null,
     }),
