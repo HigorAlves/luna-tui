@@ -49,7 +49,7 @@ None of them works on a control, an obligation of a regime, an audit artifact or
 - **A port per service.** GitHub, the wiki, Sentry and Datadog are ports in `machine/src/application/` with an adapter in `machine/src/adapters/`. Each has a `noToken…()` fallback that refuses with a reason.
 - **A draft per outward write.** Every page, post, comment, issue and release body is a draft with the lifecycle from `ticket-drafts.ts`: waiting, edited, ignored, posting, posted. Each state change checks the draft's hash, and a draft that holds a secret or an address is refused. The board's Compliance view lists every draft, grouped by kind. The person approves (`a`), edits (`e`) or ignores (`x`) it. The machine serves the view at `GET /compliance/drafts` and `POST /compliance/drafts/:id/{approve,edit,ignore}`.
 - **Periodic jobs check a cursor.** A daily `Ticker` reads a stored "last period done" cursor under `<stateDir>/compliance/`. It does no work when the period is already done. A monthly or quarterly `setTimeout` is not used: Node clamps a delay longer than about 24.8 days to 1 ms.
-- **Two kinds of wiki page.** A page about one repository goes to that repository's own wiki. A page about the org goes to the wiki of the repository that `LUNA_MANAGER_WIKI_REPO` names.
+- **Two kinds of wiki page.** A page about one repository goes to that repository's own wiki. A page about the org goes to the wiki of the repository that `MACHINE_MANAGER_WIKI_REPO` names.
 
 ### Wave 1: the wiki port, change-management evidence and the Compliance view
 
