@@ -1511,6 +1511,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: ComplianceReviewAnswer,
     template: "compliance_review.md",
+    network: "engine",
   },
   docs_drift: {
     id: "docs_drift",
@@ -1527,6 +1528,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: DocsDriftAnswer,
     template: "docs_drift.md",
+    network: "engine",
   },
   addressing: {
     id: "addressing",
@@ -1652,6 +1654,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: ChangeExceptionsAnswer,
     template: "change_exceptions.md",
+    network: "engine",
   },
   access_review: {
     id: "access_review",
@@ -1669,6 +1672,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: AccessReviewAnswer,
     template: "access_review.md",
+    network: "engine",
   },
   postmortem: {
     id: "postmortem",
@@ -1686,6 +1690,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: PostmortemAnswer,
     template: "postmortem.md",
+    network: "engine",
   },
   questionnaire: {
     id: "questionnaire",
@@ -1703,6 +1708,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: QuestionnaireAnswer,
     template: "questionnaire.md",
+    network: "engine",
   },
   vuln_triage: {
     id: "vuln_triage",
@@ -1720,6 +1726,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: VulnTriageAnswer,
     template: "vuln_triage.md",
+    network: "engine",
   },
   release_notes: {
     id: "release_notes",
@@ -1737,6 +1744,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: ReleaseNotesAnswer,
     template: "release_notes.md",
+    network: "engine",
   },
   status_report: {
     id: "status_report",
@@ -1754,6 +1762,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: StatusReportAnswer,
     template: "status_report.md",
+    network: "engine",
   },
   triage_signals: {
     id: "triage_signals",
