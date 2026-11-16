@@ -123,11 +123,13 @@ export function chooseEffort(opts: {
   return { effort: asked, source: "config", reason: null };
 }
 
-/** The first `<pack>: <problem>` among a repo's efforts, else null: a pack that takes no effort cannot be given one. The engine
+/** The first `<pack>: <problem>` among a repo's efforts, else null: a pack that takes no effort, or runs on its own, cannot be given one. The engine
  *  is not checked here, it may differ per task; `chooseEffort` does that at run time. */
 export function effortsProblem(efforts: StageEfforts): string | null {
   for (const pack of Object.keys(efforts) as PackId[]) {
     if (PACKS[pack].kind === "decision") return `${pack}: ${pack} is a decision pack and takes no effort`;
+    // An on-demand pack never runs in a task, so nothing would apply the entry.
+    if (packStates(pack).length === 0) return `${pack}: runs on its own, not in a task`;
   }
   return null;
 }
