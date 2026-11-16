@@ -66,6 +66,18 @@ const blankedEnv = (): string[] => BLANKED_ENV.flatMap((name) => ["-e", `${name}
 export const SECRETS_MOUNT = "/run/luna-secrets";
 export const LUNA_ENV = "/opt/luna/bin/luna-env";
 const SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** Names a secret may never take, since `luna-env` exports it before the command starts: what changes how a process
+ *  loads (the blanked variables, the shell's startup files, the loaders' prefixes), where its traffic goes (the proxy
+ *  variables, the engines' base URLs), or what the machine itself sets (`LUNA_`, `HARDNESS_`). `luna-env` holds the same list. */
+const RESERVED_SECRET = new Set([...BLANKED_ENV, "PATH", "HOME", "SHELL", "IFS", "ENV", "BASH_ENV", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"]);
+const RESERVED_PREFIX = /^(LD_|DYLD_|LUNA_|HARDNESS_)/;
+
+/** Why `name` cannot be a secret, or null. */
+export function secretNameProblem(name: string): string | null {
+  if (!SECRET_NAME.test(name)) return "its name is not an environment variable name";
+  if (RESERVED_SECRET.has(name.toUpperCase()) || RESERVED_PREFIX.test(name.toUpperCase())) return "its name is one the machine reserves";
+  return null;
+}
 /** Variables of a run's trace context (`extraEnv`) that are secrets: the project key reads every trace of the project. The rest of the context is not secret and stays a plain variable. */
 export const SECRET_EXTRA_ENV: ReadonlySet<string> = new Set(["LMNR_PROJECT_API_KEY"]);
 
@@ -77,7 +89,10 @@ export function setSecretsRoot(dir: string): void {
 
 /** Writes each secret as a 0600 file named for it, in a 0700 folder made new; a name that is not a variable name is refused before anything is written. `owner` (`uid:gid`) is given to a root machine, so the container's user can read them. */
 export async function writeSecretFiles(dir: string, values: Readonly<Record<string, string>>, owner?: string | null): Promise<void> {
-  for (const name of Object.keys(values)) if (!SECRET_NAME.test(name)) throw new Error(`secret "${name}" cannot be a file in ${SECRETS_MOUNT}: its name is not an environment variable name`);
+  for (const name of Object.keys(values)) {
+    const problem = secretNameProblem(name);
+    if (problem) throw new Error(`secret "${name}" cannot be a file in ${SECRETS_MOUNT}: ${problem}`);
+  }
   const ids = owner && /^\d+:\d+$/.test(owner) && process.getuid?.() === 0 ? owner.split(":").map(Number) : null;
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true, mode: 0o700 });

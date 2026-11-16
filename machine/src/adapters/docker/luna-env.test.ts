@@ -55,6 +55,18 @@ describe("luna-env", () => {
     }
   });
 
+  it("refuses a secret whose name would change how a process loads or where its traffic goes, and runs nothing", () => {
+    for (const bad of ["NODE_OPTIONS", "LD_PRELOAD", "LD_ANYTHING", "DYLD_INSERT_LIBRARIES", "BASH_ENV", "ENV", "PATH", "HOME", "HTTPS_PROXY", "http_proxy", "NO_PROXY", "ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "LUNA_EFFORT", "HARDNESS_TASK"]) {
+      const out = lunaEnv({ GOOD: "g", [bad]: "the-value" }, ["/bin/sh", "-c", "printf RAN"]);
+      expect(out.status, bad).not.toBe(0);
+      expect(out.stdout, bad).toBe("");
+      expect(out.stderr, bad).toContain(bad);
+      expect(out.stderr, bad).not.toContain("the-value");
+    }
+    // An engine credential is a secret like any other.
+    expect(lunaEnv({ CLAUDE_CODE_OAUTH_TOKEN: "t" }, printVar("CLAUDE_CODE_OAUTH_TOKEN")).stdout).toBe("t");
+  });
+
   it("never prints a value, on success or on refusal", () => {
     const ok = lunaEnv({ TOKEN: "super-secret-value" }, ["/bin/sh", "-c", "true"]);
     expect(ok.stdout + ok.stderr).toBe("");

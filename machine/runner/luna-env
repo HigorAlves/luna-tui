@@ -19,6 +19,15 @@ if [ -d "$dir" ]; then
         exit 65
         ;;
     esac
+    # The names the machine reserves (docker.ts RESERVED_SECRET): a secret never changes how a process loads or where its traffic goes.
+    case "$name" in
+      NODE_OPTIONS | NODE_PATH | NODE_EXTRA_CA_CERTS | SSL_CERT_FILE | PATH | HOME | SHELL | IFS | ENV | BASH_ENV | \
+      HTTP_PROXY | HTTPS_PROXY | NO_PROXY | ALL_PROXY | http_proxy | https_proxy | no_proxy | all_proxy | \
+      ANTHROPIC_BASE_URL | OPENAI_BASE_URL | LD_* | DYLD_* | LUNA_* | HARDNESS_*)
+        echo "luna-env: refusing the secret file \"$name\": its name is one the machine reserves" >&2
+        exit 65
+        ;;
+    esac
   done
   nl='
 '

@@ -5,7 +5,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ExecResult } from "../process/exec.ts";
-import { CACHE_ENV, SecretsMissingError, type RunDeps, cacheVolumeFor, hostUser, execInSandbox, runSandbox, sandboxArgs, sandboxExecArgs, sandboxExecutor, type SandboxRun } from "./docker.ts";
+import { CACHE_ENV, SecretsMissingError, type RunDeps, cacheVolumeFor, hostUser, execInSandbox, runSandbox, sandboxArgs, sandboxExecArgs, sandboxExecutor, secretNameProblem, writeSecretFiles, type SandboxRun } from "./docker.ts";
 import { EgressUnsupportedError } from "./egress.ts";
 
 function run(over: Partial<SandboxRun> = {}): SandboxRun {
@@ -753,5 +753,18 @@ describe("values kept only to be redacted", () => {
     expect(readFileSync(result.transcriptPath, "utf8")).toBe("printed [secret:APP_KEY]");
     expect(result.blocked![0]!.host).toBe("[secret:APP_KEY].example.com");
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("secret names", () => {
+  it("refuses a name that would change how a process loads or where its traffic goes, and keeps an ordinary one", () => {
+    for (const bad of ["NODE_OPTIONS", "NODE_PATH", "LD_PRELOAD", "LD_ANYTHING", "DYLD_INSERT_LIBRARIES", "BASH_ENV", "ENV", "PATH", "HOME", "HTTPS_PROXY", "http_proxy", "NO_PROXY", "ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "LUNA_EFFORT", "HARDNESS_TASK", "my-secret"]) expect(secretNameProblem(bad), bad).not.toBeNull();
+    for (const ok of ["DB_URL", "API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_HOME", "LMNR_PROJECT_API_KEY"]) expect(secretNameProblem(ok), ok).toBeNull();
+  });
+
+  it("writes no file when one name is reserved", async () => {
+    const dir = join(mkdtempSync(join(tmpdir(), "secret-names-")), "s");
+    await expect(writeSecretFiles(dir, { DB_URL: "x", NODE_OPTIONS: "--require=/tmp/evil.js" })).rejects.toThrow(/NODE_OPTIONS/);
+    expect(existsSync(join(dir, "DB_URL"))).toBe(false);
   });
 });
