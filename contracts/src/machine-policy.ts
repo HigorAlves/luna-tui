@@ -34,7 +34,7 @@ export const MachinePolicySchema = section({
   images: section({ repo_base: Allow.default("allow"), devcontainer: Allow.default("allow") }).default({ repo_base: "allow", devcontainer: "allow" }),
   /** Untrusted cards get their own cache volume. */
   cache: section({ split_by_trust: z.boolean().default(true) }).default({ split_by_trust: true }),
-  /** The SDK's Bash sandbox layer inside the stage container. */
+  /** Reserved. The nested Bash sandbox was not built (RFC 0009), so `on` has no effect: the machine warns at start and `GET /health` lists it under `notInForce`. */
   bash_sandbox: z.enum(["off", "on"]).default("off"),
 }).strict();
 

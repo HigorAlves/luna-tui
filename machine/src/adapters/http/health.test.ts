@@ -40,4 +40,10 @@ describe("GET /health", () => {
     expect(await health(() => ["x"], policy)).toMatchObject({ status: 503, body: { sandboxPolicy: { limits: { max_cpu: 4 } } } });
     expect((await health()).body).not.toHaveProperty("sandboxPolicy");
   });
+
+  it("lists bash_sandbox under notInForce when it is on, and omits the list when nothing is idle", async () => {
+    const on = { ...DEFAULT_MACHINE_POLICY, bash_sandbox: "on" as const };
+    expect(await health(undefined, on)).toMatchObject({ status: 200, body: { sandboxPolicy: { bash_sandbox: "on" }, notInForce: ["bash_sandbox"] } });
+    expect((await health(undefined, DEFAULT_MACHINE_POLICY)).body).not.toHaveProperty("notInForce");
+  });
 });

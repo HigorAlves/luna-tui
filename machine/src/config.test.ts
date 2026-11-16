@@ -11,6 +11,7 @@ import {
   DEFAULT_PORT,
   DEFAULT_RETENTION_DAYS,
   loadConfig,
+  sandboxPolicyNotes,
   tracesConfig,
 } from "./config.ts";
 
@@ -419,5 +420,16 @@ describe("the machine sandbox policy file", () => {
       const profile = write(join(dir, "bad.json"), "not json");
       expect(start(dir, profile)).toThrow(`seccomp ${profile} is not valid JSON`);
     });
+  });
+});
+
+describe("sandbox policy keys that have no effect", () => {
+  it("names bash_sandbox when it is on, and warns that the nested Bash sandbox was not built", () => {
+    const on = { ...DEFAULT_MACHINE_POLICY, bash_sandbox: "on" as const };
+    expect(sandboxPolicyNotes(on)).toEqual({ notInForce: ["bash_sandbox"], warnings: [expect.stringMatching(/bash_sandbox.*on.*nested Bash sandbox was not built.*RFC 0009.*no effect/)] });
+  });
+
+  it("names nothing when bash_sandbox is off", () => {
+    expect(sandboxPolicyNotes(DEFAULT_MACHINE_POLICY)).toEqual({ notInForce: [], warnings: [] });
   });
 });

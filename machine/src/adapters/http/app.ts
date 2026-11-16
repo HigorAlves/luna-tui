@@ -71,7 +71,7 @@ import { ZodError, type ZodType, z } from "zod";
 
 const SlotsInput = z.object({ max: z.number().int().min(1) });
 
-import { DEFAULT_PORT } from "../../config.ts";
+import { DEFAULT_PORT, sandboxPolicyNotes } from "../../config.ts";
 import { computeMetrics } from "../persistence/metrics-query.ts";
 import { PgTaskStore } from "../persistence/task-store.ts";
 import type { TaskRow } from "../../domain/task.ts";
@@ -308,7 +308,8 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
   // 503 with the problems when the machine cannot do its job (no GitHub token, no git identity, stub stages): the compose healthcheck and `up --wait` then fail visibly. The stage pool is still in the body.
   app.get("/health", async (c) => {
     const problems = (await problemsOf?.()) ?? [];
-    const policy = sandboxPolicy ? { sandboxPolicy } : {};
+    const idle = sandboxPolicy ? sandboxPolicyNotes(sandboxPolicy).notInForce : [];
+    const policy = sandboxPolicy ? { sandboxPolicy, ...(idle.length > 0 ? { notInForce: idle } : {}) } : {};
     if (problems.length === 0) return c.json({ ok: true, slots: pipeline.slots, ...policy });
     return c.json({ ok: false, problems, slots: pipeline.slots, ...policy }, 503);
   });

@@ -315,6 +315,12 @@ export function sandboxPolicyFrom(env: NodeJS.ProcessEnv, home: string): Machine
   return parsed.data;
 }
 
+/** The policy keys that are set but do nothing, and a startup warning for each. Today only `bash_sandbox: on`: the nested Bash sandbox was not built (RFC 0009). */
+export function sandboxPolicyNotes(policy: MachinePolicy): { notInForce: string[]; warnings: string[] } {
+  if (policy.bash_sandbox !== "on") return { notInForce: [], warnings: [] };
+  return { notInForce: ["bash_sandbox"], warnings: ["sandbox policy: bash_sandbox is on, but the nested Bash sandbox was not built (RFC 0009), so it has no effect"] };
+}
+
 /** The policy's seccomp profile must exist, be a readable regular file and parse as JSON: else the machine would start and then fail every stage. Throws, naming the key and the path. */
 function checkSeccompProfile(profile: string, policyFile: string): void {
   const where = `MACHINE_SANDBOX_POLICY ${policyFile}: seccomp ${profile}`;
