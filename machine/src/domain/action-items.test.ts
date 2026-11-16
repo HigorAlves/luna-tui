@@ -17,6 +17,13 @@ describe("actionItemsOf", () => {
     expect(actionItemsOf(page("- [ ] Rotate the key (the old one) now (owner: ana, due: 2026-12-05)"))).toEqual([{ title: "Rotate the key (the old one) now", owner: "ana", due: "2026-12-05" }]);
   });
 
+  it("reads an owner that holds a comma or a parenthesis", () => {
+    expect(actionItemsOf(page("- [ ] Add a pager (owner: Payments, SRE, due: 2026-12-01)\n- [ ] Split the role (owner: Platform (infra), due: none)"))).toEqual([
+      { title: "Add a pager", owner: "Payments, SRE", due: "2026-12-01" },
+      { title: "Split the role", owner: "Platform (infra)", due: null },
+    ]);
+  });
+
   it("skips a ticked box, other bullets, and blank titles", () => {
     expect(actionItemsOf(page("- [x] Done already (owner: ana, due: none)\n- A note\n- [ ]   \n* [ ] Star bullet"))).toEqual([{ title: "Star bullet", owner: null, due: null }]);
   });

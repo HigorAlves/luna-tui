@@ -7,7 +7,7 @@ export interface ActionItem {
   due: string | null;
 }
 
-const SUFFIX = /\s*\(owner:\s*([^,)]*?)\s*,\s*due:\s*([^)]*?)\s*\)\s*$/;
+const SUFFIX = /\s*\(owner:\s*(.*?)\s*,\s*due:\s*([^)]*?)\s*\)\s*$/;
 const NONE = new Set(["", "none", "unassigned"]);
 
 /** Each unchecked `- [ ] <title> (owner: <x>, due: <date>)` line of the section, in order. The suffix is optional; `unassigned` and `none` read as null. */

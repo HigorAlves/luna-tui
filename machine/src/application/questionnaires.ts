@@ -21,7 +21,8 @@ const POLICY_DIRS = ["Compliance/Policies/", "Compliance/Controls/"];
 const BANK_DIR = "Compliance/Answers/";
 const MAX_POLICIES = 20;
 const POLICY_CAP = 12_000;
-const MAX_BANK = 100;
+/** The characters of bank pages sent to the pack; the pages that share words with the questionnaire go first. */
+const BANK_CHARS = 100_000;
 const BANK_CAP = 2_000;
 const MARKDOWN_CAP = 100_000;
 
@@ -32,7 +33,7 @@ const Source = z.object({
   requester: z.string().nullable(),
   /** The target that takes the filled text back to where the questionnaire came from. */
   reply: z.union([z.object({ kind: z.literal("slack_thread"), channel: z.string(), ts: z.string() }), z.object({ kind: z.literal("jira_comment"), key: z.string() })]),
-  /** What names the repository: the item's own text. */
+  /** What names the repository: the item's own text and the file's name, never the file's body. */
   hint: z.string(),
 });
 type Source = z.infer<typeof Source>;
@@ -48,6 +49,8 @@ export interface QuestionnairesDeps {
   repos(): Promise<string[]>;
   /** `MACHINE_MANAGER_WIKI_REPO`, the repository used when the text names none. */
   defaultRepo: string | null;
+  /** The characters of answer-bank pages sent to the pack; default 100,000. */
+  bankChars?: number;
   stateDir: string;
   log?: (line: string) => void;
 }
@@ -55,16 +58,38 @@ export interface QuestionnairesDeps {
 /** True when the text holds at least two sentences that end in a question mark. */
 export const hasInlineQuestions = (text: string): boolean => (text.match(/\?(?=\s|$)/g) ?? []).length >= 2;
 
-/** The known repository the text names, by `owner/name` or by name; else the default; else null. */
-export function pickRepo(text: string, known: string[], fallback: string | null): string | null {
+/** The known repository the text names, by `owner/name` or by name, whole words only; the longest match wins. Else null. Two repositories of one name and no owner given is no match. */
+export function pickRepo(text: string, known: string[]): string | null {
   const lower = text.toLowerCase();
-  const edge = "[^a-z0-9_.-]";
-  for (const slug of known) if (lower.includes(slug.toLowerCase())) return slug;
+  const escape = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const found = (term: string) => new RegExp(`(?<![a-z0-9_./-])${escape(term.toLowerCase())}(?![a-z0-9_-])(?!\\.[a-z0-9_-])`).test(lower);
+  let best = 0;
+  let picks: string[] = [];
   for (const slug of known) {
-    const name = slug.split("/")[1]!.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    if (new RegExp(`(^|${edge})${name}($|${edge})`).test(lower)) return slug;
+    const score = found(slug) ? slug.length : found(slug.split("/")[1]!) ? slug.split("/")[1]!.length : 0;
+    if (score === 0 || score < best) continue;
+    if (score > best) picks = [];
+    best = score;
+    picks.push(slug);
   }
-  return fallback;
+  return picks.length === 1 ? picks[0]! : null;
+}
+
+const WORD = /[a-z0-9]{4,}/g;
+
+/** The bank pages that share the most words with the questionnaire first, as many as fit in `budget` characters; a page too big for what is left is passed over. */
+export function selectBank(pages: Array<{ path: string; text: string }>, questionnaire: string, budget: number): Array<{ path: string; text: string }> {
+  const wanted = new Set(questionnaire.toLowerCase().match(WORD) ?? []);
+  const scored = pages.map((page, order) => ({ page, order, score: [...new Set(`${page.path} ${page.text}`.toLowerCase().match(WORD) ?? [])].filter((w) => wanted.has(w)).length }));
+  scored.sort((a, b) => b.score - a.score || a.order - b.order);
+  const out: Array<{ path: string; text: string }> = [];
+  let left = budget;
+  for (const { page } of scored) {
+    if (page.text.length > left) continue;
+    out.push(page);
+    left -= page.text.length;
+  }
+  return out;
 }
 
 export class Questionnaires {
@@ -98,7 +123,7 @@ export class Questionnaires {
         source: "slack",
         requester: row.author.name,
         reply: { kind: "slack_thread", channel: row.channel.id, ts: row.id.split(":")[1] ?? row.slackTs },
-        hint: `${row.text}\n${file?.name ?? ""}\n${file?.text ?? ""}`,
+        hint: `${row.text}\n${file?.name ?? ""}`,
       };
       return await this.build(id, source, null);
     } catch (error) {
@@ -122,7 +147,7 @@ export class Questionnaires {
         source: "jira",
         requester: issue.reporter?.name ?? null,
         reply: { kind: "jira_comment", key: issue.key },
-        hint: `${issue.summary}\n${issue.description}\n${file.text}`,
+        hint: `${issue.summary}\n${issue.description}\n${file.name}`,
       };
       return await this.build(id, source, null);
     } catch (error) {
@@ -144,33 +169,57 @@ export class Questionnaires {
   }
 
   private async build(id: string, source: Source, forced: string | null): Promise<ComplianceDraft | null> {
-    const repo = forced ?? pickRepo(source.hint, await this.deps.repos(), this.deps.defaultRepo);
+    const picked = forced ?? pickRepo(source.hint, await this.deps.repos());
+    const repo = picked ?? this.deps.defaultRepo;
+    await this.saveSource(id, source);
     if (!repo) {
-      this.log(`questionnaires: ${id}: no repository named in the text and no MACHINE_MANAGER_WIKI_REPO, so it was skipped`);
-      return null;
+      const known = await this.deps.repos();
+      if (known.length === 0) {
+        this.log(`questionnaires: ${id}: no repository named in the text, no MACHINE_MANAGER_WIKI_REPO and no known repository, so it was skipped`);
+        return null;
+      }
+      return this.needsRepo(id, source, known[0]!, "No repository was named in the message or the file name, and no home wiki is set.");
     }
     const policies = await this.pages(repo, POLICY_DIRS, MAX_POLICIES, POLICY_CAP);
     if (policies.length === 0) {
-      this.log(`questionnaires: ${id}: no policy pages under Compliance/Policies/ or Compliance/Controls/ in the wiki of ${repo}, so it was skipped`);
-      return null;
+      if (forced) {
+        this.log(`questionnaires: ${id}: no policy pages under Compliance/Policies/ or Compliance/Controls/ in the wiki of ${repo}`);
+        return null;
+      }
+      return this.needsRepo(id, source, repo, `The wiki of ${repo} has no policy or control pages under Compliance/Policies/ or Compliance/Controls/.`);
     }
-    const bank = await this.pages(repo, [BANK_DIR], MAX_BANK, BANK_CAP);
+    const bank = selectBank(await this.pages(repo, [BANK_DIR], Infinity, BANK_CAP), source.markdown, this.deps.bankChars ?? BANK_CHARS);
     const context: QuestionnaireContext = { repo, source: source.source, requester: source.requester, questionnaire: { name: source.name, markdown: source.markdown }, policies, bank };
     const parsed = QuestionnaireAnswer.parse(await this.deps.run(context));
     const known = new Set([...policies, ...bank].map((p) => p.path));
     const bankPaths = new Set(bank.map((p) => p.path));
     const answers = parsed.answers.map((a) => ({ ...a, citations: a.citations.filter((c) => known.has(c)), fromBank: a.fromBank && bankPaths.has(a.fromBank) ? a.fromBank : null }));
-    await this.saveSource(id, source);
     const targets: ComplianceTarget[] = [source.reply, { kind: "answer_bank", repo }];
+    const counts = `${answers.length} answered, ${parsed.unanswered.length} unanswered`;
     return this.deps.drafts.open({
       id,
       kind: "questionnaire",
       repo,
       title: `Questionnaire: ${source.name}`,
       period: null,
-      summary: `${answers.length} answered, ${parsed.unanswered.length} unanswered`,
+      summary: picked ? counts : `${counts}; answered from the home wiki: ${repo}`,
       text: filledMarkdown(source.name, answers, parsed.unanswered),
       targets,
+    });
+  }
+
+  /** A draft that answers nothing and says why: the person picks a repository (`POST /compliance/drafts/:id/repo`), and the questionnaire is answered then. It only replies to where it came from. */
+  private needsRepo(id: string, source: Source, repo: string, why: string): Promise<ComplianceDraft> {
+    this.log(`questionnaires: ${id}: ${why} A draft asks the person for a repository.`);
+    return this.deps.drafts.open({
+      id,
+      kind: "questionnaire",
+      repo,
+      title: `Questionnaire: ${source.name}`,
+      period: null,
+      summary: "pick a repository",
+      text: [`# ${source.name}: needs a repository`, "", `This questionnaire needs a repository before it can be answered. ${why}`, "", "No question has been answered yet. Pick the repository whose wiki holds the policies; the questionnaire is then answered from it.", ""].join("\n"),
+      targets: [source.reply],
     });
   }
 

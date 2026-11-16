@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { ComplianceDraft } from "@hardness/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { bankPath } from "../domain/questionnaire.ts";
 import { fakeJira } from "../test/jira.ts";
 import { fakeSlack } from "../test/slack.ts";
 import { questionnaireWriters } from "./compliance-writers.ts";
@@ -24,7 +25,7 @@ const text = [
   "",
   "Yes.",
   "",
-  "_Sources: Compliance/Controls/Access.md, Compliance/Answers/is-mfa-on-abcdef.md · from the answer bank_",
+  "_Sources: Compliance/Controls/Access.md · from the answer bank: Compliance/Answers/is-mfa-on-abcdef.md_",
   "",
   "## Unanswered",
   "",
@@ -49,17 +50,25 @@ function world(over: { limit?: number } = {}) {
 const tap = tapOf("POST /compliance/drafts/:id/approve");
 
 describe("answer_bank writer", () => {
-  it("writes one bank page per answer in one commit, reusing the bank page the sources name", async () => {
+  it("writes one bank page per answer in one commit, each at its own question's page", async () => {
     const { writers, writePages } = world();
     await writers.answer_bank!(draft(), { kind: "answer_bank", repo: "acme/api" }, tap);
     expect(writePages).toHaveBeenCalledTimes(1);
     const [repo, pages, message] = writePages.mock.calls[0]!;
     expect(repo).toBe("acme/api");
     expect(message).toBe("Questionnaire answers Questionnaire: acme.csv");
-    expect(pages.map((p) => p.path)).toEqual(["Compliance/Answers/do-you-encrypt-data-at-rest-5a02c3.md", "Compliance/Answers/is-mfa-on-abcdef.md"]);
+    expect(pages.map((p) => p.path)).toEqual(["Compliance/Answers/do-you-encrypt-data-at-rest-5a02c3.md", "Compliance/Answers/is-mfa-on-7f555c.md"]);
     expect(pages[0]!.text).toContain("Yes, with AES-256.");
     expect(pages[0]!.text).toContain("- Approved: 2026-11-16");
     expect(pages[1]!.text).toContain("- Sources: Compliance/Controls/Access.md");
+  });
+
+  it("never overwrites another question's bank page that an answer cites", async () => {
+    const { writers, writePages } = world();
+    const sso = "## 5. Do you use SSO?\n\nYes.\n\n_Sources: Compliance/Answers/is-mfa-on-abcdef.md_\n";
+    await writers.answer_bank!(draft({ text: `# a: answers\n\n${sso}` }), { kind: "answer_bank", repo: "acme/api" }, tap);
+    const pages = writePages.mock.calls[0]![1];
+    expect(pages.map((p) => p.path)).toEqual([bankPath("Do you use SSO?")]);
   });
 
   it("writes what the person edited, not what the model answered", async () => {
@@ -118,6 +127,29 @@ describe("slack_thread writer", () => {
     await writers.slack_thread!(draft(), target, tap);
     await writers.slack_thread!(draft({ text: text.replace("Yes.", "Yes, always.") }), target, tap);
     expect(slack.calls).toHaveLength(2);
+  });
+
+  it("posts an edited text complete and in order after a partial post, never beside the old chunks", async () => {
+    const { writers, slack } = world({ limit: 120 });
+    const whole = world({ limit: 120 });
+    await whole.writers.slack_thread!(draft({ id: "x" }), target, tap);
+    const count = whole.slack.calls.length;
+    expect(count).toBeGreaterThan(2);
+    let n = 0;
+    const sent: string[] = [];
+    slack.postMessage.mockImplementation(async (...args: unknown[]) => {
+      if (++n === count) throw new Error("ratelimited");
+      sent.push(args[1] as string);
+      return "9.1";
+    });
+    await expect(writers.slack_thread!(draft(), target, tap)).rejects.toThrow("ratelimited");
+    const edited = draft({ text: text.replace("Yes, with AES-256.", "Yes: AES-256.") });
+    const before = sent.length;
+    await writers.slack_thread!(edited, target, tap);
+    const again = sent.slice(before);
+    const fresh = world({ limit: 120 });
+    await fresh.writers.slack_thread!({ ...edited, id: "y" }, target, tap);
+    expect(again).toEqual(fresh.slack.calls.map((c) => c[2] as string));
   });
 
   it("refuses without a person's tap", async () => {

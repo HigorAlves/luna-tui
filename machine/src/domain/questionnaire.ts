@@ -9,7 +9,7 @@ import type { WikiPage } from "../application/wiki.ts";
 export const BANK_DIR = "Compliance/Answers/";
 
 const BANK_NOTE = " · from the answer bank";
-const SOURCES = /^_Sources: (.*?)(?: · from the answer bank)?_$/;
+const SOURCES = /^_Sources: (.*?)(?: · from the answer bank(?:: (.*?))?)?_$/;
 const SECTION = /^## (\d+)\. (.*)$/;
 const UNANSWERED = "## Unanswered";
 
@@ -18,8 +18,10 @@ export interface FilledAnswer {
   n: number;
   question: string;
   answer: string;
-  /** Wiki page paths the answer cites, a bank page among them when it came from the bank. */
+  /** Wiki page paths the answer cites; a bank page among them is a citation, never the page to write. */
   sources: string[];
+  /** The bank page the answer was taken from, when the text says so. */
+  fromBank: string | null;
 }
 
 const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim();
@@ -30,8 +32,8 @@ const unescapeAnswer = (text: string): string => text.replace(/^\\(#)/gm, "$1");
 export function filledMarkdown(name: string, answers: QuestionnaireAnswer["answers"], unanswered: QuestionnaireAnswer["unanswered"]): string {
   const lines = [`# ${oneLine(name)}: answers`, ""];
   for (const a of answers) {
-    const sources = [...new Set([...a.citations, ...(a.fromBank ? [a.fromBank] : [])])];
-    lines.push(`## ${a.n}. ${oneLine(a.question)}`, "", escapeAnswer(a.answer.trim()), "", `_Sources: ${sources.join(", ")}${a.fromBank ? BANK_NOTE : ""}_`, "");
+    const sources = [...new Set(a.citations)];
+    lines.push(`## ${a.n}. ${oneLine(a.question)}`, "", escapeAnswer(a.answer.trim()), "", `_Sources: ${sources.join(", ")}${a.fromBank ? `${BANK_NOTE}: ${a.fromBank}` : ""}_`, "");
   }
   if (unanswered.length > 0) {
     lines.push(UNANSWERED, "");
@@ -49,13 +51,15 @@ export function parseFilled(text: string): FilledAnswer[] {
     const body = [...current.body];
     while (body.length > 0 && body.at(-1)!.trim() === "") body.pop();
     let sources: string[] = [];
+    let fromBank: string | null = null;
     const last = body.at(-1);
     const match = last === undefined ? null : SOURCES.exec(last.trim());
     if (match) {
       sources = match[1]!.split(",").map((s) => s.trim()).filter((s) => s !== "");
+      fromBank = match[2]?.trim() || null;
       body.pop();
     }
-    found.push({ n: current.n, question: current.question, answer: unescapeAnswer(body.join("\n").trim()), sources });
+    found.push({ n: current.n, question: current.question, answer: unescapeAnswer(body.join("\n").trim()), sources, fromBank });
     current = null;
   };
   for (const line of text.split("\n")) {
@@ -120,10 +124,8 @@ export function bankPath(question: string): string {
   return `${BANK_DIR}${slug === "" ? "question" : slug}-${hash}.md`;
 }
 
-/** The bank page of one approved answer. A bank page among `sources` is the page itself: it keeps its path, and is not a source. */
+/** The bank page of one approved answer: always the question's own page. A bank page among `sources` is a citation like any other. */
 export function bankPage(question: string, answer: string, sources: string[], approvedAt: string, name: string): WikiPage {
-  const existing = sources.find((s) => s.startsWith(BANK_DIR));
-  const cited = sources.filter((s) => !s.startsWith(BANK_DIR));
-  const text = [`# ${oneLine(question)}`, "", answer.trim(), "", `- Sources: ${cited.length > 0 ? cited.join(", ") : "none"}`, `- Approved: ${approvedAt.slice(0, 10)}`, `- From: ${oneLine(name)}`, ""].join("\n");
-  return { path: existing ?? bankPath(question), text };
+  const text = [`# ${oneLine(question)}`, "", answer.trim(), "", `- Sources: ${sources.length > 0 ? sources.join(", ") : "none"}`, `- Approved: ${approvedAt.slice(0, 10)}`, `- From: ${oneLine(name)}`, ""].join("\n");
+  return { path: bankPath(question), text };
 }

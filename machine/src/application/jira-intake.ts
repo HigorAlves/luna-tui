@@ -177,7 +177,12 @@ export class JiraIntake {
   /** The ticket machine's path: the issue becomes a ticket object with its drafts. Nothing is written to Jira and no card is made. */
   private async hold(issue: JiraIssue, repoPath: string): Promise<void> {
     const classification = (await this.options.classifier?.classify(issueContext(issue)).catch(() => null)) ?? null;
-    void this.requested(issue, classification);
+    if (await this.requested(issue, classification)) {
+      // A questionnaire is not a ticket: it lives in the Compliance view.
+      this.answered.set(issue.key, issue.updated);
+      this.log(`jira intake: ${issue.key} is a compliance request: went to the Compliance view, no ticket`);
+      return;
+    }
     const overrides = (await this.options.policies.for(repoPath)).decisions.triage_signals ?? {};
     await this.options.tickets!.ingest(canonicalTicketOf({ tool: "jira", issue }), { repoPath, question: confidentQuestion(classification, overrides) });
     this.answered.set(issue.key, issue.updated);

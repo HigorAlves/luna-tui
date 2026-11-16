@@ -23,7 +23,7 @@ const filled = [
   "",
   "SSO with MFA is required.",
   "",
-  "_Sources: Compliance/Controls/Access.md, Compliance/Answers/is-mfa-enforced-5d38d7.md · from the answer bank_",
+  "_Sources: Compliance/Controls/Access.md · from the answer bank: Compliance/Answers/is-mfa-enforced-5d38d7.md_",
   "",
   "## Unanswered",
   "",
@@ -43,15 +43,15 @@ describe("filledMarkdown", () => {
   it("keeps a question to one heading line and a '#' at the start of an answer line from opening a section", () => {
     const text = filledMarkdown("q.md", [{ ...answers[0]!, question: "Do you encrypt\ndata?", answer: "Yes.\n## 9. Fake\nNo." }], []);
     expect(text).toContain("## 1. Do you encrypt data?\n");
-    expect(parseFilled(text)).toEqual([{ n: 1, question: "Do you encrypt data?", answer: "Yes.\n## 9. Fake\nNo.", sources: ["Compliance/Policies/Encryption.md"] }]);
+    expect(parseFilled(text)).toEqual([{ n: 1, question: "Do you encrypt data?", answer: "Yes.\n## 9. Fake\nNo.", sources: ["Compliance/Policies/Encryption.md"], fromBank: null }]);
   });
 });
 
 describe("parseFilled", () => {
   it("reads the sections back, skipping the unanswered", () => {
     expect(parseFilled(filled)).toEqual([
-      { n: 1, question: "Do you encrypt data at rest?", answer: "Yes, with AES-256.", sources: ["Compliance/Policies/Encryption.md"] },
-      { n: 2, question: "Is **MFA** enforced for `admin` users?", answer: "Yes.\n\nSSO with MFA is required.", sources: ["Compliance/Controls/Access.md", "Compliance/Answers/is-mfa-enforced-5d38d7.md"] },
+      { n: 1, question: "Do you encrypt data at rest?", answer: "Yes, with AES-256.", sources: ["Compliance/Policies/Encryption.md"], fromBank: null },
+      { n: 2, question: "Is **MFA** enforced for `admin` users?", answer: "Yes.\n\nSSO with MFA is required.", sources: ["Compliance/Controls/Access.md"], fromBank: "Compliance/Answers/is-mfa-enforced-5d38d7.md" },
     ]);
   });
 
@@ -60,8 +60,8 @@ describe("parseFilled", () => {
       .replace("Yes, with AES-256.", "Yes: AES-256 at rest, TLS 1.3 in transit.")
       .replace(/## 2\.[\s\S]*## Unanswered/, "## 4. Do you test backups?\n\nQuarterly.\n\n## Unanswered");
     expect(parseFilled(edited)).toEqual([
-      { n: 1, question: "Do you encrypt data at rest?", answer: "Yes: AES-256 at rest, TLS 1.3 in transit.", sources: ["Compliance/Policies/Encryption.md"] },
-      { n: 4, question: "Do you test backups?", answer: "Quarterly.", sources: [] },
+      { n: 1, question: "Do you encrypt data at rest?", answer: "Yes: AES-256 at rest, TLS 1.3 in transit.", sources: ["Compliance/Policies/Encryption.md"], fromBank: null },
+      { n: 4, question: "Do you test backups?", answer: "Quarterly.", sources: [], fromBank: null },
     ]);
   });
 
@@ -100,11 +100,21 @@ describe("bankPage", () => {
     });
   });
 
-  it("says there are no sources when there are none, and reuses a bank path the sources name", () => {
-    const page = bankPage("Is MFA on?", "Yes.", ["Compliance/Answers/is-mfa-enforced-5d38d7.md"], "2026-11-16T12:00:00Z", "q.md");
-    expect(page.path).toBe("Compliance/Answers/is-mfa-enforced-5d38d7.md");
-    expect(page.text).toContain("- Sources: none");
+  it("says there are no sources when there are none", () => {
     expect(bankPage("Is MFA on?", "Yes.", [], "2026-11-16T12:00:00Z", "q.md").text).toContain("- Sources: none");
+  });
+
+  it("is always the question's own page, even when the sources cite another bank page", () => {
+    const page = bankPage("Do you use SSO?", "Yes.", ["Compliance/Controls/Access.md", "Compliance/Answers/is-mfa-on-abcdef.md"], "2026-11-16T12:00:00Z", "q.md");
+    expect(page.path).toBe(bankPath("Do you use SSO?"));
+    expect(page.text).toContain("- Sources: Compliance/Controls/Access.md, Compliance/Answers/is-mfa-on-abcdef.md");
+  });
+});
+
+describe("a citation of another bank page", () => {
+  it("round-trips as a source, apart from the bank page the answer came from", () => {
+    const text = filledMarkdown("q.md", [{ n: 5, question: "Do you use SSO?", answer: "Yes.", citations: ["Compliance/Answers/is-mfa-on-abcdef.md"], fromBank: null, confidence: "low" as const }], []);
+    expect(parseFilled(text)).toEqual([{ n: 5, question: "Do you use SSO?", answer: "Yes.", sources: ["Compliance/Answers/is-mfa-on-abcdef.md"], fromBank: null }]);
   });
 });
 

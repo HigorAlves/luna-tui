@@ -374,6 +374,20 @@ describe("SlackInbox.pollOnce", () => {
       expect(overrides).toMatchObject([{ thread: id, kind: "question" }]);
     });
 
+    it("starts the questionnaire job when the person corrects a thread's kind to compliance_request, once", async () => {
+      const seen: string[] = [];
+      const onTriaged = async (row: SlackItemRow) => void seen.push(`${row.id} ${row.triage?.category}`);
+      const assessor = { assess: async () => assessed({ verdict: "ask", classification: { kind: "bug", confidence: 0.4, by: "model", at: iso(0), records: { assess: "rec-1" }, verdict: "ask" } }) };
+      const { inbox } = setup({ assessor, onTriaged, hits: [hit({ ts: ts(10), text: "<@U1> hmm" })] });
+      await poll(inbox);
+      const id = `C1:${ts(10)}`;
+      await inbox.patch(id, { kind: "question" }, TAP);
+      expect(seen).toEqual([]);
+      await inbox.patch(id, { kind: "compliance_request" }, TAP);
+      await inbox.patch(id, { kind: "compliance_request" }, TAP);
+      expect(seen).toEqual([`${id} compliance_request`]);
+    });
+
     it("stores the relation and the shortlist the assessment offered", async () => {
       const shortlist = [{ slot: 1, id: "card-1", kind: "open" as const, otherSource: { kind: "jira" as const, key: "ENG-1" }, title: "t" }];
       const relation = { type: "related_to_in_progress" as const, target: "card-1", confidence: 0.9, by: "model" as const, at: iso(0), record: "rel-1", otherSource: { kind: "jira" as const, key: "ENG-1" } };

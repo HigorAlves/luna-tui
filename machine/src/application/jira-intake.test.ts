@@ -32,7 +32,7 @@ const verdicts: Record<string, JiraIntakeAnswer> = {
 
 const classified = (kind: string, confidence = 0.9): TaskClassification => ({ kind, area: "machine", ready: kind !== "question", size: 1, confidence, at: "2026-10-28T12:00:00.000Z", model: "typesafe-ai/jev" });
 
-function wire(over: { questionnaires?: { fromJira: (issue: JiraIssue) => Promise<unknown> }; triager?: boolean; comments?: JiraPolicy["comments"]; classify?: (issue: IssueContext) => TaskClassification | null | Promise<TaskClassification | null> } = {}) {
+function wire(over: { questionnaires?: { fromJira: (issue: JiraIssue) => Promise<unknown> }; tickets?: { ingest: (...args: never[]) => Promise<unknown> }; triager?: boolean; comments?: JiraPolicy["comments"]; classify?: (issue: IssueContext) => TaskClassification | null | Promise<TaskClassification | null> } = {}) {
   const jira = fakeJira({
     issues: [
       { key: "PLAT-1", summary: "Login page", description: "Users sign in.\n\n- [ ] bad password errors", issueType: "Story" },
@@ -58,6 +58,7 @@ function wire(over: { questionnaires?: { fromJira: (issue: JiraIssue) => Promise
     triager,
     ...(classifier ? { classifier } : {}),
     ...(over.questionnaires ? { questionnaires: over.questionnaires } : {}),
+    ...(over.tickets ? { tickets: over.tickets as never } : {}),
     now: () => now,
     log: (l) => logs.push(l),
   });
@@ -131,6 +132,20 @@ describe("JiraIntake with triage_signals", () => {
     await intake.tick();
     expect(triaged).toContain("PLAT-2");
     expect(logs.filter((l) => l.includes("PLAT-2") && l.includes("Compliance view"))).toEqual([]);
+  });
+
+  it("on the ticket machine's path, a compliance_request that opened a draft makes no ticket; one that did not does", async () => {
+    const ingested: string[] = [];
+    const tickets = { ingest: async (ticket: { key?: string; id?: string }) => void ingested.push(JSON.stringify(ticket)) };
+    const opened = wire({ tickets, questionnaires: { fromJira: async () => ({ id: "questionnaire:jira:PLAT-2" }) }, classify: (issue) => classified(issue.source === "jira:PLAT-2" ? "compliance_request" : "feature") });
+    await opened.intake.tick();
+    expect(ingested.some((t) => t.includes("PLAT-2"))).toBe(false);
+    expect(ingested.some((t) => t.includes("PLAT-1"))).toBe(true);
+    expect(opened.logs.filter((l) => l.includes("PLAT-2") && l.includes("Compliance view"))).toHaveLength(1);
+    ingested.length = 0;
+    const none = wire({ tickets, questionnaires: { fromJira: async () => null }, classify: (issue) => classified(issue.source === "jira:PLAT-2" ? "compliance_request" : "feature") });
+    await none.intake.tick();
+    expect(ingested.some((t) => t.includes("PLAT-2"))).toBe(true);
   });
 
   it("keeps making a card for a compliance_request when no questionnaire job is wired", async () => {

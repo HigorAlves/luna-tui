@@ -38,11 +38,12 @@ export function questionnaireWriters(deps: QuestionnaireWriterDeps): Pick<Target
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, key), "");
   };
-  /** Sends each chunk once: a chunk with a mark is skipped, and a mark is written as soon as its chunk is out. */
+  /** Sends each chunk once: a chunk with a mark is skipped, and a mark is written as soon as its chunk is out. A mark names the whole text too, so an edited text posts again complete and in order. */
   async function sendOnce(where: string[], text: string, limit: number, send: (chunk: string) => Promise<unknown>): Promise<void> {
     const chunks = chunkText(text, limit);
+    const whole = createHash("sha256").update(text).digest("hex");
     for (const [i, chunk] of chunks.entries()) {
-      const key = keyOf([...where, String(i), String(chunks.length), chunk]);
+      const key = keyOf([...where, whole, String(i), String(chunks.length), chunk]);
       if (await done(key)) continue;
       await send(chunk);
       await mark(key);

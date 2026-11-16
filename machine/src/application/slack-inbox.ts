@@ -1140,7 +1140,9 @@ export class SlackInbox implements SlackInboxPort {
       const base: SlackTriage = next.triage ?? { priority: patch.priority, category: "fyi", expectsReply: false, summary: firstLine(next.text), why: "set by hand", draft: null, refs: [], deadline: null, by: "rules", triagedAt: now, overridden: true };
       next = { ...next, triage: { ...base, priority: patch.priority, overridden: true } };
     }
-    return this.saveAndPublish(next);
+    const saved = await this.saveAndPublish(next);
+    if (patch.kind && next.triage?.category === "compliance_request" && row.triage?.category !== "compliance_request") this.requested([next]);
+    return saved;
   }
 
   async relate(id: string, input: SlackRelationInput): Promise<SlackItem> {
