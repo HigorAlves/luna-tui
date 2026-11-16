@@ -15,6 +15,7 @@ import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node
 import { connect as netConnect, createServer as createNetServer, isIP } from "node:net";
 import type { Server as NetServer, Socket } from "node:net";
 import { readFile } from "node:fs/promises";
+import { pipeline } from "node:stream";
 import { request as httpsRequest } from "node:https";
 import { connect as tlsConnect } from "node:tls";
 import { fileURLToPath } from "node:url";
@@ -455,8 +456,12 @@ export function createEgressProxy(options: ProxyOptions): EgressProxy {
         for (const [key, value] of Object.entries(response.headers)) if (value !== undefined && !HOP.has(key)) out[key] = value;
         res.writeHead(response.statusCode ?? 502, out);
         res.flushHeaders();
-        response.pipe(res);
-        response.on("end", () => say({ relay: { method, path: clean(path), status: response.statusCode ?? 502, ms: Date.now() - started } }));
+        // pipeline, not pipe: when the upstream aborts or idles out, the client's response is destroyed too, so the SDK retries instead of waiting.
+        pipeline(response, res, (error) => {
+          const status = response.statusCode ?? 502;
+          const ms = Date.now() - started;
+          say({ relay: error || !response.complete ? { method, path: clean(path), status, ms, aborted: true } : { method, path: clean(path), status, ms } });
+        });
       });
       upstream.on("error", () => {
         if (!res.headersSent) relayRefuse(res, 502, "upstream", method, path);

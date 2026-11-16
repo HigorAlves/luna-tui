@@ -102,6 +102,29 @@ describe("the engine relay", () => {
     expect(upstreamEnded).toBeGreaterThan(firstAt);
   });
 
+  it("ends the client's response when the upstream dies mid-stream, and logs the request", async () => {
+    const { port, lines } = await start((_req, res) => {
+      const out = res as import("node:http").ServerResponse;
+      out.writeHead(200, { "content-type": "text/event-stream" });
+      out.write("event: first\n\n");
+      setTimeout(() => out.socket?.destroy(), 50);
+    });
+    const outcome = await new Promise<string>((resolve) => {
+      const timer = setTimeout(() => resolve("hung"), 2000);
+      const req = request({ host: "127.0.0.1", port, method: "POST", path: "/v1/messages?beta=true", headers: oauth }, (res) => {
+        res.on("data", () => {});
+        res.on("error", () => (clearTimeout(timer), resolve("errored")));
+        res.on("aborted", () => (clearTimeout(timer), resolve("errored")));
+        res.on("close", () => (clearTimeout(timer), resolve(res.complete ? "complete" : "errored")));
+      });
+      req.on("error", () => (clearTimeout(timer), resolve("errored")));
+      req.end("{}");
+    });
+    expect(outcome).toBe("errored");
+    await new Promise((r) => setTimeout(r, 100));
+    expect(lines.map((l) => JSON.parse(l) as { relay: Record<string, unknown> }).some((l) => l.relay.path === "/v1/messages" && l.relay.aborted === true)).toBe(true);
+  });
+
   it("replaces the OAuth placeholder with the real token and keeps the path, the query and the other headers", async () => {
     const { port, seen } = await start((_req, res) => (res as import("node:http").ServerResponse).end("ok"));
     const reply = await send(port, { headers: oauth, body: '{"a":1}' });
