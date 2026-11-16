@@ -3,6 +3,7 @@
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
 import { looksLikeTestPath } from "../domain/locked-files.ts";
+import { trustOf } from "../domain/trust.ts";
 import { z } from "zod";
 
 import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, TERMINAL, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, SplitChild, coverageOf, criteriaOf, sizeLimits, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type CardSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, maxRisk, reviseCriteria, stepOf, stepsOfAnswer, stronger, RUN_OR_GATE } from "@hardness/contracts";
@@ -2428,6 +2429,8 @@ export class Pipeline {
     for (const task of await this.store.findStuckTasks(new Set<TaskState>(["awaiting_approval"]))) {
       // A Luna Notch task's plan is the notch's to approve (its AutoApproval calls /decision).
       if (task.source?.kind === "notch") continue;
+      // An untrusted card's plan waits for a person: text from a stranger is never approved by a clock, whatever its risk or council.
+      if (trustOf(task) === "untrusted") continue;
       const policy = await this.policies.for(task.repoPath);
       const minutes = policy.autoApprovePlanMinutes;
       if (minutes === null) continue;

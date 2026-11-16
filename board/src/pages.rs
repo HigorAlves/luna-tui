@@ -206,6 +206,12 @@ fn machine_flags(approval: &Approval, rows: &[(String, String)]) -> Vec<String> 
         .filter_map(Value::as_str)
         .filter_map(|f| f.strip_prefix("triage."))
     {
+        if field == "council" {
+            all.push(Flag::said(
+                "questions answered by the council, not a person · read them below".to_string(),
+            ));
+            continue;
+        }
         all.push(Flag::said(format!(
             "triage {} flagged · T corrects the record",
             plain(field)
@@ -278,6 +284,34 @@ fn council_section(r: &Value, width: usize) -> Vec<Line<'static>> {
             if let Some(name) = f["title"].as_str() {
                 out.extend(hanging(vec![Span::raw("    ")], name, width));
             }
+        }
+    }
+    out
+}
+
+/// What the question council answered before this plan was written: question, answer, confidence when it is kept, and the places it read.
+fn settled_section(approval: &Approval, width: usize) -> Vec<Line<'static>> {
+    let settled = settled_by_council_of(approval);
+    if settled.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![title("Settled by the council")];
+    for (question, answer, confidence, evidence) in settled {
+        let said = if confidence > 0.0 {
+            format!("{question} {answer} ({confidence:.2})")
+        } else {
+            format!("{question} {answer}")
+        };
+        out.extend(hanging(
+            vec![Span::raw("  "), Span::styled("- ", theme::label())],
+            &said,
+            width,
+        ));
+        if !evidence.is_empty() {
+            out.push(Line::from(Span::styled(
+                format!("    evidence: {}", plain(&evidence.join(", "))),
+                theme::dim(),
+            )));
         }
     }
     out
@@ -641,6 +675,13 @@ pub(crate) fn review_page(
         for note in &notes {
             main.extend(hanging(vec![Span::raw("  · ")], note, width));
         }
+    }
+    let settled = settled_section(approval, width);
+    if !settled.is_empty() {
+        if !main.is_empty() {
+            main.push(Line::default());
+        }
+        main.extend(settled);
     }
     let council = council_section(r, width);
     if !council.is_empty() {
@@ -2126,6 +2167,32 @@ mod approver_tests {
             "{screen}"
         );
         assert!(!screen.contains("0 finding(s) open"), "{screen}");
+    }
+
+    #[test]
+    fn the_plan_review_lists_what_the_council_settled_before_the_person_approves() {
+        let mut app = plan_gate_app();
+        app.detail_section = Section::Review;
+        let gate = app
+            .detail
+            .as_mut()
+            .unwrap()
+            .approvals
+            .iter_mut()
+            .find(|a| a.requested["lane"].is_string())
+            .unwrap();
+        gate.requested["flagged"] = serde_json::json!(["triage.council"]);
+        gate.requested["settledByCouncil"] = serde_json::json!([{"question": "Round half up or half to even?", "answer": "half to even", "evidence": ["src/round.rs:12"]}]);
+        let screen = render(&mut app, 180, 60);
+        for needle in [
+            "Settled by the council",
+            "Round half up or half to even? half to even",
+            "evidence: src/round.rs:12",
+        ] {
+            assert!(screen.contains(needle), "{needle}: {screen}");
+        }
+        assert!(screen.contains("answered by the council, not a person"), "{screen}");
+        assert!(!screen.contains("triage council flagged"), "{screen}");
     }
 
     #[test]

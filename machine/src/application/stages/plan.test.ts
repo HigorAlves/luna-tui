@@ -1127,16 +1127,60 @@ describe("planStage's council", () => {
     expect(councilCalls(calls)).toHaveLength(2);
   });
 
-  it("sends findings to the planner as its review, checks the plan once, then asks only the finder in round 2: settled is passed", async () => {
+  it("sends findings to the planner as its review, checks the plan once, then asks every member in round 2: settled is passed", async () => {
     const { run, calls, decided } = setup({ council_security: [member("a gap", [{ title: "No auth on the export" }]), silent()] }, cfg());
     const result = await run(context({ task: highTask }));
-    expect(calls.map((c) => c.runId)).toEqual(["r1-plan", "r1-tests-1", "r1-council-security-1", "r1-council-second-1", "r1-plan-2", "r1-council-security-2"]);
+    expect(calls.map((c) => c.runId)).toEqual(["r1-plan", "r1-tests-1", "r1-council-security-1", "r1-council-second-1", "r1-plan-2", "r1-council-security-2", "r1-council-second-2"]);
     expect(calls.find((c) => c.runId === "r1-plan-2")!.plan!.review).toEqual([expect.stringContaining("No auth on the export")]);
     expect(decided.filter((d) => d.pack === "plan_check")).toHaveLength(2);
     expect(calls.find((c) => c.runId === "r1-council-security-2")!.plan!.council).toMatchObject({ round: 2, transcript: [{ member: "security", round: 1 }, { member: "second", round: 1 }] });
     expect(result.detail).toMatchObject({ council: { passed: true, rounds: 2 }, rounds: { plan: 2, council: 2 } });
     expect(councilFlags(result)).toEqual([]);
-    expect((result.detail!.council as { transcript: unknown[] }).transcript).toHaveLength(3);
+    expect((result.detail!.council as { transcript: unknown[] }).transcript).toHaveLength(4);
+  });
+
+  it("reads the revised plan with the member that was silent in round 1, and a new finding there leaves passed false", async () => {
+    const left = member("a new gap", [{ title: "Export leaks other tenants" }]);
+    const { run, calls } = setup({ council_security: [member("a gap", [{ title: "No auth on the export" }]), silent()], council_second: [silent(), left] }, cfg());
+    const result = await run(context({ task: highTask }));
+    expect(calls.filter((c) => c.runId.endsWith("-2") && c.pack.startsWith("council_")).map((c) => c.runId)).toEqual(["r1-council-security-2", "r1-council-second-2"]);
+    expect(result.detail).toMatchObject({ council: { passed: false, rounds: 2 } });
+    expect(councilFlags(result)).toEqual(["council.second"]);
+  });
+
+  it("ends the stage as needs_input when the planner asks a question while revising for the council", async () => {
+    const asking: StageResult = { outcome: "needs_input", needsInput: [{ question: "Which tenants?", recommended: null }], detail: { summary: "s" } };
+    const { run } = setup({ council_security: [member("a gap", [{ title: "No auth" }])], plan: [planned(), asking] }, cfg());
+    const result = await run(context({ task: highTask }));
+    expect(result.outcome).toBe("needs_input");
+    expect(result.needsInput).toEqual([{ question: "Which tenants?", recommended: null }]);
+  });
+
+  it("ends the stage rate limited when the usage limit hits the planner's revision", async () => {
+    const limited: StageResult = { outcome: "fail", rateLimited: true, detail: { error: "usage limit" } };
+    const { run } = setup({ council_security: [member("a gap", [{ title: "No auth" }])], plan: [planned(), limited] }, cfg());
+    const result = await run(context({ task: highTask }));
+    expect(result.outcome).toBe("fail");
+    expect(result.rateLimited).toBe(true);
+  });
+
+  it("keeps the old plan when the revision plainly fails, says so in a council turn, and the council has not passed", async () => {
+    const { run } = setup({ council_security: [member("a gap", [{ title: "No auth" }])], plan: [planned(), { outcome: "fail", detail: { error: "boom" } }] }, cfg());
+    const result = await run(context({ task: highTask }));
+    expect(result.outcome).toBe("pass");
+    const council = result.detail!.council as { passed: boolean; transcript: Array<{ summary: string }> };
+    expect(council.passed).toBe(false);
+    expect(council.transcript.map((t) => t.summary)).toContain("the planner could not revise: boom");
+    expect(councilFlags(result)).toEqual(["council.security"]);
+  });
+
+  it("counts findings that do not parse as a member that did not answer", async () => {
+    const garbled: StageResult = { outcome: "pass", detail: { summary: "gaps", findings: [{ nonsense: true }] } };
+    const { run } = setup({ council_second: [garbled] }, cfg({ rounds: 1 }));
+    const result = await run(context({ task: highTask }));
+    const council = result.detail!.council as { passed: boolean; transcript: Array<{ member: string; summary: string }> };
+    expect(council.passed).toBe(false);
+    expect(council.transcript.find((t) => t.member === "second")!.summary).toMatch(/^did not answer/);
   });
 
   it("flags findings left after the last round as council.<member>, and the council has not passed", async () => {
@@ -1187,5 +1231,22 @@ describe("planStage's council", () => {
     const off = setup({}, cfg({ enabled: false }));
     await off.run(context({ task: highTask }));
     expect(councilCalls(off.calls)).toEqual([]);
+  });
+});
+
+describe("planStage's council-settled answers", () => {
+  const settled = { question: "Round half up?", answer: "half to even", by: "council", evidence: ["src/round.rs:12"] };
+  const withQa = (qa: unknown[]) => ({ ...task, record: { ...record, qa } }) as unknown as TaskRow;
+
+  it("flags the gate triage.council when the question council settled an answer", async () => {
+    const { run } = setup();
+    const result = await run(context({ task: withQa([settled, { question: "Which file?", answer: "keys.rs", by: "person" }]) }));
+    expect(result.detail?.flagged).toContain("triage.council");
+  });
+
+  it("does not flag it when only a person answered", async () => {
+    const { run } = setup();
+    const result = await run(context({ task: withQa([{ question: "Which file?", answer: "keys.rs", by: "person" }, { question: "Old?", answer: "yes" }]) }));
+    expect(result.detail?.flagged).not.toContain("triage.council");
   });
 });

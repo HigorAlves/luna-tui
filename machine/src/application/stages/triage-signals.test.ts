@@ -5,7 +5,7 @@ import type { TaskRow } from "../../domain/task.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { withTriageSignals } from "./triage-signals.ts";
 
-const task = (over: Partial<TaskRow> = {}): TaskRow => ({ id: "t1", title: "Which Postgres?", description: "Is 14 fine?", criteria: [], repoPath: "/repo", source: { kind: "github", repo: "o/n", number: 7, url: "https://github.com/o/n/issues/7" }, classification: null, ...over }) as unknown as TaskRow;
+const task = (over: Partial<TaskRow> = {}): TaskRow => ({ id: "t1", title: "Which Postgres?", description: "Is 14 fine?", criteria: [], repoPath: "/repo", source: { kind: "github", repo: "o/n", number: 7, url: "https://github.com/o/n/issues/7", authorAssociation: "MEMBER" }, classification: null, ...over }) as unknown as TaskRow;
 const context = (over: Partial<StageContext> = {}): StageContext => ({ task: task(), stage: "triage", attempt: 1, runId: "r1", approvals: [], signal: new AbortController().signal, ...over });
 const classification = {
   kind: "bug", ready: true, size: 1, sizeBucket: "S", typeOfWork: "backend", priority: "P2", riskPrelim: "low", subScores: { who: 2, what: 2, impact: 2, time: 1, demand: 1 },
@@ -463,6 +463,19 @@ describe("withTriageSignals and the question council", () => {
     }
     expect(notes).toHaveLength(3);
     expect(notes[0]).toContain("engine down");
+  });
+
+  it("never runs the council for an untrusted card: every question goes to the person, with a note", async () => {
+    const seen: Asked[] = [];
+    const notes: string[] = [];
+    const note = async (text: string) => void notes.push(text);
+    const stranger = { ...task(), source: { kind: "github", repo: "o/r", number: 4, url: "u", authorAssociation: "NONE" } } as unknown as TaskRow;
+    const council = councilOf({ [KIND]: { answer: "bug", confidence: 1, evidence: ["a:1"] } }, seen);
+    const result = await withTriageSignals(async () => agentPass(), { classify: async () => kindOpen, council, save: async () => {} })(context({ task: stranger, note }));
+    expect(seen).toEqual([]);
+    expect(result.outcome).toBe("needs_input");
+    expect(result.needsInput).toEqual([{ question: KIND, recommended: "bug" }]);
+    expect(notes.join(" ")).toContain("untrusted");
   });
 
   it("does today's thing when the council is off in the repo's config or has no runner", async () => {

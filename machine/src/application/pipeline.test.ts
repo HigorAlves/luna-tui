@@ -3223,7 +3223,7 @@ describe("timer-approved plans", () => {
   });
 
   it("never approves a re-planned gate or a gate with any flag, however confident its verdicts", async () => {
-    for (const over of [{ replan: { raised_by: "verifying", reason: "wrong" } }, { flagged: ["plan outside map"] }, { flagged: ["map stale"], replan: undefined }]) {
+    for (const over of [{ replan: { raised_by: "verifying", reason: "wrong" } }, { flagged: ["plan outside map"] }, { flagged: ["map stale"], replan: undefined }, { flagged: ["triage.council"] }]) {
       stubs.reset();
       pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: policies(10) });
       stubs.plan("test_design", confident(over));
@@ -3234,6 +3234,18 @@ describe("timer-approved plans", () => {
       expect((await pipeline.get(task.id)).state, JSON.stringify(over)).toBe("awaiting_approval");
       expect((await pipeline.events(task.id)).map((e) => e.kind)).not.toContain("plan.auto_approved");
     }
+  });
+
+  it("never approves an untrusted card's plan, however low its risk or good its council", async () => {
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: policies(10) });
+    stubs.plan("test_design", confident());
+    const source = { kind: "github", repo: "o/r", number: 9, url: "https://github.com/o/r/issues/9", authorAssociation: "NONE" } as const;
+    const task = await pipeline.createTask({ title: "t", repoPath: "/r/a", source });
+    await pipeline.start(task.id);
+    await db.query("update approvals set created_at = now() - interval '11 minutes'");
+    await pipeline.tick();
+    expect((await pipeline.get(task.id)).state).toBe("awaiting_approval");
+    expect((await pipeline.events(task.id)).map((e) => e.kind)).not.toContain("plan.auto_approved");
   });
 
   it("never approves a reply or an archive gate, whatever else it carries", async () => {
