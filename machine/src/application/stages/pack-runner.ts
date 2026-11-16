@@ -33,7 +33,6 @@ import {
 } from "../../adapters/git/worktree.ts";
 import { CredentialWaitError, type CredentialMount, type Credentials, NoCredentialError } from "../../adapters/credentials/index.ts";
 import { type SandboxResult, type SandboxRun, SecretsMissingError, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
-import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
 import { type EgressPolicy, blockedPayloads } from "../egress-policy.ts";
 import type { InstallInput, InstallOutcome } from "../install.ts";
 import type { SecretStore } from "../secrets.ts";
@@ -44,7 +43,6 @@ import { LOCKFILES, envOf } from "../../domain/env-hash.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { sandboxSizeOf } from "../../domain/sandbox-bounds.ts";
 import { trustOf, untrustedNote } from "../../domain/trust.ts";
-import { RuntimeUnavailableError } from "../../adapters/docker/runtimes.ts";
 import { envBrokenDetail } from "../env-broken.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
@@ -636,6 +634,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       installed = await deps.install({ taskId: task.id, repoPath: task.repoPath, workspace: workspace.path, commit: inputCommit, trust, signal: context.signal });
     } catch (error) {
       credential.release();
+      const broken = envBrokenDetail(error);
+      if (broken) return { outcome: "escalated", detail: broken };
       throw error;
     }
     for (const payload of blockedPayloads(installed.blocked, "install")) await Promise.resolve(context.emit?.("sandbox.egress_blocked", payload)).catch(() => {});
@@ -718,9 +718,9 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   });
     ran.container = true;
   } catch (error) {
-    if (error instanceof RuntimeUnavailableError) return { outcome: "escalated", detail: envBrokenDetail(error)! };
-    if (!(error instanceof EgressUnsupportedError)) throw error;
-    return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "network", reason: error.message, options: ["install Docker Engine 28.0 or newer, or set MACHINE_EGRESS=off on the machine to run without the allow-list, then resume"] } };
+    const broken = envBrokenDetail(error);
+    if (!broken) throw error;
+    return { outcome: "escalated", detail: broken };
   }
   // A run that had secrets: what its tools wrote into the files it left is cleaned before anything reads the packet, and every string of
   // what is ingested below is cleaned where it is made.

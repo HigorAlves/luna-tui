@@ -15,6 +15,8 @@ import { DEFAULT_POLICY } from "../../domain/policy.ts";
 import type { TaskRow } from "../../domain/task.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
 import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
+import { RuntimeUnavailableError } from "../../adapters/docker/runtimes.ts";
+import { SeccompUnavailableError } from "../../adapters/docker/seccomp.ts";
 import type { SecretStore } from "../secrets.ts";
 import { noEconomy } from "../economy.ts";
 import { type AgentDeps, agentRunners, runAgent } from "./pack-runner.ts";
@@ -1616,6 +1618,24 @@ describe("a stage's own list of hosts", () => {
     const result = await runAgent(d, context("triage"), "triage");
     expect(result.outcome).toBe("escalated");
     expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true, step: "network", reason: expect.stringContaining("Docker Engine 28"), options: expect.any(Array) });
+  });
+});
+
+describe("sandbox environment errors on the agent path", () => {
+  it("escalates env_broken at step seccomp when the daemon has no seccomp filter", async () => {
+    const d = deps(async () => {
+      throw new SeccompUnavailableError("no seccomp");
+    });
+    const result = await runAgent(d, context("triage"), "triage");
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true, step: "seccomp" });
+  });
+
+  it("escalates env_broken at step runtime when the install step finds no runtime, on a writable stage", async () => {
+    const d: AgentDeps = { ...deps(fakeSandbox(output())), install: async () => { throw new RuntimeUnavailableError("no runsc"); } };
+    const result = await runAgent(d, context("implementing"), "implementing");
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true, step: "runtime" });
   });
 });
 
