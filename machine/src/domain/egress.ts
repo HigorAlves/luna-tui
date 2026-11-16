@@ -13,8 +13,9 @@ export const ENGINE_HOSTS: Readonly<Record<CredentialOwner, readonly string[]>> 
   typesafe: ["ai-gateway.vercel.sh", "api.typesafe.ai"],
 };
 
-/** `install` is the machine's install of a lockfile, `check` a repository's check, the app, the seed and the deploy, `agent` a pack run on a repository, `pack` a pack run with no repository. */
-export type EgressKind = "install" | "check" | "agent" | "pack";
+/** `install` is the machine's install of a lockfile, `check` a repository's check, the app, the seed and the deploy. A pack's `network` picks the other three:
+ *  `pack` (`engine`) is its engines' hosts and the relay only, `github` adds GitHub's, `agent` (`full`) is a pack run on a repository with everything a check has. */
+export type EgressKind = "install" | "check" | "agent" | "pack" | "github";
 
 export interface EgressInputs {
   /** `sandbox.egress.allow` of the user's checkout. */
@@ -60,7 +61,10 @@ export function egressFor(kind: EgressKind, inputs: EgressInputs): EgressSpec {
   };
   const engines = () => add([...(inputs.owners ?? []).filter((owner) => !inputs.relayed?.includes(owner)).flatMap((owner) => ENGINE_HOSTS[owner]), ...(inputs.engineHosts ?? [])]);
   if (kind === "pack") engines();
-  else {
+  else if (kind === "github") {
+    add(GITHUB_HOSTS);
+    engines();
+  } else {
     add(GITHUB_HOSTS);
     add(inputs.allow);
     if (kind === "install" || inputs.registries === "always") add(inputs.registryHosts);
@@ -69,6 +73,6 @@ export function egressFor(kind: EgressKind, inputs: EgressInputs): EgressSpec {
       add(inputs.targets ?? []);
     }
   }
-  const privateEntries = kind === "agent" || kind === "pack" ? (inputs.machineEntries ?? []).map(normalizeHostPattern).filter((e) => PRIVATE_ENTRY.test(e) && !e.startsWith("*")) : [];
+  const privateEntries = kind === "agent" || kind === "pack" || kind === "github" ? (inputs.machineEntries ?? []).map(normalizeHostPattern).filter((e) => PRIVATE_ENTRY.test(e) && !e.startsWith("*")) : [];
   return { allow: [...new Set(hosts)].sort(), allowPrivate: [...new Set(privateEntries)].sort() };
 }

@@ -1568,11 +1568,13 @@ describe("a stage's own list of hosts", () => {
     return { d, requests };
   };
 
-  it("asks for the agent list of the run's repository with its engine's owner, and hands it to the sandbox with the machine's image", async () => {
-    const { d, requests } = withEgress(fakeSandbox(output()));
-    await runAgent(d, context("triage"), "triage");
-    expect(requests).toEqual([expect.objectContaining({ repoPath: repo, kind: "agent", owners: expect.arrayContaining(["claude"]), targets: [] })]);
-    expect(seen?.egress).toEqual(spec);
+  it("asks for the pack's network: engine as `pack`, github as `github`, full as `agent`, with its engine's owner, and hands the list to the sandbox", async () => {
+    for (const [pack, kind] of [["reviewing", "pack"], ["triage", "github"], ["implementing", "agent"]] as const) {
+      const { d, requests } = withEgress(fakeSandbox(output()));
+      await runAgent(d, context(pack), pack);
+      expect(requests, pack).toEqual([expect.objectContaining({ repoPath: repo, kind, owners: expect.arrayContaining(["claude"]), targets: [] })]);
+      expect(seen?.egress).toEqual(spec);
+    }
   });
 
   it("gives a browser run the host of the one QA target it is given", async () => {

@@ -70,7 +70,7 @@ export function egressPolicy(deps: EgressPolicyDeps): EgressPolicy {
       const sandbox = policy?.factory.sandbox.egress ?? { allow: [], registries: "always" as const };
       const lockfiles: LockfileText[] = [];
       let nested: string[] = [];
-      if (request.repoPath && request.kind !== "pack") {
+      if (request.repoPath && (request.kind === "install" || request.kind === "check" || request.kind === "agent")) {
         for (const name of LOCKFILES) {
           try {
             lockfiles.push({ name, text: await read(join(request.repoPath, name)) });
@@ -81,7 +81,7 @@ export function egressPolicy(deps: EgressPolicyDeps): EgressPolicy {
         // The lockfiles in subfolders the repository tracks (`board/Cargo.lock`), by path only: their ecosystems' own hosts.
         nested = await listNested(request.repoPath).catch(() => []);
       }
-      const agentLike = request.kind === "agent" || request.kind === "pack";
+      const agentLike = request.kind === "agent" || request.kind === "pack" || request.kind === "github";
       const { allow, allowPrivate } = egressFor(request.kind, {
         allow: sandbox.allow,
         registries: sandbox.registries,
