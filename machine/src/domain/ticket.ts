@@ -65,5 +65,6 @@ export function canonicalTicketOf(source: TicketSource): CanonicalTicket {
     createdAt: null,
     updatedAt: null,
     permalink: line(g.url, 500),
+    ...(g.authorAssociation ? { authorAssociation: line(g.authorAssociation, 40) } : {}),
   };
 }

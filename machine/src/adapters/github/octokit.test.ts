@@ -40,7 +40,7 @@ function stub(answers: Record<string, unknown>) {
       },
       git: { deleteRef: endpoint("git.deleteRef") },
       checks: { listForRef: endpoint("checks.listForRef") },
-      issues: { listForRepo: "issues.listForRepo", createComment: endpoint("issues.createComment"), listComments: "issues.listComments", updateComment: endpoint("issues.updateComment") },
+      issues: { get: endpoint("issues.get"), listForRepo: "issues.listForRepo", createComment: endpoint("issues.createComment"), listComments: "issues.listComments", updateComment: endpoint("issues.updateComment") },
       actions: {
         listJobsForWorkflowRun: endpoint("actions.listJobsForWorkflowRun"),
         downloadJobLogsForWorkflowRun: endpoint("actions.downloadJobLogsForWorkflowRun"),
@@ -435,6 +435,13 @@ describe("OctokitGitHub", () => {
     expect(calls.at(-1)![1]).toMatchObject({ base: "main", head: "feat/x", draft: true });
     await github.markPrReady("o/a", 3);
     expect(calls.at(-1)![1]).toMatchObject({ variables: { id: "PR_1" } });
+  });
+
+  it("reads one issue's author association, and null when it has none", async () => {
+    const a = stub({ "issues.get": { author_association: "OWNER" } }).github;
+    expect(await a.issueAssociation("o/a", 5)).toBe("OWNER");
+    expect((await stub({ "issues.get": {} }).github.issueAssociation("o/a", 5))).toBeNull();
+    await expect(stub({ "issues.get": Object.assign(new Error("nope"), { status: 404 }) }).github.issueAssociation("o/a", 5)).rejects.toThrow(GitHubError);
   });
 
   it("joins the failed jobs' logs, filters PRs out of the issue list, and wraps failures as GitHubError", async () => {

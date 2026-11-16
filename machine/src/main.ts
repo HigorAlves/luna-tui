@@ -91,7 +91,7 @@ import { Backlog } from "./application/backlog.ts";
 import { PgTicketStore } from "./adapters/persistence/ticket-store.ts";
 import { GitHubTickets } from "./adapters/tickets/github-tickets.ts";
 import { JiraTickets } from "./adapters/tickets/jira-tickets.ts";
-import { TicketMachine, cardOnce } from "./application/ticket-machine.ts";
+import { TicketMachine, cardOnce, ticketSource } from "./application/ticket-machine.ts";
 import { TicketEvents } from "./application/ticket-events.ts";
 import { INTAKE_CLIENT } from "./application/classify.ts";
 import type { DedupAnswer } from "./application/intake-dedup.ts";
@@ -774,7 +774,9 @@ const ticketMachine = new TicketMachine({
   store: new PgTicketStore(db),
   port: (tool) => (tool === "jira" ? new JiraTickets(jiraApi) : new GitHubTickets(github)),
   intakeLabel: config.githubPoll.label,
-  candidates: (ticket, repoPath) => pipeline.ticketCandidates(repoPath, ticket.tool === "github" ? { kind: "github", repo: ticket.key.split("#")[0]!, number: Number(ticket.key.split("#")[1]), url: ticket.permalink } : { kind: "jira", key: ticket.key, url: ticket.permalink, issueType: ticket.type }),
+  candidates: (ticket, repoPath) => pipeline.ticketCandidates(repoPath, ticketSource(ticket)),
+  association: (slug, number) => github.issueAssociation(slug, number),
+  record: (id, kind, payload) => pipeline.record(id, kind, payload),
   config: async (repoPath) => (await policies.for(repoPath)).factory,
   locate: async (repoPath, text) => (repoPath ? ((await graph.locate(repoPath, text))?.files ?? []).map((f: { path?: string } | string) => (typeof f === "string" ? f : (f.path ?? ""))).filter(Boolean) : []),
   createCard: (input, key) => cardOnce(pipeline, input, key),

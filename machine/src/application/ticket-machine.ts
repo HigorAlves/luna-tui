@@ -96,6 +96,10 @@ export interface TicketMachineDeps {
   /** The label the GitHub intake watches for: a child ticket made on GitHub carries it, so the intake sees it. */
   intakeLabel?: string;
   backlog?: { upsertFromSource(input: BacklogAddInput, options: { createIfMissing: boolean }): Promise<{ id: string; created: boolean } | null> };
+  /** GitHub's `author_association` of one issue, through the GitHub port: asked only for a GitHub ticket that carries none. A rejection leaves it absent (the card runs untrusted). */
+  association?(slug: string, number: number): Promise<string | null>;
+  /** Logs a fact on a card (`pipeline.record`): the note that a card's trust could not be read. */
+  record?(cardId: string, kind: string, payload: Record<string, unknown>): Promise<void>;
   now?: () => Date;
 }
 
@@ -119,11 +123,13 @@ export async function cardOnce(pipeline: { createTaskOnce(order: NewTask & Recor
 /** How long a claim on a ticket's card creation holds before a retry may take it (a machine that died between the card and the link; the card's own key then returns the card already made). */
 const CARD_CLAIM_MS = 10 * 60_000;
 
-const sourceOf = (t: CanonicalTicket): TaskSource => {
+/** The source a ticket's card or candidate lookup carries; a GitHub one holds the author association the ticket was read with. */
+export const ticketSource = (t: CanonicalTicket): TaskSource => {
   const gh = GITHUB_KEY.exec(t.key);
-  if (t.tool === "github" && gh) return { kind: "github", repo: `${gh[1]}/${gh[2]}`, number: Number(gh[3]), url: t.permalink };
+  if (t.tool === "github" && gh) return { kind: "github", repo: `${gh[1]}/${gh[2]}`, number: Number(gh[3]), url: t.permalink, ...(t.authorAssociation ? { authorAssociation: t.authorAssociation } : {}) };
   return { kind: "jira", key: t.key, url: t.permalink, issueType: t.type };
 };
+const sourceOf = ticketSource;
 
 /** The repository a ticket is linked to, when one is. */
 const repoOf = (row: Pick<TicketRow, "machineLinks">): string | null => row.machineLinks.find((l) => l.kind === "repo")?.target ?? null;
@@ -132,6 +138,18 @@ export class TicketMachine implements TicketIntake {
   private readonly now: () => Date;
   constructor(private readonly deps: TicketMachineDeps) {
     this.now = deps.now ?? (() => new Date());
+  }
+
+  /** The ticket with its author association: as read, else asked once of GitHub. A failed read leaves it absent, so the card stays untrusted. */
+  private async withAssociation(t: CanonicalTicket): Promise<{ ticket: CanonicalTicket; unread: boolean }> {
+    const gh = GITHUB_KEY.exec(t.key);
+    if (t.tool !== "github" || !gh || t.authorAssociation || !this.deps.association) return { ticket: t, unread: t.tool === "github" && !t.authorAssociation };
+    try {
+      const found = await this.deps.association(`${gh[1]}/${gh[2]}`, Number(gh[3]));
+      return found ? { ticket: { ...t, authorAssociation: found.slice(0, 40) }, unread: false } : { ticket: t, unread: true };
+    } catch {
+      return { ticket: t, unread: true };
+    }
   }
 
   /** Reads a ticket and holds its drafts. Writes nothing to the tracker and makes no card. */
@@ -162,7 +180,7 @@ export class TicketMachine implements TicketIntake {
       await store.setMachine(ticket.key, { status, ...(ctx.repoPath ? { links: [...kept, { kind: "repo", target: ctx.repoPath }] } : {}) });
     };
     const config = await this.deps.config(ctx.repoPath);
-    const candidates = await this.deps.candidates(ticket, ctx.repoPath);
+    const candidates = await this.deps.candidates((await this.withAssociation(ticket)).ticket, ctx.repoPath);
     const enrichment = await enrichTicket(ticket, { candidates, ...(this.deps.locate ? { locate: (text: string) => this.deps.locate!(ctx.repoPath, text) } : {}), lookbackDays: config.dedup.lookback_days }, at);
     const base = buildValidityContext(ticket, enrichment, candidates);
 
@@ -335,7 +353,8 @@ export class TicketMachine implements TicketIntake {
   async card(key: string): Promise<{ id: string }> {
     const row = await this.row(key);
     if (row.cardId) throw new TicketRefusal("this ticket already has a card");
-    const t = row.canonical;
+    const read = await this.withAssociation(row.canonical);
+    const t = read.ticket;
     const last = [...row.assessments].reverse().find((a) => a.outcome === "workable");
     const repo = row.machineLinks.find((l) => l.kind === "repo")?.target;
     // A ticket that depends on others needs a card for each first; its card waits on them (the dependency rule holds it).
@@ -367,6 +386,7 @@ export class TicketMachine implements TicketIntake {
       throw error;
     }
     await this.deps.store.setMachine(key, { cardId: card.id, status: "carded" });
+    if (read.unread) await this.deps.record?.(card.id, "card.trust_unread", { note: "The author's association with this GitHub repository could not be read, so the card runs untrusted." }).catch(() => {});
     await this.acknowledge(key);
     await this.learn(row, "do_now");
     return card;
