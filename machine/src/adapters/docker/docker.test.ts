@@ -531,7 +531,7 @@ describe("runSandbox and execInSandbox on a run's own network", () => {
   it("hands the credential's relay to the proxy and puts only the placeholder in the container's secret files", async () => {
     const seen: unknown[] = [];
     const { deps, calls } = fakes({ open: async (name: string, spec: unknown) => (seen.push(spec), { name: `net-${name}`, dns: "172.30.0.2", containerArgs: () => ["--network", "n"], blocked: async () => [], teardown: async () => {} } as never) });
-    const relay = { kind: "oauth" as const, placeholder: "sk-ant-oat01-luna-relay-ph", file: "/state/r/relay/anthropic" };
+    const relay = { kind: "oauth" as const, placeholder: "sk-ant-oat01-luna-relay-ph", file: "/state/r/relay/anthropic", metaFile: "/state/r/relay/meta.json" };
     const base = run({ runDir: tmp(), egress: { allow: [], allowPrivate: [], proxyImage: "machine:dev" } });
     await runSandbox({ ...base, credential: { env: { CLAUDE_CODE_OAUTH_TOKEN: relay.placeholder }, mounts: [], relay } }, deps);
     expect(seen).toEqual([{ allow: [], allowPrivate: [], proxyImage: "machine:dev", relay }]);

@@ -2,7 +2,7 @@ import { type IncomingHttpHeaders, type Server, createServer, request } from "no
 import { connect as netConnect } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { type EgressProxy, createEgressProxy } from "./proxy.ts";
+import { type EgressProxy, createEgressProxy, parseRelayMeta } from "./proxy.ts";
 
 const REAL = "sk-ant-oat01-REAL-SECRET-VALUE";
 const PLACEHOLDER = "sk-ant-oat01-luna-relay-abc123";
@@ -29,6 +29,7 @@ async function start(
   handler: Parameters<typeof createServer>[1],
   kind: "oauth" | "api-key" = "oauth",
   resolved: string[] = [PUBLIC],
+  denyLocal: string[] = [],
 ): Promise<{ port: number; seen: Seen[]; lines: string[]; connects: Array<{ port: number; address: string }>; lookups: string[] }> {
   const seen: Seen[] = [];
   const lines: string[] = [];
@@ -50,7 +51,7 @@ async function start(
     resolve: async (name) => (lookups.push(name), resolved),
     connect: (port, address) => (connects.push({ port, address }), netConnect(upstreamPort, "127.0.0.1")),
     log: (line) => lines.push(line),
-    relay: { kind, placeholder: PLACEHOLDER, credential: async () => REAL, tls: false },
+    relay: { kind, placeholder: PLACEHOLDER, credential: async () => REAL, tls: false, denyLocal },
   });
   const bound = await proxy.listen(0, null, "127.0.0.1", 0);
   return { port: bound.relayPort!, seen, lines, connects, lookups };
@@ -176,6 +177,25 @@ describe("the engine relay", () => {
     const bad = await start((_req, res) => (res as import("node:http").ServerResponse).end("ok"), "oauth", ["10.0.0.5"]);
     expect((await send(bad.port, { headers: oauth })).status).toBe(502);
     expect(bad.seen).toHaveLength(0);
+  });
+
+  it("refuses a request that arrives on the egress bridge's address, and serves one that arrives anywhere else", async () => {
+    // The test's listener is 127.0.0.1: denying 127.0.0.0/8 stands for a request on the bridge side.
+    const denied = await start((_req, res) => (res as import("node:http").ServerResponse).end("ok"), "oauth", [PUBLIC], ["127.0.0.0/8"]);
+    expect((await send(denied.port, { headers: oauth })).status).toBe(403);
+    expect(denied.seen).toHaveLength(0);
+    expect(denied.connects).toHaveLength(0);
+    expect(denied.lines.map((l) => JSON.parse(l) as { relay: Record<string, unknown> })[0]!.relay).toMatchObject({ refused: "local", status: 403 });
+    await proxy!.close();
+    await new Promise<void>((resolve) => upstream!.close(() => resolve()));
+    const other = await start((_req, res) => (res as import("node:http").ServerResponse).end("ok"), "oauth", [PUBLIC], ["172.18.0.0/16", "10.9.9.9"]);
+    expect((await send(other.port, { headers: oauth })).status).toBe(200);
+  });
+
+  it("reads the placeholder and the kind from the mounted file's text, and refuses anything else", () => {
+    expect(parseRelayMeta('{"kind":"oauth","placeholder":"sk-ant-oat01-luna-relay-x"}')).toEqual({ kind: "oauth", placeholder: "sk-ant-oat01-luna-relay-x" });
+    expect(parseRelayMeta('{"kind":"api-key","placeholder":"p"}')).toEqual({ kind: "api-key", placeholder: "p" });
+    for (const bad of ["", "nope", '{"kind":"x","placeholder":"p"}', '{"kind":"oauth"}', '{"kind":"oauth","placeholder":""}']) expect(parseRelayMeta(bad), bad).toBeNull();
   });
 
   it("logs one JSON line per request with no header value", async () => {

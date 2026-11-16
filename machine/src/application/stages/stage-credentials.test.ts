@@ -24,7 +24,7 @@ function recording({ missing = [] as string[], busy = [] as string[], held = [] 
 
 describe("prepareStageCredentials with a relayed Claude", () => {
   it("carries the Claude relay of the stage's own engine or of a helper's through the merge", async () => {
-    const relay = { kind: "oauth" as const, placeholder: "ph", file: "/r/anthropic" };
+    const relay = { kind: "oauth" as const, placeholder: "ph", file: "/r/anthropic", metaFile: "/r/meta.json" };
     const credentials: Credentials = {
       check: async () => ({ available: true }),
       prepare: async (engine) => ({ env: { K: engine }, mounts: [], ...(engine.startsWith("claude") ? { relay } : {}), release: async () => {} }),

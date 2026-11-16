@@ -17,6 +17,7 @@ function dockerFake(answers: Array<(args: string[]) => ExecResult | undefined> =
       if (r) return r;
     }
     const key = args.slice(0, 2).join(" ");
+    if (key === "network inspect" && args.some((a) => a.includes("Subnet"))) return ok("172.18.0.0/16\n");
     if (key === "network inspect" && args.includes("hardness-egress")) return ok("[]");
     if (args[0] === "version") return ok("29.9.2\n");
     if (key === "network inspect") return ok("true|isolated|invalid IP");
@@ -54,14 +55,17 @@ describe("the network commands", () => {
 });
 
 describe("the engine relay", () => {
-  const relay = { kind: "oauth" as const, placeholder: "sk-ant-oat01-luna-relay-abc", file: "/state/runs/r1/relay/anthropic" };
+  const relay = { kind: "oauth" as const, placeholder: "sk-ant-oat01-luna-relay-abc", file: "/state/runs/r1/relay/anthropic", metaFile: "/state/runs/r1/relay/meta.json" };
 
-  it("starts the proxy with the credential as a read-only file mount, never as a value", () => {
-    const args = proxyArgs({ run: "r1", image: IMAGE, bridge: "hardness-egress", allow: [], allowPrivate: [], relay });
+  it("starts the proxy with the credential and the placeholder as read-only file mounts, never as a value, and with the bridge's subnet to refuse", () => {
+    const args = proxyArgs({ run: "r1", image: IMAGE, bridge: "hardness-egress", allow: [], allowPrivate: [], relay, relayDenyLocal: "172.18.0.0/16" });
     expect(args).toContain("/state/runs/r1/relay/anthropic:/run/relay/anthropic:ro");
     expect(args[args.indexOf("/state/runs/r1/relay/anthropic:/run/relay/anthropic:ro") - 1]).toBe("-v");
+    expect(args).toContain("/state/runs/r1/relay/meta.json:/run/relay/meta.json:ro");
     const tail = args.slice(args.indexOf("--relay"));
-    expect(tail).toEqual(["--relay", "anthropic=/run/relay/anthropic", "--relay-kind", "oauth", "--relay-placeholder", relay.placeholder, "--relay-listen", "3129"]);
+    expect(tail).toEqual(["--relay", "anthropic=/run/relay/anthropic", "--relay-meta", "/run/relay/meta.json", "--relay-listen", "3129", "--relay-deny-local", "172.18.0.0/16"]);
+    expect(args.join(" ")).not.toContain(relay.placeholder);
+    expect(args).not.toContain("--relay-placeholder");
     expect(args).not.toContain("-e");
     expect(proxyArgs({ run: "r1", image: IMAGE, bridge: "b", allow: [], allowPrivate: [] })).not.toContain("--relay");
   });
@@ -75,6 +79,16 @@ describe("the engine relay", () => {
     expect(env.ANTHROPIC_BASE_URL).toBe("http://172.30.0.2:3129");
     for (const name of ["NO_PROXY", "no_proxy"]) expect(env[name]).toBe("localhost,127.0.0.1,::1,luna-app,172.30.0.2");
     expect(args.join(" ")).not.toContain(relay.file);
+  });
+
+  it("reads the egress bridge's subnet before the proxy starts and hands it to the relay to refuse; no subnet, no proxy", async () => {
+    const withSubnet = dockerFake([(a) => (a[0] === "network" && a[1] === "inspect" && a.includes("hardness-egress") && a.some((x) => x.includes("Subnet")) ? ok("172.18.0.0/16 \n") : undefined)]);
+    await openCardNetwork("r1", { allow: [], allowPrivate: [], relay }, { exec: withSubnet.exec, proxyImage: IMAGE, pollMs: 0 });
+    const run = withSubnet.calls.find((c) => c[1] === "run")!;
+    expect(run.slice(run.indexOf("--relay-deny-local"))).toEqual(["--relay-deny-local", "172.18.0.0/16"]);
+    const none = dockerFake([(a) => (a[0] === "network" && a[1] === "inspect" && a.some((x) => x.includes("Subnet")) ? ok("\n") : undefined)]);
+    await expect(openCardNetwork("r1", { allow: [], allowPrivate: [], relay }, { exec: none.exec, proxyImage: IMAGE, pollMs: 0 })).rejects.toThrow(/subnet/);
+    expect(none.calls.some((c) => c[1] === "run")).toBe(false);
   });
 
   it("sets no base URL when there is no relay", async () => {

@@ -161,6 +161,39 @@ export interface RelayOptions {
   credential: () => Promise<string>;
   /** Default true. False only in a test, where a plain server stands in for the API. */
   tls?: boolean;
+  /** IPv4 addresses or CIDR ranges (the egress bridge's): a request that arrives on a local address inside one is refused, so the relay is served on the card network only. */
+  denyLocal?: readonly string[];
+}
+
+/** The text of the mounted meta file (`{"kind":…,"placeholder":…}`), or null when it is not that. */
+export function parseRelayMeta(text: string): { kind: "oauth" | "api-key"; placeholder: string } | null {
+  try {
+    const json = JSON.parse(text) as { kind?: unknown; placeholder?: unknown };
+    if ((json.kind !== "oauth" && json.kind !== "api-key") || typeof json.placeholder !== "string" || json.placeholder.length === 0) return null;
+    return { kind: json.kind, placeholder: json.placeholder };
+  } catch {
+    return null;
+  }
+}
+
+const v4Number = (address: string): number | null => {
+  const parts = address.split(".");
+  if (parts.length !== 4 || !parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255)) return null;
+  return parts.reduce((n, p) => n * 256 + Number(p), 0);
+};
+
+/** Whether `address` (IPv4, or IPv4-mapped IPv6) is inside one of `ranges` (an address or a CIDR). An address that is not IPv4 is "inside": the relay refuses what it cannot place. */
+export function inRanges(address: string | undefined, ranges: readonly string[]): boolean {
+  const n = address === undefined ? null : v4Number(address.replace(/^::ffff:/i, ""));
+  if (n === null) return true;
+  return ranges.some((range) => {
+    const [base, bits = "32"] = range.split("/");
+    const b = v4Number(base!);
+    const length = Number(bits);
+    if (b === null || !Number.isInteger(length) || length < 0 || length > 32) return false;
+    const size = 2 ** (32 - length);
+    return Math.floor(n / size) === Math.floor(b / size);
+  });
 }
 
 export const RELAY_HOST = "api.anthropic.com";
@@ -416,6 +449,8 @@ export function createEgressProxy(options: ProxyOptions): EgressProxy {
     const relay = relayOptions!;
     const method = req.method ?? "-";
     const target = req.url ?? "";
+    // Served on the card network only: a request that came in on the egress bridge's side (a host that can route to it) is refused before anything else.
+    if (relay.denyLocal && relay.denyLocal.length > 0 && inRanges(req.socket.localAddress, relay.denyLocal)) return relayRefuse(res, 403, "local", method, target.split("?")[0]!);
     // Origin-form, under /v1/ and nothing that climbs out of it: a request for another host or path is never forwarded.
     const path = target.split("?")[0]!;
     if (!target.startsWith("/v1/") || path.split("/").some((part) => part === "." || part === "..") || path.includes("//") || path.includes("\\")) {
@@ -573,18 +608,19 @@ if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.
   };
   if (args.includes("--check")) process.exit(selfCheck() ? 0 : 1);
   const port = Number(value("--listen") ?? "3128");
-  // `--relay anthropic=<file> --relay-kind oauth|api-key --relay-placeholder <value> --relay-listen 3129`: the credential is a file, never an argument.
+  // `--relay anthropic=<file> --relay-meta <file> --relay-listen 3129 --relay-deny-local <cidr>`: the credential, the placeholder and the kind are mounted files, never an argument or a variable (an argument shows in /proc/<pid>/cmdline).
   const relayFile = /^anthropic=(\/.+)$/.exec(value("--relay") ?? "")?.[1];
-  const relayKind = value("--relay-kind");
-  const placeholder = value("--relay-placeholder");
-  if (value("--relay") !== undefined && (!relayFile || (relayKind !== "oauth" && relayKind !== "api-key") || !placeholder)) {
-    process.stderr.write("egress proxy: --relay needs anthropic=<absolute file>, --relay-kind oauth|api-key and --relay-placeholder\n");
+  const metaFile = value("--relay-meta");
+  const meta = metaFile ? parseRelayMeta(await readFile(metaFile, "utf8").catch(() => "")) : null;
+  if (value("--relay") !== undefined && (!relayFile || !meta)) {
+    process.stderr.write("egress proxy: --relay needs anthropic=<absolute file> and --relay-meta <file holding the kind and the placeholder>\n");
     process.exit(1);
   }
+  const denyLocal = listOf(value("--relay-deny-local"));
   const relayPort = Number(value("--relay-listen") ?? "3129");
   const proxy = createEgressProxy({
-    ...(relayFile && placeholder && (relayKind === "oauth" || relayKind === "api-key")
-      ? { relay: { kind: relayKind, placeholder, credential: async () => (await readFile(relayFile, "utf8")).replace(/\s+/g, "") } }
+    ...(relayFile && meta
+      ? { relay: { kind: meta.kind, placeholder: meta.placeholder, denyLocal, credential: async () => (await readFile(relayFile, "utf8")).replace(/\s+/g, "") } }
       : {}),
     allow: listOf(value("--allow")),
     allowPrivate: listOf(value("--allow-private")),
