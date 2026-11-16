@@ -19,6 +19,7 @@ use ureq::{
 };
 
 use crate::backlog::BacklogEntry;
+use crate::compliance::{self, ActError, ComplianceDraft, DraftsResponse};
 use crate::economy::Economy;
 use crate::model::{
     EngineCatalog, EngineInfo, Health, JiraIssueHit, JiraStatus, Metrics, PlanEdit, PrAction,
@@ -607,6 +608,33 @@ impl Machine {
                 .send_json(body),
         )
         .map(|_| ())
+    }
+
+    /// The manager's drafts, in the order the machine sent them.
+    pub fn compliance_drafts(&self) -> Result<Vec<ComplianceDraft>, String> {
+        Self::typed::<DraftsResponse>(self.agent.get(self.url("/compliance/drafts")).call())
+            .map(|r| r.drafts)
+    }
+
+    /// A tap on a draft: `approve`, `edit` or `ignore`; `body` carries the hash the person saw (and the text for an edit). The
+    /// machine answers the draft as it is now. A `409` is a draft that changed since it was read.
+    pub fn compliance_act(
+        &self,
+        id: &str,
+        action: &str,
+        body: Value,
+    ) -> Result<ComplianceDraft, ActError> {
+        let reply = self
+            .agent
+            .post(self.url(&format!(
+                "/compliance/drafts/{}/{action}",
+                compliance::encode_id(id)
+            )))
+            .send_json(body);
+        if matches!(&reply, Ok(r) if r.status().as_u16() == 409) {
+            return Err(ActError::Stale);
+        }
+        Self::typed(reply).map_err(ActError::Failed)
     }
 
     /// `bump`, `promote` or `decline` on a backlog item.
@@ -1736,6 +1764,62 @@ mod prs_all_tests {
         assert_eq!(
             seen.recv().unwrap(),
             "POST /github/prs/all/refresh HTTP/1.1"
+        );
+    }
+
+    const DRAFT: &str = r#"{"id":"change_evidence:acme/api:2026-10","kind":"change_evidence","repo":"acme/api","title":"t","period":"2026-10","summary":"s","text":"x","status":"posted","hash":"0123456789abcdef","targets":[],"history":[],"createdAt":"a","updatedAt":"b"}"#;
+
+    #[test]
+    fn the_compliance_drafts_come_from_the_drafts_list() {
+        let (machine, seen) = machine_saying(
+            "200 OK",
+            "application/json",
+            Box::leak(format!(r#"{{"drafts":[{DRAFT}]}}"#).into_boxed_str()),
+        );
+        let drafts = machine.compliance_drafts().unwrap();
+        assert_eq!(drafts[0].id, "change_evidence:acme/api:2026-10");
+        assert_eq!(seen.recv().unwrap(), "GET /compliance/drafts HTTP/1.1");
+    }
+
+    #[test]
+    fn a_tap_on_a_draft_names_its_id_as_one_encoded_segment_and_returns_the_draft() {
+        let (machine, seen) = machine_saying("200 OK", "application/json", DRAFT);
+        let draft = machine
+            .compliance_act(
+                "change_evidence:acme/api:2026-10",
+                "approve",
+                json!({"hash": "0123456789abcdef"}),
+            )
+            .unwrap();
+        assert_eq!(draft.status, "posted");
+        assert_eq!(
+            seen.recv().unwrap(),
+            "POST /compliance/drafts/change_evidence%3Aacme%2Fapi%3A2026-10/approve HTTP/1.1"
+        );
+    }
+
+    #[test]
+    fn a_409_on_a_tap_means_the_draft_changed_and_any_other_refusal_keeps_its_message() {
+        let (machine, _) = machine_saying(
+            "409 Conflict",
+            "application/json",
+            r#"{"error":"stale_hash","message":"the draft changed"}"#,
+        );
+        let stale = machine
+            .compliance_act("a:b", "ignore", json!({"hash": "0123456789abcdef"}))
+            .unwrap_err();
+        assert_eq!(stale, crate::compliance::ActError::Stale);
+        let (machine, _) = machine_saying(
+            "502 Bad Gateway",
+            "application/json",
+            r#"{"error":"wiki","message":"the wiki is disabled"}"#,
+        );
+        let failed = machine
+            .compliance_act("a:b", "approve", json!({"hash": "0123456789abcdef"}))
+            .unwrap_err();
+        assert_eq!(
+            failed,
+            crate::compliance::ActError::Failed("the wiki is disabled".into())
         );
     }
 

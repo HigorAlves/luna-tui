@@ -40,6 +40,7 @@ pub enum Scope {
     Backlog,
     Economy,
     Tickets,
+    Compliance,
     Slack,
     Watches,
     Inbox,
@@ -50,13 +51,14 @@ pub enum Scope {
 }
 
 impl Scope {
-    pub const ALL: [Scope; 13] = [
+    pub const ALL: [Scope; 14] = [
         Scope::Board,
         Scope::Detail,
         Scope::Pulls,
         Scope::Backlog,
         Scope::Economy,
         Scope::Tickets,
+        Scope::Compliance,
         Scope::Slack,
         Scope::Watches,
         Scope::Inbox,
@@ -75,6 +77,7 @@ impl Scope {
             Scope::Backlog => "Backlog",
             Scope::Economy => "Economy",
             Scope::Tickets => "Tickets",
+            Scope::Compliance => "Compliance",
             Scope::Slack => "Slack",
             Scope::Watches => "Watches",
             Scope::Inbox => "Inbox",
@@ -94,6 +97,7 @@ impl Scope {
             Scope::Backlog => "backlog",
             Scope::Economy => "economy",
             Scope::Tickets => "tickets",
+            Scope::Compliance => "compliance",
             Scope::Slack => "slack",
             Scope::Watches => "watches",
             Scope::Inbox => "inbox",
@@ -147,6 +151,7 @@ impl Group {
                 Scope::Pulls => "Pull request",
                 Scope::Backlog => "Item",
                 Scope::Economy => "Row",
+                Scope::Compliance => "Draft",
                 Scope::Slack => "Message",
                 Scope::Watches => "Watch",
                 _ => "Ticket",
@@ -1297,6 +1302,17 @@ const BOARD: &[Binding] = &[
     ),
     cmd(
         b(
+            "M",
+            "Compliance: drafts that wait for you",
+            Group::Views,
+            Scope::Board,
+            on,
+            20,
+        ),
+        "compliance",
+    ),
+    cmd(
+        b(
             "S",
             "Slack: mentions, DMs and watches",
             Group::Views,
@@ -1609,6 +1625,17 @@ const BOARD: &[Binding] = &[
             0,
         ),
         "tickets",
+    ),
+    cmd(
+        b(
+            ":compliance",
+            "open the Compliance view",
+            Group::Commands,
+            Scope::Board,
+            on,
+            0,
+        ),
+        "compliance",
     ),
     cmd(
         b(
@@ -2197,6 +2224,71 @@ fn ticket_waiting(app: &App) -> Avail {
     }
 }
 
+/// The Compliance view: the drafts the manager's agents wrote, and the taps that let any of them leave the machine.
+const COMPLIANCE: &[Binding] = &[
+    b(
+        "a",
+        "approve: push the draft to its target",
+        Group::Ticket,
+        Scope::Compliance,
+        compliance_waiting,
+        90,
+    ),
+    b(
+        "e",
+        "edit: change the text, then tap again",
+        Group::Ticket,
+        Scope::Compliance,
+        compliance_waiting,
+        85,
+    ),
+    b(
+        "x",
+        "ignore: keep the draft, never post it",
+        Group::Ticket,
+        Scope::Compliance,
+        compliance_waiting,
+        80,
+    ),
+    b(
+        "j / k",
+        "previous / next draft",
+        Group::Move,
+        Scope::Compliance,
+        on,
+        30,
+    ),
+    b(
+        "J / K",
+        "scroll the text a line",
+        Group::Move,
+        Scope::Compliance,
+        on,
+        25,
+    ),
+    b("esc / q", "close", Group::Move, Scope::Compliance, on, 20),
+    b(
+        "r",
+        "fetch the drafts again",
+        Group::App,
+        Scope::Compliance,
+        on,
+        60,
+    ),
+    cmd(
+        b("?", "keys", Group::App, Scope::Compliance, on, 100),
+        "help",
+    ),
+];
+
+fn compliance_waiting(app: &App) -> Avail {
+    match app.compliance_under_cursor() {
+        Some(d) if d.waiting() => Avail::On,
+        Some(_) => Avail::Off("nothing waiting on it"),
+        None => Avail::Off("no draft selected"),
+    }
+}
+
 /// The Economy view: a repository's facts, tool mask, loop guard and cost.
 const ECONOMY: &[Binding] = &[
     b(
@@ -2641,6 +2733,7 @@ const TOTAL: usize = BOARD.len()
     + BACKLOG.len()
     + ECONOMY.len()
     + TICKETS.len()
+    + COMPLIANCE.len()
     + SLACK.len()
     + WATCHES.len()
     + DIGEST.len()
@@ -2714,6 +2807,7 @@ const fn build() -> [Binding; TOTAL] {
     copy_into(BACKLOG, Scope::Backlog, "", &mut out, &mut at);
     copy_into(ECONOMY, Scope::Economy, "", &mut out, &mut at);
     copy_into(TICKETS, Scope::Tickets, "", &mut out, &mut at);
+    copy_into(COMPLIANCE, Scope::Compliance, "", &mut out, &mut at);
     copy_into(SLACK, Scope::Slack, "", &mut out, &mut at);
     copy_into(WATCHES, Scope::Watches, "", &mut out, &mut at);
     copy_into(DIGEST, Scope::Digest, "", &mut out, &mut at);
@@ -2734,6 +2828,7 @@ pub fn active_scope(app: &App) -> Scope {
     match &app.mode {
         Mode::Help { scope, .. } => return *scope,
         Mode::EditTicket { .. }
+        | Mode::EditCompliance { .. }
         | Mode::EditPlan { .. }
         | Mode::EditCases { .. }
         | Mode::Answer { .. }
@@ -2752,6 +2847,7 @@ pub fn active_scope(app: &App) -> Scope {
         Some(View::Backlog) => Scope::Backlog,
         Some(View::Economy) => Scope::Economy,
         Some(View::Tickets) => Scope::Tickets,
+        Some(View::Compliance) => Scope::Compliance,
         Some(View::Slack) => Scope::Slack,
         None => Scope::Board,
     }
@@ -4021,6 +4117,7 @@ mod tests {
         parity(Scope::Backlog, handled::BACKLOG);
         parity(Scope::Economy, handled::ECONOMY);
         parity(Scope::Tickets, handled::TICKETS);
+        parity(Scope::Compliance, handled::COMPLIANCE);
         parity(Scope::Slack, handled::SLACK);
         parity(Scope::Watches, handled::WATCHES);
         parity(Scope::Digest, handled::DIGEST);

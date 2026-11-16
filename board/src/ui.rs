@@ -192,6 +192,26 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
+    if let Some(state) = app.compliance.as_ref().filter(|_| {
+        app.active_view() == Some(View::Compliance)
+            && matches!(
+                app.mode,
+                Mode::Normal
+                    | Mode::Help { .. }
+                    | Mode::Command { .. }
+                    | Mode::EditCompliance { .. }
+            )
+    }) {
+        render_compliance(frame, body, app, state);
+        frame.render_widget(footer_line(app, footer.width), footer);
+        if let Mode::EditCompliance { area, vim, .. } = &app.mode {
+            render_compliance_editor(frame, app, area, vim);
+        }
+        if matches!(app.mode, Mode::Help { .. }) {
+            render_help(frame, app);
+        }
+        return;
+    }
     if let Some(state) = app.economy.as_ref().filter(|_| {
         app.active_view() == Some(View::Economy)
             && matches!(
@@ -808,6 +828,7 @@ fn header_line(app: &App) -> Line<'static> {
         Some(View::Backlog) => Some("  [backlog]"),
         Some(View::Economy) => Some("  [economy]"),
         Some(View::Tickets) => Some("  [tickets]"),
+        Some(View::Compliance) => Some("  [compliance]"),
         Some(View::Pulls) => Some("  [pulls]"),
         Some(View::Slack) => Some("  [slack]"),
         Some(View::Inbox | View::Digest) | None => None,
@@ -837,6 +858,7 @@ fn footer_line(app: &App, width: u16) -> Line<'static> {
             Span::from("   enter create and edit · esc cancel").fg(c(SUBTEXT0)),
         ]),
         Mode::EditTicket { vim, .. }
+        | Mode::EditCompliance { vim, .. }
         | Mode::Answer { vim, .. }
         | Mode::EditCases { vim, .. }
         | Mode::SlackReply { vim, .. } => {
@@ -2809,6 +2831,133 @@ fn render_tickets(frame: &mut Frame, area: Rect, app: &App, state: &crate::ticke
         Paragraph::new(lines).block(side).wrap(Wrap { trim: false }),
         detail_area,
     );
+}
+
+/// The Compliance view: the drafts grouped by kind (waiting first, posted and ignored dim), the selected one's target, error and text beside them.
+fn render_compliance(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    state: &crate::compliance::ComplianceState,
+) {
+    let items = &app.compliance_items;
+    let selected = state.cursor.min(items.len().saturating_sub(1));
+    let [list_area, detail_area] =
+        Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).areas(area);
+    let waiting = crate::compliance::waiting_count(items);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .title(Line::from(format!(" Compliance {waiting} waiting ")).bold());
+    let inner = block.inner(list_area);
+    // One line per draft, a heading before each kind; `at` is where the selected draft landed.
+    let mut lines = Vec::new();
+    let mut at = 0;
+    let mut kind = None;
+    for (row, item) in items.iter().enumerate() {
+        if kind != Some(item.kind.as_str()) {
+            kind = Some(item.kind.as_str());
+            let of_kind = items.iter().filter(|d| d.kind == item.kind);
+            let open = of_kind.clone().filter(|d| d.waiting()).count();
+            lines.push(Line::from(
+                Span::from(format!(
+                    "{} ({open} of {})",
+                    crate::compliance::kind_label(&item.kind),
+                    of_kind.count()
+                ))
+                .fg(c(ACCENT))
+                .bold(),
+            ));
+        }
+        let text = truncate(&item.row(), inner.width.saturating_sub(4) as usize);
+        if row == selected {
+            at = lines.len();
+            lines.push(Line::from(
+                Span::from(format!("▸ {text}"))
+                    .fg(c(BASE))
+                    .bg(c(ACCENT))
+                    .bold(),
+            ));
+        } else {
+            let color = if item.settled() { MUTED } else { SUBTEXT0 };
+            lines.push(Line::from(Span::from(format!("  {text}")).fg(c(color))));
+        }
+    }
+    if items.is_empty() {
+        lines.push(Line::from(
+            Span::from("  ✓ no drafts, nothing waits for you").fg(c(GREEN)),
+        ));
+    }
+    let visible = (inner.height as usize).max(1);
+    let start = at
+        .saturating_sub(visible / 2)
+        .min(lines.len().saturating_sub(visible));
+    let lines: Vec<Line> = lines.into_iter().skip(start).take(visible).collect();
+    frame.render_widget(Paragraph::new(lines).block(block), list_area);
+
+    let side = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(MUTED)))
+        .padding(Padding::horizontal(1))
+        .title(Line::from(" Draft ").bold());
+    let inner = side.inner(detail_area);
+    let lines: Vec<Line> = match items.get(selected) {
+        Some(item) => {
+            let mut lines: Vec<Line> = item
+                .head_lines()
+                .into_iter()
+                .enumerate()
+                .map(|(i, l)| match (i, l.starts_with('⚠')) {
+                    (_, true) => Line::from(Span::from(l).fg(c(RED)).bold()),
+                    (0, _) => Line::from(Span::from(l).bold()),
+                    _ => Line::from(Span::from(l).fg(c(SUBTEXT0))),
+                })
+                .collect();
+            lines.push(Line::default());
+            lines.extend(crate::text::markdown(&item.text, inner.width as usize, 0));
+            lines
+        }
+        None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
+    };
+    // The text scrolls, but never past its last line.
+    let scroll = (state.scroll as usize).min(lines.len().saturating_sub(inner.height as usize));
+    frame.render_widget(
+        Paragraph::new(lines).block(side).scroll((scroll as u16, 0)),
+        detail_area,
+    );
+}
+
+/// The draft's text in the editor, over the view.
+fn render_compliance_editor(
+    frame: &mut Frame,
+    app: &App,
+    area: &TextArea<'static>,
+    vim: &crate::vim::Vim,
+) {
+    let rect = centered(
+        frame.area(),
+        frame.area().width * 9 / 10,
+        frame.area().height * 8 / 10,
+    );
+    frame.render_widget(Clear, rect);
+    let (label, mode_color) = match vim.mode() {
+        crate::vim::Mode::Normal => (" NORMAL ", ACCENT),
+        crate::vim::Mode::Insert => (" INSERT ", GREEN),
+    };
+    let mut area = area.clone();
+    if let Some(block) = area.block() {
+        let block = block
+            .clone()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(c(mode_color)))
+            .title(Line::from(format!("· {} ", keys::editor_line(app))).fg(c(SUBTEXT0)))
+            .title_bottom(Line::from(label).bold().fg(c(mode_color)).left_aligned());
+        area.set_block(block);
+    }
+    area.set_cursor_line_style(Style::new().bg(c(SURFACE0)));
+    area.set_selection_style(Style::new().bg(c(SURFACE1)));
+    area.set_cursor_style(Style::new().bg(c(mode_color)).fg(c(BASE)));
+    frame.render_widget(&area, rect);
 }
 
 fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
@@ -7791,6 +7940,11 @@ mod help_sheet_tests {
             ("tickets", {
                 let mut a = board();
                 a.tickets = Some(TicketsState { cursor: 0 });
+                a
+            }),
+            ("compliance", {
+                let mut a = board();
+                a.compliance = Some(crate::compliance::ComplianceState::default());
                 a
             }),
             ("slack", {

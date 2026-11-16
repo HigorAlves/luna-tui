@@ -19,6 +19,7 @@ use tui_textarea::TextArea;
 use std::collections::BTreeSet;
 
 use crate::backlog::{BacklogEntry, BacklogState};
+use crate::compliance::{ActError, ComplianceDraft, ComplianceState};
 use crate::detail::{EvidenceHit, Section};
 use crate::digest::{self, DigestState};
 use crate::economy::{Economy, EconomyState, Row, RowKind};
@@ -365,6 +366,7 @@ pub enum View {
     Backlog,
     Economy,
     Tickets,
+    Compliance,
     Slack,
 }
 
@@ -404,6 +406,13 @@ pub enum Mode {
     /// Editing a ticket's markdown in place: title, description, criteria, repo.
     EditTicket {
         id: String,
+        area: TextArea<'static>,
+        vim: Vim,
+    },
+    /// `e` in the Compliance view: the text of draft `id`, in the editor; ctrl+s sends it with the `hash` the draft had when it opened.
+    EditCompliance {
+        id: String,
+        hash: String,
         area: TextArea<'static>,
         vim: Vim,
     },
@@ -745,6 +754,9 @@ pub struct App {
     /// The Tickets view, open while this is `Some`, and the tickets it fetched when it opened.
     pub tickets: Option<TicketsState>,
     pub ticket_items: Vec<TicketEntry>,
+    /// The Compliance view, open while this is `Some`, and the drafts it fetched when it opened, in list order.
+    pub compliance: Option<ComplianceState>,
+    pub compliance_items: Vec<ComplianceDraft>,
     /// A dispatch waiting for a clone to land: the PR's key and the action to run then.
     pending_dispatch: Option<(String, PrAction)>,
     /// A full repaint is due (`ctrl-l`): the terminal may show cells the last frame did not draw.
@@ -891,6 +903,8 @@ impl App {
             economy_data: Economy::default(),
             tickets: None,
             ticket_items: Vec::new(),
+            compliance: None,
+            compliance_items: Vec::new(),
             pending_dispatch: None,
             redraw: false,
             clones_running: BTreeSet::new(),
@@ -1813,6 +1827,7 @@ impl App {
     pub fn editor_vim(&self) -> Option<&Vim> {
         match &self.mode {
             Mode::EditTicket { vim, .. }
+            | Mode::EditCompliance { vim, .. }
             | Mode::EditCases { vim, .. }
             | Mode::Answer { vim, .. }
             | Mode::SlackReply { vim, .. } => Some(vim),
@@ -2129,6 +2144,7 @@ impl App {
             (View::Backlog, self.backlog.is_some()),
             (View::Economy, self.economy.is_some()),
             (View::Tickets, self.tickets.is_some()),
+            (View::Compliance, self.compliance.is_some()),
             (View::Slack, self.slack.is_some()),
         ]
         .into_iter()
@@ -2145,6 +2161,7 @@ impl App {
         self.backlog = None;
         self.economy = None;
         self.tickets = None;
+        self.compliance = None;
         self.slack = None;
     }
 
@@ -2946,6 +2963,7 @@ impl App {
         };
         match &mut self.mode {
             Mode::EditTicket { area, .. }
+            | Mode::EditCompliance { area, .. }
             | Mode::EditCases { area, .. }
             | Mode::Answer { area, .. }
             | Mode::SlackReply { area, .. } => {
@@ -2993,6 +3011,7 @@ impl App {
                 Some(View::Backlog) => return self.handle_backlog(key),
                 Some(View::Economy) => return self.handle_economy(key),
                 Some(View::Tickets) => return self.handle_tickets(key),
+                Some(View::Compliance) => return self.handle_compliance(key),
                 Some(View::Slack) => return self.handle_slack(key),
                 None => {}
             }
@@ -3005,6 +3024,7 @@ impl App {
             }
             Mode::Adding(_) => self.handle_adding(key),
             Mode::EditTicket { .. } => self.handle_edit_ticket(key),
+            Mode::EditCompliance { .. } => self.handle_edit_compliance(key),
             Mode::EditCases { .. } => self.handle_edit_cases(key),
             Mode::EditChoice(id) => {
                 let id = id.clone();
@@ -3934,6 +3954,206 @@ impl App {
                 }
             }
             _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// The draft under the Compliance cursor.
+    pub fn compliance_under_cursor(&self) -> Option<ComplianceDraft> {
+        let state = self.compliance.as_ref()?;
+        self.compliance_items
+            .get(
+                state
+                    .cursor
+                    .min(self.compliance_items.len().saturating_sub(1)),
+            )
+            .cloned()
+    }
+
+    /// Puts `drafts` in list order and keeps the cursor on the draft it was on, wherever the new order puts it.
+    fn set_compliance(&mut self, drafts: Vec<ComplianceDraft>) {
+        let on = self.compliance_under_cursor().map(|d| d.id);
+        self.compliance_items = crate::compliance::order(drafts);
+        let last = self.compliance_items.len().saturating_sub(1);
+        if let Some(state) = self.compliance.as_mut() {
+            let found = on.and_then(|id| self.compliance_items.iter().position(|d| d.id == id));
+            if found.is_some_and(|at| at != state.cursor) {
+                state.scroll = 0;
+            }
+            state.cursor = found.unwrap_or(state.cursor).min(last);
+        }
+    }
+
+    /// Fetches the drafts the machine holds; a failure is a toast and the list stays as it was.
+    fn refresh_compliance(&mut self) {
+        match self.machine.compliance_drafts() {
+            Ok(drafts) => self.set_compliance(drafts),
+            Err(error) => self.notify(format!("compliance: {error}"), true),
+        }
+    }
+
+    fn open_compliance(&mut self) {
+        self.close_views();
+        self.compliance = Some(ComplianceState::default());
+        self.refresh_compliance();
+    }
+
+    /// The keys `handle_compliance` matches.
+    #[cfg(test)]
+    pub(crate) const HANDLED_COMPLIANCE: &[&str] =
+        &["esc", "q", "?", "j", "k", "J", "K", "r", "a", "e", "x"];
+
+    /// One tap on a draft. The machine answers the draft as it is now: a draft that did not post stays waiting with the target's reason,
+    /// and a `409` means it changed since it was read, so the list is fetched again and nothing was sent.
+    fn compliance_tap(&mut self, id: &str, action: &str, body: serde_json::Value, done: &str) {
+        match self.machine.compliance_act(id, action, body) {
+            Ok(draft) => {
+                let failed = draft.error.clone().filter(|_| draft.waiting());
+                let mut drafts = self.compliance_items.clone();
+                match drafts.iter_mut().find(|d| d.id == draft.id) {
+                    Some(old) => *old = draft,
+                    None => drafts.push(draft),
+                }
+                self.set_compliance(drafts);
+                match failed {
+                    Some(why) => {
+                        self.notify(format!("compliance: {}", crate::detail::plain(&why)), true)
+                    }
+                    None => self.notify(done, false),
+                }
+            }
+            Err(ActError::Stale) => {
+                self.refresh_compliance();
+                self.notify(
+                    "compliance: the draft changed since you read it; read it again, nothing was sent",
+                    true,
+                );
+            }
+            Err(ActError::Failed(why)) => self.notify(format!("compliance: {why}"), true),
+        }
+    }
+
+    /// The Compliance view's keys: move, scroll the text, approve and post, edit, ignore, refetch. Each tap sends the draft's hash.
+    fn handle_compliance(&mut self, key: KeyEvent) -> Outcome {
+        let Some(state) = self.compliance.clone() else {
+            return Outcome::Continue;
+        };
+        let last = self.compliance_items.len().saturating_sub(1);
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.compliance = None,
+            KeyCode::Char('?') => self.open_help(),
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.compliance = Some(ComplianceState {
+                    cursor: (state.cursor + 1).min(last),
+                    scroll: 0,
+                })
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.compliance = Some(ComplianceState {
+                    cursor: state.cursor.saturating_sub(1),
+                    scroll: 0,
+                })
+            }
+            KeyCode::Char('J') => {
+                self.compliance = Some(ComplianceState {
+                    scroll: state.scroll.saturating_add(1),
+                    ..state
+                })
+            }
+            KeyCode::Char('K') => {
+                self.compliance = Some(ComplianceState {
+                    scroll: state.scroll.saturating_sub(1),
+                    ..state
+                })
+            }
+            KeyCode::Char('r') => self.refresh_compliance(),
+            KeyCode::Char(c @ ('a' | 'e' | 'x')) => {
+                let Some(d) = self.compliance_under_cursor() else {
+                    self.notify("no draft selected", true);
+                    return Outcome::Continue;
+                };
+                if !d.waiting() {
+                    self.notify(
+                        "nothing waiting on this draft: it is posting, posted or ignored",
+                        true,
+                    );
+                    return Outcome::Continue;
+                }
+                match c {
+                    'a' => self.compliance_tap(
+                        &d.id,
+                        "approve",
+                        serde_json::json!({"hash": d.hash}),
+                        "approved: pushed to its target",
+                    ),
+                    'x' => self.compliance_tap(
+                        &d.id,
+                        "ignore",
+                        serde_json::json!({"hash": d.hash}),
+                        "ignored: kept, never posted",
+                    ),
+                    _ => {
+                        let mut area = TextArea::new(d.text.lines().map(str::to_string).collect());
+                        area.move_cursor(tui_textarea::CursorMove::Jump(0, 0));
+                        area.set_block(
+                            ratatui::widgets::Block::bordered()
+                                .padding(ratatui::widgets::Padding::new(2, 2, 1, 1))
+                                .title(format!(
+                                    " editing {} ",
+                                    crate::detail::plain(&d.title).replace('\n', " ")
+                                )),
+                        );
+                        self.mode = Mode::EditCompliance {
+                            id: d.id,
+                            hash: d.hash,
+                            area,
+                            vim: Vim::new(),
+                        };
+                    }
+                }
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// The draft's editor: ctrl+s sends the text under the hash the draft had when it opened, esc leaves it.
+    fn handle_edit_compliance(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::EditCompliance {
+            id,
+            hash,
+            area,
+            vim,
+        } = &mut self.mode
+        else {
+            return Outcome::Continue;
+        };
+        match vim.handle(area, key) {
+            crate::vim::Outcome::Continue => {}
+            crate::vim::Outcome::Cancel => self.mode = Mode::Normal,
+            crate::vim::Outcome::Save => {
+                let (id, hash) = (id.clone(), hash.clone());
+                let text = area.lines().join("\n");
+                if text.trim().is_empty() {
+                    self.notify("nothing to save: the draft cannot be empty", true);
+                    return Outcome::Continue;
+                }
+                self.mode = Mode::Normal;
+                if self
+                    .compliance_items
+                    .iter()
+                    .any(|d| d.id == id && d.text == text)
+                {
+                    self.notify("nothing changed", false);
+                    return Outcome::Continue;
+                }
+                self.compliance_tap(
+                    &id,
+                    "edit",
+                    serde_json::json!({"hash": hash, "text": text}),
+                    "saved: your text waits for your tap",
+                );
+            }
         }
         Outcome::Continue
     }
@@ -5083,6 +5303,7 @@ impl App {
         "T",
         "p",
         "K",
+        "M",
     ];
 
     fn handle_normal(&mut self, key: KeyEvent) -> Outcome {
@@ -5152,6 +5373,7 @@ impl App {
             KeyCode::Char('B') => self.open_backlog(),
             KeyCode::Char('$') => self.open_economy(),
             KeyCode::Char('K') => self.open_tickets(),
+            KeyCode::Char('M') => self.open_compliance(),
             KeyCode::Char('S') => self.open_slack(),
             KeyCode::Char('v') => {
                 // Toggle: remove it if it was marked, else mark it.
@@ -6150,6 +6372,7 @@ impl App {
         "backlog",
         "economy",
         "tickets",
+        "compliance",
         "ticket-edit",
         "context",
         "dedup",
@@ -6291,6 +6514,7 @@ impl App {
             "backlog" => self.open_backlog(),
             "economy" => self.open_economy(),
             "tickets" => self.open_tickets(),
+            "compliance" => self.open_compliance(),
             "ticket-edit" => self.ticket_edit(rest),
             "context" => self.give_context(rest),
             "dedup" => self.answer_dedup(rest),
@@ -7142,6 +7366,7 @@ pub(crate) mod handled {
     pub(crate) const BACKLOG: &[&str] = App::HANDLED_BACKLOG;
     pub(crate) const ECONOMY: &[&str] = App::HANDLED_ECONOMY;
     pub(crate) const TICKETS: &[&str] = App::HANDLED_TICKETS;
+    pub(crate) const COMPLIANCE: &[&str] = App::HANDLED_COMPLIANCE;
     pub(crate) const SLACK: &[&str] = App::HANDLED_SLACK;
     pub(crate) const WATCHES: &[&str] = App::HANDLED_WATCHES;
     pub(crate) const DIGEST: &[&str] = App::HANDLED_DIGEST;
@@ -12392,6 +12617,419 @@ mod view_stack_tests {
         press(&mut app, KeyCode::Esc);
         let state = app.inbox.as_ref().expect("the inbox is back");
         assert_eq!((state.split, state.cursor), (crate::inbox::Split::All, 2));
+    }
+}
+
+#[cfg(test)]
+mod compliance_tests {
+    use std::{
+        io::{BufRead, BufReader, Read, Write},
+        net::TcpListener,
+        sync::{Arc, Mutex},
+    };
+
+    use super::*;
+    use crate::testkit::render;
+
+    fn draft(id: &str, status: &str, period: &str, text: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id, "kind": "change_evidence", "repo": "acme/api", "title": format!("Change management, {period}"),
+            "period": period, "summary": format!("exceptions in {period}"), "text": text, "status": status,
+            "hash": "0123456789abcdef",
+            "targets": [{"kind": "wiki", "repo": "acme/api", "path": format!("Compliance/Change-Management/{period}.md")}],
+            "history": [], "createdAt": "2026-11-01T06:00:00Z", "updatedAt": "2026-11-01T06:00:00Z"
+        })
+    }
+
+    /// A machine that serves the drafts it is given and answers every tap with `reply`; each Compliance request is recorded as
+    /// `METHOD path body`.
+    struct Mock {
+        machine: Machine,
+        seen: Arc<Mutex<Vec<String>>>,
+        drafts: Arc<Mutex<serde_json::Value>>,
+        reply: Arc<Mutex<(u16, String)>>,
+    }
+
+    fn mock(drafts: Vec<serde_json::Value>) -> Mock {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let drafts = Arc::new(Mutex::new(serde_json::json!({ "drafts": drafts })));
+        let reply = Arc::new(Mutex::new((200u16, "{}".to_string())));
+        let (log, list, answer) = (seen.clone(), drafts.clone(), reply.clone());
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut first = String::new();
+                reader.read_line(&mut first).unwrap_or(0);
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let mut parts = first.split_whitespace();
+                let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+                let (status, text) = if !path.starts_with("/compliance/") {
+                    (404, "{}".to_string())
+                } else if method == "GET" {
+                    log.lock().unwrap().push(format!("GET {path}"));
+                    (200, list.lock().unwrap().to_string())
+                } else {
+                    // The body as compact JSON, whatever spacing the client used.
+                    let sent: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+                    log.lock().unwrap().push(format!("POST {path} {sent}"));
+                    answer.lock().unwrap().clone()
+                };
+                let reason = if status == 200 { "OK" } else { "Error" };
+                let _ = reader.into_inner().write_all(
+                    format!(
+                        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{text}",
+                        text.len()
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        Mock {
+            machine: Machine::at(&format!("http://{addr}")),
+            seen,
+            drafts,
+            reply,
+        }
+    }
+
+    impl Mock {
+        fn requests(&self) -> Vec<String> {
+            self.seen.lock().unwrap().clone()
+        }
+        fn taps(&self) -> Vec<String> {
+            self.requests()
+                .into_iter()
+                .filter(|r| r.starts_with("POST"))
+                .collect()
+        }
+        fn gets(&self) -> usize {
+            self.requests()
+                .iter()
+                .filter(|r| r.starts_with("GET"))
+                .count()
+        }
+        fn answers(&self, status: u16, body: serde_json::Value) {
+            *self.reply.lock().unwrap() = (status, body.to_string());
+        }
+    }
+
+    const ID: &str = "change_evidence:acme/api:2026-10";
+    const TAP: &str = "/compliance/drafts/change_evidence%3Aacme%2Fapi%3A2026-10";
+
+    /// A board on a machine with a waiting October draft, an ignored September one and a posted August one, the view open.
+    fn open_view() -> (App, Mock) {
+        let m = mock(vec![
+            draft(
+                "change_evidence:acme/api:2026-08",
+                "posted",
+                "2026-08",
+                "old page",
+            ),
+            draft(
+                ID,
+                "waiting",
+                "2026-10",
+                "# October\n\n- PR 12 had no approval",
+            ),
+            draft(
+                "change_evidence:acme/api:2026-09",
+                "ignored",
+                "2026-09",
+                "skipped",
+            ),
+        ]);
+        let mut app = App::new(m.machine.clone());
+        app.toast = None;
+        open(&mut app);
+        (app, m)
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    /// `:compliance`: the command opens the view from the board.
+    fn open(app: &mut App) {
+        for ch in ":compliance".chars() {
+            press(app, KeyCode::Char(ch));
+        }
+        press(app, KeyCode::Enter);
+    }
+
+    fn ctrl_s(app: &mut App) {
+        app.handle_key(KeyEvent::new(
+            KeyCode::Char('s'),
+            ratatui::crossterm::event::KeyModifiers::CONTROL,
+        ));
+    }
+
+    fn toast(app: &App) -> String {
+        app.toast
+            .as_ref()
+            .map(|t| t.text.clone())
+            .unwrap_or_default()
+    }
+
+    fn cursor_id(app: &App) -> String {
+        let at = app.compliance.as_ref().unwrap().cursor;
+        app.compliance_items[at].id.clone()
+    }
+
+    #[test]
+    fn the_compliance_command_opens_the_view_with_the_drafts_waiting_first_and_esc_closes_it() {
+        let (mut app, m) = open_view();
+        assert_eq!(app.active_view(), Some(View::Compliance));
+        assert_eq!(keys::active_scope(&app), keys::Scope::Compliance);
+        let ids: Vec<&str> = app.compliance_items.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                ID,
+                "change_evidence:acme/api:2026-08",
+                "change_evidence:acme/api:2026-09"
+            ],
+            "waiting, then posted, then ignored"
+        );
+        assert_eq!(m.gets(), 1);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.active_view(), None);
+    }
+
+    #[test]
+    fn opening_another_view_closes_it_and_it_closes_the_others() {
+        let m = mock(vec![draft(ID, "waiting", "2026-10", "x")]);
+        let mut app = App::new(m.machine.clone());
+        open(&mut app);
+        assert_eq!(app.active_view(), Some(View::Compliance));
+        press(&mut app, KeyCode::Char('K'));
+        assert_eq!(
+            app.active_view(),
+            Some(View::Compliance),
+            "K closes Tickets, not this view"
+        );
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('K'));
+        assert!(app.tickets.is_some() && app.compliance.is_none());
+        press(&mut app, KeyCode::Esc);
+        open(&mut app);
+        assert!(app.compliance.is_some() && app.tickets.is_none());
+        assert_eq!(app.active_view(), Some(View::Compliance));
+    }
+
+    #[test]
+    fn capital_m_opens_the_view_from_the_board_and_fetches_the_drafts() {
+        let m = mock(vec![draft(ID, "waiting", "2026-10", "x")]);
+        let mut app = App::new(m.machine.clone());
+        press(&mut app, KeyCode::Char('M'));
+        assert_eq!(app.active_view(), Some(View::Compliance));
+        assert_eq!(app.compliance_items.len(), 1);
+        assert_eq!(m.gets(), 1);
+    }
+
+    #[test]
+    fn j_and_k_move_over_the_drafts_and_stop_at_both_ends() {
+        let (mut app, _m) = open_view();
+        for _ in 0..5 {
+            press(&mut app, KeyCode::Char('j'));
+        }
+        assert_eq!(app.compliance.as_ref().unwrap().cursor, 2);
+        for _ in 0..5 {
+            press(&mut app, KeyCode::Char('k'));
+        }
+        assert_eq!(app.compliance.as_ref().unwrap().cursor, 0);
+    }
+
+    #[test]
+    fn a_sends_the_hash_the_person_saw_and_shows_what_the_machine_answers() {
+        let (mut app, m) = open_view();
+        m.answers(
+            200,
+            draft(
+                ID,
+                "posted",
+                "2026-10",
+                "# October\n\n- PR 12 had no approval",
+            ),
+        );
+        press(&mut app, KeyCode::Char('a'));
+        assert_eq!(
+            m.taps(),
+            [format!(
+                r#"POST {TAP}/approve {{"hash":"0123456789abcdef"}}"#
+            )]
+        );
+        assert_eq!(app.compliance_items[0].status, "posted");
+        assert!(!app.toast.as_ref().unwrap().error, "{}", toast(&app));
+    }
+
+    #[test]
+    fn a_refused_post_keeps_the_draft_waiting_and_shows_the_reason() {
+        let (mut app, m) = open_view();
+        let mut back = draft(ID, "waiting", "2026-10", "x");
+        back["error"] = "the wiki is disabled".into();
+        m.answers(200, back);
+        press(&mut app, KeyCode::Char('a'));
+        assert_eq!(app.compliance_items[0].status, "waiting");
+        assert!(
+            toast(&app).contains("the wiki is disabled"),
+            "{}",
+            toast(&app)
+        );
+        assert!(app.toast.as_ref().unwrap().error);
+    }
+
+    #[test]
+    fn a_e_and_x_on_a_posted_draft_send_nothing_and_say_why() {
+        let (mut app, m) = open_view();
+        press(&mut app, KeyCode::Char('j'));
+        for key in ['a', 'x', 'e'] {
+            press(&mut app, KeyCode::Char(key));
+            assert!(
+                toast(&app).contains("nothing waiting"),
+                "{key}: {}",
+                toast(&app)
+            );
+        }
+        assert!(m.taps().is_empty());
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn x_ignores_the_draft_with_its_hash() {
+        let (mut app, m) = open_view();
+        m.answers(200, draft(ID, "ignored", "2026-10", "x"));
+        press(&mut app, KeyCode::Char('x'));
+        assert_eq!(
+            m.taps(),
+            [format!(
+                r#"POST {TAP}/ignore {{"hash":"0123456789abcdef"}}"#
+            )]
+        );
+        let ignored = app.compliance_items.iter().find(|d| d.id == ID).unwrap();
+        assert_eq!(ignored.status, "ignored");
+    }
+
+    #[test]
+    fn a_draft_that_changed_under_you_is_read_again_and_nothing_is_posted() {
+        let (mut app, m) = open_view();
+        m.answers(
+            409,
+            serde_json::json!({"error": "stale_hash", "message": "changed"}),
+        );
+        let mut newer = draft(ID, "edited", "2026-10", "someone else's text");
+        newer["hash"] = "fedcba9876543210".into();
+        *m.drafts.lock().unwrap() = serde_json::json!({ "drafts": [newer] });
+        press(&mut app, KeyCode::Char('a'));
+        assert_eq!(m.gets(), 2, "the list is fetched again");
+        assert_eq!(app.compliance_items[0].hash, "fedcba9876543210");
+        assert!(toast(&app).contains("changed"), "{}", toast(&app));
+        assert!(app.toast.as_ref().unwrap().error);
+    }
+
+    #[test]
+    fn e_opens_the_text_and_ctrl_s_sends_the_edit_with_the_hash() {
+        let (mut app, m) = open_view();
+        press(&mut app, KeyCode::Char('e'));
+        let Mode::EditCompliance { area, .. } = &app.mode else {
+            panic!("the editor opens: {}", toast(&app))
+        };
+        assert_eq!(
+            area.lines().join("\n"),
+            "# October\n\n- PR 12 had no approval"
+        );
+        assert_eq!(keys::active_scope(&app), keys::Scope::Editor);
+        press(&mut app, KeyCode::Char('i'));
+        press(&mut app, KeyCode::Char('Z'));
+        m.answers(
+            200,
+            draft(
+                ID,
+                "edited",
+                "2026-10",
+                "Z# October\n\n- PR 12 had no approval",
+            ),
+        );
+        ctrl_s(&mut app);
+        assert!(matches!(app.mode, Mode::Normal));
+        assert_eq!(
+            m.taps(),
+            [format!(
+                r#"POST {TAP}/edit {{"hash":"0123456789abcdef","text":"Z# October\n\n- PR 12 had no approval"}}"#
+            )]
+        );
+        assert_eq!(app.compliance_items[0].status, "edited");
+    }
+
+    #[test]
+    fn saving_an_editor_nobody_typed_in_sends_nothing() {
+        let (mut app, m) = open_view();
+        press(&mut app, KeyCode::Char('e'));
+        ctrl_s(&mut app);
+        assert!(m.taps().is_empty());
+        assert!(toast(&app).contains("nothing changed"), "{}", toast(&app));
+    }
+
+    #[test]
+    fn r_reads_the_drafts_again_and_the_cursor_stays_on_its_draft() {
+        let (mut app, m) = open_view();
+        let on = cursor_id(&app);
+        *m.drafts.lock().unwrap() = serde_json::json!({ "drafts": [
+            draft("change_evidence:acme/api:2026-11", "waiting", "2026-11", "new"),
+            draft(ID, "waiting", "2026-10", "x"),
+        ]});
+        press(&mut app, KeyCode::Char('r'));
+        assert_eq!(m.gets(), 2);
+        assert_eq!(
+            app.compliance.as_ref().unwrap().cursor,
+            1,
+            "a newer draft moved the list"
+        );
+        assert_eq!(cursor_id(&app), on, "{on} is still selected");
+    }
+
+    #[test]
+    fn a_machine_that_cannot_answer_leaves_the_view_open_and_says_so() {
+        let mut app = App::new(crate::testkit::dead_machine());
+        open(&mut app);
+        assert_eq!(app.active_view(), Some(View::Compliance));
+        assert!(toast(&app).starts_with("compliance:"), "{}", toast(&app));
+    }
+
+    #[test]
+    fn the_screen_groups_by_kind_and_shows_the_target_the_error_and_the_text() {
+        let (mut app, _m) = open_view();
+        let mut with_error = draft(
+            ID,
+            "waiting",
+            "2026-10",
+            "# October\n\n- PR 12 had no approval",
+        );
+        with_error["error"] = "the wiki is disabled".into();
+        app.compliance_items[0] = serde_json::from_value(with_error).unwrap();
+        let screen = render(&mut app, 140, 30);
+        for part in [
+            "Change evidence",
+            "2026-10",
+            "exceptions in",
+            "wiki acme/api › Compliance/Change-Management/2026-10.md",
+            "the wiki is disabled",
+            "PR 12 had no approval",
+        ] {
+            assert!(screen.contains(part), "{part} missing in\n{screen}");
+        }
     }
 }
 
