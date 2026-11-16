@@ -627,8 +627,9 @@ impl Machine {
     /// A questionnaire answered again from `repo`'s wiki; the machine answers the reopened draft. A `409` is a draft that is
     /// posting or posted.
     pub fn compliance_repo(&self, id: &str, repo: &str) -> Result<ComplianceDraft, String> {
+        // Answering again runs a container pack: longer than the quick calls.
         Self::typed(
-            self.agent
+            self.slow
                 .post(self.url(&format!(
                     "/compliance/drafts/{}/repo",
                     compliance::encode_id(id)
@@ -645,16 +646,24 @@ impl Machine {
         action: &str,
         body: Value,
     ) -> Result<ComplianceDraft, ActError> {
+        // An approve can clone and push several wikis: longer than the quick calls.
         let reply = self
-            .agent
+            .slow
             .post(self.url(&format!(
                 "/compliance/drafts/{}/{action}",
                 compliance::encode_id(id)
             )))
             .send_json(body);
-        if matches!(&reply, Ok(r) if r.status().as_u16() == 409) {
-            return Err(ActError::Stale);
-        }
+        // A `409` is a stale hash unless the machine says the draft is not waiting (an older machine sends no code).
+        let reply = match reply {
+            Ok(r) if r.status().as_u16() == 409 => {
+                return Err(match Self::coded(Ok(r)) {
+                    Err((code, _)) if code == "draft_not_waiting" => ActError::NotWaiting,
+                    _ => ActError::Stale,
+                });
+            }
+            other => other,
+        };
         Self::typed(reply).map_err(ActError::Failed)
     }
 
@@ -1841,6 +1850,31 @@ mod prs_all_tests {
         assert_eq!(
             failed,
             crate::compliance::ActError::Failed("the wiki is disabled".into())
+        );
+    }
+
+    #[test]
+    fn a_409_names_a_stale_draft_or_one_that_is_not_waiting() {
+        let (machine, _) = machine_saying(
+            "409 Conflict",
+            "application/json",
+            r#"{"error":"stale_draft","message":"the draft changed"}"#,
+        );
+        let hash = json!({"hash": "0123456789abcdef"});
+        assert_eq!(
+            machine
+                .compliance_act("a:b", "ignore", hash.clone())
+                .unwrap_err(),
+            crate::compliance::ActError::Stale
+        );
+        let (machine, _) = machine_saying(
+            "409 Conflict",
+            "application/json",
+            r#"{"error":"draft_not_waiting","message":"posting"}"#,
+        );
+        assert_eq!(
+            machine.compliance_act("a:b", "approve", hash).unwrap_err(),
+            crate::compliance::ActError::NotWaiting
         );
     }
 

@@ -65,10 +65,12 @@ pub struct ReposResponse {
     pub repos: Vec<String>,
 }
 
-/// Why a tap on a draft did not go through: the draft changed under you (`409`: read it again), or the machine's own words.
+/// Why a tap on a draft did not go through: the draft changed under you (`409 stale_draft`: read it again), it is posting or was
+/// already handled (`409 draft_not_waiting`), or the machine's own words.
 #[derive(Debug, PartialEq)]
 pub enum ActError {
     Stale,
+    NotWaiting,
     Failed(String),
 }
 

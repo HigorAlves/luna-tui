@@ -4012,7 +4012,14 @@ impl App {
 
     /// One tap on a draft. The machine answers the draft as it is now: a draft that did not post stays waiting with the target's reason,
     /// and a `409` means it changed since it was read, so the list is fetched again and nothing was sent.
-    fn compliance_tap(&mut self, id: &str, action: &str, body: serde_json::Value, done: &str) {
+    /// Answers whether the machine took the tap.
+    fn compliance_tap(
+        &mut self,
+        id: &str,
+        action: &str,
+        body: serde_json::Value,
+        done: &str,
+    ) -> bool {
         match self.machine.compliance_act(id, action, body) {
             Ok(draft) => {
                 let failed = draft.error.clone().filter(|_| draft.waiting());
@@ -4028,6 +4035,7 @@ impl App {
                     }
                     None => self.notify(done, false),
                 }
+                true
             }
             Err(ActError::Stale) => {
                 self.refresh_compliance();
@@ -4035,8 +4043,20 @@ impl App {
                     "compliance: the draft changed since you read it; read it again, nothing was sent",
                     true,
                 );
+                false
             }
-            Err(ActError::Failed(why)) => self.notify(format!("compliance: {why}"), true),
+            Err(ActError::NotWaiting) => {
+                self.refresh_compliance();
+                self.notify(
+                    "compliance: the draft is being posted or was already handled; refreshed",
+                    true,
+                );
+                false
+            }
+            Err(ActError::Failed(why)) => {
+                self.notify(format!("compliance: {why}"), true);
+                false
+            }
         }
     }
 
@@ -4118,18 +4138,22 @@ impl App {
                     return Outcome::Continue;
                 }
                 match c {
-                    'a' => self.compliance_tap(
-                        &d.id,
-                        "approve",
-                        serde_json::json!({"hash": d.hash}),
-                        "approved: pushed to its target",
-                    ),
-                    'x' => self.compliance_tap(
-                        &d.id,
-                        "ignore",
-                        serde_json::json!({"hash": d.hash}),
-                        "ignored: kept, never posted",
-                    ),
+                    'a' => {
+                        self.compliance_tap(
+                            &d.id,
+                            "approve",
+                            serde_json::json!({"hash": d.hash}),
+                            "approved: pushed to its target",
+                        );
+                    }
+                    'x' => {
+                        self.compliance_tap(
+                            &d.id,
+                            "ignore",
+                            serde_json::json!({"hash": d.hash}),
+                            "ignored: kept, never posted",
+                        );
+                    }
                     _ => {
                         let mut area = TextArea::new(d.text.lines().map(str::to_string).collect());
                         area.move_cursor(tui_textarea::CursorMove::Jump(0, 0));
@@ -4176,21 +4200,25 @@ impl App {
                     self.notify("nothing to save: the draft cannot be empty", true);
                     return Outcome::Continue;
                 }
-                self.mode = Mode::Normal;
                 if self
                     .compliance_items
                     .iter()
-                    .any(|d| d.id == id && d.text == text)
+                    // The editor's lines drop the final newline every machine page ends with.
+                    .any(|d| d.id == id && d.text.trim_end() == text.trim_end())
                 {
+                    self.mode = Mode::Normal;
                     self.notify("nothing changed", false);
                     return Outcome::Continue;
                 }
-                self.compliance_tap(
+                // The editor stays open when the machine refuses, so the text is not lost.
+                if self.compliance_tap(
                     &id,
                     "edit",
                     serde_json::json!({"hash": hash, "text": text}),
                     "saved: your text waits for your tap",
-                );
+                ) {
+                    self.mode = Mode::Normal;
+                }
             }
         }
         Outcome::Continue
@@ -12996,7 +13024,7 @@ mod compliance_tests {
         let (mut app, m) = open_view();
         m.answers(
             409,
-            serde_json::json!({"error": "stale_hash", "message": "changed"}),
+            serde_json::json!({"error": "stale_draft", "message": "changed"}),
         );
         let mut newer = draft(ID, "edited", "2026-10", "someone else's text");
         newer["hash"] = "fedcba9876543210".into();
@@ -13005,6 +13033,26 @@ mod compliance_tests {
         assert_eq!(m.gets(), 2, "the list is fetched again");
         assert_eq!(app.compliance_items[0].hash, "fedcba9876543210");
         assert!(toast(&app).contains("changed"), "{}", toast(&app));
+        assert!(app.toast.as_ref().unwrap().error);
+    }
+
+    #[test]
+    fn a_draft_that_is_posting_or_handled_is_read_again_and_says_so() {
+        let (mut app, m) = open_view();
+        m.answers(
+            409,
+            serde_json::json!({"error": "draft_not_waiting", "message": "posting"}),
+        );
+        let posted = draft(ID, "posted", "2026-10", "# October");
+        *m.drafts.lock().unwrap() = serde_json::json!({ "drafts": [posted] });
+        press(&mut app, KeyCode::Char('a'));
+        assert_eq!(m.gets(), 2, "the list is fetched again");
+        assert_eq!(app.compliance_items[0].status, "posted");
+        assert!(
+            toast(&app).contains("being posted or was already handled"),
+            "{}",
+            toast(&app)
+        );
         assert!(app.toast.as_ref().unwrap().error);
     }
 
@@ -13048,6 +13096,49 @@ mod compliance_tests {
         press(&mut app, KeyCode::Char('e'));
         ctrl_s(&mut app);
         assert!(m.taps().is_empty());
+        assert!(toast(&app).contains("nothing changed"), "{}", toast(&app));
+    }
+
+    #[test]
+    fn a_refused_edit_keeps_the_editor_and_the_text_the_person_typed() {
+        let (mut app, m) = open_view();
+        press(&mut app, KeyCode::Char('e'));
+        press(&mut app, KeyCode::Char('i'));
+        press(&mut app, KeyCode::Char('Z'));
+        m.answers(
+            422,
+            serde_json::json!({"error": "secret", "message": "the text holds a secret"}),
+        );
+        ctrl_s(&mut app);
+        let Mode::EditCompliance { area, .. } = &app.mode else {
+            panic!("the editor stays open: {}", toast(&app))
+        };
+        assert_eq!(
+            area.lines().join("\n"),
+            "Z# October\n\n- PR 12 had no approval"
+        );
+        assert!(
+            toast(&app).contains("the text holds a secret"),
+            "{}",
+            toast(&app)
+        );
+        assert!(app.toast.as_ref().unwrap().error);
+    }
+
+    #[test]
+    fn saving_an_untouched_machine_page_that_ends_in_a_newline_sends_nothing() {
+        let m = mock(vec![draft(
+            ID,
+            "waiting",
+            "2026-10",
+            "# October\n\n- PR 12\n",
+        )]);
+        let mut app = App::new(m.machine.clone());
+        app.toast = None;
+        open(&mut app);
+        press(&mut app, KeyCode::Char('e'));
+        ctrl_s(&mut app);
+        assert!(m.taps().is_empty(), "{:?}", m.taps());
         assert!(toast(&app).contains("nothing changed"), "{}", toast(&app));
     }
 
