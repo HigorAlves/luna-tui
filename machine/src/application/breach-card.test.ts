@@ -33,6 +33,8 @@ describe("breachCards", () => {
     const task = createTask.mock.calls[0]![0] as { title: string; description: string; source: unknown };
     expect(task.title).toBe("Breach notification: Export bucket public");
     expect(task.source).toMatchObject({ kind: "incident", id: "datadog:incident:812", labels: ["security"] });
+    // A Jira key in the incident's title must not link the card to that issue: the Jira sync would move the incident's ticket.
+    expect(createTask.mock.calls[0]![0]).toMatchObject({ noJiraDetection: true });
     expect(task.description).toContain("gdpr");
     expect(task.description).toContain("2026-11-13");
     expect(task.description).toContain("supervisory authority");

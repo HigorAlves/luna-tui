@@ -42,6 +42,8 @@ export function breachCards(deps: BreachCardDeps): (incident: Incident) => Promi
         source: { kind: "incident", id: incident.id, labels: ["security"] },
         originMachine: "automation",
         hints: { kind: "security", urgency: "critical" },
+        // A Jira key in the incident's title names the incident's own ticket: linking it would let the Jira sync move that ticket.
+        noJiraDetection: true,
       });
       for (const regime of breach.regimes) {
         await deps.pipeline.record(task.id, "compliance.deadline", { incident: incident.id, regime, deadline: clocks[regime] ?? null }).catch((error: unknown) => log(`incidents: ${incident.id} ${regime}: ${messageOf(error)}`));

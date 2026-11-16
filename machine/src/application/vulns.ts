@@ -208,6 +208,8 @@ export class Vulns {
       source: { kind: "github_alert", repo, alert: a.number, tool: a.source, url: a.url, labels: answer.severity === "critical" ? ["security"] : [] },
       originMachine: "automation",
       hints: { kind: "security", urgency: answer.severity },
+      // An alert's text can carry a key that names someone's Jira issue: the card is not that issue's work.
+      noJiraDetection: true,
     });
     return { cardId: task.id, deadline: answer.deadline, lane: answer.lane, severity: answer.severity, overdue: false };
   }

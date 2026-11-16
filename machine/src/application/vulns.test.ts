@@ -95,6 +95,7 @@ describe("the vulnerability job", () => {
     const context = triage.mock.calls[0]![0];
     expect(context).toMatchObject({ repo: "acme/web", today: "2026-11-16", policy: { path: POLICY_PATH, text: "High: 14 days." }, alert: { source: "dependabot", number: 7, severity: "high", package: "lodash", patchedVersion: "4.17.21", title: "Prototype pollution", rule: null } });
     expect(pipeline.createTask).toHaveBeenCalledTimes(1);
+    expect(pipeline.createTask.mock.calls[0]![0]).toMatchObject({ noJiraDetection: true });
     const task = pipeline.createTask.mock.calls[0]![0] as { title: string; description: string; criteria: string[]; repoPath: string; source: unknown; hints: unknown; originMachine: string };
     expect(task).toMatchObject({ title: "Bump lodash to 4.17.21", criteria: ["The alert closes"], repoPath: "/repos/web", originMachine: "automation", hints: { kind: "security" } });
     expect(task.source).toMatchObject({ kind: "github_alert", repo: "acme/web", alert: 7, tool: "dependabot", url: "https://github.com/acme/web/security/dependabot/7" });
