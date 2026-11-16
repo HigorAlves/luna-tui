@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ComplianceActInput, ComplianceDraft, ComplianceDraftKind, ComplianceDraftsResponse, ComplianceEditInput, ComplianceTarget } from "./index.ts";
+import { ChangeExceptionKind, ComplianceActInput, ComplianceDraft, ComplianceDraftKind, ComplianceDraftsResponse, ComplianceEditInput, ComplianceTarget } from "./index.ts";
 
 const draft = {
   id: "change_evidence:acme/api:2026-10",
@@ -49,5 +49,9 @@ describe("compliance drafts", () => {
     expect(ComplianceActInput.parse({ hash: "0123456789abcdef" })).toEqual({ hash: "0123456789abcdef" });
     expect(() => ComplianceActInput.parse({})).toThrow();
     expect(() => ComplianceEditInput.parse({ hash: "0123456789abcdef", text: "" })).toThrow();
+  });
+
+  it("names the five change-management exceptions", () => {
+    expect(ChangeExceptionKind.options).toEqual(["no_independent_approval", "stale_approval", "no_ticket", "checks_red", "bypassed"]);
   });
 });
