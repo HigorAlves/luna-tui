@@ -14,7 +14,8 @@ import type { CredentialMount, RunCredential } from "../credentials/index.ts";
 import { hostRedactor, secretRedactor } from "../../domain/redact-secrets.ts";
 import type { SecretStore } from "../../application/secrets.ts";
 import { type BlockedRow, type CardNetwork, findCardNetwork, openCardNetwork } from "./egress.ts";
-import { serviceName, startServices } from "./services.ts";
+import { runtimeChecker } from "./runtimes.ts";
+import { type ServiceHardening, serviceName, startServices } from "./services.ts";
 import { type ExecResult, exec, execOrThrow, OUTPUT_CAP } from "../process/exec.ts";
 import { seccompChecker } from "./seccomp.ts";
 
@@ -27,13 +28,21 @@ export interface SandboxSize {
   memoryGb: number;
   /** The owner's seccomp profile (an absolute path), from the machine sandbox policy; absent, docker's default. */
   seccomp?: string;
+  /** The process limit (`--pids-limit`), from the policy's `limits.max_pids`; absent, 1024. */
+  pids?: number;
+  /** The container runtime (`--runtime`) for the card's trust, when the policy names one other than runc. */
+  runtime?: string;
+  /** The trust the card's cache volume is split by (`cacheVolumeFor`); `trusted` when the policy does not split. */
+  cacheTrust?: "trusted" | "untrusted";
 }
 export const DEFAULT_SANDBOX_SIZE: SandboxSize = { cpu: 2, memoryGb: 4 };
 /** Docker's own init (tini) as PID 1. Without it the stage's entrypoint is PID 1 and never reaps: a process group the stage kills (a test runner's timeout, an abort)
  *  leaves zombies that `kill(pid, 0)` still reports alive, and the repo's own suite (`exec.test.ts` "kills the group") fails inside the container and escalates the card. */
 export const INIT_ARGS = ["--init"];
 
-export const sandboxLimits = (size: SandboxSize = DEFAULT_SANDBOX_SIZE): string[] => ["--memory", `${size.memoryGb}g`, "--cpus", `${size.cpu}`, "--pids-limit", "1024", ...(size.seccomp ? ["--security-opt", `seccomp=${size.seccomp}`] : [])];
+export const sandboxLimits = (size: SandboxSize = DEFAULT_SANDBOX_SIZE): string[] => ["--memory", `${size.memoryGb}g`, "--cpus", `${size.cpu}`, "--pids-limit", `${size.pids ?? 1024}`, ...(size.seccomp ? ["--security-opt", `seccomp=${size.seccomp}`] : []), ...(size.runtime ? ["--runtime", size.runtime] : [])];
+/** What the services beside a container take from its size: the same limits, capped where `serviceArgs` caps them. */
+export const serviceHardeningOf = (size: SandboxSize | undefined): ServiceHardening => ({ ...(size?.pids ? { pids: size.pids } : {}), ...(size?.seccomp ? { seccomp: size.seccomp } : {}), ...(size?.runtime ? { runtime: size.runtime } : {}) });
 export const SANDBOX_LIMITS = sandboxLimits();
 /** `docker wait` gets this long past the stage's own timeout before the container is forced down. */
 const WAIT_GRACE_MS = 60_000;
@@ -126,11 +135,11 @@ function stageSecrets(run: SandboxRun): Record<string, string> {
 }
 const secretsMount = (host: string): string[] => ["-v", `${host}:${SECRETS_MOUNT}:ro`];
 
-/** The docker volume holding one repo's caches: `hardness-cache-<repo>`, from the checkout's name. */
-export function cacheVolumeFor(repoPath: string): string {
+/** The docker volume holding one repo's caches: `hardness-cache-<repo>`, from the checkout's name; an untrusted card's is `hardness-cache-<repo>-untrusted`. The one name install, checks, stages and the app use. */
+export function cacheVolumeFor(repoPath: string, trust: "trusted" | "untrusted" = "trusted"): string {
   const name = repoPath.replace(/\/+$/, "").split("/").pop() ?? "repo";
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "repo";
-  return `hardness-cache-${slug}`;
+  return `hardness-cache-${slug}${trust === "untrusted" ? "-untrusted" : ""}`;
 }
 
 /** The cache mount and env, when a volume is named. */
@@ -231,8 +240,10 @@ export interface RunDeps {
   findCardNetwork: typeof findCardNetwork;
   /** Throws `SeccompUnavailableError` when the daemon has no seccomp filter: no container starts on it. */
   checkSeccomp: () => Promise<void>;
+  /** Throws `RuntimeUnavailableError` when the daemon lacks the runtime the size names (`--runtime`); asked only for a runtime other than runc. */
+  checkRuntime?: (runtime: string) => Promise<void>;
 }
-const HOST_DEPS: RunDeps = { exec, execOrThrow, startServices, openCardNetwork, findCardNetwork, checkSeccomp: seccompChecker(exec) };
+const HOST_DEPS: RunDeps = { exec, execOrThrow, startServices, openCardNetwork, findCardNetwork, checkSeccomp: seccompChecker(exec), checkRuntime: runtimeChecker(exec) };
 
 /** Every container drops all capabilities and has its own IPC namespace: a stage needs none of root's powers, and shares no shared memory with the host. */
 export const HARDEN_ARGS = ["--cap-drop", "ALL", "--ipc", "private"];
@@ -305,7 +316,10 @@ function networkArgs(network: string | null | undefined, serviceEnv: Record<stri
 
 export async function runSandbox(run: SandboxRun, given: Partial<RunDeps> = {}): Promise<SandboxResult> {
   const deps: RunDeps = { ...HOST_DEPS, ...given };
-  if (!run.attach) await deps.checkSeccomp();
+  if (!run.attach) {
+    await deps.checkSeccomp();
+    if (run.limits?.runtime) await deps.checkRuntime?.(run.limits.runtime);
+  }
   // The run's own card network, when it has a list: opened here and removed in `finally`, whatever the outcome. A card network
   // it is handed (the browser run's, the app's) is joined and left alone; a re-attached run's is found by name and removed at its end.
   let own: CardNetwork | null = null;
@@ -317,7 +331,7 @@ export async function runSandbox(run: SandboxRun, given: Partial<RunDeps> = {}):
     // A re-attached run's services are still up from before; they are torn down with it below.
     const services = run.attach
       ? { network: null, env: {}, teardown: async () => void (await Promise.all(Object.keys(run.services ?? {}).map((key) => deps.exec("docker", ["rm", "-f", serviceName(run.name, key)])))) }
-      : await deps.startServices(run.name, run.services ?? {}, card ? { network: { name: card.name, dns: card.dns } } : {});
+      : await deps.startServices(run.name, run.services ?? {}, { harden: serviceHardeningOf(run.limits), ...(card ? { network: { name: card.name, dns: card.dns } } : {}) });
     try {
       if (!run.attach) {
         const inDir = join(run.runDir, "in");
@@ -488,13 +502,14 @@ export async function execInSandbox(
 ): Promise<ExecResult & { blocked?: BlockedRow[] }> {
   const deps: RunDeps = { ...HOST_DEPS, ...given };
   await deps.checkSeccomp();
+  if (run.limits?.runtime) await deps.checkRuntime?.(run.limits.runtime);
   const own = !run.cardNetwork && run.egress ? await deps.openCardNetwork(run.name, run.egress, { proxyImage: run.egress.proxyImage }) : null;
   const card = run.cardNetwork ?? own;
   const folder = run.secrets && Object.keys(run.secrets).length > 0 ? await makeSecretFolder(run.secrets, run.user === undefined ? hostUser() : run.user).catch(async (error) => { await own?.teardown(); throw error; }) : null;
   try {
     const services = run.servicesUp
       ? { network: run.network ?? null, env: run.serviceEnv ?? {}, teardown: async () => {} }
-      : await deps.startServices(run.name, run.services ?? {}, card ? { network: { name: card.name, dns: card.dns } } : {});
+      : await deps.startServices(run.name, run.services ?? {}, { harden: serviceHardeningOf(run.limits), ...(card ? { network: { name: card.name, dns: card.dns } } : {}) });
     try {
       // What the project's own commands print is theirs to choose: only its tail is kept.
       const result = await deps.exec("docker", sandboxExecArgs({ ...run, ...(card ? { cardNetwork: card } : {}), ...(folder ? { secretsDir: folder.dir } : {}), network: services.network, serviceEnv: services.env }), { ...options, outputCap: OUTPUT_CAP });
@@ -528,7 +543,7 @@ export function sandboxExecutor(
     /** The list a check of this repository may reach (`egressPolicy`, kind `check`); absent, the check joins an ordinary bridge. */
     egress?: (repoPath: string | undefined) => Promise<{ allow: readonly string[]; allowPrivate: readonly string[]; proxyImage: string }>;
     /** The repository's own `sandbox.cpu` and `sandbox.memory_gb`; absent, the defaults. */
-    limitsOf?: (repoPath: string | undefined) => Promise<SandboxSize>;
+    limitsOf?: (repoPath: string | undefined, trust?: "trusted" | "untrusted") => Promise<SandboxSize>;
     /** The owner's store of this repository's scoped secrets; a check gets only the names it declares. */
     secrets?: SecretStore;
   },
@@ -561,6 +576,7 @@ export function sandboxExecutor(
       if (loaded.missing.length > 0) throw new SecretsMissingError(loaded.missing, images.secrets.folder(options.repoPath));
       secrets = loaded.values;
     }
+    const size = images.limitsOf ? await images.limitsOf(options.repoPath, options.trust) : undefined;
     const result = await run(
       {
         ...(secrets ? { secrets } : {}),
@@ -573,10 +589,10 @@ export function sandboxExecutor(
         // A file not yet on disk (the setup proposal, a file being proved) adds its own `sandbox.egress.allow` on top of the machine's list.
         // In a session the network is the session's: it was opened once, with the list, for every check of the pass.
         ...(images.egress && !shared ? { egress: withAllow(await images.egress(options.repoPath), options.egressAllow) } : {}),
-        ...(images.limitsOf ? { limits: await images.limitsOf(options.repoPath) } : {}),
+        ...(size ? { limits: size } : {}),
         gitIdentity,
         services: options.services,
-        cacheVolume: cacheVolumeFor(dirname(options.cwd)),
+        cacheVolume: cacheVolumeFor(options.repoPath ?? dirname(options.cwd), size?.cacheTrust),
         ...(shared ? { ...(shared.card ? { cardNetwork: shared.card } : {}), servicesUp: true, network: shared.services.network, serviceEnv: shared.services.env } : {}),
       },
       { signal: options.signal, timeoutMs: options.timeoutMs },
@@ -590,9 +606,11 @@ export function sandboxExecutor(
     const spec = images.egress ? withAllow(await images.egress(options.repoPath), options.egressAllow) : null;
     const name = `hardness-checks-${randomUUID().slice(0, 8)}`;
     const card = spec ? await deps.openCardNetwork(name, spec, { proxyImage: spec.proxyImage }) : null;
+    const size = images.limitsOf ? await images.limitsOf(options.repoPath, options.trust) : undefined;
     let services: Awaited<ReturnType<RunDeps["startServices"]>>;
     try {
-      services = await deps.startServices(name, options.services, card ? { network: { name: card.name, dns: card.dns } } : {});
+      if (size?.runtime) await deps.checkRuntime?.(size.runtime);
+      services = await deps.startServices(name, options.services, { harden: serviceHardeningOf(size), ...(card ? { network: { name: card.name, dns: card.dns } } : {}) });
     } catch (error) {
       await card?.teardown();
       throw error;
@@ -607,7 +625,7 @@ export function sandboxExecutor(
     };
     let closed = false;
     return {
-      exec: (command, args, execOptions) => one(command, args, execOptions, { card, services, fresh }),
+      exec: (command, args, execOptions) => one(command, args, { ...(options.trust ? { trust: options.trust } : {}), ...execOptions }, { card, services, fresh }),
       close: async () => {
         if (closed) return;
         closed = true;
@@ -620,10 +638,12 @@ export function sandboxExecutor(
   return Object.assign(exec, { session });
 }
 
-type ExecOptions = { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string; secrets?: string[]; image?: string; egressAllow?: readonly string[] };
+type ExecOptions = { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string; secrets?: string[]; image?: string; egressAllow?: readonly string[]; trust?: "trusted" | "untrusted" };
 export interface SessionOptions {
   cwd: string;
   repoPath?: string;
+  /** The card's trust: its runtime, process limit and cache volume. */
+  trust?: "trusted" | "untrusted";
   services: Record<string, ServiceSpec>;
   egressAllow?: readonly string[];
 }

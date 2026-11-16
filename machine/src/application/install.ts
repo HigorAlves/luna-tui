@@ -12,6 +12,7 @@ import type { ExecResult } from "../adapters/process/exec.ts";
 import { LOCKFILES } from "../domain/env-hash.ts";
 import { safe } from "../domain/evidence-markdown.ts";
 import { sandboxSizeOf } from "../domain/sandbox-bounds.ts";
+import type { Trust } from "../domain/trust.ts";
 import { type InstallStep, argvIn, installKey, installPlanOf, nestedPlansOf } from "../domain/install-plan.ts";
 import type { EgressPolicy } from "./egress-policy.ts";
 import type { PolicyStore } from "./policy.ts";
@@ -44,6 +45,8 @@ export interface InstallInput {
   repoPath: string;
   workspace: string;
   commit: string;
+  /** The card's trust (`trustOf`): its runtime, process limit and cache volume. */
+  trust?: Trust;
   signal?: AbortSignal;
 }
 
@@ -120,6 +123,7 @@ export async function ensureInstalled(deps: InstallDeps, input: InstallInput): P
   const spec = deps.egress ? await deps.egress.for({ repoPath: input.repoPath, kind: "install" }) : undefined;
   const blocked: BlockedRow[] = [];
   const ran: string[] = [];
+  const limits = sandboxSizeOf(policy, input.trust);
   for (const step of steps) {
     // No `secrets`, no credential, no /in, /out, /session or /graph: the spec has nothing of the run's.
     const result = await deps.exec(
@@ -127,10 +131,10 @@ export async function ensureInstalled(deps: InstallDeps, input: InstallInput): P
         name: `hardness-install-${randomUUID().slice(0, 8)}`,
         image,
         worktree: input.workspace,
-        limits: sandboxSizeOf(policy),
+        limits,
         argv: argvIn(step),
         env: step.env,
-        cacheVolume: cacheVolumeFor(input.repoPath),
+        cacheVolume: cacheVolumeFor(input.repoPath, limits.cacheTrust),
         ...(spec ? { egress: spec } : {}),
       },
       { ...(input.signal ? { signal: input.signal } : {}), timeoutMs: STEP_TIMEOUT_MS },

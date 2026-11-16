@@ -2,6 +2,8 @@
 // thing it dropped or lowered, a reason in the repo's own vocabulary, so the person who wrote the luna.yaml can see why it did not take effect.
 import type { FactoryConfig, MachinePolicy } from "@hardness/contracts";
 
+import type { Trust } from "./trust.ts";
+
 export type RepoSandbox = FactoryConfig["sandbox"];
 
 /** What the bounds did, as sentences. `notes` (cpu, memory) go on the task; `egress` and `image` go in repo health. */
@@ -11,6 +13,10 @@ export interface SandboxBounds {
   image: string[];
   /** The seccomp profile path the policy names; null for docker's default. */
   seccomp: string | null;
+  /** The container runtime per trust level, the process limit and whether an untrusted card's cache is its own: the policy's, read where a container starts. */
+  runtime: { default: "runc" | "runsc"; untrusted: "runc" | "runsc" };
+  maxPids: number;
+  splitCache: boolean;
 }
 
 const hostOf = (pattern: string): string => pattern.toLowerCase().split(":")[0]!;
@@ -31,7 +37,7 @@ const plural = (count: number): string => `${count} host${count === 1 ? "" : "s"
 
 export function boundSandbox(sandbox: RepoSandbox, policy: MachinePolicy): { sandbox: RepoSandbox; bounds: SandboxBounds } {
   const out: RepoSandbox = structuredClone(sandbox);
-  const bounds: SandboxBounds = { notes: [], egress: [], image: [], seccomp: policy.seccomp === "default" ? null : policy.seccomp };
+  const bounds: SandboxBounds = { notes: [], egress: [], image: [], seccomp: policy.seccomp === "default" ? null : policy.seccomp, runtime: { ...policy.runtime }, maxPids: policy.limits.max_pids, splitCache: policy.cache.split_by_trust };
 
   if (out.cpu > policy.limits.max_cpu) {
     bounds.notes.push(`sandbox.cpu ${out.cpu} is capped at ${policy.limits.max_cpu} by the machine's sandbox policy (limits.max_cpu)`);
@@ -69,8 +75,17 @@ export function boundSandbox(sandbox: RepoSandbox, policy: MachinePolicy): { san
 /** Why the machine's policy refused the repo's base image, or null; `POST /repos/base/approve` refuses the same base. */
 export const baseRefusal = (policy: { bounds?: Pick<SandboxBounds, "image"> | undefined }): string | null => policy.bounds?.image[0] ?? null;
 
-/** A container's size: the repo's bounded cpu and memory, and the policy's seccomp profile when it names one. */
-export function sandboxSizeOf(policy: { factory: { sandbox: { cpu: number; memory_gb: number } }; bounds?: SandboxBounds }): { cpu: number; memoryGb: number; seccomp?: string } {
-  const seccomp = policy.bounds?.seccomp;
-  return { cpu: policy.factory.sandbox.cpu, memoryGb: policy.factory.sandbox.memory_gb, ...(seccomp ? { seccomp } : {}) };
+/** A container's size: the repo's bounded cpu and memory, the policy's process limit, its seccomp profile when it names one, its runtime for the card's trust when that is not runc,
+ *  and the trust the cache volume is split by (`trusted` when the policy does not split). */
+export function sandboxSizeOf(policy: { factory: { sandbox: { cpu: number; memory_gb: number } }; bounds?: SandboxBounds }, trust: Trust = "trusted"): { cpu: number; memoryGb: number; pids: number; cacheTrust: Trust; seccomp?: string; runtime?: string } {
+  const bounds = policy.bounds;
+  const runtime = bounds ? bounds.runtime[trust === "untrusted" ? "untrusted" : "default"] : "runc";
+  return {
+    cpu: policy.factory.sandbox.cpu,
+    memoryGb: policy.factory.sandbox.memory_gb,
+    pids: bounds?.maxPids ?? 1024,
+    cacheTrust: bounds && !bounds.splitCache ? "trusted" : trust,
+    ...(bounds?.seccomp ? { seccomp: bounds.seccomp } : {}),
+    ...(runtime !== "runc" ? { runtime } : {}),
+  };
 }

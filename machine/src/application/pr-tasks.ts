@@ -81,7 +81,7 @@ export async function createPrTask(deps: PrTaskDeps, pr: PullRequest, action: Pr
   const worktreePath = prWorktreePath(pr.localPath, deps.worktreesDir, pr.number, pr.headRef);
   await (deps.ensurePrClone ?? realEnsurePrClone)(pr.localPath, pr.headRef, worktreePath);
 
-  const source: TaskSource = { kind: "github_pr", repo: pr.repo, number: pr.number, url: pr.url, headRef: pr.headRef, baseRef: pr.baseRef };
+  const source: TaskSource = { kind: "github_pr", repo: pr.repo, number: pr.number, url: pr.url, headRef: pr.headRef, baseRef: pr.baseRef, ...(pr.authorAssociation ? { authorAssociation: pr.authorAssociation } : {}) };
   const task = await deps.pipeline.createTask({
     title: `PR #${pr.number}: ${pr.title}`,
     ...briefFor(pr, action),

@@ -11,7 +11,7 @@ export interface PrFieldLimits {
 
 /** The fields of a PR the inbox needs, shared by the per-PR query and the bulk one so both map through `fromGraphQl` alike. */
 export const prFields = ({ requests, threads, contexts }: PrFieldLimits): string => `id number title body url isDraft updatedAt baseRefName headRefName
-    author{login} headRepository{nameWithOwner}
+    author{login} authorAssociation headRepository{nameWithOwner}
     reviewDecision mergeable mergeStateStatus
     reviewRequests(first:${requests}){nodes{requestedReviewer{__typename ... on User{login} ... on Team{slug}}}}
     reviewThreads(first:${threads}){nodes{isResolved}}
@@ -54,6 +54,8 @@ export interface PrNode {
   baseRefName: string;
   headRefName: string;
   author: { login: string } | null;
+  /** GitHub's `authorAssociation` of the PR's author; absent from older fixtures. */
+  authorAssociation?: string | null;
   /** Null when the fork the head lived in was deleted. */
   headRepository: { nameWithOwner: string } | null;
   reviewDecision: PullRequest["reviewDecision"];
@@ -123,6 +125,7 @@ export function fromGraphQl(node: PrNode, repo: string, me: string, teams: strin
     title: node.title,
     url: node.url,
     author,
+    ...(node.authorAssociation ? { authorAssociation: node.authorAssociation } : {}),
     mine: author.toLowerCase() === me.toLowerCase(),
     reviewRequested,
     isDraft: node.isDraft,

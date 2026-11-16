@@ -247,19 +247,44 @@ describe("agent stages through packs", () => {
 
   it("sizes the container from the repository's sandbox section, two CPUs and four gigabytes without one", async () => {
     await runners(fakeSandbox(output())).triage!(context("triage"));
-    expect(seen!.limits).toEqual({ cpu: 2, memoryGb: 4 });
+    expect(seen!.limits).toEqual({ cpu: 2, memoryGb: 4, pids: 1024, cacheTrust: "trusted" });
     const small = { ...deps(fakeSandbox(output())), policies: { for: async () => ({ ...DEFAULT_POLICY, factory: { ...FACTORY_DEFAULTS, sandbox: { ...FACTORY_DEFAULTS.sandbox, cpu: 2, memory_gb: 3 } } }) } as never };
     await agentRunners(small).triage!(context("triage"));
-    expect(seen!.limits).toEqual({ cpu: 2, memoryGb: 3 });
+    expect(seen!.limits).toEqual({ cpu: 2, memoryGb: 3, pids: 1024, cacheTrust: "trusted" });
   });
 
   it("runs at the bounded size and the owner's seccomp profile, and leaves a note on the task for a capped size", async () => {
-    const bounds = { notes: ["sandbox.cpu 16 is capped at 4 by the machine's sandbox policy (limits.max_cpu)"], egress: [], image: [], seccomp: "/etc/luna/seccomp.json" };
+    const bounds = { notes: ["sandbox.cpu 16 is capped at 4 by the machine's sandbox policy (limits.max_cpu)"], egress: [], image: [], seccomp: "/etc/luna/seccomp.json", runtime: { default: "runc", untrusted: "runc" }, maxPids: 1024, splitCache: true };
     const capped = { ...deps(fakeSandbox(output())), policies: { for: async () => ({ ...DEFAULT_POLICY, bounds, factory: { ...FACTORY_DEFAULTS, sandbox: { ...FACTORY_DEFAULTS.sandbox, cpu: 4, memory_gb: 4 } } }) } as never };
     const note = vi.fn(async () => {});
     await agentRunners(capped).triage!({ ...context("triage"), note });
-    expect(seen!.limits).toEqual({ cpu: 4, memoryGb: 4, seccomp: "/etc/luna/seccomp.json" });
+    expect(seen!.limits).toEqual({ cpu: 4, memoryGb: 4, pids: 1024, cacheTrust: "trusted", seccomp: "/etc/luna/seccomp.json" });
     expect(note).toHaveBeenCalledWith(bounds.notes[0]);
+  });
+
+  describe("a card from outside the repository's people", () => {
+    const stranger = (ctx: StageContext, authorAssociation = "NONE"): StageContext => ({ ...ctx, task: { ...ctx.task, id: `stranger-${authorAssociation}-${Math.random()}`, source: { kind: "github", repo: "o/a", number: 9, url: "u", authorAssociation } } as unknown as TaskRow });
+    const bounds = { notes: [], egress: [], image: [], seccomp: null, runtime: { default: "runc", untrusted: "runsc" }, maxPids: 300, splitCache: true };
+    const withBounds = (over = {}) => ({ ...deps(fakeSandbox(output())), policies: { for: async () => ({ ...DEFAULT_POLICY, bounds: { ...bounds, ...over } }) } as never });
+
+    it("gets its own cache volume and the policy's runtime, and says so on the task once", async () => {
+      const note = vi.fn(async (_text: string) => {});
+      const runner = agentRunners(withBounds());
+      const ctx = { ...stranger(context("triage")), note };
+      await runner.triage!(ctx);
+      expect(seen!.cacheVolume).toBe("hardness-cache-repo-untrusted");
+      expect(seen!.limits).toMatchObject({ runtime: "runsc", pids: 300, cacheTrust: "untrusted" });
+      await runner.triage!(ctx);
+      expect(note.mock.calls.filter(([text]) => String(text).includes("runs untrusted"))).toEqual([["This card runs untrusted (its GitHub author is not an owner, member or collaborator): its own cache volume and the runsc container runtime."]]);
+    });
+
+    it("keeps the shared cache when the policy does not split, and a trusted card keeps runc", async () => {
+      await agentRunners(withBounds({ splitCache: false })).triage!(stranger(context("triage")));
+      expect(seen!.cacheVolume).toBe("hardness-cache-repo");
+      await agentRunners(withBounds()).triage!(stranger(context("triage"), "MEMBER"));
+      expect(seen!.cacheVolume).toBe("hardness-cache-repo");
+      expect(seen!.limits).not.toHaveProperty("runtime");
+    });
   });
 
   it("carries the agent's typed escalation reason, and reads one off the enum as other", async () => {
@@ -1137,7 +1162,7 @@ describe("the engine a stage runs on", () => {
 
     it("says on the task, and in the run's events, when the result ran at another effort than the input set", async () => {
       asked();
-      const note = vi.fn(async () => {});
+      const note = vi.fn(async (_text: string) => {});
       const result = await runAgent(deps(fakeSandbox(output({ run: runInfo("high") }))), { ...context("triage"), note }, "triage");
       expect((seen!.input as unknown as StageInput).effort).toBe("low");
       const reason = "triage was asked to run at low effort and ran at high: the runner image may be older than this build (pnpm images)";
@@ -1147,14 +1172,14 @@ describe("the engine a stage runs on", () => {
 
     it("says so when the result reports no effort at all (an old image strips the key)", async () => {
       asked();
-      const note = vi.fn(async () => {});
+      const note = vi.fn(async (_text: string) => {});
       await runAgent(deps(fakeSandbox(output({ run: runInfo() }))), { ...context("triage"), note }, "triage");
       expect(note).toHaveBeenCalledWith("triage was asked to run at low effort and reported none: the runner image may be older than this build (pnpm images)");
     });
 
     it("says nothing when the result ran at the effort asked for, or no effort was set", async () => {
       asked();
-      const note = vi.fn(async () => {});
+      const note = vi.fn(async (_text: string) => {});
       const same = await runAgent(deps(fakeSandbox(output({ run: runInfo("low") }))), { ...context("triage"), note }, "triage");
       expect(same.events?.find((e) => e.kind === "engine")).toBeUndefined();
       writeFileSync(join(repo, "luna.yaml"), "policy:\n  graph: off\n");
