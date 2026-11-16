@@ -138,4 +138,34 @@ The person settled these in the design interview of 2026-11-16:
 
 ## What was built
 
-(Filled in when the PR is ready for review.)
+The seven waves landed on `feat/manager-compliance-agents`, stacked on #228, one merge per wave. This section says what landed as designed, and where the build differs from the design above. The code and its tests are the source of truth. No model call was made while the waves were built, so every test runs on a fake.
+
+### As designed
+
+- **Shared parts.** The draft store is `machine/src/application/compliance-drafts.ts`, one JSON file per draft under `<stateDir>/compliance/drafts/`. The publisher hands each target to the writer for its kind, and every writer can be repeated safely. The machine has one wiki adapter, `sharedWiki(stateDir)`, a host-git clone per repo under `<stateDir>/wikis/`. The routes are under `/compliance/`. The board's Compliance view is on key `M`.
+- **Wave 1.** The GitHub port has `mergedPrs` and `ruleBypasses`. `machine/src/domain/change-evidence.ts` computes each record and the month's page. `change_exceptions` explains only the exceptions. The monthly job runs on a daily `Ticker` with a cursor, and `POST /compliance/evidence/run` rebuilds one month on demand.
+- **Wave 2.** `luna.yaml` takes `compliance:`. `compliance_review` and its five regime helpers run as a sub-run beside the PR review and in Verify. Their findings join the review before the verdict. Each finding names its clause and control.
+- **Wave 3.** Slack, chat, conversation and Jira triage have a `compliance_request` category. The Slack port downloads a file and the Jira port an attachment, as text of at most 1 MB. `questionnaire` drafts the answers. The writers post to the thread or the issue and write the answer bank. The board's `p` key moves a questionnaire to another repo's wiki.
+- **Wave 4.** The GitHub port reads the org's access. `machine/src/domain/access-review.ts` flags org owners, repo admins, bypass actors, unenforced admin rules, outside collaborators, direct access, stale invitations and dormant members, against the last signed snapshot. `access_review` suggests an action for each flag. The `access_slices` writer writes each repo's part and signs the snapshot. `MACHINE_ACCESS_REVIEW` turns the review off.
+- **Wave 5.** Sentry and Datadog have their own ports. The Datadog port and its adapter came from #88, without its inbox. Every source becomes an `IncidentSignal`, and `machine/src/domain/incident.ts` folds the signals into incidents. `breach_assess` derives the regimes, and the clocks are stored on the incident. `postmortem` opens a draft when an incident resolves. A failed postmortem is retried each hour, at most three times. The `jira_actions` writer files each action item once.
+- **Wave 6.** `migration-reviewer` and `iac-reviewer` are helpers of `reviewing` and `verifying`, triggered by path. `docs_drift` adds advisory findings beside Verify and never changes the verdict. `vuln_triage` turns each Dependabot or code-scanning alert into a card, every 6 hours. `release_notes` drafts a release body on demand, and the `github_release` writer sets it.
+- **Wave 7.** `status_report` writes the week's page. It reads the board's metrics, the shipped and blocked cards, the merged PRs, the compliance drafts, the access review, the open incidents and their clocks, the vulnerability deadlines and `capacity_check`'s answers. A weekly job on an hourly `Ticker` opens the draft on the configured day. The `slack_channel` writer posts the page's summary with a link to the wiki page. `POST /compliance/status/run` builds a week on demand.
+
+### Where the build differs
+
+- **Role names.** `docs_drift` has the role `docs-keeper`. `release_notes` has its own role, `release-writer`, because the two packs were built at the same time.
+- **Vulnerability lanes are text.** A card has no field that sends it to the fast lane or holds it. The card's description states the lane, the deadline, the severity and the alert. Cards are not started automatically. Only a critical alert carries the `security` label, which triage reads as P0.
+- **An overdue alert is not raised to P0.** A job cannot set a card's P0 flags: ticket assessment computes them. An overdue alert gets a `compliance.deadline` event on its card and `overdue: true` in `GET /compliance/vulns`.
+- **`verifying` can dispatch subagents.** It gained `access.agent`, because the two new reviewers are Claude helpers.
+- **Long Slack answers are chunked.** The Slack port cannot upload a file. A long text goes into the thread as ordered messages of at most 3,500 characters. A Jira comment splits at 30,000.
+- **Incident times.** A breach clock starts when Luna first sees the incident, which stands in for awareness. A Jira incident's start time is its first-seen update time, because the port has no creation time. The US state clock is a flat 30 days, the earliest common deadline.
+- **A Sentry-started incident does not resolve by itself.** The Sentry port lists only unresolved issues, so the absence of an issue is not a resolution. A Datadog or Jira incident that carries the issue resolves it.
+- **A Jira questionnaire skips intake.** When the questionnaire job is wired, a `compliance_request` issue goes to the Compliance view and does not become a card.
+- **Access review details.** A bypass actor is named by its id, because the ruleset API gives no name. An email invitation is named by its date, never by its address.
+- **Docs drift without an origin.** A repo with no origin slug is named `local/<folder>`.
+- **Two capacity facts are approximations.** The person's review count is the GitHub viewer's reviews on PRs merged in the compliance repos over four weeks. Rate-limited hours are the waits of the cards that are paused now, because no history of rate limits is kept. The report reads the exception and flag counts from the drafts' one-line summaries.
+
+### Not verified live
+
+- No call was made to GitHub, Sentry, Datadog, Slack or Jira. The new adapter calls are checked against stubbed responses only: rule suites, collaborators, rulesets, contributions, Dependabot and code scanning, Slack files and Jira attachments. No page was pushed to a real GitHub wiki.
+- No pack ran on a model. The decision packs `breach_assess` and `capacity_check` need baselines and a scorecard row. `conversation_assess` and `triage_signals` changed their criteria, so their baselines need a new run. The `slack_triage` and `chat_triage` eval results are stale, because their roles changed.
