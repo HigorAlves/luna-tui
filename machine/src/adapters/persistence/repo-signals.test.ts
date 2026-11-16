@@ -6,7 +6,7 @@ import type { EconomyStore } from "../../application/economy.ts";
 import { NO_RETRIES } from "../../domain/transition.ts";
 import { freshTestDatabase } from "../../test/database.ts";
 import { pgRepoSignals } from "./repo-signals.ts";
-import { StageRunEntity, TaskEntity } from "./schemas.ts";
+import { EventEntity, StageRunEntity, TaskEntity } from "./schemas.ts";
 
 let db: DataSource;
 beforeAll(async () => {
@@ -24,6 +24,10 @@ const save = (repoPath: string) => db.getRepository(TaskEntity).save({ title: "x
 const stage = (taskId: string, stageName: "triage" | "setup", outcome: string, costUsd: string | null, ago = 0) =>
   db.getRepository(StageRunEntity).save({ taskId, stage: stageName, attempt: 1, status: outcome === "pass" ? "passed" : "failed", outcome, costUsd, startedAt: new Date(Date.now() - ago * DAY) });
 
+// The machine's own record of a stage ending in escalation: the transition event. The stage run itself stays `fail`.
+const escalate = (taskId: string, from: string, ago = 0, event = "stage_done") =>
+  db.getRepository(EventEntity).save({ taskId, kind: "transition", stageRunId: null, payload: { event, outcome: "escalated", from, to: "escalated" }, at: new Date(Date.now() - ago * DAY) });
+
 const economy = (guard: unknown[], ledger: unknown[]) => ({ guard: async () => guard, ledger: async () => ledger }) as unknown as EconomyStore;
 
 describe("pgRepoSignals", () => {
@@ -31,10 +35,15 @@ describe("pgRepoSignals", () => {
     const mine = await save("/r/app");
     const other = await save("/r/other");
     await stage(mine.id, "triage", "pass", "1.0000");
-    await stage(mine.id, "triage", "escalated", "2.0000");
+    // A loop-guard stop is stored as a failed stage run; the escalation is in the event log only.
+    await stage(mine.id, "triage", "fail", "2.0000");
+    await escalate(mine.id, "triage");
+    await escalate(mine.id, "triage", 40);
+    await escalate(mine.id, "triage", 0, "approved");
     await stage(mine.id, "setup", "pass", "0.5000");
     await stage(mine.id, "setup", "pass", "9.0000", 40);
-    await stage(other.id, "setup", "escalated", "7.0000");
+    await stage(other.id, "setup", "fail", "7.0000");
+    await escalate(other.id, "setup");
     const since = new Date(Date.now() - 30 * DAY);
     const at = new Date().toISOString();
     const old = new Date(Date.now() - 40 * DAY).toISOString();

@@ -433,14 +433,15 @@ The machine can draft a `luna.yaml` change from evidence. A person still turns t
 
 **How it starts.** A person runs `pnpm eval propose --repo <abs path>`. The command turns the baselines in `evals/baselines/` and the scorecards in `decision-defaults.json` into candidates. It posts them to `POST /repos/proposals`. `--dry-run` prints the request and calls nothing. The machine adds the repo's own signals from the last 30 days (`SIGNAL_DAYS`). It reads them per pack:
 
-- `runs` and `escalations` come from the repo's `stage_runs`. An escalated outcome counts as an escalation.
-- `stuck` counts the loop guard's stops in the repo's economy log. The machine escalates each stop, so a stop is also an escalation.
+- `runs` comes from the repo's `stage_runs`.
+- `escalations` counts the `stage_done escalated` transitions in the task event log, by the state the task left. A stage run stores a loop-guard stop, a stuck-detector stop and a second scope red as `fail`; only the pipeline event escalates them, so `stage_runs.outcome` cannot be the source.
+- `stuck` counts the loop guard's stops in the repo's economy log. It is evidence only: each stop is already an escalation above.
 - `costUsd` is the stage runs' cost plus the cost of the ledger's `overhead` records. A stage run's own ledger record is not added again.
 
 **The rule.** `proposeConfig` (`machine/src/domain/config-proposal.ts`) is a fixed rule. It calls no model. It decides per pack, from these constants:
 
 - A candidate needs `MIN_CASES = 3` cases. A pack needs `MIN_RUNS = 10` runs in the repo. Otherwise the pack has no signal.
-- The trouble rate is escalations / runs. A stuck loop is not counted twice. The `why` says how many escalations were a stuck loop.
+- The trouble rate is escalations / runs. `stuck` is a part of `escalations`, so it is not added. The `why` says how many escalations were a stuck loop.
 - At `TROUBLE = 0.25` or more, the pack steps up. It takes the candidate with the best quality, at least `GAIN = 0.10` above the current one.
 - Below `CALM = 0.10`, the pack steps down. It takes the cheapest candidate that costs at most `CHEAPER = 0.7` of the current one and loses at most `TOLERANCE = 0.05` of quality.
 - A change is only to an engine the pack allows, at an effort that engine supports.
