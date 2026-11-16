@@ -70,7 +70,7 @@ function send(port: number, options: { path?: string; headers?: Record<string, s
       res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks).toString() }));
     });
     req.on("error", reject);
-    req.end(options.body ?? "{}");
+    req.end((options.method ?? "POST") === "POST" ? (options.body ?? "{}") : undefined);
   });
 }
 
@@ -165,6 +165,31 @@ describe("the engine relay", () => {
     expect((await send(port, { path: "//evil.example.com/v1/x", headers: oauth })).status).toBe(403);
     expect(seen).toHaveLength(0);
     expect(connects).toHaveLength(0);
+  });
+
+  it("allows POST /v1/messages and POST /v1/messages/count_tokens (with a query) and nothing else, logging each refused path", async () => {
+    const { port, seen, lines } = await start((_req, res) => (res as import("node:http").ServerResponse).end("ok"));
+    expect((await send(port, { path: "/v1/messages", headers: oauth })).status).toBe(200);
+    expect((await send(port, { path: "/v1/messages/count_tokens?beta=true", headers: oauth })).status).toBe(200);
+    expect(seen).toHaveLength(2);
+    const refused: Array<[string, string]> = [
+      ["POST", "/v1/models"],
+      ["POST", "/v1/messages/batches"],
+      ["POST", "/v1/messages/"],
+      ["POST", "/v1/messages/count_tokens/x"],
+      ["GET", "/v1/messages"],
+      ["DELETE", "/v1/messages"],
+      ["POST", "/v1/%2e%2e/admin"],
+      ["POST", "/v1/%2E%2E/admin"],
+      ["POST", "/v1/messages%2Fbatches"],
+      ["POST", "/v1/mess%61ges"],
+    ];
+    for (const [method, path] of refused) expect((await send(port, { method, path, headers: oauth })).status, `${method} ${path}`).toBe(403);
+    expect(seen).toHaveLength(2);
+    const logged = lines.map((l) => JSON.parse(l) as { relay: Record<string, unknown> }).filter((l) => l.relay.refused === "path");
+    expect(logged.map((l) => l.relay.path)).toContain("/v1/models");
+    expect(logged.map((l) => l.relay.path)).toContain("/v1/%2e%2e/admin");
+    expect(logged).toHaveLength(refused.length);
   });
 
   it("resolves only api.anthropic.com, and refuses when it answers a private address", async () => {

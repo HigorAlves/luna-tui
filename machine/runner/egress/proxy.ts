@@ -197,6 +197,8 @@ export function inRanges(address: string | undefined, ranges: readonly string[])
 }
 
 export const RELAY_HOST = "api.anthropic.com";
+/** The only paths the relay forwards, all POST: what the spike saw the Agent SDK send. Exact match (no `%`, no extra segment). */
+const RELAY_PATHS: ReadonlySet<string> = new Set(["/v1/messages", "/v1/messages/count_tokens"]);
 
 export interface ProxyOptions {
   allow: readonly string[];
@@ -451,11 +453,10 @@ export function createEgressProxy(options: ProxyOptions): EgressProxy {
     const target = req.url ?? "";
     // Served on the card network only: a request that came in on the egress bridge's side (a host that can route to it) is refused before anything else.
     if (relay.denyLocal && relay.denyLocal.length > 0 && inRanges(req.socket.localAddress, relay.denyLocal)) return relayRefuse(res, 403, "local", method, target.split("?")[0]!);
-    // Origin-form, under /v1/ and nothing that climbs out of it: a request for another host or path is never forwarded.
+    // An allow list, not a prefix: only the two calls the SDK makes (any query string), exactly. A `%` anywhere in the path is refused, so no encoded
+    // dot or slash can reach the upstream. Each refusal logs its path: the relay smoke test shows whether the SDK needs another one.
     const path = target.split("?")[0]!;
-    if (!target.startsWith("/v1/") || path.split("/").some((part) => part === "." || part === "..") || path.includes("//") || path.includes("\\")) {
-      return relayRefuse(res, 403, "path", method, path);
-    }
+    if (method !== "POST" || !RELAY_PATHS.has(path)) return relayRefuse(res, 403, "path", method, path);
     const sent = relay.kind === "oauth" ? req.headers.authorization : req.headers["x-api-key"];
     const wanted = relay.kind === "oauth" ? `Bearer ${relay.placeholder}` : relay.placeholder;
     if (typeof sent !== "string" || sent !== wanted) return relayRefuse(res, 401, "placeholder", method, path);
