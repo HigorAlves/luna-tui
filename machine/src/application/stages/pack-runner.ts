@@ -42,6 +42,7 @@ import { redactFiles } from "../../adapters/fs/redact-files.ts";
 import { saveKept } from "../kept-sandboxes.ts";
 import { LOCKFILES, envOf } from "../../domain/env-hash.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
+import { sandboxSizeOf } from "../../domain/sandbox-bounds.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
 import { lockedFilesRemoved, lockedFilesTouched } from "../../domain/locked-files.ts";
@@ -300,6 +301,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const limits = PACK_LIMITS[pack];
   if (extra.checkout && limits.writable) throw new Error(`${pack} is writable; a checkout run must be read-only`);
   const policy = await (deps.policies ?? sharedPolicies).for(task.repoPath);
+  // What the machine's sandbox policy lowered of the repository's cpu and memory: said on the task, so the cap is never silent.
+  for (const line of policy.bounds?.notes ?? []) await context.note?.(line).catch(() => {});
   // The repository's own image, built from the base its luna.yaml names; a build that fails is an environment problem with the reason.
   let stageImage = extra.image ?? deps.image;
   if (deps.repoImages && !extra.checkout && !extra.image) {
@@ -651,7 +654,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     worktree: workspace.path,
     writable: limits.writable,
     gitDir,
-    limits: { cpu: policy.factory.sandbox.cpu, memoryGb: policy.factory.sandbox.memory_gb },
+    limits: sandboxSizeOf(policy),
     gitIdentity: limits.writable ? await gitIdentity(task.repoPath) : null,
     // The repo's services run beside every stage that runs its code; a read-only stage only reads.
     services: limits.writable ? policy.services : {},

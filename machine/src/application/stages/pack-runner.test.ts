@@ -253,6 +253,15 @@ describe("agent stages through packs", () => {
     expect(seen!.limits).toEqual({ cpu: 2, memoryGb: 3 });
   });
 
+  it("runs at the bounded size and the owner's seccomp profile, and leaves a note on the task for a capped size", async () => {
+    const bounds = { notes: ["sandbox.cpu 16 is capped at 4 by the machine's sandbox policy (limits.max_cpu)"], egress: [], image: [], seccomp: "/etc/luna/seccomp.json" };
+    const capped = { ...deps(fakeSandbox(output())), policies: { for: async () => ({ ...DEFAULT_POLICY, bounds, factory: { ...FACTORY_DEFAULTS, sandbox: { ...FACTORY_DEFAULTS.sandbox, cpu: 4, memory_gb: 4 } } }) } as never };
+    const note = vi.fn(async () => {});
+    await agentRunners(capped).triage!({ ...context("triage"), note });
+    expect(seen!.limits).toEqual({ cpu: 4, memoryGb: 4, seccomp: "/etc/luna/seccomp.json" });
+    expect(note).toHaveBeenCalledWith(bounds.notes[0]);
+  });
+
   it("carries the agent's typed escalation reason, and reads one off the enum as other", async () => {
     const answer = { kind: "escalated", summary: "stopped", reason: "the plan names a module that does not exist", options: [], escalation: "plan_wrong" };
     const wrong = await runners(fakeSandbox(output({ schema: 2 as const, outcome: "escalated" as const, summary: "stopped", answer }))).implementing!(context("implementing"));

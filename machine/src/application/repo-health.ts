@@ -9,7 +9,7 @@ export interface RepoHealthDeps {
   repos: string[];
   /** The repositories the machine knows now; read on each call, added to `repos`. */
   knownRepos?: () => Promise<string[]>;
-  policy: (repoPath: string) => Promise<{ graph?: boolean; factory?: { sandbox?: { image?: { base?: string | null } } } }>;
+  policy: (repoPath: string) => Promise<{ graph?: boolean; factory?: { sandbox?: { image?: { base?: string | null } } }; bounds?: { egress: string[]; image: string[] } }>;
   machineImage: string;
   images: { pending(repoPath: string): Promise<string | null>; status(repoPath: string): { image: string; builtAt: string | null; lastFailure: string | null } | null };
   graph: { stampOf(repoPath: string): Promise<GraphStamp | null>; health?(repoPath: string): { building: boolean; lastFailure: string | null }; behind?(repoPath: string, commit: string): Promise<number | null> };
@@ -30,9 +30,11 @@ export async function repoHealthOf(deps: RepoHealthDeps): Promise<RepoHealth[]> 
       const watch = deps.watch.health(repo);
       const built = deps.graph.health?.(repo);
       const health = built ? { building: built.building || watch.building, lastFailure: built.lastFailure } : watch;
+      const bounds = [...(policy.bounds?.image ?? []), ...(policy.bounds?.egress ?? [])].map((line) => safe(line).slice(0, 400));
       return {
         repo,
         image: { inUse: own?.image ?? deps.machineImage, base, builtAt: own?.builtAt ?? null, lastFailure: own?.lastFailure ?? null, pendingBase: pending === null ? null : safe(pending).slice(0, 255) },
+        ...(bounds.length > 0 ? { bounds } : {}),
         graph: { on: policy.graph !== false, commit: stamp?.commit ?? null, behind, graphify: stamp?.graphify ?? null, builtAt: stamp?.builtAt ?? null, building: health.building, lastFailure: health.lastFailure },
       };
     }),

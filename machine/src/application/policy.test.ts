@@ -2,6 +2,7 @@ import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { MachinePolicySchema } from "@hardness/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { DEFAULT_POLICY } from "../domain/policy.ts";
@@ -101,5 +102,39 @@ describe("PolicyStore", () => {
     }
     const store = new PolicyStore({ warn: () => {} });
     expect((await store.for(checkout)).factory.learning).toMatchObject({ records: false, context: "answers", traces: "metadata" });
+  });
+
+  describe("held within the machine's sandbox policy", () => {
+    const sandboxYaml = "sandbox:\n  cpu: 16\n  memory_gb: 64\n  egress: { allow: [files.pastebin.com, ok.example.com] }\n  image: { base: node:22 }\n";
+    const strict = MachinePolicySchema.parse({ limits: { max_cpu: 4, max_memory_gb: 8 }, egress: { deny: ["*.pastebin.com"] }, images: { repo_base: "deny" }, seccomp: "/etc/luna/seccomp.json" });
+
+    it("bounds what a repo's luna.yaml asks for, and says why", async () => {
+      const dir = repo();
+      writeFileSync(join(dir, CONFIG_FILE), sandboxYaml);
+      const policy = await new PolicyStore({ machinePolicy: strict }).for(dir);
+      expect(policy.factory.sandbox).toMatchObject({ cpu: 4, memory_gb: 8, egress: { allow: ["ok.example.com"] }, image: { base: null } });
+      expect(policy.bounds?.notes).toHaveLength(2);
+      expect(policy.bounds?.egress).toHaveLength(1);
+      expect(policy.bounds?.image).toHaveLength(1);
+      expect(policy.bounds?.seccomp).toBe("/etc/luna/seccomp.json");
+    });
+
+    it("holds the cached copy too, and leaves a repo with no file at the policy's seccomp only", async () => {
+      const dir = repo();
+      writeFileSync(join(dir, CONFIG_FILE), sandboxYaml);
+      const store = new PolicyStore({ machinePolicy: strict });
+      await store.for(dir);
+      expect((await store.for(dir)).factory.sandbox.cpu).toBe(4);
+      expect((await store.for(repo())).bounds).toMatchObject({ notes: [], seccomp: "/etc/luna/seccomp.json" });
+      expect((await store.for(null)).bounds?.seccomp).toBe("/etc/luna/seccomp.json");
+    });
+
+    it("without a machine policy the repo's values stand", async () => {
+      const dir = repo();
+      writeFileSync(join(dir, CONFIG_FILE), sandboxYaml);
+      const policy = await new PolicyStore().for(dir);
+      expect(policy.factory.sandbox).toMatchObject({ cpu: 16, memory_gb: 64, image: { base: "node:22" } });
+      expect(policy.bounds).toBeUndefined();
+    });
   });
 });

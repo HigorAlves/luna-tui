@@ -55,6 +55,14 @@ describe("sandboxArgs", () => {
     expect(sandboxArgs(run(), "/in", "/out")).toContain("CLAUDE_CONFIG_DIR=/tmp/claude");
   });
 
+  it("adds the owner's seccomp profile to a stage, an exec and an app container only when the size names one", () => {
+    const flag = ["--security-opt", "seccomp=/etc/luna/seccomp.json"];
+    expect(sandboxArgs(run({ limits: { cpu: 2, memoryGb: 4, seccomp: "/etc/luna/seccomp.json" } }), "/i", "/o")).toEqual(expect.arrayContaining(flag));
+    expect(sandboxExecArgs({ name: "x", image: "img:1", worktree: "/wt", argv: ["ls"], limits: { cpu: 2, memoryGb: 4, seccomp: "/etc/luna/seccomp.json" } })).toEqual(expect.arrayContaining(flag));
+    expect(sandboxArgs(run(), "/i", "/o").join(" ")).not.toContain("seccomp");
+    expect(sandboxExecArgs({ name: "x", image: "img:1", worktree: "/wt", argv: ["ls"] }).join(" ")).not.toContain("seccomp");
+  });
+
   it("tells Claude Code to send no telemetry or error reports, which the egress list would refuse and log as noise", () => {
     expect(sandboxArgs(run(), "/i", "/o")).toEqual(expect.arrayContaining(["-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"]));
   });

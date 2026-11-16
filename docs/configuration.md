@@ -46,6 +46,7 @@ See `machine/.env.example`. The defaults match `compose.yaml`. You need a `.env`
 | `MACHINE_MAX_PER_STAGE` | unset | `stage=n` pairs, e.g. `implementing=2,e2e=1,evidence=1`: tasks that may drive one stage at once. Set `evidence=1` where the video image is built: a film runs the voice and cards models and a browser, on top of what e2e used. A task whose next stage is at cap waits in the queue, state kept (`stage.held`). `ci_watch` never holds a slot: it polls GitHub outside the pool and takes a slot again (or queues) for the stage after |
 | `MACHINE_EGRESS` | on | `off` makes every run join an ordinary bridge with no allow-list (warned once at startup); the owner's switch, never read from `luna.yaml` |
 | `MACHINE_EGRESS_ENGINE_HOSTS` | none | a comma list of host patterns added to every agent stage's engine hosts (a gateway in front of an engine); each is checked. A trace endpoint other than `host.docker.internal` is not reached from a stage |
+| `MACHINE_SANDBOX_POLICY` | `~/.config/hardness/sandbox.yaml` | the machine sandbox policy file (see "Machine sandbox policy"); absent means today's behaviour, an invalid file stops the machine at start and names the key |
 | `MACHINE_AGENTS` | on | set to `off` to make every stage a stub (no credential or Docker needed); the Slack inbox's triage is a pack too (`slack_triage`), so it is off with them and items show no priority; so is `POST /runs` (503 `agents_off`) |
 | `MACHINE_GITHUB_POLL` | empty, off | comma-separated `owner/name` repos whose open issues labelled `MACHINE_GITHUB_LABEL` land in Intake as tasks; needs `GITHUB_TOKEN` |
 | `MACHINE_GITHUB_POLL_INTERVAL` | `300` | seconds between GitHub polls |
@@ -282,6 +283,33 @@ A repository can turn a mechanism off, or tune a number inside its bounds. A tun
 - Change the fixed rules: the gate and stuck numbers, the 90th percentile and its margin of 1.25, and the fact lifecycle.
 - Add a tool or widen a pack's access. A mask only removes.
 - Approve a mask, drop a fact or restore a tool. A person does that through the routes in [api.md](api.md).
+
+## Machine sandbox policy
+
+The owner's file (`~/.config/hardness/sandbox.yaml`, or the path in `MACHINE_SANDBOX_POLICY`) says what any repository's sandbox may ask for. A repo's `luna.yaml` stays inside it; the file is never read from a checkout. Every key is optional and its default is today's behaviour. An unknown or invalid key stops the machine at start and names it (`limits.max_cpu: ...`). `GET /health` shows the policy in force as `sandboxPolicy`.
+
+```yaml
+runtime: { default: runc, untrusted: runc }   # runc | runsc (read where trust is known)
+seccomp: default                              # default | an absolute path to a seccomp profile
+limits: { max_cpu: 128, max_memory_gb: 1024, max_pids: 1024 }
+egress: { deny: [], max_repo_hosts: 50, repo_hosts: allow }   # repo_hosts: allow | deny
+images: { repo_base: allow, devcontainer: allow }             # allow | deny
+cache: { split_by_trust: true }
+bash_sandbox: off                             # off | on
+```
+
+How the bounds apply to a repo's `luna.yaml`, each with a reason left where you will see it:
+
+| Key | Effect | Where the reason is |
+|---|---|---|
+| `limits.max_cpu`, `limits.max_memory_gb` | a repo's `sandbox.cpu` and `sandbox.memory_gb` are capped | a note on the task, at the start of a stage |
+| `egress.deny` | repo `sandbox.egress.allow` hosts matching an entry (`*.x.com` covers subdomains) are dropped | `bounds` on the repo's row in `GET /repos` |
+| `egress.repo_hosts: deny` | every repo egress host is dropped | the same |
+| `egress.max_repo_hosts` | only the first N repo hosts are kept | the same |
+| `images.repo_base: deny` | `sandbox.image.base` is ignored (the machine's image runs) and `POST /repos/base/approve` refuses | the same, and the refusal |
+| `seccomp: <path>` | stage, check and app containers get `--security-opt seccomp=<path>` | none; it is the machine's own setting |
+
+`runtime`, `cache`, `images.devcontainer`, `limits.max_pids` and `bash_sandbox` are accepted now and read by later changes.
 
 ## GitHub gates
 

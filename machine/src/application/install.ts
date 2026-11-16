@@ -11,6 +11,7 @@ import type { BlockedRow } from "../adapters/docker/egress.ts";
 import type { ExecResult } from "../adapters/process/exec.ts";
 import { LOCKFILES } from "../domain/env-hash.ts";
 import { safe } from "../domain/evidence-markdown.ts";
+import { sandboxSizeOf } from "../domain/sandbox-bounds.ts";
 import { type InstallStep, argvIn, installKey, installPlanOf, nestedPlansOf } from "../domain/install-plan.ts";
 import type { EgressPolicy } from "./egress-policy.ts";
 import type { PolicyStore } from "./policy.ts";
@@ -126,7 +127,7 @@ export async function ensureInstalled(deps: InstallDeps, input: InstallInput): P
         name: `hardness-install-${randomUUID().slice(0, 8)}`,
         image,
         worktree: input.workspace,
-        limits: { cpu: policy.factory.sandbox.cpu, memoryGb: policy.factory.sandbox.memory_gb },
+        limits: sandboxSizeOf(policy),
         argv: argvIn(step),
         env: step.env,
         cacheVolume: cacheVolumeFor(input.repoPath),
