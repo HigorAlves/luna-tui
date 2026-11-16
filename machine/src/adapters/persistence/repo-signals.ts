@@ -1,13 +1,14 @@
 // A repo's signals per pack, read from the machine's own records: the stage runs in Postgres (runs, cost), the task event
 // log (every `stage_done escalated` transition), the economy's guard log (the loop guard's stops) and its ledger (cost of
-// the runs that are no stage run, such as the guard's own judge). A stage run counts for the pack its task state runs.
+// the runs that are no stage run, such as the guard's own judge). A stage run counts for a pack only when its task state
+// runs exactly one agent pack; a shared state (test_design, implementing, ...) gives no signal, so no proposal follows from mixed runs.
 import type { PackId } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { EconomyStore } from "../../application/economy.ts";
 import type { RepoSignals } from "../../application/repo-signals.ts";
 import type { RepoSignal } from "../../domain/config-proposal.ts";
-import { packForState } from "../../domain/packs.ts";
+import { soleAgentPackForState } from "../../domain/packs.ts";
 
 type StageRow = { stage: string; runs: string; cost: string | null };
 type EscalationRow = { stage: string; escalations: string };
@@ -25,7 +26,7 @@ export function pgRepoSignals(db: DataSource, economy: EconomyStore): RepoSignal
         [repo, since],
       );
       for (const row of rows) {
-        const pack = packForState(row.stage as never);
+        const pack = soleAgentPackForState(row.stage as never);
         if (!pack) continue;
         const signal = of(pack);
         signal.runs += Number(row.runs);
@@ -41,7 +42,7 @@ export function pgRepoSignals(db: DataSource, economy: EconomyStore): RepoSignal
         [repo, since],
       );
       for (const row of escalated) {
-        const pack = packForState(row.stage as never);
+        const pack = soleAgentPackForState(row.stage as never);
         if (pack) of(pack).escalations += Number(row.escalations);
       }
       // Evidence only: every loop-guard stop is already among the escalations above.

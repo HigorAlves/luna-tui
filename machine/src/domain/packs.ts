@@ -84,6 +84,13 @@ export function packForState(state: TaskState): PackId | null {
   return (Object.keys(PACKS) as PackId[]).find((id) => packStates(id).includes(state)) ?? null;
 }
 
+/** The agent pack a task state's stage runs and escalations can be told apart for: the one agent pack that runs in the state, else null.
+ *  A state that several agent packs run in (test_design: the planner, the code map, the councils) records one stage run for all of them. */
+export function soleAgentPackForState(state: TaskState): PackId | null {
+  const agents = (Object.keys(PACKS) as PackId[]).filter((id) => PACKS[id].kind !== "decision" && packStates(id).includes(state));
+  return agents.length === 1 ? agents[0]! : null;
+}
+
 export function packInfo(pack: Pack): PackInfo {
   return {
     id: pack.id,

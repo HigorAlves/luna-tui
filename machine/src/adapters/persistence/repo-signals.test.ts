@@ -21,7 +21,7 @@ beforeEach(async () => {
 
 const DAY = 86_400_000;
 const save = (repoPath: string) => db.getRepository(TaskEntity).save({ title: "x", description: "", criteria: [], repoPath, branch: null, worktreePath: null, state: "triage", retries: { ...NO_RETRIES }, resumeTo: null, reason: null });
-const stage = (taskId: string, stageName: "triage" | "setup", outcome: string, costUsd: string | null, ago = 0) =>
+const stage = (taskId: string, stageName: "verifying" | "setup", outcome: string, costUsd: string | null, ago = 0) =>
   db.getRepository(StageRunEntity).save({ taskId, stage: stageName, attempt: 1, status: outcome === "pass" ? "passed" : "failed", outcome, costUsd, startedAt: new Date(Date.now() - ago * DAY) });
 
 // The machine's own record of a stage ending in escalation: the transition event. The stage run itself stays `fail`.
@@ -34,12 +34,12 @@ describe("pgRepoSignals", () => {
   it("counts a pack's runs, escalations, stops and cost in the repo since the date", async () => {
     const mine = await save("/r/app");
     const other = await save("/r/other");
-    await stage(mine.id, "triage", "pass", "1.0000");
+    await stage(mine.id, "verifying", "pass", "1.0000");
     // A loop-guard stop is stored as a failed stage run; the escalation is in the event log only.
-    await stage(mine.id, "triage", "fail", "2.0000");
-    await escalate(mine.id, "triage");
-    await escalate(mine.id, "triage", 40);
-    await escalate(mine.id, "triage", 0, "approved");
+    await stage(mine.id, "verifying", "fail", "2.0000");
+    await escalate(mine.id, "verifying");
+    await escalate(mine.id, "verifying", 40);
+    await escalate(mine.id, "verifying", 0, "approved");
     await stage(mine.id, "setup", "pass", "0.5000");
     await stage(mine.id, "setup", "pass", "9.0000", 40);
     await stage(other.id, "setup", "fail", "7.0000");
@@ -58,14 +58,25 @@ describe("pgRepoSignals", () => {
         [
           { at, runId: "a", pack: "loop_judge", card: "c", kind: "overhead", effective: 0, tokens: null, costUsd: 0.25 },
           // A stage run's own ledger record: its cost is already in stage_runs.
-          { at, runId: "t", pack: "triage", card: "c", kind: "exec", effective: 0, tokens: null, costUsd: 5 },
+          { at, runId: "t", pack: "verifying", card: "c", kind: "exec", effective: 0, tokens: null, costUsd: 5 },
         ],
       ),
     );
     const got = await signals.forRepo("/r/app", since);
-    expect(got.triage).toEqual({ runs: 2, escalations: 1, stuck: 0, costUsd: 3 });
+    expect(got.verifying).toEqual({ runs: 2, escalations: 1, stuck: 0, costUsd: 3 });
     expect(got.setup).toEqual({ runs: 1, escalations: 0, stuck: 1, costUsd: 0.5 });
     expect(got.loop_judge).toEqual({ runs: 0, escalations: 0, stuck: 0, costUsd: 0.25 });
+  });
+
+  it("reports no signal for a state that several packs run in", async () => {
+    const mine = await save("/r/app");
+    for (let i = 0; i < 3; i++) await db.getRepository(StageRunEntity).save({ taskId: mine.id, stage: "test_design", attempt: 1, status: "failed", outcome: "fail", costUsd: "1.0000", startedAt: new Date() });
+    await escalate(mine.id, "test_design");
+    await stage(mine.id, "setup", "pass", "0.5000");
+    const got = await pgRepoSignals(db, economy([], [])).forRepo("/r/app", new Date(Date.now() - DAY));
+    expect(got.test_design).toBeUndefined();
+    expect(got.plan).toBeUndefined();
+    expect(got.setup).toEqual({ runs: 1, escalations: 0, stuck: 0, costUsd: 0.5 });
   });
 
   it("is empty for a repo with no runs", async () => {
