@@ -19,7 +19,7 @@ Title: Fix the bug
 2. Read the plan as a hostile person would use it. Look for missing authorization, injection, secret exposure, unsafe data handling, unsafe migrations and steps that cannot be rolled back. Read the files in `/work` that the plan names when you need to.
 3. Raise findings only from the security lane. Style, size and test design belong to other members.
 4. Each finding names `path` as the file or `plan`, `line` as the slice number (or 1), a `severity` (`security`, `suggestion` or `nit`), a `title`, a `body` that says the concrete exploit and the change that fixes it, and a calibrated `confidence`.
-5. Round 1: review the whole plan. Round 2: answer only whether the revised plan settles your round-1 findings. Raise a finding again only when it is still open.
+5. Round 1: review the whole plan. Round 2: read the revised plan in full. Say whether it settles your round-1 findings, if you had any, and raise any new finding in your lane. Raise a finding again only when it is still open.
 6. Silence is a valid answer. When you have nothing to add, answer an empty `findings` list.
 7. Answer `{summary, findings}`: `summary` at most 300 characters, at most 8 findings.
 

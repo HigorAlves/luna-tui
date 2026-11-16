@@ -573,11 +573,14 @@ export function planStage(deps: PlanDeps): StageRunner {
         results.push(result);
         if (result.outcome !== "pass") return { member: who, round, summary: `did not answer: ${String(result.detail?.error ?? result.detail?.reason ?? result.outcome).slice(0, 200)}`, findings: [] };
         const found = Finding.array().safeParse(result.detail?.findings);
-        return { member: who, round, summary: String(result.detail?.summary ?? "").slice(0, 300), findings: found.success ? found.data : [] };
+        // Findings that do not parse are no answer: they are not "nothing to add".
+        if (!found.success) return { member: who, round, summary: "did not answer: its findings were not valid", findings: [] };
+        return { member: who, round, summary: String(result.detail?.summary ?? "").slice(0, 300), findings: found.data };
       };
       let asked: Member[] = [...MEMBERS];
       let open = new Map<Member, Finding[]>();
       let roundsRun = 0;
+      let revisionFailed = false;
       for (let round = 1 as 1 | 2; round <= councilCfg.rounds; round = 2) {
         const current = plan;
         const earlier = open;
@@ -597,13 +600,25 @@ export function planStage(deps: PlanDeps): StageRunner {
         review = [...open.entries()].flatMap(([who, list]) => list.map((f) => `council ${who}: ${f.title}: ${f.body}`));
         const revised = await deps.runPack("plan", sub(`plan-${planRuns}`), { plan: { record: task.record ?? null, ...plan, cases, round: planRuns, review, ...mapPart(), ...riskPart, ...replanPart } });
         results.push(revised);
-        if (revised.outcome !== "pass") break;
+        // A question or a usage limit from the revision is the stage's own result: the planner is not done, so the council cannot be.
+        if (revised.outcome === "needs_input" || revised.rateLimited) return ended(revised);
+        if (revised.outcome !== "pass") {
+          // The old plan stands; the findings stay open and the council has not passed.
+          const why = String(revised.detail?.error ?? revised.detail?.reason ?? revised.outcome).slice(0, 200);
+          transcript.push({ member: [...open.keys()][0]!, round: 2, summary: `the planner could not revise: ${why}`, findings: [] });
+          revisionFailed = true;
+          break;
+        }
         plan = adopt(revised.detail ?? {}, plan.criteria);
         await checkPlan(plan);
-        asked = [...open.keys()];
+        // The plan changed since round 1: every member reads the revised plan, not only those that found something.
+        asked = [...MEMBERS];
       }
       for (const who of open.keys()) flagged.add(`council.${who}`);
-      council = { passed: open.size === 0 && !transcript.some((t) => t.summary.startsWith("did not answer")), rounds: roundsRun, transcript };
+      // Passed: no open findings and every member's last turn answered.
+      const lastTurns = MEMBERS.map((who) => transcript.filter((t) => t.member === who && !t.summary.startsWith("the planner could not revise")).at(-1));
+      const everyoneAnswered = lastTurns.every((t) => t !== undefined && !t.summary.startsWith("did not answer") && t.findings.length === 0);
+      council = { passed: open.size === 0 && !revisionFailed && everyoneAnswered, rounds: roundsRun, transcript };
     }
 
     // The risk was fixed before the plan, so the files the planner named could not raise it: a script reads them now. A step that touches the
