@@ -420,6 +420,21 @@ describe("withTriageSignals and the question council", () => {
     expect(onlyPerson.outcome).toBe("needs_input");
   });
 
+  it("asks the machine's questions the council did not settle when the re-run's classifier fails: urgency still reaches the person", async () => {
+    const open = reading({ kind: { answer: "bug", confidence: 0.5 }, who: { answer: 1, confidence: 0.3 } });
+    let calls = 0;
+    const classify = async () => {
+      if (++calls > 1) throw new Error("classifier down");
+      return open;
+    };
+    const council = councilOf({ [KIND]: { answer: "bug", confidence: 0.95, evidence: ["a.ts:1"] } });
+    const result = await withTriageSignals(async () => agentPass(), { classify: classify as never, council, save: async () => {} })(context());
+    expect(calls).toBe(2);
+    expect(result.outcome).toBe("needs_input");
+    expect(result.needsInput?.map((q) => q.question)).toEqual([expect.stringContaining("urgent")]);
+    expect(result.detail).toMatchObject({ settledByCouncil: [{ question: KIND }] });
+  });
+
   it("asks the person when the answer is under the bar: the field's own bar for a machine question, the council's for the agent's", async () => {
     const answer = { [KIND]: { answer: "bug", confidence: 0.7, evidence: ["a:1"] }, "Which db?": { answer: "sqlite", confidence: 0.7, evidence: ["a:1"] } };
     const under = await withTriageSignals(async () => agentPass(), { classify: async () => kindOpen, council: councilOf(answer), save: async () => {} })(context());
