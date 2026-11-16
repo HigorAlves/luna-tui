@@ -289,7 +289,7 @@ export const sandbox = {
   id: "sandbox",
   eyebrow: "Sandbox and safety",
   title: "Sandbox and safety on every stage.",
-  lead: "Each stage runs in a container with a per-repository egress allow-list. The agent reaches package registries, GitHub, its engine hosts and the hosts you add.",
+  lead: "Each stage runs in a container with a per-repository egress allow-list. Most agents reach only their engine. Planning stages also reach GitHub. Only the writable build, verify, e2e, recording and setup stages reach package registries and the hosts you add.",
   steps: [
     { title: "A container per stage", body: "Each stage runs in its own throwaway container with a read-only root filesystem." },
     { title: "An egress allow-list per repository", body: "Each repository adds hosts to the defaults: registries, GitHub and the engine hosts. Every other host has no route out, unless the owner sets MACHINE_EGRESS to off." },
@@ -345,7 +345,7 @@ export const factory = {
   packsTitle: "What it runs",
   packs: [
     { name: "triage", body: "Reads the ticket, its signals and the repo; records what it is and picks plan, fast lane, reply or archive, or asks." },
-    { name: "plan", body: "Plans the change and designs its tests, then checks coverage, fit and risk. One approval; two people on High risk." },
+    { name: "plan", body: "Plans the change and designs its tests, then checks coverage, fit and risk. One approval by default. A repo can ask for more on High risk, and a passed council can let the timer approve when one approver is enough." },
     { name: "test_design", body: "Writes the failing tests first. They're locked once you approve." },
     { name: "implementing", body: "Builds the change slice by slice, one commit each, on the task branch." },
     { name: "verifying", body: "Reviews the diff after your suite, lint and typecheck pass on the host." },
