@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ExecResult } from "../process/exec.ts";
-import { EgressUnsupportedError, cardNetworkArgs, egressBridgeArgs, ensureEgressBridge, openCardNetwork, proxyArgs, findCardNetwork, removeLeftoverNetworks } from "./egress.ts";
+import { EgressUnsupportedError, cardNetworkArgs, egressBridgeArgs, ensureEgressBridge, openCardNetwork, proxyArgs, findCardNetwork, removeLeftoverNetworks, removeRunNetwork } from "./egress.ts";
 
 const IMAGE = "machine-image:dev";
 const ok = (stdout = ""): ExecResult => ({ code: 0, stdout, stderr: "" });
@@ -292,10 +292,6 @@ describe("findCardNetwork", () => {
     expect(calls.at(-1)).toEqual(["docker", "network", "rm", "hardness-card-r1"]);
   });
 
-  it("is null when there is no such network", async () => {
-    const { exec } = dockerFake([(a) => (a[0] === "network" && a[1] === "inspect" ? fail("No such network") : undefined)]);
-    expect(await findCardNetwork("r1", exec)).toBeNull();
-  });
 
   it("has no proxy to read or remove when there is none", async () => {
     const { calls, exec } = dockerFake([(a) => (a[0] === "inspect" && a.includes("hardness-egress-r1") ? fail("No such container") : undefined)]);
@@ -303,5 +299,31 @@ describe("findCardNetwork", () => {
     expect(await net!.blocked()).toEqual([]);
     await net!.teardown();
     expect(calls.filter((c) => c[1] === "rm")).toEqual([]);
+  });
+});
+
+describe("removeRunNetwork", () => {
+  it("removes a run's proxy and its card network by the run's container name, and is safe when they are gone", async () => {
+    const { calls, exec } = dockerFake([(a) => (a[0] === "rm" || (a[0] === "network" && a[1] === "rm") ? fail("No such") : undefined)]);
+    await removeRunNetwork("hardness-abcd1234-council-security-1", exec);
+    expect(calls).toEqual([
+      ["docker", "rm", "-f", "hardness-egress-hardness-abcd1234-council-security-1"],
+      ["docker", "network", "rm", "hardness-card-hardness-abcd1234-council-security-1"],
+    ]);
+  });
+});
+
+describe("findCardNetwork when only the proxy is left", () => {
+  it("still finds the proxy, so it is removed at the run's end", async () => {
+    const { calls, exec } = dockerFake([(a) => (a[0] === "network" && a[1] === "inspect" ? fail("No such network") : undefined)]);
+    const net = await findCardNetwork("r1", exec);
+    expect(net).not.toBeNull();
+    await net!.teardown();
+    expect(calls).toContainEqual(["docker", "rm", "-f", "hardness-egress-r1"]);
+  });
+
+  it("is null when neither the network nor the proxy is there", async () => {
+    const { exec } = dockerFake([(a) => (a[0] === "network" && a[1] === "inspect" ? fail("No such network") : a[0] === "inspect" ? fail("No such container") : undefined)]);
+    expect(await findCardNetwork("r1", exec)).toBeNull();
   });
 });

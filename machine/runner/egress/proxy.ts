@@ -468,9 +468,13 @@ export function createEgressProxy(options: ProxyOptions): EgressProxy {
         const addresses = await withTimeout(options.resolve(RELAY_HOST), RESOLVE_TIMEOUT_MS);
         if (addresses.length === 0 || !addresses.every(isPublicV4)) return relayRefuse(res, 502, "address", method, path);
         address = addresses[0]!;
-        real = await relay.credential();
       } catch {
         return relayRefuse(res, 502, "unresolved", method, path);
+      }
+      try {
+        real = await relay.credential();
+      } catch {
+        return relayRefuse(res, 502, "credential", method, path);
       }
       const headers: Record<string, string | string[]> = {};
       for (const [key, value] of Object.entries(req.headers)) {
@@ -582,6 +586,14 @@ export function systemLookup(): (name: string) => Promise<string[]> {
   return async (name) => (await dnsLookup(name, { family: 4, all: true })).map((entry) => entry.address);
 }
 
+/** What is wrong with a relay token file's text, named without the value; null when it is usable. */
+export function relayTokenProblem(text: string): string | null {
+  const token = text.trim();
+  if (token.length === 0) return "the token file is empty";
+  if (/[\r\n]/.test(token)) return "the token file holds a newline inside the token";
+  return null;
+}
+
 function listOf(value: string | undefined): string[] {
   return (value ?? "").split(",").map((entry) => entry.trim().toLowerCase()).filter((entry) => entry.length > 0);
 }
@@ -616,6 +628,15 @@ if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.
   if (value("--relay") !== undefined && (!relayFile || !meta)) {
     process.stderr.write("egress proxy: --relay needs anthropic=<absolute file> and --relay-meta <file holding the kind and the placeholder>\n");
     process.exit(1);
+  }
+  // The token file is checked once here, so a missing or empty one stops the proxy with a clear line instead of a 401 that looks like a revoked token. It is still read per request, so a rotated token works.
+  if (relayFile) {
+    const text = await readFile(relayFile, "utf8").catch(() => null);
+    const problem = text === null ? "the token file is missing or unreadable" : relayTokenProblem(text);
+    if (problem) {
+      process.stderr.write(`egress proxy: ${problem}\n`);
+      process.exit(1);
+    }
   }
   const denyLocal = listOf(value("--relay-deny-local"));
   const relayPort = Number(value("--relay-listen") ?? "3129");

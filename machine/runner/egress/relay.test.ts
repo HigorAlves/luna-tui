@@ -1,8 +1,14 @@
 import { type IncomingHttpHeaders, type Server, createServer, request } from "node:http";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { connect as netConnect } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { type EgressProxy, createEgressProxy, parseRelayMeta } from "./proxy.ts";
+
+const PROXY_FILE = join(import.meta.dirname, "proxy.ts");
 
 const REAL = "sk-ant-oat01-REAL-SECRET-VALUE";
 const PLACEHOLDER = "sk-ant-oat01-luna-relay-abc123";
@@ -30,6 +36,7 @@ async function start(
   kind: "oauth" | "api-key" = "oauth",
   resolved: string[] = [PUBLIC],
   denyLocal: string[] = [],
+  credential: () => Promise<string> = async () => REAL,
 ): Promise<{ port: number; seen: Seen[]; lines: string[]; connects: Array<{ port: number; address: string }>; lookups: string[] }> {
   const seen: Seen[] = [];
   const lines: string[] = [];
@@ -51,7 +58,7 @@ async function start(
     resolve: async (name) => (lookups.push(name), resolved),
     connect: (port, address) => (connects.push({ port, address }), netConnect(upstreamPort, "127.0.0.1")),
     log: (line) => lines.push(line),
-    relay: { kind, placeholder: PLACEHOLDER, credential: async () => REAL, tls: false, denyLocal },
+    relay: { kind, placeholder: PLACEHOLDER, credential, tls: false, denyLocal },
   });
   const bound = await proxy.listen(0, null, "127.0.0.1", 0);
   return { port: bound.relayPort!, seen, lines, connects, lookups };
@@ -148,6 +155,41 @@ describe("the engine relay", () => {
     expect(seen[0]!.headers.authorization).toBeUndefined();
   });
 
+  for (const status of [429, 401]) {
+    it(`passes an upstream ${status} through with its status, headers and body, and logs the status`, async () => {
+      const body = JSON.stringify({ type: "error", error: { type: status === 429 ? "rate_limit_error" : "authentication_error", message: "no" } });
+      const { port, lines } = await start((_req, res) => {
+        (res as import("node:http").ServerResponse).writeHead(status, {
+          "content-type": "application/json",
+          "retry-after": "17",
+          "anthropic-ratelimit-unified-status": "rejected",
+          "anthropic-ratelimit-unified-reset": "1790000000",
+          "anthropic-ratelimit-unified-representative-claim": "five_hour",
+        });
+        (res as import("node:http").ServerResponse).end(body);
+      });
+      const reply = await send(port, { headers: oauth });
+      expect(reply.status).toBe(status);
+      expect(reply.body).toBe(body);
+      expect(reply.headers["retry-after"]).toBe("17");
+      expect(reply.headers["anthropic-ratelimit-unified-status"]).toBe("rejected");
+      expect(reply.headers["anthropic-ratelimit-unified-reset"]).toBe("1790000000");
+      expect(reply.headers["anthropic-ratelimit-unified-representative-claim"]).toBe("five_hour");
+      expect(reply.headers["content-type"]).toBe("application/json");
+      await new Promise((r) => setTimeout(r, 50));
+      expect(lines.map((l) => JSON.parse(l) as { relay: Record<string, unknown> })[0]!.relay).toMatchObject({ method: "POST", path: "/v1/messages", status });
+    });
+  }
+
+  it("answers 502 with the refusal reason credential when the credential cannot be read, and never reaches the upstream", async () => {
+    const { port, seen, lines } = await start((_req, res) => (res as import("node:http").ServerResponse).end("ok"), "oauth", [PUBLIC], [], async () => {
+      throw new Error("ENOENT: no such file");
+    });
+    expect((await send(port, { headers: oauth })).status).toBe(502);
+    expect(seen).toHaveLength(0);
+    expect(lines.map((l) => JSON.parse(l) as { relay: Record<string, unknown> })[0]!.relay).toMatchObject({ refused: "credential", status: 502 });
+  });
+
   it("refuses a request that does not carry the run's placeholder, and never reaches the upstream", async () => {
     const { port, seen } = await start((_req, res) => (res as import("node:http").ServerResponse).end("ok"));
     expect((await send(port, { headers: { authorization: "Bearer sk-ant-oat01-guess" } })).status).toBe(401);
@@ -233,5 +275,30 @@ describe("the engine relay", () => {
     expect(parsed[1]!.relay).toMatchObject({ refused: "placeholder", status: 401 });
     const text = lines.join("\n");
     for (const secret of [REAL, PLACEHOLDER, "wrong-value-here"]) expect(text).not.toContain(secret);
+  });
+
+  describe("the relay's start-up check of the token file", () => {
+    const run = (token: string | null) => {
+      const dir = mkdtempSync(join(tmpdir(), "relay-cli-"));
+      const tokenFile = join(dir, "token");
+      const metaFile = join(dir, "meta.json");
+      if (token !== null) writeFileSync(tokenFile, token);
+      writeFileSync(metaFile, JSON.stringify({ kind: "oauth", placeholder: PLACEHOLDER }));
+      return spawnSync(process.execPath, [PROXY_FILE, "--listen", "0", "--relay", `anthropic=${tokenFile}`, "--relay-meta", metaFile, "--relay-listen", "0"], { encoding: "utf8", timeout: 10_000 });
+    };
+    for (const [name, token, reason] of [
+      ["missing", null, "missing"],
+      ["empty", "", "empty"],
+      ["blank", "  \n", "empty"],
+      ["holding a newline inside", "sk-ant-oat01-REAL\nsecond-line", "newline"],
+    ] as const) {
+      it(`exits 1 naming the problem and never the value when the token file is ${name}`, () => {
+        const result = run(token);
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(reason);
+        expect(result.stderr + result.stdout).not.toContain("sk-ant-oat01-REAL");
+        expect(result.stderr + result.stdout).not.toContain("second-line");
+      });
+    }
   });
 });

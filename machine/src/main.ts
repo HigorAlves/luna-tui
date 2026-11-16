@@ -74,6 +74,8 @@ import { PgPackRunStore } from "./adapters/persistence/pack-run-store.ts";
 import { MINUTE_MS, Ticker } from "./application/ticker.ts";
 import { graphifyGraph } from "./adapters/graph/graphify.ts";
 import { imageId, imageLabel, runSandbox } from "./adapters/docker/docker.ts";
+import { removeRunNetwork } from "./adapters/docker/egress.ts";
+import { sweepRunSecrets } from "./adapters/docker/leftover-secrets.ts";
 import { LOCKFILES, type EnvRecord, envOf } from "./domain/env-hash.ts";
 import { lockfilesAt } from "./adapters/git/worktree.ts";
 import { GraphWatch } from "./application/graph-watch.ts";
@@ -539,6 +541,8 @@ pipeline = new Pipeline(db, runnerFor, {
   budget: { taskUsd: config.taskBudgetUsd, dailyUsd: config.dailyBudgetUsd },
   restartPolicy: config.restartPolicy,
   closeDeps: { exec, worktreeRemove: false, watcher, github },
+  sweepRunSecrets: (keep) => sweepRunSecrets(config.stateDir, keep),
+  removeRunNetwork: (container) => removeRunNetwork(container),
   // A merged card's retro: the truth file, and the graph misses its Build Report also declared (never written into prompts or rules).
   retroOutputs: {
     stateDir: config.stateDir,

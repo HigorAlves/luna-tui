@@ -28,6 +28,21 @@ describe("the start-up sweep of a killed machine's credentials", () => {
     }
   });
 
+  it("leaves the folders of the runs it is told to keep, which are still running", async () => {
+    const state = mkdtempSync(join(tmpdir(), "sweep-secrets-"));
+    dirs.push(state);
+    for (const run of ["live", "dead"]) {
+      mkdirSync(join(state, "runs", run, "relay"), { recursive: true });
+      writeFileSync(join(state, "runs", run, "relay", "anthropic"), "sk-real");
+      mkdirSync(join(state, "runs", run, "secrets"), { recursive: true });
+    }
+    expect(await sweepRunSecrets(state, new Set(["live"]))).toBe(2);
+    expect(existsSync(join(state, "runs", "live", "relay", "anthropic"))).toBe(true);
+    expect(existsSync(join(state, "runs", "live", "secrets"))).toBe(true);
+    expect(existsSync(join(state, "runs", "dead", "relay"))).toBe(false);
+    expect(existsSync(join(state, "runs", "dead", "secrets"))).toBe(false);
+  });
+
   it("is nothing to do when there are no runs", async () => {
     const state = mkdtempSync(join(tmpdir(), "sweep-secrets-"));
     dirs.push(state);

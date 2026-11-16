@@ -425,6 +425,24 @@ describe("agent stages through packs", () => {
     expect(heard.detail).toMatchObject({ summary: "one gap", findings: [finding] });
   });
 
+  it("tells the machine a council member's container, and the question council's, since a sub-run's own `started` is withheld", async () => {
+    for (const [pack, state] of [["council_security", "test_design"], ["council_second", "test_design"], ["question_council", "triage"]] as const) {
+      const subStarted = vi.fn(async (_facts: { container: string }) => {});
+      await runAgent(deps(fakeSandbox(output({ answer: { summary: "s", findings: [], answers: [] } }))), { ...context(state), subStarted }, pack);
+      expect(subStarted, pack).toHaveBeenCalledTimes(1);
+      expect(subStarted.mock.calls[0]![0].container, pack).toMatch(/^hardness-[0-9a-f]{8}-/);
+      expect(seen!.name).toBe(subStarted.mock.calls[0]![0].container);
+    }
+  });
+
+  it("does not report a sub-run container for a pack that is a stage of its own, or for a re-attached council run", async () => {
+    const subStarted = vi.fn(async (_facts: { container: string }) => {});
+    await runAgent(deps(fakeSandbox(output())), { ...context("triage"), subStarted }, "triage");
+    expect(subStarted).not.toHaveBeenCalled();
+    await runAgent(deps(fakeSandbox(output({ answer: { answers: [] } }))), { ...context("triage"), subStarted, resume: { container: "hardness-abcd1234-question-council-1", inputCommit: null } }, "question_council");
+    expect(subStarted).not.toHaveBeenCalled();
+  });
+
   it("reads the question council's answer: the answers ride on the detail", async () => {
     const answers = [{ id: "q1", answer: "pnpm", confidence: 0.9, evidence: ["package.json:3"] }, { id: "q2", answer: null, confidence: 0, evidence: [] }];
     const heard = await runAgent(deps(fakeSandbox(output({ answer: { answers } }))), context("triage"), "question_council");
@@ -1185,6 +1203,14 @@ describe("the engine a stage runs on", () => {
       const note = vi.fn(async (_text: string) => {});
       await runAgent(deps(fakeSandbox(output({ run: runInfo() }))), { ...context("triage"), note }, "triage");
       expect(note).toHaveBeenCalledWith("triage was asked to run at low effort and reported none: the runner image may be older than this build (pnpm images)");
+    });
+
+    it("says nothing on a re-attached run: its container started with the input of before the restart, not the luna.yaml of now", async () => {
+      asked();
+      const note = vi.fn(async (_text: string) => {});
+      const result = await runAgent(deps(fakeSandbox(output({ run: runInfo("high") }))), { ...context("triage"), note, resume: { container: "hardness-abcd1234-triage-1", inputCommit: null, engine: "claude:opus" } }, "triage");
+      expect(note).not.toHaveBeenCalled();
+      expect(result.events?.find((e) => e.kind === "engine")).toBeUndefined();
     });
 
     it("says nothing when the result ran at the effort asked for, or no effort was set", async () => {

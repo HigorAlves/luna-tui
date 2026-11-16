@@ -3714,6 +3714,100 @@ describe("re-attaching to a container after a restart", () => {
     expect((await restarted.events(task.id)).map((e) => e.kind)).toContain("stage.reattached");
   });
 
+  it("sweeps the leftover run secrets before it re-attaches, keeping the run whose container is still running", async () => {
+    const live = await newTask();
+    const gone = await newTask();
+    await running(live.id, "hardness-c1");
+    await running(gone.id, "hardness-c2");
+    const events: string[] = [];
+    let kept: ReadonlySet<string> | undefined;
+    const runnerFor = (stage: TaskState): StageRunner =>
+      stage === "implementing"
+        ? async (context) => {
+            events.push("run");
+            return { outcome: "pass", run: { containerId: context.resume?.container } };
+          }
+        : stubs.runnerFor(stage);
+    const restarted = new Pipeline(db, runnerFor, {
+      inline: true,
+      policies: previewOn,
+      hasConfig: () => true,
+      containerRunning: async (name) => name === "hardness-c1",
+      removeContainer: async () => {},
+      sweepRunSecrets: async (keep) => {
+        events.push("sweep");
+        kept = keep;
+      },
+    });
+    await restarted.recover();
+    const liveRun = (await restarted.stageRuns(live.id)).find((r) => r.containerId === "hardness-c1")!;
+    const goneRun = (await restarted.stageRuns(gone.id)).find((r) => r.containerId === "hardness-c2")!;
+    expect(events[0]).toBe("sweep");
+    expect(events.filter((e) => e === "sweep")).toHaveLength(1);
+    expect([...kept!]).toEqual([liveRun.id]);
+    expect(kept!.has(goneRun.id)).toBe(false);
+  });
+
+  it("goes on with recovery when the sweep throws", async () => {
+    const task = await newTask();
+    await running(task.id, "hardness-c1");
+    const restarted = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, containerRunning: async () => false, removeContainer: async () => {}, sweepRunSecrets: async () => { throw new Error("EACCES"); } });
+    expect(await restarted.recover()).toBe(1);
+  });
+
+  it("records a council sub-run's container as an event of its stage run", async () => {
+    const task = await newTask();
+    const runnerFor = (stage: TaskState): StageRunner =>
+      stage === "triage"
+        ? async (context) => {
+            await context.subStarted?.({ container: "hardness-abcd1234-council-security-1" });
+            return { outcome: "pass" };
+          }
+        : stubs.runnerFor(stage);
+    pipeline = new Pipeline(db, runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
+    await pipeline.start(task.id);
+    const [run] = await pipeline.stageRuns(task.id);
+    const row = (await pipeline.events(task.id)).find((e) => e.kind === "stage.sub_container");
+    expect(row).toMatchObject({ stageRunId: run!.id, payload: { container: "hardness-abcd1234-council-security-1" } });
+  });
+
+  const subContainer = (taskId: string, container: string) =>
+    db.query(`insert into events (task_id, stage_run_id, kind, payload) select $1, id, 'stage.sub_container', $2::jsonb from stage_runs where task_id = $1 and status = 'running'`, [taskId, JSON.stringify({ container })]);
+
+  it("removes the council containers and proxies a stage left running, whether it re-attaches to the stage or escalates it", async () => {
+    const live = await newTask();
+    const gone = await newTask();
+    await running(live.id, "hardness-c1");
+    await running(gone.id, "hardness-c2");
+    await subContainer(live.id, "hardness-sub-live");
+    await subContainer(gone.id, "hardness-sub-gone");
+    const removed: string[] = [];
+    const networks: string[] = [];
+    const restarted = new Pipeline(db, stubs.runnerFor, {
+      inline: true,
+      policies: previewOn,
+      hasConfig: () => true,
+      containerRunning: async (name) => name === "hardness-c1",
+      removeContainer: async (name) => void removed.push(name),
+      removeRunNetwork: async (name) => void networks.push(name),
+    });
+    await restarted.recover();
+    // The re-attached stage's own container stays; the dead one's goes with its proxy, and both stages' sub-runs.
+    expect(removed.sort()).toEqual(["hardness-c2", "hardness-sub-gone", "hardness-sub-live"]);
+    expect(networks.sort()).toEqual(["hardness-c2", "hardness-sub-gone", "hardness-sub-live"]);
+  });
+
+  it("removes only names the machine itself gave a container, never one a stage container wrote into its events", async () => {
+    const task = await newTask();
+    await running(task.id, "hardness-c1");
+    await subContainer(task.id, "postgres-prod");
+    await subContainer(task.id, "hardness-ok");
+    const removed: string[] = [];
+    const restarted = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, containerRunning: async () => false, removeContainer: async (name) => void removed.push(name), removeRunNetwork: async () => {} });
+    await restarted.recover();
+    expect(removed.sort()).toEqual(["hardness-c1", "hardness-ok"]);
+  });
+
   it("still escalates when the container is gone", async () => {
     const task = await newTask();
     await running(task.id, "hardness-c1");

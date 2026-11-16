@@ -411,6 +411,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     ...(effortChoice.reason ? [{ at: new Date().toISOString(), kind: "engine", payload: { pack, engine: choice.engine, reason: effortChoice.reason } }] : []),
   ];
   if (!resume) await context.started?.({ container, inputCommit, engine: choice.engine });
+  // A council member's or the question council's container is no stage's (its `started` is withheld), but a restart must still find it.
+  if (!resume && (pack === "council_security" || pack === "council_second" || pack === "question_council")) await context.subStarted?.({ container });
   // An engine asked for that gave way to the default is said on the task as it starts, not only in the run's events.
   if (choice.note) await context.note?.(choice.note).catch(() => {});
 
@@ -785,7 +787,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   }
   const { output } = ingested;
   // A runner image built before `StageInput.effort` strips the key and runs at the pack's own effort: nothing else would say so.
-  if (input.effort && output.run?.effort !== input.effort) {
+  // Not on a re-attached run: its container started with the input of before the restart, while this one is rebuilt from today's luna.yaml.
+  if (!resume && input.effort && output.run?.effort !== input.effort) {
     const reason = `${pack} was asked to run at ${input.effort} effort and ${output.run?.effort ? `ran at ${output.run.effort}` : "reported none"}: the runner image may be older than this build (pnpm images)`;
     engineEvents.push({ at: new Date().toISOString(), kind: "engine", payload: { pack, engine: choice.engine, reason } });
     await context.note?.(reason).catch(() => {});

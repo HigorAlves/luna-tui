@@ -244,12 +244,14 @@ export async function openPlainNetwork(runName: string, options: { exec?: Docker
   };
 }
 
-/** A re-attached run's network and proxy, found by name (a restart found the container still running); null when the network is gone. The handle reads and removes them; it cannot put a container on the network. */
+/** A re-attached run's network and proxy, found by name (a restart found the container still running); null when both are gone. The handle reads and removes them; it cannot put a container on the network. */
 export async function findCardNetwork(runName: string, exec: DockerExec = hostExec): Promise<CardNetwork | null> {
   const network = cardNetworkName(runName);
   const proxy = proxyName(runName);
-  if ((await exec("docker", ["network", "inspect", network])).code !== 0) return null;
+  const hasNetwork = (await exec("docker", ["network", "inspect", network])).code === 0;
   const hasProxy = (await exec("docker", ["inspect", "-f", "{{.State.Running}}", proxy])).code === 0;
+  // A proxy whose network is gone is still found, so that it (and the real-token file it mounts) is removed when the run ends.
+  if (!hasNetwork && !hasProxy) return null;
   let torn = false;
   return {
     name: network,
@@ -282,6 +284,12 @@ async function waitReady(exec: DockerExec, proxy: string, options: OpenOptions):
     if (running.stdout.trim() !== "true" || Date.now() >= deadline) throw new Error(`egress proxy ${proxy} did not come up: ${safe(text).slice(0, 400) || "no output"}`);
     await wait(options.pollMs ?? 200);
   }
+}
+
+/** Removes one run's proxy and card network by the run's container name; nothing happens for what is already gone. */
+export async function removeRunNetwork(runName: string, exec: DockerExec = hostExec): Promise<void> {
+  await exec("docker", ["rm", "-f", proxyName(runName)]);
+  await exec("docker", ["network", "rm", cardNetworkName(runName)]);
 }
 
 /** Removes proxies whose run's container is gone, then every network labelled as a stage's that no container uses. Returns how many networks went. */
