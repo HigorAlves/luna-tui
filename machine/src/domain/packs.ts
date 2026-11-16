@@ -84,10 +84,14 @@ export function packForState(state: TaskState): PackId | null {
   return (Object.keys(PACKS) as PackId[]).find((id) => packStates(id).includes(state)) ?? null;
 }
 
+/** Packs that advise a stage and never decide its outcome: a council reads the work, and the stage's own pack decides. */
+const COUNCIL_PACKS: readonly PackId[] = ["council_security", "council_second", "question_council"];
+
 /** The agent pack a task state's stage runs and escalations can be told apart for: the one agent pack that runs in the state, else null.
- *  A state that several agent packs run in (test_design: the planner, the code map, the councils) records one stage run for all of them. */
+ *  Councils and decision packs are left out of the count: they never decide the stage's outcome (triage has `question_council` inside it).
+ *  A state that several deciding agent packs run in (test_design: the planner, the test designer, the code map) records one stage run for all of them. */
 export function soleAgentPackForState(state: TaskState): PackId | null {
-  const agents = (Object.keys(PACKS) as PackId[]).filter((id) => PACKS[id].kind !== "decision" && packStates(id).includes(state));
+  const agents = (Object.keys(PACKS) as PackId[]).filter((id) => PACKS[id].kind !== "decision" && !COUNCIL_PACKS.includes(id) && packStates(id).includes(state));
   return agents.length === 1 ? agents[0]! : null;
 }
 

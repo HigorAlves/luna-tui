@@ -79,6 +79,15 @@ describe("pgRepoSignals", () => {
     expect(got.setup).toEqual({ runs: 1, escalations: 0, stuck: 0, costUsd: 0.5 });
   });
 
+  it("gives triage a signal although the question council runs inside it", async () => {
+    const mine = await save("/r/app");
+    for (let i = 0; i < 2; i++) await db.getRepository(StageRunEntity).save({ taskId: mine.id, stage: "triage", attempt: 1, status: "passed", outcome: "pass", costUsd: "0.2500", startedAt: new Date() });
+    await escalate(mine.id, "triage");
+    const got = await pgRepoSignals(db, economy([], [])).forRepo("/r/app", new Date(Date.now() - DAY));
+    expect(got.triage).toEqual({ runs: 2, escalations: 1, stuck: 0, costUsd: 0.5 });
+    expect(got.question_council).toBeUndefined();
+  });
+
   it("is empty for a repo with no runs", async () => {
     expect(await pgRepoSignals(db, economy([], [])).forRepo("/r/none", new Date(0))).toEqual({});
   });
