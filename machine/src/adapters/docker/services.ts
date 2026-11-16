@@ -40,6 +40,9 @@ export interface ServiceHardening {
   pids?: number;
   seccomp?: string;
   runtime?: string;
+  /** The bounded size of the container the services run beside: each service is capped at it (`--cpus`, `--memory`). */
+  cpu?: number;
+  memoryGb?: number;
 }
 const SERVICE_MAX_PIDS = 512;
 
@@ -49,6 +52,8 @@ export function serviceArgs(network: string, runName: string, key: string, spec:
   hardening[hardening.indexOf("--pids-limit") + 1] = String(Math.min(harden.pids ?? SERVICE_MAX_PIDS, SERVICE_MAX_PIDS));
   if (harden.seccomp) hardening.push("--security-opt", `seccomp=${harden.seccomp}`);
   if (harden.runtime) hardening.push("--runtime", harden.runtime);
+  if (harden.memoryGb) hardening.push("--memory", `${harden.memoryGb}g`);
+  if (harden.cpu) hardening.push("--cpus", `${harden.cpu}`);
   const args = ["run", "-d", "--name", serviceName(runName, key), "--label", `${CONTAINER_LABEL}=1`, ...hardening, "--network", network, ...(dns ? ["--dns", dns] : []), "--network-alias", key];
   for (const [name, value] of Object.entries(spec.env ?? {})) args.push("-e", `${name}=${value}`);
   args.push(spec.image);

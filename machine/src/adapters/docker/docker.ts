@@ -42,7 +42,7 @@ export const INIT_ARGS = ["--init"];
 
 export const sandboxLimits = (size: SandboxSize = DEFAULT_SANDBOX_SIZE): string[] => ["--memory", `${size.memoryGb}g`, "--cpus", `${size.cpu}`, "--pids-limit", `${size.pids ?? 1024}`, ...(size.seccomp ? ["--security-opt", `seccomp=${size.seccomp}`] : []), ...(size.runtime ? ["--runtime", size.runtime] : [])];
 /** What the services beside a container take from its size: the same limits, capped where `serviceArgs` caps them. */
-export const serviceHardeningOf = (size: SandboxSize | undefined): ServiceHardening => ({ ...(size?.pids ? { pids: size.pids } : {}), ...(size?.seccomp ? { seccomp: size.seccomp } : {}), ...(size?.runtime ? { runtime: size.runtime } : {}) });
+export const serviceHardeningOf = (size: SandboxSize | undefined): ServiceHardening => ({ ...(size ? { cpu: size.cpu, memoryGb: size.memoryGb } : {}), ...(size?.pids ? { pids: size.pids } : {}), ...(size?.seccomp ? { seccomp: size.seccomp } : {}), ...(size?.runtime ? { runtime: size.runtime } : {}) });
 export const SANDBOX_LIMITS = sandboxLimits();
 /** `docker wait` gets this long past the stage's own timeout before the container is forced down. */
 const WAIT_GRACE_MS = 60_000;

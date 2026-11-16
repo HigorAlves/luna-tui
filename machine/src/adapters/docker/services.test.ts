@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ExecResult } from "../process/exec.ts";
+import { serviceHardeningOf } from "./docker.ts";
 import { ServiceNotReadyError, serviceArgs, serviceName, startServices } from "./services.ts";
 
 const postgres = {
@@ -47,6 +48,14 @@ describe("serviceArgs hardening from the policy", () => {
     const args = serviceArgs("n", "r1", "postgres", postgres, undefined, { seccomp: "/etc/luna/s.json", runtime: "runsc" });
     expect(args).toEqual(expect.arrayContaining(["--security-opt", "seccomp=/etc/luna/s.json", "--runtime", "runsc"]));
     expect(serviceArgs("n", "r1", "postgres", postgres).join(" ")).not.toMatch(/seccomp|--runtime/);
+  });
+
+  it("caps each service at the bounded cpu and memory of the container it runs beside", () => {
+    const args = serviceArgs("n", "r1", "postgres", postgres, undefined, { cpu: 2, memoryGb: 4 });
+    expect(args[args.indexOf("--memory") + 1]).toBe("4g");
+    expect(args[args.indexOf("--cpus") + 1]).toBe("2");
+    expect(serviceArgs("n", "r1", "postgres", postgres).join(" ")).not.toMatch(/--memory|--cpus/);
+    expect(serviceHardeningOf({ cpu: 2, memoryGb: 4, pids: 200, cacheTrust: "trusted" })).toEqual({ cpu: 2, memoryGb: 4, pids: 200 });
   });
 
   it("passes the hardening to each service it starts", async () => {
