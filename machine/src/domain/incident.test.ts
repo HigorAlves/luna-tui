@@ -82,19 +82,57 @@ describe("foldSignals", () => {
     expect(out[0]!.timeline.at(-1)!.text).toMatch(/resolved/i);
   });
 
-  it("resolves a Sentry-started incident after 6 hours with every signal resolved, not before", () => {
-    const [base] = foldSignals([], [signal({ startedAt: at(-8), updatedAt: at(-8) })], NOW);
-    const early = foldSignals([base!], [signal({ status: "resolved", startedAt: at(-8), updatedAt: at(-5) })], NOW);
+  it("resolves a Sentry-started incident 6 quiet hours after its last signal update, not before", () => {
+    const [base] = foldSignals([], [signal({ startedAt: at(-5), updatedAt: at(-5) })], NOW);
+    expect(base!.status).toBe("open");
+    const early = foldSignals([base!], [signal({ startedAt: at(-5), updatedAt: at(-4) })], NOW);
     expect(early[0]!.status).toBe("open");
-    const late = foldSignals([early[0]!], [signal({ status: "resolved", startedAt: at(-8), updatedAt: at(-6) })], NOW);
+    const late = foldSignals([early[0]!], [], new Date(at(2)));
     expect(late[0]!.status).toBe("resolved");
-    expect(late[0]!.resolvedAt).toBe(at(-6));
+    expect(late[0]!.resolvedAt).toBe(at(-4));
   });
 
   it("keeps a Sentry-started incident open while one attached signal is still open", () => {
-    const [base] = foldSignals([], [signal({ updatedAt: at(-9), startedAt: at(-9) }), signal({ id: "sentry:2", severity: "medium", startedAt: at(-9), updatedAt: at(-9) })], new Date(at(-9)));
+    const [base] = foldSignals([], [signal({ updatedAt: at(-9), startedAt: at(-9) }), datadog({ id: "datadog:monitor:5:a", severity: "medium", service: "api", startedAt: at(-9), updatedAt: at(-9) })], new Date(at(-9)));
     const out = foldSignals([base!], [signal({ status: "resolved", startedAt: at(-9), updatedAt: at(-8) })], NOW);
     expect(out[0]!.status).toBe("open");
+  });
+
+  it("does not hold an incident open for a Sentry issue, which is only ever listed while unresolved", () => {
+    const [base] = foldSignals([], [signal({ source: "slack", id: "slack:C1:1.2", service: null, severity: "unknown", startedAt: at(-9), updatedAt: at(-9) })], new Date(at(-9)));
+    const [attached] = foldSignals([base!], [signal({ startedAt: at(-8), updatedAt: at(-8) })], new Date(at(-8)));
+    expect(attached!.signals.map((s) => s.id)).toEqual(["slack:C1:1.2", "sentry:1"]);
+    const out = foldSignals([attached!], [], NOW);
+    expect(out[0]!.status).toBe("resolved");
+    expect(out[0]!.resolvedAt).toBe(at(-8));
+  });
+
+  it("starts a new incident when a signal opens again after its incident resolved", () => {
+    const monitor = (over: Partial<IncidentSignal> = {}) => datadog({ id: "datadog:monitor:123:host:a", title: "CPU high", startedAt: at(-480), updatedAt: at(-480), ...over });
+    const [first] = foldSignals([], [monitor()], NOW);
+    const [resolved] = foldSignals([first!], [monitor({ status: "resolved", updatedAt: at(-470) })], NOW);
+    expect(resolved!.status).toBe("resolved");
+    const again = monitor({ startedAt: at(-1), updatedAt: at(-1) });
+    const out = foldSignals([resolved!], [again], NOW);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.id).not.toBe(resolved!.id);
+    expect(out[0]!.id).toMatch(/^[A-Za-z0-9:._@-]+$/);
+    expect(out[0]!.status).toBe("open");
+    expect(out[0]!.startedAt).toBe(at(-1));
+    // The same signal read again changes nothing, and the old incident stays as it was.
+    expect(foldSignals([resolved!, out[0]!], [again], NOW)).toEqual([]);
+    // It resolves on its own signal like any other.
+    const [closed] = foldSignals([resolved!, out[0]!], [{ ...again, status: "resolved", updatedAt: at(-0.5) }], NOW);
+    expect(closed!.status).toBe("resolved");
+    expect(closed!.id).toBe(out[0]!.id);
+  });
+
+  it("records when it first saw the incident, whatever the signal says it started", () => {
+    const [sentry] = foldSignals([], [signal({ startedAt: "2026-08-01T00:00:00.000Z", updatedAt: at(-0.1) })], NOW);
+    expect(sentry!.startedAt).toBe("2026-08-01T00:00:00.000Z");
+    expect(sentry!.seenAt).toBe(NOW.toISOString());
+    const later = foldSignals([sentry!], [signal({ startedAt: "2026-08-01T00:00:00.000Z", title: "TypeError again", updatedAt: at(0) })], new Date(at(3)));
+    expect(later[0]!.seenAt).toBe(NOW.toISOString());
   });
 
   it("returns nothing for a signal that changes nothing", () => {

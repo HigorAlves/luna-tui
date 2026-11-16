@@ -22,7 +22,28 @@ export interface BreachAnswers {
 }
 
 /** Kept on the incident: the assessment and its clocks, or the reason there is none. A failed assessment never blocks the incident. */
-export type IncidentBreach = { assessedAt: string; answers: BreachAnswers; regimes: BreachRegime[]; clocks: Partial<Record<BreachRegime, string>> } | { error: string };
+export interface AssessedBreach {
+  assessedAt: string;
+  answers: BreachAnswers;
+  regimes: BreachRegime[];
+  clocks: Partial<Record<BreachRegime, string>>;
+  /** The later reassessment that failed, if one did: the clocks above are still the last good ones. */
+  error?: string;
+  errorAt?: string;
+}
+export type IncidentBreach = AssessedBreach | { error: string; errorAt?: string };
+
+/** The assessment an incident holds, with its clocks, even when a later reassessment failed; null when it never had a good one. */
+export const assessedBreach = (breach: IncidentBreach | undefined): AssessedBreach | null => (breach && "clocks" in breach ? breach : null);
+
+/** What to store after a reassessment: a good one replaces everything; a failed one is kept beside the last good assessment, so
+ *  a clock set once is never erased by a rate limit. */
+export function mergeBreach(last: IncidentBreach | undefined, next: IncidentBreach, at: string): IncidentBreach {
+  if ("clocks" in next) return next;
+  const kept = assessedBreach(last);
+  const failure = { error: next.error, errorAt: at };
+  return kept ? { ...kept, ...failure } : failure;
+}
 
 /** Health information puts HIPAA in play on its own; personal data does so for each region whose people are affected. */
 export function regimesOf(answers: BreachAnswers): BreachRegime[] {

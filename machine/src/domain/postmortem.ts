@@ -3,11 +3,12 @@
 
 import type { PostmortemAnswer, PostmortemContext } from "@hardness/contracts";
 
+import { assessedBreach } from "./breach.ts";
 import type { Incident } from "./incident.ts";
 
 /** What the writer is shown: the incident without addresses, and the clocks of a successful breach assessment. */
 export function postmortemContext(incident: Incident): PostmortemContext {
-  const breach = incident.breach && !("error" in incident.breach) ? incident.breach : null;
+  const breach = assessedBreach(incident.breach);
   return {
     incident: {
       title: incident.title,
@@ -34,7 +35,7 @@ const slugOf = (title: string): string =>
 export const postmortemPath = (incident: Pick<Incident, "title" | "startedAt">): string => `Incidents/${incident.startedAt.slice(0, 10)}-${slugOf(incident.title)}.md`;
 
 const clocksOf = (incident: Incident): Array<[string, string]> => {
-  const breach = incident.breach && !("error" in incident.breach) ? incident.breach : null;
+  const breach = assessedBreach(incident.breach);
   return breach ? Object.entries(breach.clocks as Record<string, string>).sort((a, b) => a[1].localeCompare(b[1])) : [];
 };
 

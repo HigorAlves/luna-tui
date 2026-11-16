@@ -38,6 +38,7 @@ describe("postmortemContext", () => {
     expect(JSON.stringify(withBreach)).not.toContain("https://j/OPS-9");
     expect(postmortemContext(incident()).breach).toBeNull();
     expect(postmortemContext(incident({ breach: { error: "agents are off" } })).breach).toBeNull();
+    expect(postmortemContext(incident({ breach: { ...breach, error: "rate limited", errorAt: "2026-11-12T00:00:00.000Z" } })).breach).toEqual({ regimes: ["gdpr", "hipaa"], clocks: breach.clocks });
   });
 });
 

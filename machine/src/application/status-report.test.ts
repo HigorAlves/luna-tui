@@ -51,7 +51,7 @@ function world(over: Partial<StatusReportDeps> = {}) {
     incidents: {
       list: async () =>
         [
-          { id: "i1", title: "Export bucket public", severity: "high", status: "open", startedAt: at(10).toISOString(), resolvedAt: null, service: null, signals: [], timeline: [], breach: { assessedAt: "x", answers: {}, regimes: ["gdpr", "hipaa"], clocks: { gdpr: "2026-11-18T09:00:00.000Z", hipaa: "2027-01-10T09:00:00.000Z" } } },
+          { id: "i1", title: "Export bucket public", severity: "high", status: "open", startedAt: at(10).toISOString(), resolvedAt: null, service: null, signals: [], timeline: [], breach: { assessedAt: "x", answers: {}, regimes: ["gdpr", "hipaa"], clocks: { gdpr: "2026-11-18T09:00:00.000Z", hipaa: "2027-01-10T09:00:00.000Z" }, error: "rate limited", errorAt: "2026-11-15T00:00:00.000Z" } },
           { id: "i2", title: "Old one", severity: "low", status: "resolved", startedAt: at(1).toISOString(), resolvedAt: at(2).toISOString(), service: null, signals: [], timeline: [] },
         ] as never,
     },

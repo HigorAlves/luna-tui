@@ -101,7 +101,8 @@ export class IncidentJob {
     for (const name of await readdir(this.dir).catch(() => [])) {
       if (!name.endsWith(".json")) continue;
       try {
-        incidents.push(JSON.parse(await readFile(join(this.dir, name), "utf8")) as Incident);
+        const incident = JSON.parse(await readFile(join(this.dir, name), "utf8")) as Incident;
+        incidents.push({ ...incident, seenAt: incident.seenAt ?? incident.startedAt });
       } catch {
         this.log(`incidents: skipping the damaged file ${join(this.dir, name)}`);
       }

@@ -6,8 +6,8 @@ import type { AccessReviewContext } from "@hardness/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AccessSnapshot } from "../domain/access-review.ts";
-import { AccessReview } from "./access-review.ts";
-import { ComplianceDrafts } from "./compliance-drafts.ts";
+import { AccessReview, accessSlicesWriter } from "./access-review.ts";
+import { ComplianceDrafts, complianceHash } from "./compliance-drafts.ts";
 import { GitHubError, type GitHub } from "./github.ts";
 
 let stateDir: string;
@@ -62,7 +62,8 @@ function build(fakes: Fakes = {}) {
   return { job, github, drafts, log, suggest };
 }
 
-const pendingFile = (org: string, period: string) => join(stateDir, "compliance", "access", org, `${period}.json`);
+/** The pending snapshot of the page `text`: kept under the hash of the machine's text, so the writer signs the one its page was built from. */
+const pendingFile = (org: string, period: string, text: string) => join(stateDir, "compliance", "access", org, `${period}.${complianceHash(text)}.json`);
 const signedFile = (org: string) => join(stateDir, "compliance", "access", org, "signed.json");
 
 describe("buildQuarter", () => {
@@ -83,7 +84,7 @@ describe("buildQuarter", () => {
     });
     expect(draft.summary).toMatch(/^\d+ flags, \d+ new$/);
     expect((await drafts.get("access_review:acme:2026-Q4"))!.text).toBe(draft.text);
-    const snapshot = JSON.parse(readFileSync(pendingFile("acme", "2026-Q4"), "utf8")) as AccessSnapshot;
+    const snapshot = JSON.parse(readFileSync(pendingFile("acme", "2026-Q4", draft.text), "utf8")) as AccessSnapshot;
     expect(snapshot).toMatchObject({ org: "acme", period: "2026-Q4", takenAt: "2026-11-16T12:00:00.000Z" });
     expect(snapshot.members).toEqual([
       { login: "ann", role: "admin", active: true },
@@ -95,6 +96,21 @@ describe("buildQuarter", () => {
     expect(snapshot.repos[0]).toEqual({ slug: "acme/api", admins: ["bob"], directCollaborators: [{ login: "eve", permission: "write" }, { login: "ext", permission: "read" }], bypassActors: "unknown", adminsEnforced: true });
     expect(github.adminsEnforced).toHaveBeenCalledWith("acme/api", "trunk");
     expect(github.memberActivity).toHaveBeenCalledWith("acme", ["ann", "bob"], "2026-08-18T12:00:00.000Z");
+  });
+
+  it("signs the snapshot the approved page was built from, even when a rebuild is running as the approval lands", async () => {
+    const first = build({ now: "2026-11-16T12:00:00Z" });
+    const pageA = await first.job.buildQuarter("acme", "2026-Q4");
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const second = build({ now: "2026-11-20T09:00:00Z", suggest: async () => (await held, { recommendations: [], summary: "" }) });
+    const rebuild = second.job.buildQuarter("acme", "2026-Q4");
+    await vi.waitFor(() => expect(second.suggest).toHaveBeenCalled());
+    const wiki = { readPages: async () => [], writePages: async () => ({ sha: "s" }) };
+    await accessSlicesWriter({ wiki, stateDir })(pageA, { kind: "access_slices", org: "acme", period: "2026-Q4" });
+    expect((JSON.parse(readFileSync(signedFile("acme"), "utf8")) as AccessSnapshot).takenAt).toBe("2026-11-16T12:00:00.000Z");
+    release();
+    await rebuild;
   });
 
   it("compares with the last signed snapshot and hands the pack the flags, the new ones first", async () => {
@@ -147,8 +163,8 @@ describe("buildQuarter", () => {
 
   it("reads activity as unknown, never failing the review, when GitHub cannot say", async () => {
     const { job } = build({ activity: new GitHubError("rate limited") });
-    await job.buildQuarter("acme", "2026-Q4");
-    const snapshot = JSON.parse(readFileSync(pendingFile("acme", "2026-Q4"), "utf8")) as AccessSnapshot;
+    const draft = await job.buildQuarter("acme", "2026-Q4");
+    const snapshot = JSON.parse(readFileSync(pendingFile("acme", "2026-Q4", draft.text), "utf8")) as AccessSnapshot;
     expect(snapshot.members.map((m) => m.active)).toEqual([null, null]);
   });
 });

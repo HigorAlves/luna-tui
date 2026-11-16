@@ -76,6 +76,7 @@ import { ChangeEvidence } from "./application/change-evidence.ts";
 import { StatusReport } from "./application/status-report.ts";
 import { AccessReview, accessSlicesWriter } from "./application/access-review.ts";
 import { IncidentJob } from "./application/incidents.ts";
+import { mergeBreach } from "./domain/breach.ts";
 import type { Incident } from "./domain/incident.ts";
 import { postmortemWriter } from "./application/incident-postmortem.ts";
 import { jiraActionsWriter } from "./application/jira-actions.ts";
@@ -886,7 +887,7 @@ const assessBreach = breachAssessor({
     return (await ownCalls(packRuns).run({ pack: "breach_assess", context: { breach } }, INTAKE_CLIENT)).answer;
   },
 });
-const reassess = async (incident: Incident): Promise<Incident> => (await incidentJob.update(incident.id, { breach: await assessBreach(incident) })) ?? incident;
+const reassess = async (incident: Incident): Promise<Incident> => (await incidentJob.update(incident.id, { breach: mergeBreach(incident.breach, await assessBreach(incident), new Date().toISOString()) })) ?? incident;
 /** On resolve, with the fresh assessment, the postmortem pack writes the page and a draft waits for the person. */
 const writePostmortem = postmortemWriter({
   drafts: complianceDrafts,

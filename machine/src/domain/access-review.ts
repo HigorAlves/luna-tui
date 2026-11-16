@@ -48,11 +48,16 @@ export const orgPagePath = (org: string, period: string): string => `Compliance/
 /** Where a repository's part lives in that repository's own wiki. */
 export const repoSlicePath = (period: string): string => `Compliance/Access-Reviews/${period}.md`;
 
-type Facts = Omit<AccessFlag, "change">;
+/** What a flag grants, by what it is granted on (a repo, a ruleset), as a rank: a higher rank than the signed review's is wider access. */
+type Facts = Omit<AccessFlag, "change"> & { grants?: Record<string, number> };
+
+const PERMISSION_RANK: Record<RepoPermission, number> = { read: 1, triage: 2, write: 3, maintain: 4, admin: 5 };
+const modeRank = (mode: string): number => (mode === "always" ? 2 : 1);
 
 function factsOf(s: AccessSnapshot): Facts[] {
   const out: Facts[] = [];
-  const add = (kind: AccessFlagKind, subject: string, repo: string | null, detail: string) => out.push({ id: `${kind}:${subject}:${repo ?? "-"}`, kind, subject, repo, detail });
+  const add = (kind: AccessFlagKind, subject: string, repo: string | null, detail: string, grants?: Record<string, number>) =>
+    out.push({ id: `${kind}:${subject}:${repo ?? "-"}`, kind, subject, repo, detail, ...(grants ? { grants } : {}) });
   for (const m of s.members) if (m.role === "admin") add("org_owner", m.login, null, "organization owner");
   for (const r of s.repos) for (const login of r.admins) add("repo_admin", login, r.slug, "admin");
   for (const r of s.repos) {
@@ -61,20 +66,23 @@ function factsOf(s: AccessSnapshot): Facts[] {
       continue;
     }
     // One flag per actor, however many rulesets let it bypass.
-    const byActor = new Map<string, string[]>();
+    const byActor = new Map<string, { rulesets: string[]; grants: Record<string, number> }>();
     for (const a of r.bypassActors) {
       const key = `${a.actorType}:${a.actorName ?? a.actorId ?? "?"}`;
-      byActor.set(key, [...(byActor.get(key) ?? []), `${a.ruleset} (${a.mode})`]);
+      const held = byActor.get(key) ?? { rulesets: [], grants: {} };
+      held.rulesets.push(`${a.ruleset} (${a.mode})`);
+      held.grants[a.ruleset] = Math.max(held.grants[a.ruleset] ?? 0, modeRank(a.mode));
+      byActor.set(key, held);
     }
-    for (const [key, rulesets] of byActor) add("bypass_actor", key, r.slug, `may bypass ${rulesets.join(", ")}`);
+    for (const [key, { rulesets, grants }] of byActor) add("bypass_actor", key, r.slug, `may bypass ${rulesets.join(", ")}`, grants);
   }
   for (const r of s.repos) {
     if (r.adminsEnforced === false) add("admins_not_enforced", r.slug, r.slug, "branch protection does not apply to admins");
     else if (r.adminsEnforced === "unknown") add("admins_not_enforced", r.slug, r.slug, UNREADABLE);
   }
-  for (const o of s.outsideCollaborators) add("outside_collaborator", o.login, null, o.repos.map((x) => `${x.repo} (${x.permission})`).join(", ") || "no repository of the review");
+  for (const o of s.outsideCollaborators) add("outside_collaborator", o.login, null, o.repos.map((x) => `${x.repo} (${x.permission})`).join(", ") || "no repository of the review", Object.fromEntries(o.repos.map((x) => [x.repo, PERMISSION_RANK[x.permission]])));
   const outside = new Set(s.outsideCollaborators.map((o) => o.login));
-  for (const r of s.repos) for (const c of r.directCollaborators) if (!outside.has(c.login)) add("direct_access", c.login, r.slug, c.permission);
+  for (const r of s.repos) for (const c of r.directCollaborators) if (!outside.has(c.login)) add("direct_access", c.login, r.slug, c.permission, { permission: PERMISSION_RANK[c.permission] });
   const takenAt = Date.parse(s.takenAt);
   for (const i of s.invitations) {
     const age = takenAt - Date.parse(i.createdAt);
@@ -96,8 +104,14 @@ function subjectsOf(s: AccessSnapshot): Set<string> {
 }
 
 export function accessFlags(snapshot: AccessSnapshot, signed: AccessSnapshot | null): { flags: AccessFlag[]; removedSinceSigned: string[] } {
-  const before = signed ? new Set(factsOf(signed).map((f) => f.id)) : new Set<string>();
-  const flags = factsOf(snapshot).map((f): AccessFlag => ({ ...f, change: before.has(f.id) ? "unchanged" : "new" }));
+  const before = new Map((signed ? factsOf(signed) : []).map((f) => [f.id, f]));
+  // The id stays the same when access widens (so the person's decisions follow it), but the signed review did not see this much: it is new.
+  const widened = (f: Facts, was: Facts) => Object.entries(f.grants ?? {}).some(([on, rank]) => rank > (was.grants?.[on] ?? 0));
+  const flags = factsOf(snapshot).map((f): AccessFlag => {
+    const { grants: _grants, ...flag } = f;
+    const was = before.get(f.id);
+    return { ...flag, change: was && !widened(f, was) ? "unchanged" : "new" };
+  });
   const now = subjectsOf(snapshot);
   const removedSinceSigned = signed ? [...subjectsOf(signed)].filter((x) => !now.has(x)).sort() : [];
   return { flags, removedSinceSigned };

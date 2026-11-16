@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { breachContext, regimesOf, type BreachAnswers } from "./breach.ts";
+import { assessedBreach, breachContext, mergeBreach, regimesOf, type BreachAnswers } from "./breach.ts";
 import type { Incident } from "./incident.ts";
 
 const yes = { value: true, p: 0.9 };
@@ -52,5 +52,28 @@ describe("breachContext", () => {
     expect(context.timeline[0]!.text).toBe("entry 15");
     expect(context.timeline.at(-1)!.text).toBe("entry 54");
     expect(context.signals).toHaveLength(20);
+  });
+});
+
+describe("mergeBreach", () => {
+  const good = { assessedAt: "2026-11-10T09:00:00.000Z", answers: answers(), regimes: ["gdpr" as const], clocks: { gdpr: "2026-11-13T09:00:00.000Z" } };
+  const AT = "2026-11-12T00:00:00.000Z";
+
+  it("keeps the last good assessment and its clocks beside the error of a failed one", () => {
+    const merged = mergeBreach(good, { error: "rate limited" }, AT);
+    expect(merged).toEqual({ ...good, error: "rate limited", errorAt: AT });
+    expect(assessedBreach(merged)).toEqual(merged);
+  });
+
+  it("replaces everything, and drops an old error, when the new assessment is good", () => {
+    const fresh = { ...good, assessedAt: AT, regimes: ["gdpr" as const, "hipaa" as const], clocks: { ...good.clocks, hipaa: "2027-01-10T09:00:00.000Z" } };
+    expect(mergeBreach({ ...good, error: "old", errorAt: "2026-11-11T00:00:00.000Z" }, fresh, AT)).toEqual(fresh);
+  });
+
+  it("is just the error when there was no good assessment before", () => {
+    expect(mergeBreach(undefined, { error: "off" }, AT)).toEqual({ error: "off", errorAt: AT });
+    expect(mergeBreach({ error: "first", errorAt: "x" }, { error: "off" }, AT)).toEqual({ error: "off", errorAt: AT });
+    expect(assessedBreach({ error: "off", errorAt: AT })).toBeNull();
+    expect(assessedBreach(undefined)).toBeNull();
   });
 });

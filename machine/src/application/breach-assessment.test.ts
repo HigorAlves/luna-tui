@@ -32,6 +32,12 @@ describe("breachAssessor", () => {
     expect(decide).toHaveBeenCalledWith(expect.objectContaining({ title: "Export bucket public", service: "exports" }));
   });
 
+  it("counts the clocks from when the machine first saw the incident, not from when its source says it started", async () => {
+    const seen = { ...incident, startedAt: "2026-08-01T00:00:00.000Z", seenAt: "2026-11-11T09:00:00.000Z" };
+    const breach = await breachAssessor({ decide: async () => answer, now: () => NOW })(seen);
+    expect(breach).toMatchObject({ clocks: { gdpr: "2026-11-14T09:00:00.000Z" } });
+  });
+
   it("answers with the error instead of throwing when the decision fails or is not valid", async () => {
     const down = await breachAssessor({ decide: async () => Promise.reject(new Error("agents are off")), now: () => NOW })(incident);
     expect(down).toEqual({ error: "agents are off" });

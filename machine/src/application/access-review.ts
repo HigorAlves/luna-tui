@@ -11,7 +11,7 @@ import { z } from "zod";
 
 import { type AccessFlag, type AccessSnapshot, type AccessSuggestion, accessFlags, accessPage, orgPagePath, quarterOf, repoSlicePage, repoSlicePath } from "../domain/access-review.ts";
 import { postable } from "../domain/postable.ts";
-import { COMPLIANCE_DIR, type ComplianceDrafts, type TargetWriter, commitMessage } from "./compliance-drafts.ts";
+import { COMPLIANCE_DIR, type ComplianceDrafts, type TargetWriter, commitMessage, complianceHash } from "./compliance-drafts.ts";
 import type { GitHub, RepoPermission } from "./github.ts";
 import { WikiError, type Wiki } from "./wiki.ts";
 
@@ -47,7 +47,10 @@ const CursorSchema = z.object({ schema: z.literal(1), done: z.record(z.string(),
 type Cursor = z.infer<typeof CursorSchema>;
 
 const accessDir = (stateDir: string, org: string): string => join(stateDir, COMPLIANCE_DIR, ACCESS_DIR, org);
-const pendingFile = (stateDir: string, org: string, period: string): string => join(accessDir(stateDir, org), `${period}.json`);
+/** The snapshot a page was built from, named by the hash of the machine's text of that page: a rebuild under way writes its own file, never this one. */
+const pendingFile = (stateDir: string, org: string, period: string, text: string): string => join(accessDir(stateDir, org), `${period}.${complianceHash(text)}.json`);
+/** Where the pending snapshot of a page built before it was keyed by the page lived. */
+const legacyPendingFile = (stateDir: string, org: string, period: string): string => join(accessDir(stateDir, org), `${period}.json`);
 const signedFile = (stateDir: string, org: string): string => join(accessDir(stateDir, org), "signed.json");
 
 /** A missing or damaged file is no snapshot. */
@@ -101,18 +104,18 @@ export class AccessReview {
     return [...new Set((await this.deps.repos()).map((slug) => slug.split("/")[0] ?? "").filter(Boolean))];
   }
 
-  /** The draft page for one org and quarter (`2026-Q4`, UTC), opened or refreshed, with its snapshot kept as pending. */
+  /** The draft page for one org and quarter (`2026-Q4`, UTC), opened or refreshed, with its snapshot kept as pending under the page's hash. */
   async buildQuarter(org: string, period: string = quarterOf(this.now())): Promise<ComplianceDraft> {
     const { managerWikiRepo, stateDir } = this.deps;
     if (!managerWikiRepo) throw new Error("set MACHINE_MANAGER_WIKI_REPO for access reviews");
     const slugs = (await this.deps.repos()).filter((slug) => slug.startsWith(`${org}/`));
     const snapshot = await this.snapshot(org, period, slugs);
-    await writeAtomic(pendingFile(stateDir, org, period), JSON.stringify(snapshot));
     const signed = await readSnapshot(signedFile(stateDir, org));
     const { flags, removedSinceSigned } = accessFlags(snapshot, signed);
     const { suggestions, summary, failed } = await this.suggest(org, period, flags, removedSinceSigned);
     const text = accessPage({ snapshot, flags, removedSinceSigned, suggestions, summary, reviewerFailed: failed, previous: signed?.period ?? null });
     const fresh = flags.filter((f) => f.change === "new").length;
+    await writeAtomic(pendingFile(stateDir, org, period, text), JSON.stringify(snapshot));
     return this.deps.drafts.open({
       id: `access_review:${org}:${period}`,
       kind: "access_review",
@@ -244,7 +247,9 @@ export class AccessReview {
 export function accessSlicesWriter(deps: { wiki: Wiki; stateDir: string; log?: (line: string) => void }): TargetWriter<"access_slices"> {
   const log = deps.log ?? ((line) => console.warn(line));
   return async (draft, { org, period }) => {
-    const snapshot = await readSnapshot(pendingFile(deps.stateDir, org, period));
+    // The snapshot of the page the person approved: the machine's own text, which an edit leaves in `original`.
+    const page = draft.original ?? draft.text;
+    const snapshot = (page === undefined ? null : await readSnapshot(pendingFile(deps.stateDir, org, period, page))) ?? (await readSnapshot(legacyPendingFile(deps.stateDir, org, period)));
     if (!snapshot) throw new Error(`no access snapshot for ${org} ${period}: build the review again`);
     for (const repo of snapshot.repos) {
       try {

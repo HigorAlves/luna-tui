@@ -11,6 +11,7 @@ import { z } from "zod";
 
 import type { StatusDay } from "../config.ts";
 import { STATUS_DAYS } from "../config.ts";
+import { assessedBreach } from "../domain/breach.ts";
 import type { Incident } from "../domain/incident.ts";
 import { isoWeek, statusPage, statusPath, weekBounds } from "../domain/status-report.ts";
 import type { TaskRow } from "../domain/task.ts";
@@ -273,8 +274,8 @@ const orgOf = (d: ComplianceDraft): string => {
 
 /** The next breach deadline of an open incident: the earliest clock still ahead, else the earliest there is. */
 function nextDeadline(incident: Incident, now: Date): { regime: string; at: string } | null {
-  const breach = incident.breach;
-  if (!breach || "error" in breach) return null;
+  const breach = assessedBreach(incident.breach);
+  if (!breach) return null;
   const clocks = Object.entries(breach.clocks).map(([regime, at]) => ({ regime: REGIME_NAME[regime] ?? regime, at: at as string }));
   const sorted = clocks.toSorted((a, b) => a.at.localeCompare(b.at));
   return sorted.find((c) => new Date(c.at) >= now) ?? sorted[0] ?? null;

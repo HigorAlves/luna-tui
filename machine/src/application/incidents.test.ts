@@ -233,6 +233,18 @@ describe("IncidentJob", () => {
     expect(await job().update("nope", { breach: { error: "x" } })).toBeNull();
   });
 
+  it("gives an incident stored before `seenAt` existed its start time as the time it was seen", async () => {
+    const j = job({ datadog: { port: fakeDatadog([ddIncident()]), scope: "" } });
+    await j.tick();
+    const [fresh] = await j.list();
+    expect(fresh!.seenAt).toBe(NOW.toISOString());
+    const { writeFile } = await import("node:fs/promises");
+    const name = (await readdir(join(dir, "compliance", "incidents")))[0]!;
+    const { seenAt: _gone, ...old } = fresh!;
+    await writeFile(join(dir, "compliance", "incidents", name), JSON.stringify(old));
+    expect((await j.list())[0]!.seenAt).toBe(old.startedAt);
+  });
+
   it("lists the incidents newest first", async () => {
     const j = job({ datadog: { port: fakeDatadog([ddIncident(), ddIncident({ publicId: 813, created: iso(-0.5) })]), scope: "" } });
     await j.tick();

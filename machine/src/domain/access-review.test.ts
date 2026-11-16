@@ -40,6 +40,45 @@ describe("accessFlags", () => {
     expect(kinds(now, signed)).toEqual(["org_owner:ann:-:unchanged", "org_owner:cy:-:new"]);
   });
 
+  describe("access that widened since the signed review is new, a flag with the same id or not", () => {
+    const repo = (over: Partial<AccessSnapshot["repos"][number]>): AccessSnapshot["repos"] => [{ slug: "acme/api", admins: [], directCollaborators: [], bypassActors: [], adminsEnforced: true, ...over }];
+    const bypass = (mode: string) => repo({ bypassActors: [{ ruleset: "main", actorType: "Team", actorId: 7, actorName: "platform", mode }] });
+    const outside = (...repos: Array<[string, "read" | "write"]>) => ({ outsideCollaborators: [{ login: "ext", repos: repos.map(([r, permission]) => ({ repo: r, permission })) }] });
+    const direct = (permission: "read" | "triage" | "write" | "maintain") => ({ repos: repo({ directCollaborators: [{ login: "eve", permission }] }) });
+    const changeOf = (now: Partial<AccessSnapshot>, was: Partial<AccessSnapshot>, kind: string) => {
+      const f = accessFlags(snapshot(now), snapshot(was)).flags.find((x) => x.kind === kind)!;
+      return f.change;
+    };
+
+    it.each([
+      ["read to write", "write", "read", "new"],
+      ["write to maintain", "maintain", "write", "new"],
+      ["write to read", "read", "write", "unchanged"],
+      ["write to write", "write", "write", "unchanged"],
+    ] as const)("a direct collaborator going %s", (_n, now, was, expected) => {
+      expect(changeOf(direct(now), direct(was), "direct_access")).toBe(expected);
+    });
+
+    it("an outside collaborator gaining write on a repo, or reaching one more, is new; losing a repo is not", () => {
+      expect(changeOf(outside(["acme/api", "write"]), outside(["acme/api", "read"]), "outside_collaborator")).toBe("new");
+      expect(changeOf(outside(["acme/api", "read"], ["acme/web", "read"]), outside(["acme/api", "read"]), "outside_collaborator")).toBe("new");
+      expect(changeOf(outside(["acme/api", "read"]), outside(["acme/api", "read"], ["acme/web", "read"]), "outside_collaborator")).toBe("unchanged");
+      expect(changeOf(outside(["acme/api", "read"]), outside(["acme/api", "read"]), "outside_collaborator")).toBe("unchanged");
+    });
+
+    it("a bypass actor going from pull_request to always is new; the reverse is not", () => {
+      expect(changeOf({ repos: bypass("always") }, { repos: bypass("pull_request") }, "bypass_actor")).toBe("new");
+      expect(changeOf({ repos: bypass("pull_request") }, { repos: bypass("always") }, "bypass_actor")).toBe("unchanged");
+      expect(changeOf({ repos: bypass("always") }, { repos: bypass("always") }, "bypass_actor")).toBe("unchanged");
+    });
+
+    it("keeps the flag id stable for the person's decisions", () => {
+      const a = accessFlags(snapshot(direct("write")), snapshot(direct("read"))).flags.find((f) => f.kind === "direct_access")!;
+      const b = accessFlags(snapshot(direct("read")), null).flags.find((f) => f.kind === "direct_access")!;
+      expect(a.id).toBe(b.id);
+    });
+  });
+
   it("names a collaborator removed since the signed review", () => {
     const signed = snapshot({ outsideCollaborators: [{ login: "ext", repos: [{ repo: "acme/api", permission: "read" }] }], members: [...snapshot().members, { login: "dan", role: "member", active: true }] });
     const { removedSinceSigned } = accessFlags(snapshot(), signed);
