@@ -51,6 +51,8 @@ describe("loadConfig", () => {
       publicUrl: null,
       groundTruth: true,
       economy: true,
+      complianceEvidence: true,
+      managerWikiRepo: null,
       decisions: { enabled: true, retentionDays: 365, maxMb: 4096 },
       slack: null,
       slackInbox: { enabled: true, userToken: null, appToken: null, intervalMs: 60_000, markRead: false, rulesPath: expect.stringMatching(/\/\.local\/state\/hardness\/slack-triage\.md$/) as string, digestAt: null, scope: "opted_in" },
@@ -130,6 +132,16 @@ describe("loadConfig", () => {
     });
     expect(() => loadConfig({ MACHINE_REPO_MAP: "o/a" })).toThrow(/MACHINE_REPO_MAP/);
     expect(() => loadConfig({ MACHINE_REPO_MAP: "oa=/r/a" })).toThrow(/MACHINE_REPO_MAP/);
+  });
+
+  it("reads the compliance settings: the monthly evidence job is on unless off, the manager wiki repo is optional and owner/name", () => {
+    expect(loadConfig({ HOME: "/h" }).complianceEvidence).toBe(true);
+    expect(loadConfig({ HOME: "/h", MACHINE_COMPLIANCE_EVIDENCE: "off" }).complianceEvidence).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_COMPLIANCE_EVIDENCE: "0" }).complianceEvidence).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_COMPLIANCE_EVIDENCE: "1" }).complianceEvidence).toBe(true);
+    expect(loadConfig({ HOME: "/h" }).managerWikiRepo).toBeNull();
+    expect(loadConfig({ HOME: "/h", MACHINE_MANAGER_WIKI_REPO: " acme/handbook " }).managerWikiRepo).toBe("acme/handbook");
+    expect(() => loadConfig({ HOME: "/h", MACHINE_MANAGER_WIKI_REPO: "nope" })).toThrow(/MACHINE_MANAGER_WIKI_REPO/);
   });
 
   it("reads the GitHub poll settings", () => {

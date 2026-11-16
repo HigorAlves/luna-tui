@@ -2,6 +2,8 @@
 // updates. Shapes are defined in @hardness/contracts.
 import {
   AnswersInput,
+  ComplianceActInput,
+  ComplianceEditInput,
   type ApiError,
   CloneInput,
   ArchiveInput,
@@ -63,6 +65,8 @@ import { type Context, Hono } from "hono";
 import type { Economy } from "../../application/economy.ts";
 import { economyMetrics } from "../../domain/economy/metrics.ts";
 import { type Backlog, BacklogItemNotFoundError, NotSchedulableError } from "../../application/backlog.ts";
+import type { ChangeEvidence } from "../../application/change-evidence.ts";
+import { type ComplianceDrafts, type CompliancePublisher, DraftNotFoundError, DraftRefusedError, DraftStatusError, StaleDraftError } from "../../application/compliance-drafts.ts";
 import { type TicketMachine, TicketNotFound, TicketRefusal } from "../../application/ticket-machine.ts";
 import { streamSSE } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
@@ -128,6 +132,8 @@ export interface AppDeps {
   backlog?: Backlog;
   /** The Ticket Machine; without it the `/tickets` routes are absent. */
   tickets?: TicketMachine;
+  /** The manager's drafts (RFC 0008): the store, the publisher an approve goes through, the monthly evidence job and the `owner/name` of every repo the machine knows. Without it the `/compliance` routes answer 503. */
+  compliance?: { drafts: ComplianceDrafts; publisher: CompliancePublisher; evidence: Pick<ChangeEvidence, "buildMonth">; repos: () => Promise<string[]> };
   /** Closes a task's herdr watch tab when it is deleted; closing it on `closed` is main.ts's job. */
   watcher?: Watcher;
   /** Enables `POST /dev/stubs` when the stub stages are in use. */
@@ -174,6 +180,8 @@ export interface AppDeps {
 const ForemanInput = z.object({ question: ForemanContext.shape.question, history: ForemanContext.shape.history.optional() });
 
 class BadRequest extends Error {}
+
+const EvidenceRunInput = z.object({ repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/name"), period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "YYYY-MM") });
 
 /** The window of a repo's own runs that a config proposal reads. */
 const SIGNAL_DAYS = 30;
@@ -222,7 +230,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], clock = () => new Date(), problems: problemsOf, sandboxPolicy }: AppDeps): Hono {
+export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, compliance, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], clock = () => new Date(), problems: problemsOf, sandboxPolicy }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -237,6 +245,10 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     if (error instanceof TaskBusyError) return fail(c, 409, "task_busy", error.message);
     if (error instanceof WorktreeUnpushedError) return fail(c, 409, "unpushed_commits", error.message);
     if (error instanceof IdempotencyConflictError) return c.json<ApiError>({ error: "idempotency_conflict", message: error.message, taskId: error.taskId }, 409);
+    if (error instanceof StaleDraftError) return fail(c, 409, "stale_draft", error.message);
+    if (error instanceof DraftStatusError) return fail(c, 409, "draft_not_waiting", error.message);
+    if (error instanceof DraftNotFoundError) return fail(c, 404, "not_found", error.message);
+    if (error instanceof DraftRefusedError) return fail(c, 422, "secret", error.message);
     if (error instanceof TicketNotFound) return fail(c, 404, "not_found", error.message);
     if (error instanceof TicketRefusal) return fail(c, 409, "ticket_refused", error.message);
     if (error instanceof BacklogItemNotFoundError) return fail(c, 404, "not_found", error.message);
@@ -684,6 +696,27 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
       const id = itemId(c);
       await backlog.decline(id);
       return c.json({ id });
+    });
+  }
+
+  {
+    // The manager's drafts: the board's Compliance view lists them and taps them. The id holds `:` and `/`, which the board percent-encodes; Hono decodes the segment.
+    const off = (c: Context) => fail(c, 503, "compliance_off", "this machine has no compliance drafts");
+    const id = (c: Context): string => c.req.param("id") ?? "";
+    app.get("/compliance/drafts", async (c) => (compliance ? c.json({ drafts: await compliance.drafts.list() }) : off(c)));
+    app.post("/compliance/drafts/:id/approve", async (c) => (compliance ? c.json(await compliance.publisher.approve(id(c), (await body(c, ComplianceActInput)).hash, "board")) : off(c)));
+    app.post("/compliance/drafts/:id/edit", async (c) => {
+      if (!compliance) return off(c);
+      const { hash, text } = await body(c, ComplianceEditInput);
+      return c.json(await compliance.drafts.edit(id(c), hash, text, "board"));
+    });
+    app.post("/compliance/drafts/:id/ignore", async (c) => (compliance ? c.json(await compliance.drafts.ignore(id(c), (await body(c, ComplianceActInput)).hash, "board")) : off(c)));
+    // An on-demand rebuild of a month, for testing a past one: the same draft the monthly job opens.
+    app.post("/compliance/evidence/run", async (c) => {
+      if (!compliance) return off(c);
+      const { repo, period } = await body(c, EvidenceRunInput);
+      if (!(await compliance.repos()).includes(repo)) return fail(c, 400, "unknown_repository", "the machine does not know that repository");
+      return c.json(await compliance.evidence.buildMonth(repo, period));
     });
   }
 

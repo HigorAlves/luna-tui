@@ -37,7 +37,7 @@ import { fileStore as economyStore } from "./adapters/economy/store.ts";
 import { OVERHEAD_PACKS } from "./domain/economy/ledger.ts";
 import { DecisionTruth, tagged } from "./application/decision-truth.ts";
 import { priorityTruth, escalationTruthWriter, evidenceFeedbackWriter, groundTruthWriter, ticketTruthWriter } from "./application/ground-truth.ts";
-import { commitsSince, defaultBranchFile, gitIdentity, headCommit } from "./adapters/git/worktree.ts";
+import { commitsSince, defaultBranchFile, gitIdentity, headCommit, originSlugOf } from "./adapters/git/worktree.ts";
 import { ConfigProofs } from "./application/config-proofs.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
 import type { Decide } from "./application/stages/check-decide.ts";
@@ -72,6 +72,9 @@ import { SlaClocks } from "./application/sla.ts";
 import { createJiraTriager } from "./application/stages/jira-intake-runner.ts";
 import { PgPackRunStore } from "./adapters/persistence/pack-run-store.ts";
 import { MINUTE_MS, Ticker } from "./application/ticker.ts";
+import { ChangeEvidence } from "./application/change-evidence.ts";
+import { ComplianceDrafts, publisher as compliancePublisher } from "./application/compliance-drafts.ts";
+import { createWiki } from "./adapters/git/wiki.ts";
 import { graphifyGraph } from "./adapters/graph/graphify.ts";
 import { imageId, imageLabel, runSandbox } from "./adapters/docker/docker.ts";
 import { removeRunNetwork } from "./adapters/docker/egress.ts";
@@ -817,6 +820,27 @@ const knownRepos = async (): Promise<string[]> => {
   for (const task of await pipeline.list()) if (task.repoPath && !isTerminal(task.state)) known.push(task.repoPath);
   return [...new Set(known)];
 };
+/** The manager's drafts (RFC 0008): pages wait for a tap, and an approve writes them to the repository's wiki. The evidence job's one model call is the `change_exceptions` pack through PackRuns. */
+const complianceDrafts = new ComplianceDrafts({ stateDir: config.stateDir });
+const complianceRepos = async (): Promise<string[]> => {
+  const slugs = new Set([...config.githubPoll.repos, ...Object.keys(config.repoMap)]);
+  for (const path of await knownRepos()) {
+    const slug = await originSlugOf(path).catch(() => null);
+    if (slug) slugs.add(slug);
+  }
+  return [...slugs];
+};
+const changeEvidence = new ChangeEvidence({
+  github,
+  drafts: complianceDrafts,
+  explain: async (exceptions) => {
+    if (!packRuns) throw new Error("agents are off: no model to explain the exceptions");
+    return (await ownCalls(packRuns).run({ pack: "change_exceptions", context: { exceptions } }, INTAKE_CLIENT)).answer;
+  },
+  repos: complianceRepos,
+  stateDir: config.stateDir,
+});
+const compliance = { drafts: complianceDrafts, publisher: compliancePublisher({ drafts: complianceDrafts, wiki: createWiki({ cacheDir: join(config.stateDir, "wikis") }) }), evidence: changeEvidence, repos: complianceRepos };
 /** A person approves the exact base the repository's luna.yaml (on the user's checkout) names now, or the exact key of the Dockerfile its devcontainer builds now; any other is refused. */
 const approveBase = async (repo: string, base: string): Promise<{ ok: true } | { ok: false; reason: string }> => {
   if (!agentDeps) return { ok: false, reason: "repository images are off on this machine" };
@@ -847,6 +871,7 @@ const app = createApp({
   bus,
   backlog,
   tickets: ticketMachine,
+  compliance,
   watcher,
   stubs,
   pulls,
@@ -970,6 +995,13 @@ if (graphTicker) {
   console.log("graph: off (MACHINE_GRAPH_INTERVAL=off or agents off); stages run without a code graph");
 }
 
+/** The monthly evidence job: a daily tick that builds the previous month once per repo (the cursor says which are done), and a first one shortly after boot. Never one long timer: Node clamps a delay over about 24.8 days to 1 ms. */
+const complianceTicker = config.complianceEvidence ? new Ticker(() => void changeEvidence.tick().catch((error: unknown) => console.warn("compliance evidence failed", error)), 24 * 60 * MINUTE_MS) : null;
+const complianceFirst = complianceTicker ? setTimeout(() => void changeEvidence.tick().catch((error: unknown) => console.warn("compliance evidence failed", error)), 2 * MINUTE_MS) : null;
+complianceFirst?.unref();
+complianceTicker?.start();
+console.log(complianceTicker ? "compliance: change-management evidence for each repo's previous month, checked daily; drafts wait in the Compliance view" : "compliance: monthly evidence off (MACHINE_COMPLIANCE_EVIDENCE=off); drafts still listed");
+
 /** The minute tick: a gate goes overdue, a stage passes 80% of its target, with no event to say so. */
 const slaTicker = new Ticker(() => {
   void pipeline
@@ -1021,6 +1053,8 @@ async function shutdown(): Promise<void> {
   jiraIntake?.stop();
   slaTicker.stop();
   graphTicker?.stop();
+  complianceTicker?.stop();
+  if (complianceFirst) clearTimeout(complianceFirst);
   pulls.stop();
   slackInbox.stop();
   socket?.stop();
