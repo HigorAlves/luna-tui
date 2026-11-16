@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { DEFAULT_MACHINE_POLICY } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -54,6 +55,7 @@ describe("loadConfig", () => {
       slackInbox: { enabled: true, userToken: null, appToken: null, intervalMs: 60_000, markRead: false, rulesPath: expect.stringMatching(/\/\.local\/state\/hardness\/slack-triage\.md$/) as string, digestAt: null, scope: "opted_in" },
       jira: null,
       sla: { gateSecs: 172_800, cycleSecs: null },
+      sandboxPolicy: DEFAULT_MACHINE_POLICY,
     });
   });
 
@@ -338,5 +340,37 @@ describe("MACHINE_EGRESS and MACHINE_EGRESS_ENGINE_HOSTS", () => {
     expect(loadConfig({ HOME: "/h", MACHINE_EGRESS_ENGINE_HOSTS: " Gateway.Example.net , *.llm.example.com:8443 " }).egress.engineHosts).toEqual(["gateway.example.net", "*.llm.example.com:8443"]);
     expect(() => loadConfig({ HOME: "/h", MACHINE_EGRESS_ENGINE_HOSTS: "ok.example.com,10.0.0.1" })).toThrow(/MACHINE_EGRESS_ENGINE_HOSTS.*10\.0\.0\.1/);
     expect(() => loadConfig({ HOME: "/h", MACHINE_EGRESS_ENGINE_HOSTS: "*" })).toThrow(/MACHINE_EGRESS_ENGINE_HOSTS/);
+  });
+});
+
+describe("the machine sandbox policy file", () => {
+  const home = () => mkdtempSync(join(tmpdir(), "sandbox-policy-"));
+  const write = (path: string, text: string): string => {
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, text);
+    return path;
+  };
+
+  it("an absent file is the defaults", () => {
+    expect(loadConfig({ HOME: home() }).sandboxPolicy).toEqual(DEFAULT_MACHINE_POLICY);
+    expect(loadConfig({ HOME: home(), MACHINE_SANDBOX_POLICY: "/nonexistent/sandbox.yaml" }).sandboxPolicy).toEqual(DEFAULT_MACHINE_POLICY);
+  });
+
+  it("reads ~/.config/hardness/sandbox.yaml, and MACHINE_SANDBOX_POLICY over it", () => {
+    const dir = home();
+    write(join(dir, ".config", "hardness", "sandbox.yaml"), "limits: { max_cpu: 4 }\n");
+    expect(loadConfig({ HOME: dir }).sandboxPolicy.limits).toEqual({ max_cpu: 4, max_memory_gb: 1024, max_pids: 1024 });
+    const other = write(join(dir, "other.yaml"), "egress: { deny: ['*.pastebin.com'], repo_hosts: deny }\n");
+    expect(loadConfig({ HOME: dir, MACHINE_SANDBOX_POLICY: other }).sandboxPolicy.egress).toEqual({ deny: ["*.pastebin.com"], max_repo_hosts: 50, repo_hosts: "deny" });
+  });
+
+  it("refuses an invalid file, naming the file and the key", () => {
+    const dir = home();
+    const file = write(join(dir, "bad.yaml"), "limits: { max_cpu: 0 }\n");
+    expect(() => loadConfig({ HOME: dir, MACHINE_SANDBOX_POLICY: file })).toThrow(/MACHINE_SANDBOX_POLICY.*bad\.yaml.*limits\.max_cpu/);
+    const unknown = write(join(dir, "unknown.yaml"), "runtime: { default: runc, sneaky: 1 }\n");
+    expect(() => loadConfig({ HOME: dir, MACHINE_SANDBOX_POLICY: unknown })).toThrow(/runtime\.sneaky/);
+    const broken = write(join(dir, "broken.yaml"), "limits: [unclosed\n");
+    expect(() => loadConfig({ HOME: dir, MACHINE_SANDBOX_POLICY: broken })).toThrow(/broken\.yaml/);
   });
 });

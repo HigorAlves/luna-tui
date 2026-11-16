@@ -19,6 +19,7 @@ export * from "./card-events.ts";
 export * from "./scoring.ts";
 export * from "./config-v22.ts";
 export * from "./egress.ts";
+export * from "./machine-policy.ts";
 export * from "./events.ts";
 export * from "./foreman.ts";
 export * from "./packs.ts";

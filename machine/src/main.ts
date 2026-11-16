@@ -821,6 +821,7 @@ const approveBase = async (repo: string, base: string): Promise<{ ok: true } | {
 const app = createApp({
   knownRepos,
   // The identity is read on each call, so a machine fixed in place turns healthy without a restart; the token and the stub reason are fixed at boot.
+  sandboxPolicy: config.sandboxPolicy,
   problems: async () => readinessProblems({ githubToken: config.githubToken, identity: await gitIdentity(process.cwd()), stubReason }),
   approveBase,
   ...(config.economy ? { economy: { port: economy, knownRepos, configOf: async (repo: string) => (await policies.for(repo)).factory.economy } } : {}),
