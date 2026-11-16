@@ -42,9 +42,15 @@ describe("proposeConfig", () => {
     expect(changes[0]).toMatchObject({ engine: null, effort: { from: "high", to: "medium" } });
   });
 
-  it("counts a stuck loop as trouble and says so", () => {
-    const changes = proposeConfig(base({ candidates: { plan: [candidate("claude:opus", "high", 0.5, 1), candidate("codex:sol", "high", 0.8, 1)] }, signals: { plan: signal(10, 1, 2) } }));
-    expect(changes[0]!.why).toBe("plan escalated 1 and got stuck 2 of 10 runs; codex:sol at high passed 0.80 vs 0.50");
+  it("says how many escalations were a stuck loop", () => {
+    const changes = proposeConfig(base({ candidates: { plan: [candidate("claude:opus", "high", 0.5, 1), candidate("codex:sol", "high", 0.8, 1)] }, signals: { plan: signal(10, 3, 2) } }));
+    expect(changes[0]!.why).toBe("plan escalated 3 of 10 runs (2 stuck in a loop); codex:sol at high passed 0.80 vs 0.50");
+  });
+
+  it("does not count a stuck loop twice: the machine escalates every one", () => {
+    // 2 escalations of 10, both loop-guard stops: a trouble rate of 0.2, neither in trouble nor calm.
+    const changes = proposeConfig(base({ candidates: { plan: [candidate("claude:opus", "high", 0.5, 1), candidate("codex:sol", "high", 0.8, 1)] }, signals: { plan: signal(10, 2, 2) } }));
+    expect(changes).toEqual([]);
   });
 
   it("steps down when a pack is calm and a candidate is much cheaper at about the same quality", () => {

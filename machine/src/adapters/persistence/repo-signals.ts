@@ -35,8 +35,9 @@ export function pgRepoSignals(db: DataSource, economy: EconomyStore): RepoSignal
       for (const event of await economy.guard(repo)) {
         if (event.action === "stop" && Date.parse(event.at) >= from) of(event.pack as PackId).stuck += 1;
       }
+      // Only the economy's own runs: a stage run's ledger record repeats the cost stage_runs already holds.
       for (const record of await economy.ledger(repo)) {
-        if (record.costUsd && Date.parse(record.at) >= from) of(record.pack as PackId).costUsd += record.costUsd;
+        if (record.kind === "overhead" && record.costUsd && Date.parse(record.at) >= from) of(record.pack as PackId).costUsd += record.costUsd;
       }
       return out;
     },

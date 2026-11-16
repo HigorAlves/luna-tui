@@ -46,7 +46,11 @@ describe("pgRepoSignals", () => {
           { at, runId: "b", pack: "setup", action: "gate", calls: 3 },
           { at: old, runId: "c", pack: "setup", action: "stop", calls: 9 },
         ],
-        [{ at, runId: "a", pack: "loop_judge", card: "c", kind: "overhead", effective: 0, tokens: null, costUsd: 0.25 }],
+        [
+          { at, runId: "a", pack: "loop_judge", card: "c", kind: "overhead", effective: 0, tokens: null, costUsd: 0.25 },
+          // A stage run's own ledger record: its cost is already in stage_runs.
+          { at, runId: "t", pack: "triage", card: "c", kind: "exec", effective: 0, tokens: null, costUsd: 5 },
+        ],
       ),
     );
     const got = await signals.forRepo("/r/app", since);

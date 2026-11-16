@@ -42,6 +42,7 @@ export interface Candidate {
 export interface RepoSignal {
   runs: number;
   escalations: number;
+  /** The loop guard's stops: the machine escalates each one, so they are already among `escalations`. Said in `why`, not counted again. */
   stuck: number;
   costUsd: number;
 }
@@ -97,7 +98,8 @@ function draftFor(pack: PackId, input: ProposalInput): Drafted | null {
   // 3. The repo's own signal.
   const signal = input.signals[pack];
   if (!signal || signal.runs < MIN_RUNS) return null;
-  const trouble = (signal.escalations + signal.stuck) / signal.runs;
+  // A stuck loop is an escalation too (the machine escalates every loop-guard stop): it is not added again.
+  const trouble = signal.escalations / signal.runs;
 
   // 2. Only candidates the pack may run.
   const usable = all.filter((c) => c !== baseline && c.n >= MIN_CASES && def.engines.allowed.includes(c.engine) && validEffort(pack, c, isDecision) && !(c.engine === engine && c.effort === effort));
@@ -146,8 +148,7 @@ const money = (usd: number): string => `$${usd.toFixed(2)}`;
 /** One sentence from the numbers. */
 function whyOf(pack: PackId, step: Step, signal: RepoSignal, current: Candidate, next: Candidate, isDecision: boolean): string {
   const verb = isDecision ? "scored" : "passed";
-  const trouble =
-    signal.stuck === 0 ? `escalated ${signal.escalations} of ${signal.runs} runs` : signal.escalations === 0 ? `got stuck ${signal.stuck} of ${signal.runs} runs` : `escalated ${signal.escalations} and got stuck ${signal.stuck} of ${signal.runs} runs`;
+  const trouble = `escalated ${signal.escalations} of ${signal.runs} runs${signal.stuck > 0 ? ` (${signal.stuck} stuck in a loop)` : ""}`;
   const head = `${pack} ${trouble}; ${label(next)} ${verb} ${next.quality.toFixed(2)} vs ${current.quality.toFixed(2)}`;
   return step === "up" ? head : `${head} at ${money(next.costPerCase)} a case vs ${money(current.costPerCase)}`;
 }
