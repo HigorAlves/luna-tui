@@ -32,6 +32,15 @@ describe("slaActions", () => {
     expect(slaActions([row("awaiting_setup", 6 * DAY, { lastReminderAt: ago(3 * DAY) })], NOW)).toEqual([{ taskId: "t1", action: "archive", reason: "no_setup", gate: "awaiting_setup" }]);
   });
 
+  it("leaves a config proposal alone: no reminder, no archive, however long it waits", () => {
+    const config = (waitedMs: number): SlaRow => {
+      const base = row("awaiting_setup", waitedMs, { lastReminderAt: ago(3 * DAY) });
+      return { ...base, task: { ...base.task, route: "config" } as TaskRow };
+    };
+    expect(slaActions([config(6 * DAY)], NOW)).toEqual([]);
+    expect(slaActions([{ ...config(3 * DAY), lastReminderAt: null }], NOW)).toEqual([]);
+  });
+
   it("never archives a later gate, or without a target: it only reminds", () => {
     expect(slaActions([row("awaiting_approval", 6 * DAY)], NOW)).toEqual([expect.objectContaining({ action: "remind", gate: "awaiting_approval" })]);
     expect(slaActions([row("awaiting_answers", 6 * DAY, { targets: { gate: 2 * 86_400 } })], NOW)).toEqual([expect.objectContaining({ action: "remind" })]);
