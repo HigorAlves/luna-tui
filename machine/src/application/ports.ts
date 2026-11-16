@@ -54,6 +54,8 @@ export interface StageContext {
   engine?: EngineId;
   /** Tells the machine the container's name, the commit it started from and the engine it runs on, as soon as they are known. */
   started?: (facts: { container: string; inputCommit: string | null; engine?: EngineId }) => Promise<void>;
+  /** Tells the machine the container of a council or question-council sub-run (its own `started` is withheld, since that one is the stage's), so a restart can remove it. */
+  subStarted?: (facts: { container: string }) => Promise<void>;
   /** Puts a line on the task's activity while the stage runs (`stage.note`): a wait, a fallback, anything the run should say before it ends. */
   note?: (text: string) => Promise<void>;
   /** Logs a row the v2.2 diagram names (`ship.ready`, `ship.event`...) while the stage runs; the payload is ids, counts and enum values only. */

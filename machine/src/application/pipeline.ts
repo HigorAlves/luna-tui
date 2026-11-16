@@ -264,6 +264,8 @@ export interface PipelineOptions {
   containerRunning?: (name: string) => Promise<boolean>;
   /** Removes the leftover relay and secrets folders of runs a killed machine left, except the runs in `keep` (their container still runs); recover() awaits it before it re-attaches. Tests pass a fake. */
   sweepRunSecrets?: (keep: ReadonlySet<string>) => Promise<unknown>;
+  /** Removes the proxy and the card network of a run by its container's name, once recover() removed that container; main wires the docker one, tests pass a fake (none by default). */
+  removeRunNetwork?: (container: string) => Promise<void>;
   /** Stops and removes a container recover() decided not to re-attach to; tests pass a fake. */
   removeContainer?: (name: string) => Promise<void>;
   /** Undoes one commit in a worktree; tests pass a fake. */
@@ -465,6 +467,7 @@ export class Pipeline {
   private readonly maxPerStage: Record<string, number>;
   private readonly containerRunning: (name: string) => Promise<boolean>;
   private readonly removeContainer: (name: string) => Promise<void>;
+  private readonly removeRunNetwork: ((container: string) => Promise<void>) | undefined;
   private readonly sweepRunSecrets: ((keep: ReadonlySet<string>) => Promise<unknown>) | undefined;
   /** The stage each loop is driving right now, for the per-stage caps. */
   private readonly stages = new Map<string, TaskState>();
@@ -532,6 +535,7 @@ export class Pipeline {
     this.containerRunning = options.containerRunning ?? containerRunning;
     this.removeContainer = options.removeContainer ?? removeContainer;
     this.sweepRunSecrets = options.sweepRunSecrets;
+    this.removeRunNetwork = options.removeRunNetwork;
     this.revertCommit = options.revertCommit ?? revertCommit;
     this.diffStat = options.diffStat ?? branchDiffStat;
     this.closeDeps = options.closeDeps;
@@ -2485,9 +2489,12 @@ export class Pipeline {
       const run = (await this.store.listStageRuns(task.id)).findLast((r) => r.status === "running" && r.stage === task.state);
       if (run?.containerId && (await this.containerRunning(run.containerId))) resumable.set(task.id, run);
     }
+    // The council containers a stage started (and their proxies) are no stage's to re-attach to: the host side that waited on them is gone.
+    const subs = await this.subContainersOf(stuck.filter((t) => !t.queued));
     await this.store.markRunningStageRunsAborted([...resumable.values()].map((r) => r.id));
     // The leftover real-token and secret folders go before anything re-attaches, and never those of a run whose container is still running: its proxy still mounts them.
     await this.sweepRunSecrets?.(new Set([...resumable.values()].map((r) => r.id))).catch((error: unknown) => console.error("could not sweep the leftover run secrets", error));
+    for (const name of subs) await this.removeRun(name);
     let escalated = 0;
     for (const task of stuck) {
       const run = resumable.get(task.id);
@@ -2515,7 +2522,7 @@ export class Pipeline {
         if (this.inline) await loop;
       } else {
         const dead = (await this.store.listStageRuns(task.id)).findLast((r) => r.stage === task.state && r.containerId);
-        if (dead?.containerId) await this.removeContainer(dead.containerId).catch(() => {});
+        if (dead?.containerId) await this.removeRun(dead.containerId);
         await this.apply(task.id, { type: "abort" }, { detail: { note: "the machine restarted mid-stage" } });
         escalated++;
       }
@@ -2523,6 +2530,25 @@ export class Pipeline {
     await this.relatch();
     await this.rearmPaused();
     return escalated;
+  }
+
+  /** The names of the sub-run containers (council members, the question council) the running stage runs of these tasks recorded. Only names the machine itself gives a container count: the events table also holds what a stage container wrote. */
+  private async subContainersOf(tasks: TaskRow[]): Promise<string[]> {
+    const names = new Set<string>();
+    for (const task of tasks) {
+      const running = new Set((await this.store.listStageRuns(task.id)).filter((r) => r.status === "running").map((r) => r.id));
+      for (const event of await this.store.listEvents(task.id)) {
+        const container = event.payload.container;
+        if (event.kind === "stage.sub_container" && event.stageRunId && running.has(event.stageRunId) && typeof container === "string" && /^hardness-[A-Za-z0-9_.-]{1,200}$/.test(container)) names.add(container);
+      }
+    }
+    return [...names];
+  }
+
+  /** A container recover() will not re-attach to, with its proxy and card network; what is already gone is not an error. */
+  private async removeRun(container: string): Promise<void> {
+    await this.removeContainer(container).catch(() => {});
+    await this.removeRunNetwork?.(container).catch(() => {});
   }
 
   /** Resume timers live in memory, so a restart during a usage window would otherwise park
@@ -3506,6 +3532,7 @@ export class Pipeline {
           span.event("started", { container: facts.container, engine: facts.engine ?? null });
           return this.store.markStageRunStarted(runId, { containerId: facts.container, inputCommit: facts.inputCommit, ...(facts.engine ? { engine: facts.engine } : {}) });
         },
+        subStarted: (facts) => this.log(id, "stage.sub_container", { container: facts.container }, runId),
         note: (text) => this.log(id, "stage.note", { stage, note: text }, runId),
         emit: async (kind, payload) => {
           // Checked at run time too: the type is no guard against a caller that casts.
