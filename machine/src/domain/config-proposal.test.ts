@@ -1,7 +1,7 @@
 import type { Effort, EngineId, PackId } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { CALM, type Candidate, CHEAPER, DECLINE_DAYS, GAIN, MAX_CHANGES, MIN_CASES, MIN_RUNS, type ProposalInput, type RepoSignal, TOLERANCE, TROUBLE, proposeConfig } from "./config-proposal.ts";
+import { CALM, type Candidate, type ConfigChange, CHEAPER, DECLINE_DAYS, GAIN, MAX_CHANGES, MIN_CASES, MIN_RUNS, type ProposalInput, type RepoSignal, TOLERANCE, TROUBLE, proposeConfig, renderProposal } from "./config-proposal.ts";
 
 const NOW = "2026-11-16T12:00:00.000Z";
 const candidate = (engine: EngineId, effort: Effort | null, quality: number, costPerCase: number, n = 5): Candidate => ({ engine, effort, n, quality, costPerCase, at: "2026-11-01" });
@@ -137,5 +137,52 @@ describe("proposeConfig", () => {
       }),
     );
     expect(changes.map((c) => c.pack)).toEqual(["verifying", "plan", "reviewing"]);
+  });
+});
+
+describe("renderProposal", () => {
+  const change = (pack: PackId, over: Partial<ConfigChange>): ConfigChange => ({ pack, engine: null, effort: null, why: "", evidence: {} as ConfigChange["evidence"], ...over });
+  const FILE = [
+    "# the repo's checks",
+    "checks:",
+    "  - { name: unit, run: pnpm test, timeout: 5 }",
+    "",
+    "engines:",
+    "  plan: claude:opus # keep for now",
+    "learning:",
+    "  records: false",
+    "economy:",
+    "  loop_guard: off",
+    "graph:",
+    "  stale_commits: 7",
+    "plan:",
+    "  sla:",
+    "    escalate_days: 3",
+    "",
+  ].join("\n");
+
+  it("keeps comments, unknown keys and key order when it changes one engine and one effort", () => {
+    const out = renderProposal(FILE, [change("plan", { engine: { from: "claude:opus", to: "codex:sol" } }), change("triage", { effort: { from: "high", to: "medium" } })]);
+    expect(out).toContain("# the repo's checks");
+    expect(out).toContain("# keep for now");
+    expect(out).toContain("plan: codex:sol");
+    expect(out).toMatch(/effort:\n {2}triage: medium/);
+    expect(out).toContain("learning:\n  records: false");
+    expect(out).toContain("economy:\n  loop_guard: off");
+    expect(out).toContain("graph:\n  stale_commits: 7");
+    expect(out).toContain("escalate_days: 3");
+    expect(out.indexOf("checks:")).toBeLessThan(out.indexOf("engines:"));
+    expect(out.indexOf("economy:")).toBeLessThan(out.indexOf("graph:"));
+  });
+
+  it("adds an engines section to a file that has none", () => {
+    const out = renderProposal("# top\nchecks:\n  - { name: unit, run: pnpm test, timeout: 5 }\ngraph:\n  stale_commits: 7\n", [change("plan", { engine: { from: "claude:opus", to: "codex:sol" } })]);
+    expect(out).toContain("# top");
+    expect(out).toMatch(/engines:\n {2}plan: codex:sol/);
+    expect(out).toContain("graph:\n  stale_commits: 7");
+  });
+
+  it("starts from nothing for an empty file", () => {
+    expect(renderProposal("", [change("plan", { engine: { from: "claude:opus", to: "codex:sol" } })])).toMatch(/engines:\n {2}plan: codex:sol/);
   });
 });

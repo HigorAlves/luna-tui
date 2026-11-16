@@ -2,10 +2,10 @@
 // the repo's own run signals (how often the pack escalated or got stuck here). A fixed rule decides; no model is called, and
 // `why` is built from the numbers, never from model text. Pure: the caller reads the evidence and says what time it is.
 import { type Effort, type EngineId, PACKS, type PackId, type StageEfforts, type StageEngines, effortProblem } from "@hardness/contracts";
-import { parse as parseYaml } from "yaml";
+import { Document, parse as parseYaml, parseDocument } from "yaml";
 
 import { PolicyParseError } from "./policy.ts";
-import { renderLunaConfig, validateLunaConfig } from "./luna-config.ts";
+import { validateLunaConfig } from "./luna-config.ts";
 
 /** Fewest scorecard cases a candidate needs to count. */
 export const MIN_CASES = 3;
@@ -153,17 +153,18 @@ function whyOf(pack: PackId, step: Step, signal: RepoSignal, current: Candidate,
   return step === "up" ? head : `${head} at ${money(next.costPerCase)} a case vs ${money(current.costPerCase)}`;
 }
 
-/** The new luna.yaml text: the current file read as config, with only `engines` and `effort` changed, rendered again. Throws a
- *  `PolicyParseError` naming the path when the current file or the result is not a valid luna.yaml, so nothing invalid is proposed. */
+/** The new luna.yaml text: the current file edited in place, so comments, key order and keys this module does not know stay. Only
+ *  `engines.<pack>` and `effort.<pack>` are set. Throws a `PolicyParseError` naming the path when the current file or the result is
+ *  not a valid luna.yaml, so nothing invalid is proposed. */
 export function renderProposal(currentText: string, changes: ConfigChange[]): string {
-  const config = validateLunaConfig(parseMapping(currentText));
-  const engines: StageEngines = { ...config.engines };
-  const effort: StageEfforts = { ...config.effort };
+  validateLunaConfig(parseMapping(currentText));
+  const parsed = parseDocument(currentText);
+  const doc: Document = parsed.contents === null ? new Document({}) : parsed;
   for (const change of changes) {
-    if (change.engine) engines[change.pack] = change.engine.to;
-    if (change.effort) effort[change.pack] = change.effort.to;
+    if (change.engine) doc.setIn(["engines", change.pack], change.engine.to);
+    if (change.effort) doc.setIn(["effort", change.pack], change.effort.to);
   }
-  const text = renderLunaConfig({ ...config, engines, effort });
+  const text = String(doc);
   validateLunaConfig(parseMapping(text));
   return text;
 }

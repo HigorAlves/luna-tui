@@ -46,6 +46,8 @@ const ESCALATING_GATES: ReadonlySet<TaskState> = new Set<TaskState>(["awaiting_a
 export function slaActions(rows: SlaRow[], now: Date): SlaAction[] {
   const actions: SlaAction[] = [];
   for (const { task, sla, targets, lastReminderAt, defaultArchive, escalateAfter, lastEscalationAt, escalateTo } of rows) {
+    // A config proposal is a suggestion, not an intake gate: a clock neither nags nor archives it (an archive is not a decline, so it would come back).
+    if (task.route === "config") continue;
     const gate = task.state as TaskState;
     const since = task.stateSince ?? task.createdAt;
     // The repo's block wins, `sla.archive: off` included; the diagram's five days apply when it says nothing. The clock is the gate's own: an answer moves the card and a new wait starts it again.

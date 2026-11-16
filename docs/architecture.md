@@ -448,7 +448,11 @@ The machine can draft a `luna.yaml` change from evidence. A person still turns t
 
 Each change carries a `why` built from the numbers. It is never model text.
 
-**The gate.** The proposal is a card on route `config`. It waits at `awaiting_setup` with the new `luna.yaml`, the old one and the changes. The board shows the changes as a table above the file. `a` writes the file to the repo. `N` rejects the card. A config card is never sent back. A repo has at most one open config card. A new proposal replaces what the open card asks.
+**The gate.** The proposal is a card on route `config`. It waits at `awaiting_setup` with the new `luna.yaml`, the old one and the changes. The board shows the changes as a table above the file. `a` writes the file to the repo. `N` rejects the card. A config card is never sent back. A repo has at most one open config card. A new proposal replaces what the open card asks. The machine makes proposals for one repo one at a time, so two calls at once make one card. The repo must be a path the machine knows, given without a trailing slash; any other path is `404 unknown_repo`. The SLA clock never reminds of a config card and never archives it.
+
+**The edit.** The machine edits the YAML document in place (`renderProposal`). It sets `engines.<pack>` and `effort.<pack>` and nothing else. Comments, key order and every other key stay, including keys the machine does not model, such as `learning`, `economy` and `graph`. It checks the result with `validateLunaConfig`. A file that does not validate makes no card.
+
+**The approve.** `a` re-reads `luna.yaml`. If it equals the old text on the card, the machine writes the text stored on the card. If a person edited it since, the machine applies the card's changes to the current text in the same way, and writes that. If the changes no longer fit the current text, the approve is refused with `409 config_changed`. The card stays open.
 
 **The decline memory.** A rejected card stays archived with its changes. For `DECLINE_DAYS = 30` days, the rule does not propose the same change again.
 
