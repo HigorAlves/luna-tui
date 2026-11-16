@@ -124,7 +124,7 @@ services:                                 # run beside every stage and check con
     env: { POSTGRES_USER: app, POSTGRES_PASSWORD: app, POSTGRES_DB: app }
     ready: pg_isready -U app              # run inside the service until it exits 0
     exports: { DATABASE_URL: "postgres://app:app@postgres:5432/app" }   # env the repo's code gets
-toolchains: { node: "24", rust: "1.99" }  # what the repo builds with; recorded by setup
+toolchains: { node: "24", rust: "1.99" }  # what the repo builds with; checked against the repo's image, a mismatch is a warning
 policy:
   qa: web                                 # web (default) runs e2e when the change renders; none never does
   monthly_budget_usd: 40                  # this repo's tasks park once the calendar month has cost this much
@@ -308,8 +308,17 @@ How the bounds apply to a repo's `luna.yaml`, each with a reason left where you 
 | `egress.max_repo_hosts` | only the first N repo hosts are kept | the same |
 | `images.repo_base: deny` | `sandbox.image.base` is ignored (the machine's image runs) and `POST /repos/base/approve` refuses | the same, and the refusal |
 | `seccomp: <path>` | stage, check and app containers get `--security-opt seccomp=<path>` | none; it is the machine's own setting |
+| `images.devcontainer: deny` | `.devcontainer/devcontainer.json` is not read: no image and no `containerEnv` from it | none |
 
-`runtime`, `cache`, `images.devcontainer`, `limits.max_pids` and `bash_sandbox` are accepted now and read by later changes.
+### Toolchains
+
+When the machine probes a repo's own base image, it also runs the version command of each `toolchains` entry it knows (node, python, go, rust or cargo, java, ruby, pnpm) and compares the major, and the minor when you give one. A tool that differs or is missing becomes a line under `notes` on the repo's row in `GET /repos`, naming the tool, the wanted version and the found one. It never blocks a run, and the machine installs nothing.
+
+### Devcontainer support
+
+When a repo's `luna.yaml` names no `sandbox.image.base`, the machine reads `.devcontainer/devcontainer.json` or `.devcontainer.json` from your checkout (comments and trailing commas are fine). Its `image` is the base, and you approve it as you approve any base. Its `containerEnv` (plain strings, not the proxy, the loader or `PATH`) reaches the repo's install, checks and app, not agent stages. `features`, lifecycle commands (`postCreateCommand` and the rest), `mounts`, `runArgs`, `remoteUser` and `build.dockerfile` are not applied; `GET /repos` lists each under `notes` as "not applied: <why>".
+
+`runtime`, `cache`, `limits.max_pids` and `bash_sandbox` are accepted now and read by later changes.
 
 ## GitHub gates
 

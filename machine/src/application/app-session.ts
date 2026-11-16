@@ -29,6 +29,8 @@ export function e2eModeOf(policy: Pick<Policy, "qaTargets" | "factory">): E2eMod
 export interface AppDeps {
   policies: { for(repoPath: string): Promise<Policy> };
   imageFor(repoPath: string, taskId: string): Promise<string>;
+  /** The repository's devcontainer `containerEnv`: for its seed and app, like its checks and install. */
+  containerEnvOf?(repoPath: string): Promise<Record<string, string>>;
   install(input: InstallInput): Promise<InstallOutcome>;
   egress?: EgressPolicy;
   secrets?: SecretStore;
@@ -125,14 +127,15 @@ export async function openApp(deps: AppDeps, input: OpenAppInput): Promise<OpenA
   try {
     services = await deps.startServices(runName, policy.services, { network: { name: card.name, dns: card.dns } });
     const limits = sandboxSizeOf(policy);
+    const containerEnv = (await deps.containerEnvOf?.(input.repoPath)) ?? {};
     const cacheVolume = cacheVolumeFor(input.repoPath);
     if (seed.command) {
-      const seeded = await deps.exec({ name: `${container}-seed`, image, worktree: input.workspace, limits, argv: ["sh", "-c", seed.command], env: services.env, cacheVolume, cardNetwork: card, services: policy.services, servicesUp: true, network: services.network, serviceEnv: services.env, ...(seed.secrets.length > 0 ? { secrets: pick(seed.secrets) } : {}) }, { timeoutMs: SEED_TIMEOUT_MS });
+      const seeded = await deps.exec({ name: `${container}-seed`, image, worktree: input.workspace, limits, argv: ["sh", "-c", seed.command], env: { ...containerEnv, ...services.env }, cacheVolume, cardNetwork: card, services: policy.services, servicesUp: true, network: services.network, serviceEnv: services.env, ...(seed.secrets.length > 0 ? { secrets: pick(seed.secrets) } : {}) }, { timeoutMs: SEED_TIMEOUT_MS });
       await report("seed");
       if (seeded.code !== 0) return await fail("seed", `the seed command exited ${seeded.code}`, `${seeded.stdout}\n${seeded.stderr}`);
     }
     if (start.secrets.length > 0) appSecrets = await makeSecretFolder(pick(start.secrets), hostUser());
-    const args = appArgs({ name: container, image, worktree: input.workspace, command: start.command!, port: start.port, limits, cacheVolume, cardNetwork: card, services: policy.services, serviceEnv: services.env, ...(appSecrets ? { secrets: pick(start.secrets), secretsDir: appSecrets.dir } : {}) });
+    const args = appArgs({ name: container, image, env: containerEnv, worktree: input.workspace, command: start.command!, port: start.port, limits, cacheVolume, cardNetwork: card, services: policy.services, serviceEnv: services.env, ...(appSecrets ? { secrets: pick(start.secrets), secretsDir: appSecrets.dir } : {}) });
     const started = await deps.docker(args);
     if (started.code !== 0) return await fail("start", "the app container did not start", started.stderr);
     const deadline = now() + start.ready_timeout_s * 1000;

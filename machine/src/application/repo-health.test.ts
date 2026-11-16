@@ -37,6 +37,34 @@ describe("a repository's image and graph health", () => {
     expect(row!.graph).toMatchObject({ building: true, lastFailure: "the graph build failed (exit code 1)" });
   });
 
+  it("shows the devcontainer's image as the base, what it did not apply, and why the policy refused it", async () => {
+    const [dev, plain] = await repoHealthOf({
+      repos: ["/a/dev", "/a/plain"],
+      policy: async () => ({ graph: true, factory: { sandbox: { image: { base: null } } } }),
+      source: { for: async (r) => (r === "/a/dev" ? { base: "node:22", origin: "devcontainer" as const, containerEnv: {}, notes: ["devcontainer.json features: not applied: they need the devcontainers CLI"], bounds: ["devcontainer.json image refused"] } : { base: null, origin: null, containerEnv: {}, notes: [], bounds: [] }) },
+      machineImage: "hardness-runner:dev",
+      images: { pending: async () => null, status: () => null },
+      graph: { stampOf: async () => null },
+      watch: { health: () => ({ building: false, lastFailure: null }) },
+    });
+    expect(dev!.image.base).toBe("node:22");
+    expect(dev!.notes).toEqual(["devcontainer.json features: not applied: they need the devcontainers CLI"]);
+    expect(dev!.bounds).toEqual(["devcontainer.json image refused"]);
+    expect(plain).not.toHaveProperty("notes");
+  });
+
+  it("shows the image's toolchain warnings as notes", async () => {
+    const [row] = await repoHealthOf({
+      repos: ["/a/shop"],
+      policy: async () => ({ graph: true }),
+      machineImage: "hardness-runner:dev",
+      images: { pending: async () => null, status: () => null, warnings: () => ["toolchains node: the image has 22.3, luna.yaml wants 24"] },
+      graph: { stampOf: async () => null },
+      watch: { health: () => ({ building: false, lastFailure: null }) },
+    });
+    expect(row!.notes).toEqual(["toolchains node: the image has 22.3, luna.yaml wants 24"]);
+  });
+
   it("shows what the machine's sandbox policy dropped from the repo's luna.yaml, only when it dropped something", async () => {
     const [bounded, plain] = await repoHealthOf({
       repos: ["/a/bounded", "/a/plain"],

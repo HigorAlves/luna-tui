@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { ImageDocker } from "../../application/repo-images.ts";
+import { toolchainProbe, toolchainWarnings } from "../../domain/toolchain-check.ts";
 import { type ExecResult, exec as hostExec } from "../process/exec.ts";
 
 type Run = (command: string, args: string[], options?: { timeoutMs?: number; signal?: AbortSignal }) => Promise<ExecResult>;
@@ -40,7 +41,7 @@ export function dockerImages(deps: { exec?: Run } = {}): ImageDocker {
     async exists(tag) {
       return (await run("docker", ["image", "inspect", tag])).code === 0;
     },
-    async checkBase(base, signal) {
+    async checkBase(base, signal, toolchains = {}) {
       const pulled = await run("docker", ["pull", "--quiet", base], { timeoutMs: PULL_TIMEOUT_MS, ...(signal ? { signal } : {}) });
       // A base that is only local (not in any registry) is used as it is; one that is neither pullable nor local is refused.
       if (pulled.code !== 0 && (await run("docker", ["image", "inspect", base])).code !== 0) return { ok: false, reason: `the base image could not be pulled: ${pulled.stderr || pulled.stdout}` };
@@ -50,16 +51,19 @@ export function dockerImages(deps: { exec?: Run } = {}): ImageDocker {
       if (os !== "linux") return { ok: false, reason: `the base image is ${os}, not Linux` };
       if (arch !== hostArch()) return { ok: false, reason: `the base image's architecture is ${arch}, the host's is ${hostArch()}` };
       // A glibc loader in the image (musl images, such as Alpine, have none); the probe runs with no network, no capability, read-only.
+      // The declared toolchains' version commands ride in the same probe: fixed commands for known tools, nothing from the repository's text.
+      const tools = toolchainProbe(toolchains);
       const probe = await run(
         "docker",
         ["run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "64", "--memory", "256m",
-         "--entrypoint", "sh", base, "-c", "ls /lib64/ld-linux-* /lib/ld-linux-* /lib/*-linux-gnu/ld-linux-* 2>/dev/null | head -1; command -v git"],
+         "--entrypoint", "sh", base, "-c", `ls /lib64/ld-linux-* /lib/ld-linux-* /lib/*-linux-gnu/ld-linux-* 2>/dev/null | head -1; command -v git${tools ? `; ${tools}` : ""}`],
         { timeoutMs: CHECK_TIMEOUT_MS, ...(signal ? { signal } : {}) },
       );
       const lines = probe.stdout.trim().split("\n").map((l) => l.trim());
       if (!lines.some((l) => /ld-linux/.test(l))) return { ok: false, reason: "the base image is not glibc Linux with a shell (the machine's layer needs both)" };
       if (!lines.some((l) => /\/git$/.test(l))) return { ok: false, reason: "the base image has no git: the machine's layer does not carry it, so the base must" };
-      return { ok: true, digest };
+      // A toolchain the image does not satisfy is a warning for repo health, never a refusal.
+      return tools ? { ok: true, digest, toolchainWarnings: toolchainWarnings(toolchains, probe.stdout) } : { ok: true, digest };
     },
     async build(spec) {
       const dir = await mkdtemp(join(tmpdir(), "luna-image-"));

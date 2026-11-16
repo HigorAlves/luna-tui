@@ -319,6 +319,18 @@ describe("sandboxExecutor's image", () => {
   });
 });
 
+describe("sandboxExecutor's container env", () => {
+  it("gives a check the repository's container env, under the HARDNESS_ variables the caller passes", async () => {
+    const envs: Array<Record<string, string>> = [];
+    const fake = (async (r: { env: Record<string, string> }) => (envs.push(r.env), { code: 0, stdout: "", stderr: "" })) as never;
+    const exec = sandboxExecutor({ machine: "m", imageOf: async () => "img", containerEnvOf: async (repo) => (repo === "/a/shop" ? { CI: "1", HARDNESS_X: "from-repo" } : ({} as Record<string, string>)) }, fake);
+    await exec("true", [], { cwd: "/wt/shop/task-1", repoPath: "/a/shop", env: { HARDNESS_X: "from-caller" } });
+    await exec("true", [], { cwd: "/wt/other/task-1", repoPath: "/b/other" });
+    expect(envs[0]).toEqual({ CI: "1", HARDNESS_X: "from-caller" });
+    expect(envs[1]).toEqual({});
+  });
+});
+
 describe("sandboxExecutor's list and size", () => {
   it("gives each check its repository's list and its own size, and the machine's defaults when no repository is named", async () => {
     const runs: Array<{ egress?: unknown; limits?: unknown }> = [];

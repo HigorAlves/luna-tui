@@ -732,11 +732,13 @@ Where each part of Evidence runs:
 
 A repository can name its own base in its `luna.yaml`, `sandbox.image.base`. The value is a plain image reference: registry, repository, tag or sha256 digest. `imageSpecOf` checks it. The machine never takes it from a card's work folder or a ticket.
 
+When `luna.yaml` names no base, the machine reads `.devcontainer/devcontainer.json` (or `.devcontainer.json`) from the user's checkout, never a card's folder. The file is JSONC. Its `image` becomes the base and goes through the same approval and the same probe. A `sandbox.image.base` in `luna.yaml` wins over it. `images.devcontainer: deny` in the machine's policy turns the reader off. Its `containerEnv` reaches the repo's own commands (install, checks, the app), never an agent stage. The keys the machine does not apply are listed under `notes` on the repo's row in `GET /repos`, each as "not applied: <why>". A `build.dockerfile` is one of them for now.
+
 The machine uses the base only after a person approves that exact reference for that repository. The machine keeps the approvals in `<state dir>/approved-bases.json`. `POST /repos/base/approve` takes the repository and the exact reference. It refuses a reference that is not the base in the repository's `luna.yaml` on your checkout now. `A` on the repository's row on the board's Floor does the same. Until then, and after any change of the reference, the machine pulls and builds nothing. The repository runs on the machine's image. An `image.base_pending` row (machine-only) says that it waits. The setup gate shows `sandbox.image.base` on its own line whenever its proposal sets it. Approval of the setup does not approve the base.
 
 The machine then builds one image for that repository. It builds from a generated Dockerfile (`FROM <base>`, the layer copied from the machine's runner image, the entrypoint). Docker builds it on the host with an empty context, no network, no build argument, no secret and no mount. The build has a time limit, and the machine runs one build at a time. The tag is `hardness-runner-<slug>:<hash of the base's digest and the layer's key>`.
 
-The machine checks the base first. The base needs Linux, glibc, the host's architecture, a shell and `git` (the layer does not carry git). The machine refuses a base that fails, with the reason. The repository then runs on the machine's image.
+The machine checks the base first. The base needs Linux, glibc, the host's architecture, a shell and `git` (the layer does not carry git). The machine refuses a base that fails, with the reason. The same probe runs the version command of each tool in the repo's `toolchains`; a mismatch is a note on the repo's health, never a refusal. The repository then runs on the machine's image.
 
 Every stage container runs in that image. So do the checks runner (given the repository explicitly) and the Verify workspace of that repository. The environment hash uses its id.
 

@@ -54,6 +54,12 @@ describe("ensureInstalled", () => {
     expect(asked).toContainEqual({ path: "/ws/repo/card-1", commit: input.commit });
   });
 
+  it("gives the install the repository's container env, under the step's own", async () => {
+    const { deps, runs, input } = setup();
+    await ensureInstalled({ ...deps, containerEnvOf: async (repo) => (repo === "/user/repo" ? { CI: "1", COREPACK_ENABLE_STRICT: "0" } : ({} as Record<string, string>)) }, input);
+    expect(runs[0]!.env).toMatchObject({ CI: "1", COREPACK_ENABLE_STRICT: "0" });
+  });
+
   it("holds no credential, no secret and no mount of the run's input or output in its container", async () => {
     const { deps, runs, input } = setup();
     await ensureInstalled(deps, input);

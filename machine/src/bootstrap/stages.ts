@@ -42,6 +42,7 @@ import { dockerImages } from "../adapters/docker/image-build.ts";
 import { repoSlug } from "../adapters/graph/slug.ts";
 import { ensureGraphReady } from "../application/graph-ready.ts";
 import { type RepoImageEvent, repoImages as makeRepoImages } from "../application/repo-images.ts";
+import { type RepoImageSource, repoImageSource } from "../application/repo-image-source.ts";
 import { homedir } from "node:os";
 import { repoSecrets } from "../adapters/credentials/repo-secrets.ts";
 import { PACKAGE_MANAGER_CONFIG, configFilesChanged } from "../application/install.ts";
@@ -95,7 +96,7 @@ export interface RealStagesResult {
   proofRig: ProofRig | null;
   /** What any pack run outside the pipeline needs (the Slack inbox's triage, Jira intake): the image,
    *  the credentials, the state dir, the worktrees dir and each repo's luna.yaml; null when agents are off or something is missing. */
-  agentDeps: { egress?: EgressPolicy; image: string; approvals: ApprovedBases; repoImages: ReturnType<typeof makeRepoImages>; imageEvents: ImageEventSink; repoImageOf: (repoPath: string, signal?: AbortSignal) => Promise<string>; credentials: Credentials; stateDir: string; worktreesDir: string; policies: PolicyStore } | null;
+  agentDeps: { egress?: EgressPolicy; image: string; approvals: ApprovedBases; repoImages: ReturnType<typeof makeRepoImages>; imageSource: RepoImageSource; imageEvents: ImageEventSink; repoImageOf: (repoPath: string, signal?: AbortSignal) => Promise<string>; credentials: Credentials; stateDir: string; worktreesDir: string; policies: PolicyStore } | null;
   /** What `Pipeline.tick` asks of an open release question (merged, withdrawn, kept); null when stages are stubs. */
   shipGateProbe: ShipGateProbe | null;
 }
@@ -200,9 +201,13 @@ export async function buildRealStages(
   // explicitly (`repoPath` in the exec options), never guess it from a folder.
   const imageEvents: ImageEventSink = { sink: (event) => console.warn(`repository image: ${JSON.stringify(event)}`) };
   const approvals = approvedBases(config.stateDir);
+  // luna.yaml's base, else the devcontainer's image, both read from the user's checkout; its `containerEnv` reaches the repo's own commands only.
+  const imageSource = repoImageSource({ policies, machinePolicy: config.sandboxPolicy });
+  const containerEnvOf = async (repoPath: string) => (await imageSource.for(repoPath)).containerEnv;
   const repoImages = makeRepoImages({
     machineImage: config.runnerImage,
-    imageOf: async (repoPath) => (await policies.for(repoPath)).factory.sandbox.image,
+    imageOf: async (repoPath) => ({ base: (await imageSource.for(repoPath)).base }),
+    toolchainsOf: async (repoPath) => (await policies.for(repoPath)).toolchains,
     slugOf: repoSlug,
     docker: dockerImages(),
     approvals,
@@ -217,6 +222,7 @@ export async function buildRealStages(
     secrets,
     machine: config.runnerImage,
     imageOf: async (repoPath) => (await repoImages.ensure(repoPath)).image,
+    containerEnvOf,
     ...(egress ? { egress: (repoPath: string | undefined) => egress.for({ repoPath: repoPath ?? null, kind: "check" }) } : {}),
     // A check container reads the repository's own size, as a stage does (the limit carried from 11a).
     limitsOf: async (repoPath) => {
@@ -225,7 +231,7 @@ export async function buildRealStages(
   });
   // The machine installs from the lockfile before a stage that writes, and before a check on a card's workspace (Verify's fresh one included).
   const install = (input: InstallInput): Promise<InstallOutcome> =>
-    ensureInstalled({ stateDir: config.stateDir, policies, repoImages, imageId, lockfilesAt, nestedLockfilesAt, exec: execInSandbox, ...(egress ? { egress } : {}), removeNested: removeNestedRepositories, dirtyFiles, restoreFiles, configChanged: (i) => configFilesChanged({ cardBlobs: (w, c, names) => lockfilesAt(w, c, names), userBlobs: (r, c, names) => blobsAtRepo(r, c, names), baseOf: (w, r) => branchBase(w, r) }, i) }, input);
+    ensureInstalled({ stateDir: config.stateDir, policies, containerEnvOf, repoImages, imageId, lockfilesAt, nestedLockfilesAt, exec: execInSandbox, ...(egress ? { egress } : {}), removeNested: removeNestedRepositories, dirtyFiles, restoreFiles, configChanged: (i) => configFilesChanged({ cardBlobs: (w, c, names) => lockfilesAt(w, c, names), userBlobs: (r, c, names) => blobsAtRepo(r, c, names), baseOf: (w, r) => branchBase(w, r) }, i) }, input);
   const installFor = async (options: { repoPath?: string; cwd?: string; signal?: AbortSignal }): Promise<void> => {
     if (options.repoPath && options.cwd && isClone(options.cwd)) {
       const installed = await install({ taskId: "_checks", repoPath: options.repoPath, workspace: options.cwd, commit: await headCommit(options.cwd), ...(options.signal ? { signal: options.signal } : {}) });
@@ -255,6 +261,7 @@ export async function buildRealStages(
   const appDeps: AppDeps = {
     policies,
     imageFor: async (repoPath, taskId) => (await repoImages.ensure(repoPath, undefined, taskId)).image,
+    containerEnvOf,
     install,
     ...(egress ? { egress } : {}),
     secrets,
@@ -617,7 +624,7 @@ export async function buildRealStages(
   };
   const resolveConflicts: DeliverDeps["resolveConflicts"] = (context, input) =>
     mergeRound({ github, loop: reviewLoop, policies, evidence: { load: evidenceDeps.load, save: saveEvidence, publish: publishByPolicy, store: evidenceStore }, stateDir: config.stateDir }, context, input);
-  return { stubReason: null, real, resolveConflicts, verifyPack, checksExec, proofRig, shipGateProbe: shipGateProbe({ github, ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch } } : {}), policies, evidence: { load: evidenceDeps.load }, stateDir: config.stateDir }), agentDeps: { ...(egress ? { egress } : {}), image: config.runnerImage, approvals, repoImages, imageEvents, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
+  return { stubReason: null, real, resolveConflicts, verifyPack, checksExec, proofRig, shipGateProbe: shipGateProbe({ github, ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch } } : {}), policies, evidence: { load: evidenceDeps.load }, stateDir: config.stateDir }), agentDeps: { ...(egress ? { egress } : {}), image: config.runnerImage, approvals, repoImages, imageSource, imageEvents, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
 }
 
 /** Packs on demand (`POST /runs`): on whenever agents are, off (undefined, the route's 503) only

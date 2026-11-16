@@ -22,6 +22,8 @@ const TAIL_LINES = 40;
 export interface InstallDeps {
   stateDir: string;
   policies: Pick<PolicyStore, "for">;
+  /** The repository's devcontainer `containerEnv`, for the install's own container. */
+  containerEnvOf?(repoPath: string): Promise<Record<string, string>>;
   repoImages: { ensure(repoPath: string, signal?: AbortSignal, taskId?: string): Promise<{ image: string }> };
   imageId(image: string): Promise<string>;
   lockfilesAt(path: string, commit: string, names: readonly string[]): Promise<Record<string, string>>;
@@ -120,6 +122,7 @@ export async function ensureInstalled(deps: InstallDeps, input: InstallInput): P
   const spec = deps.egress ? await deps.egress.for({ repoPath: input.repoPath, kind: "install" }) : undefined;
   const blocked: BlockedRow[] = [];
   const ran: string[] = [];
+  const containerEnv = (await deps.containerEnvOf?.(input.repoPath)) ?? {};
   for (const step of steps) {
     // No `secrets`, no credential, no /in, /out, /session or /graph: the spec has nothing of the run's.
     const result = await deps.exec(
@@ -129,7 +132,7 @@ export async function ensureInstalled(deps: InstallDeps, input: InstallInput): P
         worktree: input.workspace,
         limits: sandboxSizeOf(policy),
         argv: argvIn(step),
-        env: step.env,
+        env: { ...containerEnv, ...step.env },
         cacheVolume: cacheVolumeFor(input.repoPath),
         ...(spec ? { egress: spec } : {}),
       },
