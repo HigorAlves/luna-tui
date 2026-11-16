@@ -2,7 +2,7 @@
 // repository's services beside it, the seed run first, and the app only counted ready when the configured path answers from inside its container.
 // The browser run's own network (the `agent` list) joins the app's; the app never gets the agent's proxy or the engine's host, and no port is
 // published on the host. What the app and the seed print is untrusted: flattened, capped and redacted before it is in a reason.
-import { cacheVolumeFor, type SandboxExec, SecretsMissingError } from "../adapters/docker/docker.ts";
+import { cacheVolumeFor, hostUser, makeSecretFolder, type SandboxExec, SecretsMissingError } from "../adapters/docker/docker.ts";
 import { APP_ALIAS, appArgs, probeArgs } from "../adapters/docker/app.ts";
 import type { BlockedRow, CardNetwork, openCardNetwork, openPlainNetwork } from "../adapters/docker/egress.ts";
 import type { startServices } from "../adapters/docker/services.ts";
@@ -106,11 +106,14 @@ export async function openApp(deps: AppDeps, input: OpenAppInput): Promise<OpenA
     if (fresh.length > 0) input.onBlocked(step, fresh.map((row) => ({ ...row, host: redactHost(row.host) })));
   };
   let closed = false;
+  // The app's own secret files, mounted at /run/luna-secrets; deleted with the container.
+  let appSecrets: { dir: string; remove(): Promise<void> } | null = null;
   const close = async (): Promise<void> => {
     if (closed) return;
     closed = true;
     await report("app").catch(() => {});
     await deps.docker(["rm", "-f", container]);
+    await appSecrets?.remove();
     await services?.teardown();
     await card.teardown();
   };
@@ -128,8 +131,9 @@ export async function openApp(deps: AppDeps, input: OpenAppInput): Promise<OpenA
       await report("seed");
       if (seeded.code !== 0) return await fail("seed", `the seed command exited ${seeded.code}`, `${seeded.stdout}\n${seeded.stderr}`);
     }
-    const args = appArgs({ name: container, image, worktree: input.workspace, command: start.command!, port: start.port, limits, cacheVolume, cardNetwork: card, services: policy.services, serviceEnv: services.env, ...(start.secrets.length > 0 ? { secrets: pick(start.secrets) } : {}) });
-    const started = await deps.docker(args, { env: { ...process.env, ...pick(start.secrets) } });
+    if (start.secrets.length > 0) appSecrets = await makeSecretFolder(pick(start.secrets), hostUser());
+    const args = appArgs({ name: container, image, worktree: input.workspace, command: start.command!, port: start.port, limits, cacheVolume, cardNetwork: card, services: policy.services, serviceEnv: services.env, ...(appSecrets ? { secrets: pick(start.secrets), secretsDir: appSecrets.dir } : {}) });
+    const started = await deps.docker(args);
     if (started.code !== 0) return await fail("start", "the app container did not start", started.stderr);
     const deadline = now() + start.ready_timeout_s * 1000;
     for (;;) {

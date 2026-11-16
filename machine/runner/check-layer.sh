@@ -21,6 +21,7 @@ tools() {
   docker run --rm --entrypoint sh "$1" -c '/opt/luna/bin/node --version && /opt/luna/bin/rg --version | head -1 && /opt/luna/bin/gh --version | head -1 && /opt/luna/bin/pnpm --version && /opt/luna/bin/graphify --help >/dev/null && test -f /opt/luna/graph-tools/build.py && /opt/luna/python/bin/python3 -c "import graphify" && /opt/luna/bin/node /opt/luna/egress/proxy.ts --check'
 }
 check "the image has the entrypoint /opt/luna/bin/luna-stage" docker run --rm --entrypoint test "$image" -x /opt/luna/bin/luna-stage
+check "the image has luna-env, the secrets launcher" docker run --rm --entrypoint test "$image" -x /opt/luna/bin/luna-env
 check "the factory starts from the layer in the runner image" starts "$image"
 check "the layer's tools run in the runner image" tools "$image"
 

@@ -1,3 +1,4 @@
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import type { ExecResult } from "../adapters/process/exec.ts";
@@ -13,6 +14,8 @@ function setup(over: { seedExit?: number; probes?: number[]; running?: string; l
   const events: string[] = [];
   const dockerCalls: string[][] = [];
   const dockerEnvs: Array<NodeJS.ProcessEnv | undefined> = [];
+  /** The secret files the app container would have found at /run/luna-secrets when `docker run` was called, and where. */
+  const appSecrets: { dir?: string; files?: Record<string, string> } = {};
   const seedRuns: Array<{ secrets?: Record<string, string>; argv: string[]; servicesUp?: boolean }> = [];
   const blocked: Array<[string, unknown]> = [];
   const probes = [...(over.probes ?? [0])];
@@ -32,6 +35,14 @@ function setup(over: { seedExit?: number; probes?: number[]; running?: string; l
     docker: async (args, options) => {
       dockerCalls.push(args);
       dockerEnvs.push(options?.env);
+      if (args[0] === "run") {
+        const mount = args.find((a) => a.endsWith(":/run/luna-secrets:ro"));
+        if (mount) {
+          const dir = mount.split(":")[0]!;
+          appSecrets.dir = dir;
+          appSecrets.files = Object.fromEntries(readdirSync(dir).map((name) => [name, readFileSync(`${dir}/${name}`, "utf8")]));
+        }
+      }
       if (args[0] === "run") return (events.push("app"), rowsNow.push({ host: "app.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }), { code: 0, stdout: "id", stderr: "" } as ExecResult);
       if (args[0] === "exec") return { code: probes.length > 1 ? probes.shift()! : probes[0]!, stdout: "", stderr: "" };
       if (args[0] === "inspect") return { code: 0, stdout: over.running ?? "true", stderr: "" };
@@ -42,7 +53,7 @@ function setup(over: { seedExit?: number; probes?: number[]; running?: string; l
     sleep: async () => void (t += 1000),
     now: () => t,
   };
-  return { deps, events, dockerCalls, dockerEnvs, seedRuns, blocked, onBlocked: (step: string, rows: unknown) => void blocked.push([step, rows]) };
+  return { deps, events, dockerCalls, dockerEnvs, appSecrets, seedRuns, blocked, onBlocked: (step: string, rows: unknown) => void blocked.push([step, rows]) };
 }
 
 describe("e2eModeOf", () => {
@@ -88,14 +99,26 @@ describe("openApp", () => {
     expect(s.events).toContain("plain network abcd1234-app-2");
   });
 
-  it("gives the app only its own secrets, by name on the command line and by value in the docker client's environment", async () => {
+  it("gives the app only its own secrets, as files it finds at /run/luna-secrets: never an argument, never the docker client's environment; the files are gone once the app is closed", async () => {
     const s = setup();
-    await openApp(s.deps, { ...input, onBlocked: s.onBlocked });
+    const opened = await openApp(s.deps, { ...input, onBlocked: s.onBlocked });
     const run = s.dockerCalls.findIndex((c) => c[0] === "run");
-    expect(s.dockerCalls[run]!).toEqual(expect.arrayContaining(["-e", "APP_KEY", "--network-alias", "luna-app"]));
+    expect(s.dockerCalls[run]!).toEqual(expect.arrayContaining(["--network-alias", "luna-app"]));
+    expect(s.dockerCalls[run]!).not.toContain("APP_KEY");
     expect(s.dockerCalls[run]!.join(" ")).not.toContain("SEED_KEY");
     for (const a of s.dockerCalls.flat()) for (const v of [secretA, secretB]) expect(a).not.toContain(v);
-    expect(s.dockerEnvs[run]!.APP_KEY).toBe(secretA);
+    expect(s.dockerEnvs[run]?.APP_KEY).toBeUndefined();
+    expect(s.appSecrets.files).toEqual({ APP_KEY: secretA });
+    expect(existsSync(s.appSecrets.dir!)).toBe(true);
+    if (opened.ok) await opened.close();
+    expect(existsSync(s.appSecrets.dir!)).toBe(false);
+  });
+
+  it("removes the app's secret files when the app fails to start", async () => {
+    const s = setup({ probes: [1] });
+    const out = await openApp(s.deps, { ...input, onBlocked: s.onBlocked });
+    expect(out.ok).toBe(false);
+    expect(existsSync(s.appSecrets.dir!)).toBe(false);
   });
 
   it("probes from inside the container every second until the configured path answers, and gives up after ready_timeout_s", async () => {

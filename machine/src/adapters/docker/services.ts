@@ -32,9 +32,12 @@ export interface ServiceSet {
 export const networkName = (runName: string): string => `hardness-net-${runName}`;
 export const serviceName = (runName: string, key: string): string => `${runName}-svc-${key}`;
 
+/** Official images start as root and drop to their own user (postgres, redis), so the few capabilities that takes stay and the rest go. */
+const SERVICE_HARDENING = ["--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--cap-add", "CHOWN,SETUID,SETGID,DAC_OVERRIDE,FOWNER", "--pids-limit", "512"];
+
 /** The `docker run` argument list for one service. Pure. */
 export function serviceArgs(network: string, runName: string, key: string, spec: ServiceSpec, dns?: string): string[] {
-  const args = ["run", "-d", "--name", serviceName(runName, key), "--label", `${CONTAINER_LABEL}=1`, "--network", network, ...(dns ? ["--dns", dns] : []), "--network-alias", key];
+  const args = ["run", "-d", "--name", serviceName(runName, key), "--label", `${CONTAINER_LABEL}=1`, ...SERVICE_HARDENING, "--network", network, ...(dns ? ["--dns", dns] : []), "--network-alias", key];
   for (const [name, value] of Object.entries(spec.env ?? {})) args.push("-e", `${name}=${value}`);
   args.push(spec.image);
   return args;

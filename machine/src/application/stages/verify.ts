@@ -8,6 +8,8 @@ import { join, resolve, sep } from "node:path";
 import { branchBase, branchDiffStat, changedPaths as hostChangedPaths, diffText, gitIdentity as hostGitIdentity } from "../../adapters/git/worktree.ts";
 import { RepoImageError } from "../repo-images.ts";
 import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
+import { SeccompUnavailableError } from "../../adapters/docker/seccomp.ts";
+import { seccompDetail } from "../env-broken.ts";
 import { blockedPayloads } from "../egress-policy.ts";
 import { InstallFailedError } from "../install.ts";
 import { SecretsMissingError } from "../../adapters/docker/docker.ts";
@@ -174,6 +176,7 @@ async function excerptOf(worktree: string, finding: Finding): Promise<string> {
 function escalationOf(error: unknown): StageResult | null {
   // The install failed, or a declared secret is missing: the step's own detail.
   if (error instanceof InstallFailedError || error instanceof SecretsMissingError) return { outcome: "escalated", detail: error.detail };
+  if (error instanceof SeccompUnavailableError) return { outcome: "escalated", detail: seccompDetail(error) };
   if (error instanceof EgressUnsupportedError) return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "network", reason: error.message, options: ["install Docker Engine 28.0 or newer, or set MACHINE_EGRESS=off on the machine to run without the allow-list, then resume"] } };
   // The repository's image could not be built: an environment problem with the reason.
   if (error instanceof RepoImageError) return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "checks", reason: `the repository's image could not be built: ${error.reason}`, options: ["fix sandbox.image.base in luna.yaml, or remove it to use the machine's image, then resume"] } };
