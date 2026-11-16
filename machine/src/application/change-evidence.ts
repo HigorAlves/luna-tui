@@ -13,6 +13,7 @@ import { postable } from "../domain/postable.ts";
 import { COMPLIANCE_DIR, type ComplianceDrafts } from "./compliance-drafts.ts";
 import type { GitHub } from "./github.ts";
 import { findJiraKey } from "./jira.ts";
+import type { VulnRow } from "./vulns.ts";
 
 /** The controls the evidence answers, handed to the explainer. */
 const CONTROLS = ["SOC2 CC8.1", "HIPAA 164.308(a)(1)(ii)(D)"];
@@ -35,6 +36,8 @@ export interface ChangeEvidenceDeps {
   explain(context: ChangeExceptionsContext): Promise<unknown>;
   /** The `owner/name` of every repository the machine knows. */
   repos(): Promise<string[]>;
+  /** The alerts a card stands for, for the vulnerability section of the page; without it the page has none. */
+  vulns?: { list(): Promise<VulnRow[]> };
   stateDir: string;
   log?: (line: string) => void;
   now?: () => Date;
@@ -69,7 +72,8 @@ export class ChangeEvidence {
     }
     const flagged = records.filter((r) => r.exceptions.length > 0);
     const { explanations, failed } = flagged.length > 0 ? await this.explain(repo, period, flagged, bodies) : { explanations: new Map<string, string>(), failed: false };
-    const text = evidencePage({ repo, period, records, bypassUnknown: bypasses === "unknown", explanations, generatedAt: this.now().toISOString() });
+    const vulns = await this.vulnsOf(repo);
+    const text = evidencePage({ repo, period, records, bypassUnknown: bypasses === "unknown", explanations, generatedAt: this.now().toISOString(), ...(vulns ? { vulns } : {}) });
     return this.deps.drafts.open({
       id: `change_evidence:${repo}:${period}`,
       kind: "change_evidence",
@@ -80,6 +84,17 @@ export class ChangeEvidence {
       text,
       targets: [{ kind: "wiki", repo, path: evidencePath(period) }],
     });
+  }
+
+  /** The repo's alerts; null when there is no vulns state or it cannot be read (the page then has no section). */
+  private async vulnsOf(repo: string): Promise<VulnRow[] | null> {
+    if (!this.deps.vulns) return null;
+    try {
+      return (await this.deps.vulns.list()).filter((v) => v.repo === repo);
+    } catch (error) {
+      this.log(`compliance evidence: ${repo}: the vulnerability state could not be read: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
   }
 
   /** One pass: the previous month of `now` for each repo not done with it. A pass already running is joined, not doubled. */

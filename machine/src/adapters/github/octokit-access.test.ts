@@ -93,6 +93,14 @@ describe("the access review reads", () => {
     await expect(broken.github.rulesetBypassActors("o/a")).rejects.toBeInstanceOf(GitHubError);
   });
 
+  it("says unknown when a ruleset comes back without bypass_actors, which GitHub sends only to a caller who can write the ruleset", async () => {
+    const { github } = routes({
+      "GET /repos/{owner}/{repo}/rulesets": () => [{ id: 1, name: "main" }],
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": () => ({ id: 1, name: "main" }),
+    });
+    expect(await github.rulesetBypassActors("o/a")).toBe("unknown");
+  });
+
   it("reads whether branch protection covers admins", async () => {
     const route = "GET /repos/{owner}/{repo}/branches/{branch}/protection";
     const failing = (status: number, message: string) =>

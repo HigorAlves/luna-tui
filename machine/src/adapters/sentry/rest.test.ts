@@ -22,21 +22,23 @@ function fake(...answers: Response[]) {
 }
 const options = (f: ReturnType<typeof fake>) => ({ token: "t", org: "acme", fetch: f.fetch, now: () => new Date("2026-11-16T10:00:00Z") });
 const SINCE = "2026-11-15T10:00:00Z";
+const empty = () => json(200, [], { Link: link(null) });
+const queriesOf = (f: ReturnType<typeof fake>) => f.calls.map((c) => new URL(c.url).searchParams.get("query"));
 
 describe("Sentry REST", () => {
-  it("asks the org's issues endpoint for unresolved issues new or escalating since the window, with the bearer token", async () => {
-    const f = fake(json(200, issues, { Link: link(null) }));
+  it("asks the org's issues endpoint for unresolved issues new, and again for escalating, since the window, with the bearer token and no boolean OR", async () => {
+    const f = fake(json(200, issues, { Link: link(null) }), empty());
     await createSentry(options(f)).newOrEscalatingIssues(SINCE);
     const url = new URL(f.calls[0]!.url);
     expect(`${url.origin}${url.pathname}`).toBe("https://sentry.io/api/0/organizations/acme/issues/");
-    expect(url.searchParams.get("query")).toBe(`is:unresolved (firstSeen:>=${SINCE} OR is:escalating)`);
+    expect(queriesOf(f)).toEqual([`is:unresolved firstSeen:>=${SINCE}`, "is:unresolved is:escalating"]);
     expect(url.searchParams.get("start")).toBe("2026-11-15T10:00:00.000Z");
     expect(url.searchParams.get("end")).toBe("2026-11-16T10:00:00.000Z");
     expect(url.searchParams.get("sort")).toBe("date");
     expect(f.calls[0]!.init.headers).toMatchObject({ Authorization: "Bearer t" });
   });
   it("maps each issue to the fields incidents need", async () => {
-    const list = await createSentry(options(fake(json(200, issues, { Link: link(null) })))).newOrEscalatingIssues(SINCE);
+    const list = await createSentry(options(fake(json(200, issues, { Link: link(null) }), empty()))).newOrEscalatingIssues(SINCE);
     expect(list).toHaveLength(2);
     expect(list[0]).toEqual({
       id: "4501234567",
@@ -54,28 +56,38 @@ describe("Sentry REST", () => {
     });
     expect(list[1]).toMatchObject({ level: "fatal", count: 12, project: "web" });
   });
-  it("narrows to the configured projects", async () => {
-    const f = fake(json(200, []));
+  it("narrows to the configured projects by repeating each query per project", async () => {
+    const f = fake(empty(), empty(), empty(), empty());
     await createSentry({ ...options(f), projects: ["web", "api-gateway"] }).newOrEscalatingIssues(SINCE);
-    expect(new URL(f.calls[0]!.url).searchParams.get("query")).toBe(`is:unresolved (firstSeen:>=${SINCE} OR is:escalating) (project:web OR project:api-gateway)`);
+    expect(queriesOf(f)).toEqual([
+      `is:unresolved firstSeen:>=${SINCE} project:web`,
+      `is:unresolved is:escalating project:web`,
+      `is:unresolved firstSeen:>=${SINCE} project:api-gateway`,
+      `is:unresolved is:escalating project:api-gateway`,
+    ]);
+  });
+  it("merges the two queries by issue id: an issue both new and escalating appears once", async () => {
+    const f = fake(json(200, [issues[0]], { Link: link(null) }), json(200, [issues[0], issues[1]], { Link: link(null) }));
+    const list = await createSentry(options(f)).newOrEscalatingIssues(SINCE);
+    expect(list.map((i) => i.shortId)).toEqual(["API-GATEWAY-3F", "WEB-9Z"]);
   });
   it("calls a self-hosted base url", async () => {
-    const f = fake(json(200, []));
+    const f = fake(empty(), empty());
     await createSentry({ ...options(f), url: "https://sentry.acme.internal/" }).newOrEscalatingIssues(SINCE);
     expect(f.calls[0]!.url).toMatch(/^https:\/\/sentry\.acme\.internal\/api\/0\/organizations\/acme\/issues\/\?/);
   });
   it("follows the Link header's next cursor while it has results", async () => {
-    const f = fake(json(200, [issues[0]], { Link: link("0:100:0") }), json(200, [issues[1]], { Link: link(null) }));
+    const f = fake(json(200, [issues[0]], { Link: link("0:100:0") }), json(200, [issues[1]], { Link: link(null) }), empty());
     const list = await createSentry(options(f)).newOrEscalatingIssues(SINCE);
     expect(list.map((i) => i.shortId)).toEqual(["API-GATEWAY-3F", "WEB-9Z"]);
-    expect(f.calls).toHaveLength(2);
+    expect(f.calls).toHaveLength(3);
     expect(new URL(f.calls[1]!.url).searchParams.get("cursor")).toBe("0:100:0");
     expect(list.incomplete).toBeFalsy();
   });
   it("marks the list incomplete at the page cap", async () => {
-    const f = fake(...Array.from({ length: 10 }, () => json(200, [issues[0]], { Link: link("0:100:0") })));
+    const f = fake(...Array.from({ length: 10 }, () => json(200, [issues[0]], { Link: link("0:100:0") })), empty());
     const list = await createSentry(options(f)).newOrEscalatingIssues(SINCE);
-    expect(f.calls).toHaveLength(10);
+    expect(f.calls).toHaveLength(11);
     expect(list.incomplete).toBe(true);
   });
   it("a 401 says the token is wrong, a 403 that it lacks the scope", async () => {

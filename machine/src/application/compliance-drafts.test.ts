@@ -50,6 +50,24 @@ describe("the drafts store", () => {
     expect(await store().get(first.id)).toEqual(first);
   });
 
+  it("puts a draft left in posting by a crash back to waiting, or edited when the person edited it, with a failed entry", async () => {
+    const drafts = store();
+    const plain = await drafts.open(fields());
+    const other = await drafts.open(fields({ id: "change_evidence:acme/api:2026-10", repo: "acme/api" }));
+    const edited = await drafts.edit(other.id, other.hash, "# Mine\n", "person");
+    const idle = await drafts.open(fields({ id: "change_evidence:acme/x:2026-10", repo: "acme/x" }));
+    await drafts.claim(plain.id, plain.hash);
+    await drafts.claim(edited.id, edited.hash);
+    // A new process: the claims are still on disk, nobody is posting.
+    const restarted = store();
+    expect(await restarted.recoverPosting()).toBe(2);
+    expect(await restarted.get(plain.id)).toMatchObject({ status: "waiting", history: [{ did: "failed", from: "machine" }] });
+    expect(await restarted.get(edited.id)).toMatchObject({ status: "edited", history: [{ did: "edited" }, { did: "failed", from: "machine" }], error: "interrupted by a restart" });
+    expect((await restarted.get(idle.id))?.history).toEqual([]);
+    expect(await restarted.recoverPosting()).toBe(0);
+    await expect(restarted.claim(plain.id, plain.hash)).resolves.toMatchObject({ status: "posting" });
+  });
+
   it("skips a damaged file with a warning", async () => {
     const drafts = store();
     await drafts.open(fields());

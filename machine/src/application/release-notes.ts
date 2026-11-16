@@ -12,7 +12,7 @@ const PR_CAP = 200;
 const DEFAULT_DAYS = 30;
 
 export interface ReleaseNotesDeps {
-  github: Pick<GitHub, "mergedPrs" | "latestRelease">;
+  github: Pick<GitHub, "mergedPrs" | "latestRelease" | "recentReleases">;
   drafts: Pick<ComplianceDrafts, "open">;
   /** The one run of the `release_notes` pack; its answer is validated here. */
   write(context: ReleaseNotesContext): Promise<unknown>;
@@ -26,11 +26,19 @@ export class ReleaseNotes {
     this.now = deps.now ?? (() => new Date());
   }
 
-  /** The draft for one repository and tag, opened or refreshed. `since` is the latest release's date unless given, else thirty days back. */
+  /** The date of the release the notes follow: the latest one, or the one before it when `tag` is itself already the latest (CI published it). */
+  private async sinceLastRelease(repo: string, tag: string): Promise<string | null> {
+    const latest = await this.deps.github.latestRelease(repo);
+    if (latest === null) return null;
+    if (latest.tag !== tag) return latest.publishedAt;
+    return (await this.deps.github.recentReleases(repo)).find((r) => r.tag !== tag)?.publishedAt ?? null;
+  }
+
+  /** The draft for one repository and tag, opened or refreshed. `since` is the date of the release before the tag unless given, else thirty days back. */
   async draft(input: { repo: string; tag: string; since?: string }): Promise<ComplianceDraft> {
     const { github } = this.deps;
     const until = this.now();
-    const since = input.since ?? (await github.latestRelease(input.repo))?.publishedAt ?? new Date(until.getTime() - DEFAULT_DAYS * 86_400_000).toISOString();
+    const since = input.since ?? (await this.sinceLastRelease(input.repo, input.tag)) ?? new Date(until.getTime() - DEFAULT_DAYS * 86_400_000).toISOString();
     const merged = await github.mergedPrs(input.repo, since, until.toISOString());
     const prs = merged.slice(-PR_CAP).map((pr) => ({ number: pr.number, title: pr.title, author: pr.author, body: pr.body.slice(0, BODY_CAP), url: pr.url }));
     const answer = ReleaseNotesAnswer.parse(await this.deps.write({ repo: input.repo, tag: input.tag, since, prs }));

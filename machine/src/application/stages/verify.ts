@@ -30,6 +30,7 @@ import { noIdentityDetail } from "../env-broken.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
 import { type SessionExec, openChecksSession } from "./checks-session.ts";
+import { addUsage } from "./usage.ts";
 
 const MINUTE = 60_000;
 export const CHECKS_TIMEOUT_MS = 30 * MINUTE;
@@ -340,6 +341,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
         const slug = await deps.compliance.slugOf(task.repoPath).catch(() => null);
         const compliance = slug ? await runCompliance(deps.compliance, context, slug, null) : null;
         if (compliance) {
+          pack = { ...pack, usage: addUsage(pack.usage, compliance.usage) };
           reviewed = mergeDuplicateFindings([...reviewed, ...compliance.findings.map(normaliseFinding)]);
           classification = { compliance: { regimesRun: compliance.regimesRun, summary: compliance.summary, findings: compliance.findings.length, notes: compliance.notes } };
         }
@@ -351,6 +353,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
         const slug = (await deps.docsDrift.slugOf(task.repoPath).catch(() => null)) ?? `local/${basename(task.repoPath).replace(/[^A-Za-z0-9_.-]/g, "-") || "repo"}`;
         const drift = await runDocsDrift(deps.docsDrift, context, slug, cwd, await changed(cwd, task.repoPath).catch(() => null));
         if (drift) {
+          pack = { ...pack, usage: addUsage(pack.usage, drift.usage) };
           reviewed = mergeDuplicateFindings([...reviewed, ...drift.findings.map(normaliseFinding)]);
           classification = { ...classification, docsDrift: { findings: drift.findings.length, notes: drift.notes } };
         }

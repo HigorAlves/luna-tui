@@ -1,3 +1,4 @@
+import { COMPLIANCE_CONTROL_CHARS } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { TaskRow } from "../../domain/task.ts";
@@ -37,18 +38,19 @@ const clean = { verdict: "approve", summary: "Fine.", findings: [], comments: []
 
 type Seen = { review: { diff: string }; compliance: { repo: string; regimes: string[]; controls: Array<{ path: string; text: string }> } };
 
-function withCompliance(opts: { regimes?: string[]; wiki?: "ok" | "fails"; run?: () => Promise<StageResult> } = {}) {
+function withCompliance(opts: { regimes?: string[]; wiki?: "ok" | "fails"; pages?: Array<{ path: string; text: string }>; run?: () => Promise<StageResult> } = {}) {
   const runs: Seen[] = [];
   const github = fakeGitHub({ prFacts: async () => node as never, prDiff: async () => "diff --git a/a.ts b/a.ts\n+log(email)\n", prFiles: async () => [{ path: "a.ts", additions: 1, deletions: 0 }], prComments: async () => [] });
   const run = prReviewRunner({
     github,
-    runPack: async () => ({ outcome: "pass", detail: { answer: clean, summary: "Fine." } }),
+    runPack: async () => ({ outcome: "pass", usage: { turns: 1, costUsd: 0.25, tokens: { input: 40, output: 4 } }, detail: { answer: clean, summary: "Fine." } }),
     compliance: {
       regimes: async () => (opts.regimes ?? []) as never,
       wiki: {
-        readPages: async () => {
+        readPages: async (_slug: string, prefix: string) => {
           if (opts.wiki === "fails") throw new Error("the wiki is disabled");
-          return [{ path: "Compliance/Controls/PRIV-LOG-01.md", text: "No personal data in logs." }];
+          const pages = opts.pages ?? [{ path: "Compliance/Controls/PRIV-LOG-01.md", text: "No personal data in logs." }];
+          return pages.filter((p) => p.path.startsWith(prefix));
         },
         writePages: async () => ({ sha: "x" }),
       },
@@ -76,6 +78,30 @@ describe("reviewing with the compliance review", () => {
     expect(action.payload.comments[0]!.body).toContain("[GDPR Art. 5(1)(c) · Compliance/Controls/PRIV-LOG-01.md]");
     expect(action.payload.body).toContain("One GDPR finding.");
     expect(result.findings).toHaveLength(1);
+  });
+
+  it("reads only the control and policy pages, not access reviews or answers, and skips an oversized page instead of stopping", async () => {
+    const pages = [
+      { path: "Compliance/Access-Reviews/2026-Q1.md", text: "alice, bob" },
+      { path: "Compliance/Answers/acme.md", text: "answers" },
+      { path: "Compliance/Controls/HUGE.md", text: "x".repeat(COMPLIANCE_CONTROL_CHARS + 1) },
+      { path: "Compliance/Controls/PRIV-LOG-01.md", text: "No personal data in logs." },
+      { path: "Compliance/Policies/Retention.md", text: "Keep a year." },
+    ];
+    const { run, runs } = withCompliance({ regimes: ["gdpr"], pages });
+    const result = await run(context);
+    expect(runs[0]!.compliance.controls.map((c) => c.path)).toEqual(["Compliance/Controls/PRIV-LOG-01.md", "Compliance/Policies/Retention.md"]);
+    expect(result.detail).toMatchObject({ compliance: { notes: [expect.stringContaining("left out")] } });
+  });
+
+  it("adds the compliance sub-run's usage to the review's, even when its answer is not used", async () => {
+    const usage = { turns: 2, costUsd: 0.5, tokens: { input: 100, output: 10 } };
+    const ran = withCompliance({ regimes: ["gdpr"], run: async () => ({ outcome: "pass", usage, detail: { answer: { summary: "One.", findings: [], regimesRun: ["gdpr"] } } }) });
+    const failed = withCompliance({ regimes: ["gdpr"], run: async () => ({ outcome: "fail", usage, detail: { error: "boom" } }) });
+    for (const { run } of [ran, failed]) {
+      const result = await run(context);
+      expect(result.usage).toMatchObject({ turns: 2 + 1, costUsd: 0.5 + 0.25, tokens: { input: 100 + 40, output: 10 + 4 } });
+    }
   });
 
   it("skips when no regime is declared", async () => {

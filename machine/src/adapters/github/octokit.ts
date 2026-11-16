@@ -47,7 +47,7 @@ export interface OctokitLike {
     repos: {
       get(params: Record<string, unknown>): Promise<{ data: { default_branch: string } }>;
       getCombinedStatusForRef(params: Record<string, unknown>): Promise<{ data: { statuses: Array<{ context: string; state: string; target_url: string | null }> } }>;
-      listReleases(params: Record<string, unknown>): Promise<{ data: Array<{ id: number; tag_name: string; html_url: string; draft?: boolean }> }>;
+      listReleases(params: Record<string, unknown>): Promise<{ data: Array<{ id: number; tag_name: string; html_url: string; draft?: boolean; published_at?: string | null }> }>;
       createRelease(params: Record<string, unknown>): Promise<{ data: { id: number; html_url: string } }>;
       updateRelease(params: Record<string, unknown>): Promise<unknown>;
       getLatestRelease(params: Record<string, unknown>): Promise<{ data: { tag_name: string; published_at: string | null } }>;
@@ -816,7 +816,9 @@ export class OctokitGitHub implements GitHub {
       for (const { id } of list) {
         const { data } = await this.octokit.request("GET /repos/{owner}/{repo}/rulesets/{ruleset_id}", { owner, repo, ruleset_id: id });
         const ruleset = data as Detail;
-        for (const a of ruleset.bypass_actors ?? []) out.push({ ruleset: ruleset.name, actorType: a.actor_type, actorId: a.actor_id ?? null, actorName: null, mode: a.bypass_mode ?? "always" });
+        // GitHub sends bypass_actors only to a caller with write access to the ruleset: absent is not "none".
+        if (ruleset.bypass_actors === undefined) return "unknown";
+        for (const a of ruleset.bypass_actors) out.push({ ruleset: ruleset.name, actorType: a.actor_type, actorId: a.actor_id ?? null, actorName: null, mode: a.bypass_mode ?? "always" });
       }
       return out;
     } catch (error) {
@@ -1009,6 +1011,14 @@ export class OctokitGitHub implements GitHub {
       if (status === 404) return null;
       throw new GitHubError(`reading the latest release of ${slug} failed${status ? ` (${status})` : ""}: ${message ?? String(error)}`);
     }
+  }
+
+  async recentReleases(slug: string): Promise<Array<{ tag: string; publishedAt: string }>> {
+    const { owner, repo } = repoRef(slug);
+    const { data } = await call(`listing the releases of ${slug}`, () => this.octokit.rest.repos.listReleases({ owner, repo, per_page: 30 }));
+    return data
+      .flatMap((r) => (!r.draft && r.published_at ? [{ tag: r.tag_name, publishedAt: r.published_at }] : []))
+      .sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt));
   }
 
   async uploadReleaseAsset(slug: string, releaseId: number, name: string, data: Buffer, contentType: string): Promise<{ url: string }> {

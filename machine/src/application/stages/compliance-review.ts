@@ -24,6 +24,8 @@ export interface ComplianceOutcome {
   summary: string;
   regimesRun: ComplianceRegime[];
   notes: string[];
+  /** What the sub-run cost, for the stage to add to its own: absent when it did not report any. */
+  usage?: StageResult["usage"];
 }
 
 /** `[GDPR Art. 5(1)(c) · Compliance/Controls/PRIV-LOG-01.md]`: what law and which company control a finding stands on. */
@@ -38,27 +40,36 @@ export async function runCompliance(deps: ComplianceDeps, context: StageContext,
   const notes: string[] = [];
   let controls: ComplianceReviewContext["controls"] = [];
   try {
-    const pages = await deps.wiki.readPages(slug, "Compliance/");
+    // Only the controls and the policies: the access reviews and the answers sit beside them under Compliance/.
+    const pages = [...(await deps.wiki.readPages(slug, "Compliance/Controls/")), ...(await deps.wiki.readPages(slug, "Compliance/Policies/"))];
     let chars = 0;
+    let left = false;
     for (const page of pages) {
-      if (controls.length >= COMPLIANCE_CONTROL_PAGES || chars + page.text.length > COMPLIANCE_CONTROL_CHARS) {
-        notes.push(`some control pages were left out (at most ${COMPLIANCE_CONTROL_PAGES} pages and ${COMPLIANCE_CONTROL_CHARS} characters)`);
+      if (controls.length >= COMPLIANCE_CONTROL_PAGES) {
+        left = true;
         break;
+      }
+      if (chars + page.text.length > COMPLIANCE_CONTROL_CHARS) {
+        left = true;
+        continue;
       }
       controls.push({ path: page.path, text: page.text });
       chars += page.text.length;
     }
+    if (left) notes.push(`some control pages were left out (at most ${COMPLIANCE_CONTROL_PAGES} pages and ${COMPLIANCE_CONTROL_CHARS} characters)`);
   } catch (error) {
     controls = [];
     notes.push(`the control pages could not be read (${messageOf(error)}); the review ran without them`);
   }
-  const skipped = (why: string): ComplianceOutcome => ({ findings: [], comments: [], summary: "", regimesRun: [], notes: [...notes, `the compliance review did not run: ${why}`] });
+  let usage: StageResult["usage"];
+  const skipped = (why: string): ComplianceOutcome => ({ findings: [], comments: [], summary: "", regimesRun: [], notes: [...notes, `the compliance review did not run: ${why}`], ...(usage ? { usage } : {}) });
   let pack: StageResult;
   try {
     pack = await deps.run({ ...context, runId: `${context.runId}-compliance`, started: undefined, resume: undefined, engine: undefined }, review, { repo: slug, regimes, controls });
   } catch (error) {
     return skipped(messageOf(error));
   }
+  usage = pack.usage;
   if (pack.outcome !== "pass") return skipped(`the pack ${pack.outcome === "fail" ? "failed" : pack.outcome}`);
   const parsed = ComplianceReviewAnswer.safeParse(pack.detail?.answer);
   if (!parsed.success) return skipped("its answer did not parse");
@@ -69,5 +80,6 @@ export async function runCompliance(deps: ComplianceDeps, context: StageContext,
     summary,
     regimesRun,
     notes,
+    ...(usage ? { usage } : {}),
   };
 }

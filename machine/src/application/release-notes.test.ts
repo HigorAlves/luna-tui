@@ -32,13 +32,14 @@ const pr = (number: number, over: Partial<MergedPr> = {}): MergedPr => ({
 });
 
 const NOW = new Date("2026-11-16T10:00:00Z");
-function build(over: { prs?: MergedPr[]; latest?: { tag: string; publishedAt: string } | null; write?: (c: ReleaseNotesContext) => Promise<unknown> } = {}) {
+function build(over: { recent?: Array<{ tag: string; publishedAt: string }>; prs?: MergedPr[]; latest?: { tag: string; publishedAt: string } | null; write?: (c: ReleaseNotesContext) => Promise<unknown> } = {}) {
   const mergedPrs = vi.fn(async (_slug: string, _since: string, _until: string) => over.prs ?? [pr(38), pr(39)]);
   const latestRelease = vi.fn(async (_slug: string) => (over.latest === undefined ? { tag: "v1.3.0", publishedAt: "2026-11-01T00:00:00Z" } : over.latest));
+  const recentReleases = vi.fn(async (_slug: string) => over.recent ?? []);
   const write = vi.fn(over.write ?? (async (_c: ReleaseNotesContext) => ({ highlights: ["CSV export"], sections: [{ heading: "Features", items: [{ text: "Export a report as CSV", prs: [38, 77] }] }], breaking: [] })));
   const drafts = new ComplianceDrafts({ stateDir });
-  const notes = new ReleaseNotes({ github: { mergedPrs, latestRelease } as unknown as GitHub, drafts, write, now: () => NOW });
-  return { notes, mergedPrs, latestRelease, write, drafts };
+  const notes = new ReleaseNotes({ github: { mergedPrs, latestRelease, recentReleases } as unknown as GitHub, drafts, write, now: () => NOW });
+  return { notes, mergedPrs, latestRelease, recentReleases, write, drafts };
 }
 
 describe("release notes", () => {
@@ -68,6 +69,16 @@ describe("release notes", () => {
     const none = build({ latest: null });
     await none.notes.draft({ repo: "acme/web", tag: "v1.0.0" });
     expect(none.mergedPrs.mock.calls[0]![1]).toBe("2026-10-17T10:00:00.000Z");
+  });
+
+  it("when the tag is already the latest release, starts at the release before it, else thirty days back", async () => {
+    const published = { tag: "v1.4.0", publishedAt: "2026-11-10T00:00:00Z" };
+    const before = build({ latest: published, recent: [published, { tag: "v1.3.0", publishedAt: "2026-11-01T00:00:00Z" }, { tag: "v1.2.0", publishedAt: "2026-10-01T00:00:00Z" }] });
+    await before.notes.draft({ repo: "acme/web", tag: "v1.4.0" });
+    expect(before.mergedPrs.mock.calls[0]![1]).toBe("2026-11-01T00:00:00Z");
+    const first = build({ latest: published, recent: [published] });
+    await first.notes.draft({ repo: "acme/web", tag: "v1.4.0" });
+    expect(first.mergedPrs.mock.calls[0]![1]).toBe("2026-10-17T10:00:00.000Z");
   });
 
   it("caps a body at 2,000 characters and the list at the 200 newest PRs", async () => {

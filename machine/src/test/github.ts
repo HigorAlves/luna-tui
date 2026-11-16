@@ -54,6 +54,7 @@ const METHODS: Array<keyof GitHub> = [
   "releaseAssets",
   "updateReleaseBody",
   "latestRelease",
+  "recentReleases",
   "dependabotAlerts",
   "codeScanningAlerts",
   "uploadReleaseAsset",

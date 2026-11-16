@@ -283,6 +283,8 @@ export interface GitHub {
   updateReleaseBody(slug: string, releaseId: number, body: string): Promise<void>;
   /** The latest published release (never a draft or a pre-release), or null when the repo has none. */
   latestRelease(slug: string): Promise<{ tag: string; publishedAt: string } | null>;
+  /** The published releases (never a draft), newest first; the first page only. */
+  recentReleases(slug: string): Promise<Array<{ tag: string; publishedAt: string }>>;
   /** Uploads a file to a release; `url` is the asset's download url. */
   uploadReleaseAsset(slug: string, releaseId: number, name: string, data: Buffer, contentType: string): Promise<{ url: string }>;
 }
@@ -344,6 +346,7 @@ export function noTokenGitHub(): GitHub {
     releaseAssets: refuse,
     updateReleaseBody: refuse,
     latestRelease: refuse,
+    recentReleases: refuse,
     dependabotAlerts: refuse,
     codeScanningAlerts: refuse,
     uploadReleaseAsset: refuse,

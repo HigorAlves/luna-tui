@@ -52,7 +52,7 @@ describe("compliance drafts", () => {
   });
 
   it("names the five change-management exceptions", () => {
-    expect(ChangeExceptionKind.options).toEqual(["no_independent_approval", "stale_approval", "no_ticket", "checks_red", "bypassed"]);
+    expect(ChangeExceptionKind.options).toEqual(["no_independent_approval", "stale_approval", "no_ticket", "checks_red", "checks_not_green", "bypassed"]);
   });
 
   it("gives the exception explainer a context of facts and an answer of one short text per exception", () => {

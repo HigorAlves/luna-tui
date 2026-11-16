@@ -902,6 +902,17 @@ describe("release notes", () => {
     expect(calls[0]).toEqual(["repos.updateRelease", { owner: "o", repo: "a", release_id: 11, body: "## Fixes" }]);
   });
 
+  it("lists the published releases newest first, leaving out drafts", async () => {
+    const { github } = stub({
+      "repos.listReleases": [
+        { id: 1, tag_name: "v1.1.0", published_at: "2026-09-01T00:00:00Z", draft: false },
+        { id: 2, tag_name: "luna-evidence", published_at: null, draft: true },
+        { id: 3, tag_name: "v1.2.0", published_at: "2026-10-01T00:00:00Z", draft: false },
+      ],
+    });
+    expect(await github.recentReleases("o/a")).toEqual([{ tag: "v1.2.0", publishedAt: "2026-10-01T00:00:00Z" }, { tag: "v1.1.0", publishedAt: "2026-09-01T00:00:00Z" }]);
+  });
+
   it("reads the latest published release, or null when there is none", async () => {
     const { github } = stub({ "repos.getLatestRelease": { tag_name: "v1.2.0", published_at: "2026-10-01T00:00:00Z" } });
     expect(await github.latestRelease("o/a")).toEqual({ tag: "v1.2.0", publishedAt: "2026-10-01T00:00:00Z" });

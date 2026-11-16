@@ -141,6 +141,13 @@ export class ComplianceDrafts {
     });
   }
 
+  /** At boot: a draft a crash left in `posting` goes back to where it was (a restart is a failed approve); how many were put back. */
+  async recoverPosting(): Promise<number> {
+    const stuck = (await this.list()).filter((d) => d.status === "posting");
+    for (const { id } of stuck) await this.fail(id, "interrupted by a restart");
+    return stuck.length;
+  }
+
   private serial<T>(work: () => Promise<T>): Promise<T> {
     const run = this.queue.then(work, work);
     this.queue = run.catch(() => undefined);

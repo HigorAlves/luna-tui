@@ -5,6 +5,7 @@
 import { PrReviewAnswer, type RequestedAction, type ReviewContext, type ReviewLinks } from "@hardness/contracts";
 
 import { type ComplianceDeps, runCompliance } from "./compliance-review.ts";
+import { addUsage } from "./usage.ts";
 import { type GitHub, type ReviewPost, messageOf } from "../github.ts";
 import type { Jira } from "../jira.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
@@ -139,7 +140,9 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       answer.comments.map((c) => ({ path: c.path, line: c.line, side: c.side, body: c.body })),
       answer.findings,
     );
-    const base = { ...pack, findings: answer.findings };
+    // The compliance sub-run's cost joins the review's, so the budget and the engine's counters see both.
+    const usage = addUsage(pack.usage, compliance?.usage);
+    const base = { ...pack, ...(usage ? { usage } : {}), findings: answer.findings };
     const reviewLinks = reviewLinksOf(links, review.tickets ?? []);
     const detail = {
       ...pack.detail,

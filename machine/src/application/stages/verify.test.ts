@@ -137,6 +137,12 @@ describe("verifying stage", () => {
       expect(result.findings).toEqual([expect.objectContaining({ severity: "security", title: "Email in the log [GDPR Art. 5(1)(c)]" })]);
     });
 
+    it("adds the compliance sub-run's usage to the review's", async () => {
+      const deps = compliance(["gdpr"], { ...answered, usage: { turns: 3, costUsd: 1, tokens: { input: 200, output: 20 } } });
+      const { run, context } = setup({ compliance: deps, pack: { outcome: "pass", usage: { turns: 2, costUsd: 0.5, tokens: { input: 100, output: 10 } }, detail: { answer: { verdict: "pass", summary: "fine", findings: [] } } } });
+      expect((await run(context)).usage).toMatchObject({ turns: 5, costUsd: 1.5, tokens: { input: 300, output: 30 } });
+    });
+
     it("does not run when no regime is declared, and a failed run never blocks", async () => {
       const none = compliance([], answered);
       const first = setup({ compliance: none });
@@ -161,6 +167,12 @@ describe("verifying stage", () => {
       }),
     });
     const answered: StageResult = { outcome: "pass", detail: { answer: { stale: [stale] } } };
+
+    it("adds the docs-drift sub-run's usage to the review's", async () => {
+      const deps = docsDrift({ ...answered, usage: { turns: 3, costUsd: 1, tokens: { input: 200, output: 20 } } });
+      const { run, context } = setup({ docsDrift: deps, changed: ["src/config.ts"], pack: { outcome: "pass", usage: { turns: 2, costUsd: 0.5, tokens: { input: 100, output: 10 } }, detail: { answer: { verdict: "pass", summary: "fine", findings: [] } } } });
+      expect((await run(context)).usage).toMatchObject({ turns: 5, costUsd: 1.5, tokens: { input: 300, output: 30 } });
+    });
 
     it("adds one nit per stale section, titled for it, and the verdict stays a pass", async () => {
       const deps = docsDrift(answered);

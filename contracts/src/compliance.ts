@@ -79,7 +79,7 @@ export type ComplianceDraftsResponse = z.infer<typeof ComplianceDraftsResponse>;
 /** Why a merged PR fails change management (SOC2 CC8.1): no approval by a person other than its author;
  *  approvals only on an earlier commit than the one merged; no Jira key or closing issue; a check that
  *  failed at the merged commit; a ruleset bypassed at the merge. */
-export const ChangeExceptionKind = z.enum(["no_independent_approval", "stale_approval", "no_ticket", "checks_red", "bypassed"]);
+export const ChangeExceptionKind = z.enum(["no_independent_approval", "stale_approval", "no_ticket", "checks_red", "checks_not_green", "bypassed"]);
 export type ChangeExceptionKind = z.infer<typeof ChangeExceptionKind>;
 
 /** The body of an approve or an ignore tap. */

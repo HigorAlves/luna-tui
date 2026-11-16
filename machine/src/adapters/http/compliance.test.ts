@@ -174,6 +174,18 @@ describe("the compliance routes", () => {
     expect(await res.json()).toMatchObject({ status: "edited", text: "mine", original: d.text });
   });
 
+  it("answers a stale hash with stale_draft and a draft that is not waiting with draft_not_waiting, so a board can tell them apart", async () => {
+    const { app, drafts } = mk();
+    const d = await drafts.open(fields());
+    const stale = await post(app, ID, "ignore", { hash: "0123456789abcdef" });
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({ error: "stale_draft" });
+    await drafts.claim(ID, d.hash);
+    const busy = await post(app, ID, "ignore", { hash: d.hash });
+    expect(busy.status).toBe(409);
+    expect(await busy.json()).toMatchObject({ error: "draft_not_waiting" });
+  });
+
   it("ignore keeps the draft and refuses a stale hash", async () => {
     const { app, drafts } = mk();
     const d = await drafts.open(fields());

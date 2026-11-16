@@ -18,6 +18,8 @@ export interface DocsDriftOutcome {
   /** One nit per stale section, in review-contract shape. */
   findings: Finding[];
   notes: string[];
+  /** What the sub-run cost, for the stage to add to its own. */
+  usage?: StageResult["usage"];
 }
 
 const DOC = /\.(md|mdx|markdown|rst|adoc|txt)$|(^|\/)(docs?|documentation)\//i;
@@ -49,13 +51,15 @@ export async function runDocsDrift(deps: DocsDriftDeps, context: StageContext, s
   if (!changedFiles || !changedFiles.some((file) => !DOC.test(file))) return null;
   const docFiles = await (deps.docFiles ?? listDocFiles)(cwd).catch(() => []);
   if (docFiles.length === 0) return null;
-  const skipped = (why: string): DocsDriftOutcome => ({ findings: [], notes: [`docs drift did not run: ${why}`] });
+  let usage: StageResult["usage"];
+  const skipped = (why: string): DocsDriftOutcome => ({ findings: [], notes: [`docs drift did not run: ${why}`], ...(usage ? { usage } : {}) });
   let pack: StageResult;
   try {
     pack = await deps.run({ ...context, runId: `${context.runId}-docs`, started: undefined, resume: undefined, engine: undefined }, { repo: slug, changedFiles: changedFiles.slice(0, DOCS_DRIFT_CHANGED_FILES), docFiles: docFiles.slice(0, DOCS_DRIFT_DOC_FILES) });
   } catch (error) {
     return skipped(messageOf(error));
   }
+  usage = pack.usage;
   if (pack.outcome !== "pass") return skipped(`the pack ${pack.outcome === "fail" ? "failed" : pack.outcome}`);
   const parsed = DocsDriftAnswer.safeParse(pack.detail?.answer);
   if (!parsed.success) return skipped("its answer did not parse");
@@ -70,5 +74,6 @@ export async function runDocsDrift(deps: DocsDriftDeps, context: StageContext, s
       category: "convention" as const,
     })),
     notes: [],
+    ...(usage ? { usage } : {}),
   };
 }

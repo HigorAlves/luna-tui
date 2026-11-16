@@ -844,6 +844,11 @@ const knownRepos = async (): Promise<string[]> => {
 };
 /** The manager's drafts (RFC 0008): pages wait for a tap, and an approve writes them to the repository's wiki. The evidence job's one model call is the `change_exceptions` pack through PackRuns. */
 const complianceDrafts = new ComplianceDrafts({ stateDir: config.stateDir });
+// An approve a crash cut short left its draft in `posting`, which nothing takes back: put it back to waiting, as a failed approve would.
+void complianceDrafts.recoverPosting().then(
+  (count) => count > 0 && console.log(`compliance: ${count} draft(s) left posting by a restart are back to waiting`),
+  (error: unknown) => console.warn("compliance drafts: could not recover the drafts left posting", error),
+);
 const complianceRepos = async (): Promise<string[]> => {
   const slugs = new Set([...config.githubPoll.repos, ...Object.keys(config.repoMap)]);
   for (const path of await knownRepos()) {
@@ -860,6 +865,7 @@ const changeEvidence = new ChangeEvidence({
     return (await ownCalls(packRuns).run({ pack: "change_exceptions", context: { exceptions } }, INTAKE_CLIENT)).answer;
   },
   repos: complianceRepos,
+  vulns: { list: () => vulns.list() },
   stateDir: config.stateDir,
 });
 const accessReview = new AccessReview({

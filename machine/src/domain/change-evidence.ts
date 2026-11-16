@@ -3,6 +3,7 @@
 import type { ChangeExceptionKind } from "@hardness/contracts";
 
 import type { Check, MergedPr, RuleBypass } from "../application/github.ts";
+import type { VulnRow } from "../application/vulns.ts";
 import { FAILED_CHECK_STATES, PENDING_CHECK_STATES } from "./check-states.ts";
 
 /** One merged PR as an auditor reads it: the facts, and the exceptions they add up to. */
@@ -41,6 +42,7 @@ export function changeRecord(pr: MergedPr, input: { checks: Check[]; bypasses: R
   else if (pr.headSha !== null && !approvals.some((r) => r.commitId === pr.headSha)) exceptions.push("stale_approval");
   if (ticket === null) exceptions.push("no_ticket");
   if (checks === "red") exceptions.push("checks_red");
+  else if (checks === "pending" || checks === "none") exceptions.push("checks_not_green");
   if (bypass === "yes") exceptions.push("bypassed");
   return { number: pr.number, title: pr.title, url: pr.url, author: pr.author, mergedBy: pr.mergedBy, mergedAt: pr.mergedAt, approvedBy, ticket, checks, bypass, exceptions };
 }
@@ -50,7 +52,22 @@ export const evidencePath = (period: string): string => `Compliance/Change-Manag
 
 const cell = (text: string): string => text.replace(/\r?\n/g, " ").replace(/\|/g, "\\|");
 
-export function evidencePage(input: { repo: string; period: string; records: ChangeRecord[]; bypassUnknown: boolean; explanations: Map<string, string>; generatedAt: string }): string {
+/**
+ * Open alerts with their deadlines, as of when the page was generated. The state drops an alert once it closes, so how many
+ * closed within or after their deadline is not recorded and the section says open and overdue only.
+ */
+function vulnerabilitySection(vulns: VulnRow[]): string[] {
+  const overdue = vulns.filter((v) => v.overdue).length;
+  const lines = ["## Vulnerability remediation", "", "Controls evidenced: SOC2 CC7.1 (detection and remediation of vulnerabilities).", "", `- Open alerts: ${vulns.length}, ${overdue} overdue`, "- Alerts that closed are not kept, so only the open and overdue ones are shown.", ""];
+  if (vulns.length > 0) {
+    lines.push("| Alert | Severity | Lane | Deadline | Status |", "| --- | --- | --- | --- | --- |");
+    for (const v of [...vulns].sort((a, b) => Number(b.overdue) - Number(a.overdue) || a.deadline.localeCompare(b.deadline))) lines.push(`| ${cell(v.key)} | ${v.severity} | ${v.lane} | ${v.deadline} | ${v.overdue ? "OVERDUE" : "open"} |`);
+    lines.push("");
+  }
+  return lines;
+}
+
+export function evidencePage(input: { repo: string; period: string; records: ChangeRecord[]; bypassUnknown: boolean; explanations: Map<string, string>; generatedAt: string; vulns?: VulnRow[] }): string {
   const { records } = input;
   const flagged = records.filter((r) => r.exceptions.length > 0);
   const lines = [
@@ -82,6 +99,7 @@ export function evidencePage(input: { repo: string; period: string; records: Cha
       lines.push("");
     }
   }
+  if (input.vulns) lines.push(...vulnerabilitySection(input.vulns));
   lines.push("The facts above were computed from GitHub; the explanations are the reviewer's confirmed text.", "");
   return lines.join("\n");
 }

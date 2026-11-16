@@ -37,6 +37,7 @@ interface Fakes {
   checks?: Check[];
   explain?: (context: ChangeExceptionsContext) => Promise<unknown>;
   repos?: string[];
+  vulns?: Array<{ repo: string; key: string; severity: string; lane: string; deadline: string; cardId: string; overdue: boolean }>;
 }
 function build(fakes: Fakes = {}) {
   const mergedPrs = vi.fn(async (slug: string, _since: string, _until: string) => {
@@ -50,7 +51,7 @@ function build(fakes: Fakes = {}) {
   const drafts = new ComplianceDrafts({ stateDir });
   const log = vi.fn();
   const explain = vi.fn(fakes.explain ?? (async () => ({ explanations: [] })));
-  const job = new ChangeEvidence({ github, drafts, explain, repos: async () => fakes.repos ?? ["acme/web"], stateDir, log, now: () => new Date("2026-11-03T08:00:00Z") });
+  const job = new ChangeEvidence({ github, drafts, explain, repos: async () => fakes.repos ?? ["acme/web"], ...(fakes.vulns ? { vulns: { list: async () => fakes.vulns as never } } : {}), stateDir, log, now: () => new Date("2026-11-03T08:00:00Z") });
   return { job, mergedPrs, ruleBypasses, prChecks, drafts, log, explain };
 }
 
@@ -69,7 +70,7 @@ describe("buildMonth", () => {
     expect(mergedPrs).toHaveBeenCalledWith("acme/web", "2026-10-01T00:00:00.000Z", "2026-10-31T23:59:59.999Z");
     expect(ruleBypasses).toHaveBeenCalledTimes(1);
     expect(prChecks.mock.calls.map((c) => c[1])).toEqual(["h1", "m2"]);
-    expect(explain).not.toHaveBeenCalled();
+    expect(explain).toHaveBeenCalledTimes(1);
     expect(draft).toMatchObject({
       id: "change_evidence:acme/web:2026-10",
       kind: "change_evidence",
@@ -79,9 +80,23 @@ describe("buildMonth", () => {
       status: "waiting",
       targets: [{ kind: "wiki", repo: "acme/web", path: "Compliance/Change-Management/2026-10.md" }],
     });
-    expect(draft.summary).toBe("3 PRs, 0 with exceptions");
+    expect(draft.summary).toBe("3 PRs, 1 with exceptions");
+    // PR 3 has no head or merge sha, so no checks could be read: not green.
+    expect(draft.text).toMatch(/#3 PLAT-3.*checks_not_green/);
     expect(draft.text).toContain("# Change management evidence: acme/web, 2026-10");
     expect((await drafts.list())).toHaveLength(1);
+  });
+
+  it("adds the repo's open vulnerability alerts with their deadlines, the overdue ones flagged, citing SOC2 CC7.1", async () => {
+    const row = (over: object) => ({ repo: "acme/web", key: "dependabot:1", severity: "high", lane: "fast", deadline: "2026-11-20", cardId: "c1", overdue: false, ...over });
+    const { job } = build({ prs: [pr()], vulns: [row({}), row({ key: "code_scanning:4", severity: "critical", deadline: "2026-10-30", overdue: true }), row({ repo: "acme/other", key: "dependabot:9" })] });
+    const text = (await job.buildMonth("acme/web", "2026-10")).text;
+    expect(text).toContain("## Vulnerability remediation");
+    expect(text).toContain("SOC2 CC7.1");
+    expect(text).toContain("dependabot:1");
+    expect(text).toMatch(/code_scanning:4.*OVERDUE/);
+    expect(text).not.toContain("dependabot:9");
+    expect(text).toContain("1 overdue");
   });
 
   it("finds the Jira key in the title, the body or the branch", async () => {

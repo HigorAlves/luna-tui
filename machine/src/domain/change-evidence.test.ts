@@ -85,8 +85,9 @@ describe("changeRecord", () => {
       expect(r.checks).toBe("red");
       expect(r.exceptions).toEqual(["checks_red"]);
     }
-    expect(changeRecord(pr(), { ...input, jiraKey: "L-1", checks: [] })).toMatchObject({ checks: "none", exceptions: [] });
-    expect(changeRecord(pr(), { ...input, jiraKey: "L-1", checks: [{ name: "x", state: "PENDING", link: null }, { name: "y", state: "NEUTRAL", link: null }] }).checks).toBe("pending");
+    expect(changeRecord(pr(), { ...input, jiraKey: "L-1", checks: [] })).toMatchObject({ checks: "none", exceptions: ["checks_not_green"] });
+    const pending = changeRecord(pr(), { ...input, jiraKey: "L-1", checks: [{ name: "x", state: "PENDING", link: null }, { name: "y", state: "NEUTRAL", link: null }] });
+    expect(pending).toMatchObject({ checks: "pending", exceptions: ["checks_not_green"] });
     expect(changeRecord(pr(), { ...input, jiraKey: "L-1", checks: [{ name: "x", state: "SUCCESS", link: null }, { name: "y", state: "NEUTRAL", link: null }] }).checks).toBe("green");
     expect(changeRecord(pr(), { ...input, jiraKey: "L-1", checks: [{ name: "x", state: "PENDING", link: null }, { name: "y", state: "FAILURE", link: null }] }).checks).toBe("red");
   });
