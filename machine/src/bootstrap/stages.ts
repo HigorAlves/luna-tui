@@ -51,7 +51,7 @@ import { ensureClone, isClone, removeClone } from "../adapters/git/clone.ts";
 import type { ProofRig } from "../application/config-proof.ts";
 import { policyOf } from "../domain/luna-config.ts";
 import { randomUUID } from "node:crypto";
-import { DEFAULT_SANDBOX_SIZE, execInSandbox, imageExists, imageId, imageLabel, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
+import { DEFAULT_SANDBOX_SIZE, execInSandbox, imageExists, imageId, imageLabel, removeLeftoverContainers, runSandbox, sandboxExecutor, setSecretsRoot } from "../adapters/docker/docker.ts";
 import { removeLeftoverApps } from "../adapters/docker/app.ts";
 import { openCardNetwork, openPlainNetwork, removeLeftoverNetworks } from "../adapters/docker/egress.ts";
 import { startServices } from "../adapters/docker/services.ts";
@@ -68,6 +68,7 @@ import { checkpointPush } from "../application/stages/checkpoint.ts";
 import { judgeRedCheck } from "../application/stages/build-watch.ts";
 import { runSweep } from "../application/stages/sweep.ts";
 import { noIdentityDetail } from "../application/env-broken.ts";
+import { rmSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { readdir } from "node:fs/promises";
 import { readRegularFile } from "../adapters/fs/bounded.ts";
@@ -208,6 +209,9 @@ export async function buildRealStages(
   });
   const egress = buildEgress(config, policies);
   const secrets = repoSecrets({ home: homedir() });
+  // The secret files of a check, a seed, a deploy and the app live under the state dir (the host daemon mounts them, also when the machine is a container); a killed machine leaves none behind.
+  setSecretsRoot(join(config.stateDir, "run-secrets"));
+  rmSync(join(config.stateDir, "run-secrets"), { recursive: true, force: true });
   const sandboxChecks = sandboxExecutor({
     secrets,
     machine: config.runnerImage,

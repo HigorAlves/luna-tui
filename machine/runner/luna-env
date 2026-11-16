@@ -1,0 +1,39 @@
+#!/bin/sh
+# Exports each file of /run/luna-secrets as the environment variable of its name, then runs the command: `luna-env <command> [args...]`.
+# The machine hands a container its secrets as files (0600, in a 0700 folder, mounted read-only) so none is in `docker inspect`;
+# this is what puts them back in the environment of the process that reads `process.env.X`, before it starts.
+# A missing folder is no secrets. A file whose name is not a variable name refuses the whole start: its name is said, never a value.
+# Shell builtins only, like luna-stage: the base image's own tools are never called by name. One trailing newline of a file is dropped.
+dir="${LUNA_SECRETS_DIR:-/run/luna-secrets}"
+if [ "$#" -eq 0 ]; then
+  echo "usage: luna-env <command> [args...]" >&2
+  exit 64
+fi
+if [ -d "$dir" ]; then
+  for file in "$dir"/*; do
+    [ -f "$file" ] || continue
+    name="${file##*/}"
+    case "$name" in
+      '' | [0-9]* | *[!A-Za-z0-9_]*)
+        echo "luna-env: refusing the secret file \"$name\": its name is not an environment variable name" >&2
+        exit 65
+        ;;
+    esac
+  done
+  nl='
+'
+  for file in "$dir"/*; do
+    [ -f "$file" ] || continue
+    name="${file##*/}"
+    value=
+    line=
+    while IFS= read -r line; do
+      value="$value$line$nl"
+      line=
+    done < "$file"
+    # A last line without its newline is left in `line` by the failed read; else the value ends with the newline to drop.
+    if [ -n "$line" ]; then value="$value$line"; else value="${value%"$nl"}"; fi
+    export "$name=$value"
+  done
+fi
+exec "$@"

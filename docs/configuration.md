@@ -27,7 +27,7 @@ Jev is the decision model behind `triage_signals`. It is opt-in and metered, unl
 |---|---|---|
 | `OPENAI_API_KEY` | unset, `openai:*` off | the key an `openai:*` stage runs on; also read from `~/.config/hardness/openai-api-key`. The `codex:*` engines run the same models on the Codex login instead |
 | `CODEX_HOME` | `~/.codex` | where the machine finds the Codex login (`auth.json`) to copy into a `codex:*` stage |
-| `AI_GATEWAY_API_KEY` | unset | the Vercel AI Gateway key the Jev runtime calls `experimental_decide` with (model `typesafe-ai/jev`); also read from `~/.config/hardness/ai-gateway-api-key`, preferred over the TypeSafe key when both are there, and passed by name only to a `jev` stage |
+| `AI_GATEWAY_API_KEY` | unset | the Vercel AI Gateway key the Jev runtime calls `experimental_decide` with (model `typesafe-ai/jev`); also read from `~/.config/hardness/ai-gateway-api-key`, preferred over the TypeSafe key when both are there, and given to a `jev` stage as a secret file (never as a `-e`) |
 | `TYPESAFE_API_KEY` | unset | the key the Jev runtime (`@typesafe-ai/sdk`) calls `systemOne` with when there is no Gateway key; also read from `~/.config/hardness/typesafe-api-key`, and passed only to a `jev` stage. With neither key, Jev is off: `GET /engines` shows `jev` unavailable, `POST /runs` answers 409 `no_credential` for `triage_signals`, and intake classifies nothing |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | the TypeSafe API root, for a proxy or a test server |
 

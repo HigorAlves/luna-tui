@@ -5,11 +5,11 @@ import { type ExecResult, exec as hostExec } from "../process/exec.ts";
 
 export const APP_ALIAS = "luna-app";
 
-export interface AppSpec extends Pick<SandboxExec, "image" | "worktree" | "limits" | "cacheVolume" | "cardNetwork" | "services" | "serviceEnv" | "user"> {
+export interface AppSpec extends Pick<SandboxExec, "image" | "worktree" | "limits" | "cacheVolume" | "cardNetwork" | "services" | "serviceEnv" | "user" | "secretsDir"> {
   name: string;
   command: string;
   port: number;
-  /** Secret values by name: only the names are used here; the values go in the docker client's environment. */
+  /** Secret values by name: only the names are used here; the values are files in `secretsDir` (`makeSecretFolder`), started through luna-env. */
   secrets?: Record<string, string>;
 }
 

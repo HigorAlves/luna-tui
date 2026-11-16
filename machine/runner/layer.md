@@ -6,6 +6,7 @@ another image (a repository's own base) and run there: `COPY --from=<runner imag
 | Path | What |
 | --- | --- |
 | `bin/luna-stage` | the stage's entry: the factory on the layer's Node, the layer's tools first on `PATH` |
+| `bin/luna-env` | exports each file of `/run/luna-secrets` as the variable of its name, then runs the command; the machine mounts a container's secrets there as files, so none is in `docker inspect` |
 | `bin/node`, `bin/rg` | wrappers that run `libexec/<name>` with `lib/` in `LD_LIBRARY_PATH` (only for these two, and what they start) |
 | `bin/gh`, `bin/codex`, `bin/graphify`, `bin/pnpm` | the GitHub CLI (static), the Codex CLI (`codex/`), Graphify (from `python/`), pnpm at the version the repo's `package.json` pins (`pnpm/`, so a check-time install downloads no package manager) |
 | `libexec/` | the real Node and ripgrep binaries |
