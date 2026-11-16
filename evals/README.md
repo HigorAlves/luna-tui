@@ -103,9 +103,10 @@ An adversarial case must be unambiguous apart from its steering text. A borderli
 | `pnpm eval calibrate --pack <p> [--since <date>] [--target 0.9] [--with-outcome] [--out <file>]` | proposes confidence bars from labelled answers: per question the count, the acted-on accuracy at each bar from 0.50 to 0.95, and a proposal needing 20 answers. It prints the `luna.yaml` lines, marked proposed, not applied |
 | `pnpm eval calibrate --weights [--machine <m>] [--out <file>]` | proposes the priority weights and bands from the priority files (30 files, 10 that a person changed, a knock-out card left out) |
 | `pnpm eval baseline-plan [--engines a,b,c] [--efforts a,b]` | prints the baseline commands in order and runs none; `evals/baseline-run.sh` is that output. With `--efforts`, it adds one run for each agent pack that has cases, each engine and each effort that engine supports |
+| `pnpm eval propose --repo <abs path> [--machine <url>] [--dry-run]` | turns the agent baselines and the decision scorecards into candidates and posts them to the machine's `POST /repos/proposals`. The machine adds the repo's own signals and, when the rule finds a change, opens a `luna.yaml` card on the board. It prints the changes and the card id. `--dry-run` prints the request and makes no call. It reads `MACHINE_API_TOKEN` or `~/.config/hardness/machine-api-token` |
 | `pnpm eval prune-runs [--older-than 30]` | removes stamped run folders under `evals/.runs/` older than that |
 
-Neither calibrate mode writes a config, a default, a pack or a record. Only `--out` writes, and it writes the report. The team has not built the automatic loop that would turn these by itself. See [architecture](../docs/architecture.md#evals-and-calibration).
+Neither calibrate mode writes a config, a default, a pack or a record. Only `--out` writes, and it writes the report. Nothing turns these by itself. `propose` is the one command that ends in a config change, and a person approves it on the board. See [architecture](../docs/architecture.md#config-proposals).
 
 **Harvest now takes every decision the machine asked**, not only those that name a stage. A record's `origin` says whose it is: `machine` for the machine's own callers. A record from before that field is the pipeline's own when it names a stage. Harvest skips a record from `POST /runs` without `--all`.
 

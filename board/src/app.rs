@@ -2601,7 +2601,10 @@ impl App {
                         text: String::new(),
                     };
                 } else {
-                    self.notify("only the plan gate and the release question reject", false);
+                    self.notify(
+                        "only the plan gate, the release question and a config proposal reject",
+                        false,
+                    );
                 }
             }
             'r' => {
@@ -6338,7 +6341,7 @@ impl App {
                 let (id, comment) = (id.clone(), text.trim().to_string());
                 if comment.is_empty() {
                     self.notify(
-                        "say why the plan is rejected; the card ends and the comment is kept",
+                        "say why it is rejected; the card ends and the comment is kept",
                         true,
                     );
                     return Outcome::Continue;

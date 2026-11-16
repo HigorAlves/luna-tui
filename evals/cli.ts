@@ -14,7 +14,8 @@
 //   pnpm eval calibrate --weights [--machine triage|ticket|conversation] [--out <file>]   proposes the priority weights and bands from the priority files; changes nothing
 //   pnpm eval baseline-plan [--engines a,b,c] [--efforts a,b] prints the baseline commands and runs none; --efforts adds the agent packs
 //   pnpm eval prune-runs [--older-than 30]                    removes run folders under evals/.runs older than that many days
-//   pnpm eval scorecard                       evals/scorecard.md over every decision baseline
+//   pnpm eval propose --repo <abs path> [--machine <url>] [--dry-run]   posts the scorecards to the machine, which drafts a luna.yaml proposal card for the repo
+//   pnpm eval scorecard                    evals/scorecard.md over every decision baseline
 //   pnpm eval defaults [--write] [--except <pack>...]              the default per slot by the scorecard's rule; --write updates contracts/src/decision-defaults.json
 import { DECISION_DEFAULTS, PACKS, PackId, decisionEngines } from "@hardness/contracts";
 import { machineCredentials } from "@hardness/machine/credentials";
@@ -22,11 +23,13 @@ import { imageExists } from "@hardness/machine/docker";
 import { DecisionLog, machineStateDir } from "@hardness/machine/decisions";
 import { buildTelemetry, tracesFromEnv } from "@hardness/machine/telemetry";
 import { collectorGate } from "./src/collector.ts";
-import { writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
+import { type DefaultsEntry, proposalCandidates } from "./src/candidates.ts";
 import { decisionPack } from "./src/labels.ts";
 import { baselineHashes, changedLines, readLedger, writeLedger } from "./src/baseline-ledger.ts";
 import { labelFor, nextToLabel, renderNext, setLabel } from "./src/label.ts";
@@ -191,6 +194,24 @@ if (command === "harvest") {
       if (!out.ok) fail(printable(out.reason));
       console.log(`labelled ${pack} ${values.record} (person_cli)`);
     }
+  }
+} else if (command === "propose") {
+  const { values } = parseArgs({ args: process.argv.slice(3), options: { repo: { type: "string" }, machine: { type: "string" }, "dry-run": { type: "boolean", default: false } } });
+  if (!values.repo || !isAbsolute(values.repo)) fail("--repo must be an absolute path");
+  const body = { repo: values.repo, candidates: proposalCandidates(loadAgentBaselines(EVALS), DECISION_DEFAULTS as Record<string, DefaultsEntry>) };
+  const url = (values.machine ?? process.env.MACHINE_URL ?? process.env.HARDNESS_MACHINE_URL ?? "http://127.0.0.1:4317").replace(/\/+$/, "");
+  if (values["dry-run"]) {
+    console.log(`POST ${url}/repos/proposals\n${JSON.stringify(body, null, 2)}`);
+  } else {
+    const tokenFile = join(homedir(), ".config", "hardness", "machine-api-token");
+    const token = process.env.MACHINE_API_TOKEN?.trim() || (existsSync(tokenFile) ? readFileSync(tokenFile, "utf8").trim() : "");
+    const res = await fetch(`${url}/repos/proposals`, { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) }).catch((error: unknown) => fail(`the machine at ${url} did not answer: ${error instanceof Error ? error.message : String(error)}`));
+    const text = await res.text();
+    if (!res.ok) fail(`the machine answered ${res.status}: ${stripUnsafe(text).slice(0, 300)}`);
+    const out = JSON.parse(text) as { changes: { pack: string; engine: { from: string; to: string } | null; effort: { from: string; to: string } | null; why: string }[]; taskId: string | null };
+    if (out.changes.length === 0) console.log("no change proposed: the evidence does not call for one");
+    for (const c of out.changes) console.log(stripUnsafe(`${c.pack}: ${[c.engine && `engine ${c.engine.from} -> ${c.engine.to}`, c.effort && `effort ${c.effort.from} -> ${c.effort.to}`].filter(Boolean).join(", ")}; ${c.why}`));
+    if (out.taskId) console.log(`card ${out.taskId}: approve or reject it on the board`);
   }
 } else if (command === "scorecard" || command === "defaults") {
   const { values } = parseArgs({ args: process.argv.slice(3), options: { write: { type: "boolean", default: false }, except: { type: "string", multiple: true, default: [] } } });

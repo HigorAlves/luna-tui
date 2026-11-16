@@ -50,6 +50,17 @@ The owner pins a decision on Jev (`PINNED` in `evals/src/scorecard.ts`). These s
    2. Run `pnpm --filter site facts` (the site's fact for the slot).
    3. Commit `evals/baselines/**`, `evals/scorecard.md`, `contracts/src/decision-defaults.json` and the facts.
 
+## Proposing a change for one repo
+
+The steps above move the machine's default. A repo can also ask for its own engine and effort per pack in `luna.yaml`. After new baselines exist, the machine can draft that change:
+
+1. Run `pnpm eval propose --repo <abs path> --dry-run`. It prints the request and calls nothing.
+2. Run `pnpm eval propose --repo <abs path>`. The machine must be up. The command reads `MACHINE_API_TOKEN` or `~/.config/hardness/machine-api-token`. `--machine <url>` or `MACHINE_URL` names another machine.
+3. The output lists the changes and the card id. It says `no change proposed` when the repo's runs do not call for one.
+4. On the board, open the card. `a` writes `luna.yaml`. `N` rejects it, and the same change stays out for 30 days.
+
+The rule is in [architecture](../architecture.md#config-proposals).
+
 ## Overriding by hand, and going back
 
 To keep an engine the rule did not pick:
