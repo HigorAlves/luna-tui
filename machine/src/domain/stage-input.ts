@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type ChatTriageContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type PrLinkContext, type ProposeContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
+import { type ChatTriageContext, type QuestionsContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type PrLinkContext, type ProposeContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
 import { isDocsOnly } from "./docs-only.ts";
 
 export { PACK_LIMITS };
@@ -132,6 +132,8 @@ export function buildStageInput(opts: {
   pack?: PackId;
   /** A plan under review: handed to the stage as `context.plan`, and, before any approval, as the plan it reads. */
   plan?: PlanContext | null;
+  /** For question_council: the open triage questions, the card and the answers so far. */
+  questions?: QuestionsContext | null;
   /** The engine engine-choice picked; absent, the factory runs the pack's default. */
   engine?: EngineId;
   attempt: number;
@@ -248,6 +250,7 @@ export function buildStageInput(opts: {
       ci: opts.ci ?? null,
       graph: opts.graph ?? null,
       ...(opts.plan ? { plan: reviewed ?? opts.plan } : {}),
+      ...(pack === "question_council" && opts.questions ? { questions: opts.questions } : {}),
       ...(pack === "verifying" && opts.blastRadius?.length ? { blastRadius: opts.blastRadius } : {}),
       ...(pack === "verifying" && opts.coverage ? { coverage: opts.coverage } : {}),
       ...((pack === "e2e" || pack === "recording") && opts.qaTargets ? { qaTargets: opts.qaTargets } : {}),

@@ -54,6 +54,20 @@ describe("the diagram's config defaults", () => {
   });
 });
 
+describe("the triage council section", () => {
+  it("defaults to on with a bar of 0.8, read from wave 19", () => {
+    expect(FACTORY_DEFAULTS.triage.council).toEqual({ enabled: true, bar: 0.8 });
+    for (const key of ["enabled", "bar"]) expect(CONSUMED_FROM[`triage.council.${key}`], key).toBe(19);
+    expect(factoryConfigOf({ triage: { council: { bar: 0.9 } } }).triage.council).toEqual({ enabled: true, bar: 0.9 });
+  });
+
+  it("is accepted in a luna.yaml; a bar over 1 and an unknown key are refused", () => {
+    expect(LunaConfig.safeParse({ triage: { council: { enabled: false, bar: 0.5 } } }).success).toBe(true);
+    expect(LunaConfig.safeParse({ triage: { council: { bar: 1.5 } } }).success).toBe(false);
+    expect(LunaConfig.safeParse({ triage: { council: { members: 3 } } }).success).toBe(false);
+  });
+});
+
 describe("the plan council section", () => {
   it("defaults to on, two rounds, high risk or an L or XL card, read from wave 19", () => {
     expect(FACTORY_DEFAULTS.plan.council).toEqual({ enabled: true, rounds: 2, on_risk: "high", on_size: ["L", "XL"], counts_as_pass: true });

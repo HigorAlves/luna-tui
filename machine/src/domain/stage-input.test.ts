@@ -106,6 +106,13 @@ describe("buildStageInput's pack and plan", () => {
     }
   });
 
+  it("hands the question council the questions, the card and the answers so far as context.questions, and no other pack", () => {
+    const questions = { questions: [{ id: "q1", question: "Which db?", recommended: null, field: null, guess: null, confidence: null }], card: { title: "t", description: "d" }, answers: [] };
+    const input = buildStageInput({ task, stage: "triage", pack: "question_council", attempt: 1, approvals: [], priorFindings: [], questions });
+    expect(input.context.questions).toEqual(questions);
+    expect(buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [], questions }).context.questions).toBeUndefined();
+  });
+
   it("hands the test designer the criteria and the goal and no step, brief or assumption, in context.plan and in the plan it reads", () => {
     const withPlan = { ...planContext, risk: { level: "high" as const }, map: { components: [], files: [], entry_points: [], owners: [], confidence: 0.5 } };
     for (const pack of ["test_design", "test_design_fast"] as const) {

@@ -2,7 +2,7 @@
 // credential and the runner image are available), the host-only runners that always run
 // for real, and the stub fallback.
 import { FACTORY_DEFAULTS } from "@hardness/contracts";
-import type { EvidencePack, ShipContext, TaskRoute, TaskState } from "@hardness/contracts";
+import type { EvidencePack, QuestionsContext, ShipContext, TaskRoute, TaskState } from "@hardness/contracts";
 
 import type { CoverageSummary, Ledger, RunSummary } from "@hardness/contracts";
 
@@ -449,7 +449,8 @@ export async function buildRealStages(
         branch: currentBranch,
       },
     }),
-    ...(triageSignals && agents.triage ? { triage: withTriageSignals(agents.triage, triageSignals) } : {}),
+    // The shared object is bound late (main.ts sets its classifier once PackRuns exists), so the council is added to it, not to a copy.
+    ...(triageSignals && agents.triage ? { triage: withTriageSignals(agents.triage, Object.assign(triageSignals, { council: triageSignals.council ?? ((subContext: StageContext, questions: QuestionsContext) => runAgent(deps, subContext, "question_council", { questions })) })) } : {}),
     // The plan stage runs in test_design: the planner, the test designer, then three decisions, each pack a sub-run.
     test_design: planStage({
       runPack: (pack, subContext, extra) => runAgent(deps, subContext, pack, extra.plan ? { plan: extra.plan } : {}),

@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
+import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -162,6 +162,8 @@ export interface AgentExtra {
   checkout?: boolean;
   /** The plan stage's packs: the plan under review (the test designer reads it as its plan; a second round carries the gaps or the review). */
   plan?: PlanContext;
+  /** question_council: the open triage questions, the card and the answers so far. */
+  questions?: QuestionsContext;
   /** verifying: the files the code graph says depend on what the change touched. */
   blastRadius?: string[];
   /** verifying: the coverage of the change's added lines. */
@@ -416,6 +418,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     stage: context.stage,
     pack,
     ...(extra.plan ? { plan: extra.plan } : {}),
+    ...(extra.questions ? { questions: extra.questions } : {}),
     engine: choice.engine,
     attempt: context.attempt,
     approvals: context.approvals,
@@ -521,7 +524,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       : null;
   // Triage's board search: the same mailbox, answered over this task's own repository only.
   const cardSearch =
-    pack === "triage" && deps.cards
+    (pack === "triage" || pack === "question_council") && deps.cards
       ? cardSearchAnswers({ outDir: join(runDir, "out"), search: (query) => deps.cards!.search({ repoPath: task.repoPath, selfId: task.id, selfSource: sourceKindOf(task), query }) })
       : null;
   // The loop guard's question: any agent pack that runs shell commands has a guard to ask it (the machine's economy input says `judge: true` for the same packs).
@@ -1000,6 +1003,10 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   if (pack === "council_security" || pack === "council_second") {
     const answer = answerOf(output.answer);
     return merged({ ...mapped, detail: { ...mapped.detail, summary: typeof answer?.summary === "string" ? answer.summary : output.summary, findings: Array.isArray(answer?.findings) ? answer.findings : [] } });
+  }
+  if (pack === "question_council") {
+    const answer = answerOf(output.answer);
+    return merged({ ...mapped, detail: { ...mapped.detail, summary: output.summary, answers: Array.isArray(answer?.answers) ? answer.answers : [] } });
   }
   if (pack === "code_map") {
     const answer = answerOf(output.answer);

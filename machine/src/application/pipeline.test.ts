@@ -1200,6 +1200,23 @@ describe("the triage record: a correction and its ground truth", () => {
     return { p, id: task.id, learned };
   };
 
+  it("writes no ground truth for what the question council settled, and marks the record's answer as the council's", async () => {
+    const learned: unknown[] = [];
+    const truth = new DecisionTruth({ setTruth: async (...a) => (learned.push(a), true), read: async () => null }, { told: async () => {} });
+    stubs.plan("triage", { outcome: "pass", detail: { outcome: "plan", summary: "A bug.", record: { goal: "Fix it", reason: "r" } } });
+    const open = { ...classification, signals: { ...signals, kind: { answer: "bug", confidence: 0.5 } } } as never;
+    const council = async (_c: unknown, q: { questions: Array<{ id: string }> }): Promise<StageResult> => ({ outcome: "pass", detail: { answers: q.questions.map((x) => ({ id: x.id, answer: "bug", confidence: 0.95, evidence: ["src/a.ts:1"] })) } });
+    const saving = (stage: TaskState) =>
+      stage === "triage" ? withTriageSignals(stubs.runnerFor(stage), { classify: async (issue) => (issue.answers?.length ? classification : open), council, save: (id, patch) => new PgTaskStore(db).updateTask(id, patch) }) : stubs.runnerFor(stage);
+    const p = new Pipeline(db, saving, { inline: true, policies: previewOn, hasConfig: () => true, truth });
+    const task = await p.createTask({ title: "Login page", classification });
+    await p.start(task.id);
+    const row = await p.get(task.id);
+    expect(row.state).toBe("awaiting_approval");
+    expect(row.record?.qa).toEqual([{ question: expect.stringContaining("bug or a feature"), answer: "bug", by: "council", evidence: ["src/a.ts:1"] }]);
+    expect(learned).toEqual([]);
+  });
+
   it("keeps a priority edit where a calibration can find it, with the machine's level, the person's and the sub-scores; and not for a repository that keeps no truth", async () => {
     const written: Array<Record<string, unknown>> = [];
     for (const keeps of [true, false]) {

@@ -55,6 +55,7 @@ export const FactoryConfigInput = {
     max_questions: count(10).optional(),
     max_rounds: count(10).optional(),
     sla: Sla.optional(),
+    council: section({ enabled: z.boolean().optional(), bar: unit.optional() }).optional(),
   }).optional(),
   scoring: section({
     weights: section({ who: z.number().min(0).max(100).optional(), what: z.number().min(0).max(100).optional(), impact: z.number().min(0).max(100).optional(), time: z.number().min(0).max(100).optional(), demand: z.number().min(0).max(100).optional() }).optional(),
@@ -144,7 +145,7 @@ export interface FactoryConfig {
   dedup: { duplicate: number; related: number; ask_below: number; lookback_days: number };
   backlog: { stale_days: number };
   conversation: { channels: string[]; auto: "off" | "on"; debounce_seconds: number; draft_expiry_hours: number; confidence: number; active_minutes: number };
-  triage: { confidence: { kind: number; size: number; urgency: number; risk: number; archive: number }; flag_band: number; hint_weight: number; max_questions: number; max_rounds: number; sla: { reminder_days: number; archive_days: number } };
+  triage: { confidence: { kind: number; size: number; urgency: number; risk: number; archive: number }; flag_band: number; hint_weight: number; max_questions: number; max_rounds: number; sla: { reminder_days: number; archive_days: number }; council: { enabled: boolean; bar: number } };
   scoring: { weights: { who: number; what: number; impact: number; time: number; demand: number }; bands: { P0: number; P1: number; P2: number } };
   graph: { stale_commits: number; first_build_minutes: number };
   fast_lane: { max_risk: "low" | "medium" | "high"; max_size: "XS" | "S" | "M" | "L" | "XL"; excluded_types: string[]; cross_team: boolean };
@@ -165,7 +166,7 @@ export const FACTORY_DEFAULTS: FactoryConfig = {
   dedup: { duplicate: 0.9, related: 0.7, ask_below: 0.7, lookback_days: 90 },
   backlog: { stale_days: 14 },
   conversation: { channels: [], auto: "off", debounce_seconds: 90, draft_expiry_hours: 24, confidence: 0.7, active_minutes: 10 },
-  triage: { confidence: { kind: 0.8, size: 0.6, urgency: 0.7, risk: 0.85, archive: 0.9 }, flag_band: 0.15, hint_weight: 0.5, max_questions: 3, max_rounds: 2, sla: { reminder_days: 2, archive_days: 5 } },
+  triage: { confidence: { kind: 0.8, size: 0.6, urgency: 0.7, risk: 0.85, archive: 0.9 }, flag_band: 0.15, hint_weight: 0.5, max_questions: 3, max_rounds: 2, sla: { reminder_days: 2, archive_days: 5 }, council: { enabled: true, bar: 0.8 } },
   scoring: { weights: { who: 3, what: 3, impact: 2, time: 2, demand: 1 }, bands: { P0: 28, P1: 22, P2: 16 } },
   graph: { stale_commits: 50, first_build_minutes: 10 },
   fast_lane: { max_risk: "low", max_size: "S", excluded_types: ["infra", "data"], cross_team: false },
@@ -186,6 +187,7 @@ export const CONSUMED_FROM: Readonly<Record<string, number>> = {
   "conversation.channels": 17, "conversation.auto": 17, "conversation.debounce_seconds": 17, "conversation.draft_expiry_hours": 17, "conversation.confidence": 17, "conversation.active_minutes": 17,
   "triage.confidence.kind": 9, "triage.confidence.size": 9, "triage.confidence.urgency": 9, "triage.confidence.risk": 9, "triage.confidence.archive": 9,
   "triage.flag_band": 9, "triage.hint_weight": 9, "triage.max_questions": 9, "triage.max_rounds": 9, "triage.sla.reminder_days": 9, "triage.sla.archive_days": 9,
+  "triage.council.enabled": 19, "triage.council.bar": 19,
   "scoring.weights": 9, "scoring.bands": 9,
   "graph.stale_commits": 9, "graph.first_build_minutes": 11,
   "fast_lane.max_risk": 9, "fast_lane.max_size": 9, "fast_lane.excluded_types": 9, "fast_lane.cross_team": 9,
