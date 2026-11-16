@@ -25,7 +25,7 @@ pnpm eval --pack triage --engine claude:opus --case task-price-decimals --no-jud
 | `--engine <id>` | the engine under test; one outside the pack's `allowed` runs as a candidate |
 | `--against <id>` | runs the cases on a second engine too and prints the diff |
 | `--case <id>` | only this case; repeat it for several |
-| `--effort <low\|medium\|high>` | runs an agent pack at that effort. Without it, the pack's own effort applies. An engine that does not support it fails the case. A decision pack takes none |
+| `--effort <low\|medium\|high>` | runs an agent pack at that effort. Without it, the pack's own effort applies. A bad `--effort` is refused before any case runs: a decision pack takes none, and an engine may not support it. An image that ignores it fails each case and refuses `--save-baseline`: rebuild it (`pnpm images`) |
 | `--no-judge` | schema and checks only |
 | `--judge` | adds the judge to a decision pack, which runs without one by default |
 | `--trials <n>` | runs every case n times (1 to 20), each in its own container |

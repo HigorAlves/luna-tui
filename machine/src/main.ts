@@ -16,7 +16,7 @@ import { machineSecrets } from "./bootstrap/machine-secrets.ts";
 import { useTruthSecrets } from "./application/ground-truth.ts";
 import { buildTelemetry, probeCollector } from "./bootstrap/telemetry.ts";
 import { buildPackRuns, buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
-import { loadConfig } from "./config.ts";
+import { loadConfig, sandboxPolicyNotes } from "./config.ts";
 import { createDataSource, poolSizeFor } from "./adapters/persistence/data-source.ts";
 import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
 import { pruneOldRuns, prunePackRuns, pruneTombstones, TOMBSTONE_RETENTION_DAYS } from "./adapters/persistence/prune.ts";
@@ -134,6 +134,7 @@ if (applied.length > 0) {
 }
 
 /** Every repo's luna.yaml (or older PIPELINE.md), read on demand; shared so a bad edit warns once. */
+for (const line of sandboxPolicyNotes(config.sandboxPolicy).warnings) console.warn(line);
 const policies = new PolicyStore({ machinePolicy: config.sandboxPolicy });
 /** Run traces: a local Laminar (`MACHINE_TRACES`, `LMNR_*`); the no-op without a key. Built before
  *  the pipeline so the first stage run after boot is traced. */

@@ -189,6 +189,8 @@ describe("parseLunaConfig", () => {
     expect(() => parseLunaConfig("effort:\n  triage: max\n")).toThrow(/effort\.triage/);
     expect(() => parseLunaConfig("effort:\n  nope: low\n")).toThrow(/effort/);
     expect(() => parseLunaConfig("effort:\n  risk_score: low\n")).toThrow(/^effort\.risk_score: risk_score is a decision pack and takes no effort/);
+    expect(() => parseLunaConfig("effort:\n  foreman: low\n")).toThrow(/^effort\.foreman: runs on its own, not in a task/);
+    expect(() => parseLunaConfig("effort:\n  slack_triage: low\n")).toThrow(/^effort\.slack_triage: runs on its own, not in a task/);
   });
 
   it("refuses a monthly engine cap on Claude, on no engine, or below zero, naming the key", () => {

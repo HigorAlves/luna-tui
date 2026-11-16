@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, EscalationReason, type EngineId, Ledger, PACKS, type Pack, Slice, credentialOwner, helpersOn, resolveEngine, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
+import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -33,18 +33,17 @@ import {
 } from "../../adapters/git/worktree.ts";
 import { CredentialWaitError, type CredentialMount, type Credentials, NoCredentialError } from "../../adapters/credentials/index.ts";
 import { type SandboxResult, type SandboxRun, SecretsMissingError, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
-import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
 import { type EgressPolicy, blockedPayloads } from "../egress-policy.ts";
 import type { InstallInput, InstallOutcome } from "../install.ts";
 import type { SecretStore } from "../secrets.ts";
 import { redactDeep, secretRedactor } from "../../domain/redact-secrets.ts";
+import { egressKindOf } from "../../domain/egress-kind.ts";
 import { redactFiles } from "../../adapters/fs/redact-files.ts";
 import { saveKept } from "../kept-sandboxes.ts";
 import { LOCKFILES, envOf } from "../../domain/env-hash.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { sandboxSizeOf } from "../../domain/sandbox-bounds.ts";
 import { trustOf, untrustedNote } from "../../domain/trust.ts";
-import { RuntimeUnavailableError } from "../../adapters/docker/runtimes.ts";
 import { envBrokenDetail } from "../env-broken.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
@@ -201,12 +200,6 @@ export interface AgentExtra {
   noProxy?: string[];
   /** e2e: secret values of the app, the seed or the deploy, which the browser run never holds: used only to clean what its output and files carry. */
   redactValues?: Record<string, string>;
-}
-
-/** The list a pack's `network` asks for: engine is the engines' hosts only (`pack`), github adds GitHub's, full is the agent list. A decision pack keeps the agent list. */
-function egressKindOf(pack: Pack): "pack" | "github" | "agent" {
-  if (pack.kind === "decision") return "agent";
-  return pack.network === "engine" ? "pack" : pack.network === "github" ? "github" : "agent";
 }
 
 /** `host:port` of each QA target's URL, for the browser run's list (an address or a private name is dropped later, by the list's own rules). */
@@ -636,6 +629,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       installed = await deps.install({ taskId: task.id, repoPath: task.repoPath, workspace: workspace.path, commit: inputCommit, trust, signal: context.signal });
     } catch (error) {
       credential.release();
+      const broken = envBrokenDetail(error);
+      if (broken) return { outcome: "escalated", detail: broken };
       throw error;
     }
     for (const payload of blockedPayloads(installed.blocked, "install")) await Promise.resolve(context.emit?.("sandbox.egress_blocked", payload)).catch(() => {});
@@ -718,9 +713,9 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   });
     ran.container = true;
   } catch (error) {
-    if (error instanceof RuntimeUnavailableError) return { outcome: "escalated", detail: envBrokenDetail(error)! };
-    if (!(error instanceof EgressUnsupportedError)) throw error;
-    return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "network", reason: error.message, options: ["install Docker Engine 28.0 or newer, or set MACHINE_EGRESS=off on the machine to run without the allow-list, then resume"] } };
+    const broken = envBrokenDetail(error);
+    if (!broken) throw error;
+    return { outcome: "escalated", detail: broken };
   }
   // A run that had secrets: what its tools wrote into the files it left is cleaned before anything reads the packet, and every string of
   // what is ingested below is cleaned where it is made.
