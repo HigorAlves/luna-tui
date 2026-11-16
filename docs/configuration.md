@@ -39,6 +39,7 @@ See `machine/.env.example`. The defaults match `compose.yaml`. You need a `.env`
 |---|---|---|
 | `DATABASE_URL` | `postgres://hardness:hardness@127.0.0.1:5433/hardness` | Postgres connection string |
 | `MACHINE_PORT` | `4317` | HTTP port the machine listens on |
+| `MACHINE_URL` | `http://127.0.0.1:4317` (`pnpm dev`) | the machine `pnpm eval propose` posts to. For `pnpm start`, which listens on 4318, set it or pass `--machine http://127.0.0.1:4318`. `HARDNESS_MACHINE_URL` is read too, after it |
 | `MACHINE_HOST` | `127.0.0.1` | interface the API binds to (`0.0.0.0` inside the compose container) |
 | `MACHINE_API_TOKEN` | unset; required beyond loopback | the bearer token every API call must carry (`Authorization: Bearer <token>`); also read from `~/.config/hardness/machine-api-token`, which `pnpm start` creates when missing (`pnpm api-token`). With `MACHINE_HOST` beyond loopback and no token the machine refuses to start. The board reads the same variable and file. Never logged. See [api.md](api.md#who-may-call) |
 | `MACHINE_MAX_CONCURRENT` | `4` | tasks driving a stage at once, across every repo |

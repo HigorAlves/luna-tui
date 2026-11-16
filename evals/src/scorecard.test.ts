@@ -42,7 +42,7 @@ describe("agent pack baselines", () => {
   it("reads one row per agent baseline, its effort from the card, the folder suffix or the pack, and skips decision packs", () => {
     const rows = loadAgentBaselines(evals);
     expect(rows.map((r) => `${r.pack} ${r.engine} ${r.effort}`)).toEqual(["plan claude:haiku high", "plan codex:luna low", "slack_triage claude:haiku low"]);
-    expect(rows[0]).toEqual({ pack: "plan", engine: "claude:haiku", effort: "high", n: 2, passRate: 1, meanTurns: 4.5, costPerCase: null, at: "2026-11-10T10:00:00.000Z" });
+    expect(rows[0]).toEqual({ pack: "plan", engine: "claude:haiku", effort: "high", n: 2, passRate: 1, meanTurns: 4.5, costPerCase: null, at: "2026-11-10T10:00:00.000Z", model: "m" });
     expect(rows[2]).toMatchObject({ n: 4, passRate: 0.75, costPerCase: 0.01 });
     expect(loadAgentBaselines(join(evals, "nowhere"))).toEqual([]);
   });

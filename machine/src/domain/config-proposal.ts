@@ -1,7 +1,7 @@
 // The rule that turns evidence into a luna.yaml change: a pack's scorecards (what each engine and effort scored and cost) and
 // the repo's own run signals (how often the pack escalated or got stuck here). A fixed rule decides; no model is called, and
 // `why` is built from the numbers, never from model text. Pure: the caller reads the evidence and says what time it is.
-import { type Effort, type EngineId, PACKS, type PackId, type StageEfforts, type StageEngines, effortProblem } from "@hardness/contracts";
+import { type Effort, type EngineId, PACKS, type PackId, type StageEfforts, type StageEngines, effortProblem, resolveEngine } from "@hardness/contracts";
 import { Document, parse as parseYaml, parseDocument } from "yaml";
 
 import { PolicyParseError } from "./policy.ts";
@@ -21,6 +21,10 @@ export const TROUBLE = 0.25;
 export const CALM = 0.1;
 /** How much quality a stronger candidate must add. */
 export const GAIN = 0.1;
+/** The share of a pack's runs one engine must have for it to count as the engine the repo runs. */
+export const ENGINE_SHARE = 0.8;
+/** Days a scorecard may be old and still count. */
+export const MAX_EVIDENCE_DAYS = 90;
 /** Days a declined change stays out of new proposals. */
 export const DECLINE_DAYS = 30;
 /** Most changes in one proposal. */
@@ -36,6 +40,8 @@ export interface Candidate {
   quality: number;
   costPerCase: number;
   at: string;
+  /** The model the scorecard measured, when it says. A row whose model is not the engine's current one is refused. */
+  model?: string | null;
 }
 
 /** What a pack did in the repo over the window. */
@@ -45,6 +51,8 @@ export interface RepoSignal {
   /** The loop guard's stops. Evidence only: `escalations` is read from the event log, where the pipeline escalates each stop, so they are already in it. Said in `why`, not counted again. */
   stuck: number;
   costUsd: number;
+  /** Runs per engine (`stage_runs.engine`; a run with no engine recorded is left out). Absent: the engine is taken from the config. */
+  engines?: Partial<Record<EngineId, number>>;
 }
 
 export interface ProposalInput {
@@ -84,12 +92,34 @@ export function proposeConfig(input: ProposalInput): ConfigChange[] {
   return drafted.slice(0, MAX_CHANGES).map((d) => d.change);
 }
 
+/** The engine a pack ran on most in the repo, when one ran at least `ENGINE_SHARE` of its runs. `skip` says why none did. */
+function observedEngine(pack: PackId, signal: RepoSignal | undefined): { engine: EngineId | null; skip: string | null } {
+  const counts = Object.entries(signal?.engines ?? {}) as Array<[EngineId, number]>;
+  if (!signal || counts.length === 0) return { engine: null, skip: null };
+  const [top, n] = counts.sort((a, b) => b[1] - a[1])[0]!;
+  if (n / signal.runs < ENGINE_SHARE) return { engine: null, skip: `${pack} ran on mixed engines: ${top} ${n} of ${signal.runs} runs, under ${ENGINE_SHARE * 100}%` };
+  return { engine: top, skip: null };
+}
+
+/** The packs the rule left out because no single engine ran most of their runs, with the reason. */
+export function proposalSkips(input: ProposalInput): Array<{ pack: PackId; reason: string }> {
+  const out: Array<{ pack: PackId; reason: string }> = [];
+  for (const pack of Object.keys(input.candidates) as PackId[]) {
+    const { skip } = observedEngine(pack, input.signals[pack]);
+    if (skip) out.push({ pack, reason: skip });
+  }
+  return out;
+}
+
 function draftFor(pack: PackId, input: ProposalInput): Drafted | null {
   const def = PACKS[pack];
   const isDecision = def.kind === "decision";
-  const engine = input.current.engines[pack] ?? def.engines.default;
+  const observed = observedEngine(pack, input.signals[pack]);
+  if (observed.skip) return null;
+  // The engine the repo really ran beats the config and the default: a reviewer may run on codex:sol while the pack defaults to claude:opus.
+  const engine = observed.engine ?? input.current.engines[pack] ?? def.engines.default;
   const effort: Effort | null = isDecision ? null : (input.current.effort[pack] ?? (def as { effort: Effort }).effort);
-  const all = input.candidates[pack] ?? [];
+  const all = (input.candidates[pack] ?? []).filter((c) => currentEvidence(c, input.now));
 
   // 1. The baseline: the candidate for the pair the repo runs today.
   const baseline = all.find((c) => c.engine === engine && c.effort === effort);
@@ -126,6 +156,14 @@ function draftFor(pack: PackId, input: ProposalInput): Drafted | null {
     evidence: { current: baseline, next, signal },
   };
   return { change, step, saving: baseline.costPerCase - next.costPerCase };
+}
+
+/** A scorecard counts when it was measured within `MAX_EVIDENCE_DAYS` and, if it names its model, on the engine's current catalog model:
+ *  a card from before a model swap says nothing about the model that runs now. */
+function currentEvidence(c: Candidate, now: string): boolean {
+  const measured = Date.parse(c.at);
+  if (Number.isNaN(measured) || Date.parse(now) - measured > MAX_EVIDENCE_DAYS * DAY_MS) return false;
+  return !c.model || c.model === resolveEngine(c.engine).modelId;
 }
 
 /** An agent pack's candidate names an effort its engine can run; a decision pack's names none. */
@@ -174,6 +212,21 @@ export function renderProposal(currentText: string, changes: ConfigChange[]): st
 export function choicesOf(text: string): ProposalInput["current"] {
   const config = validateLunaConfig(parseMapping(text));
   return { engines: config.engines ?? {}, effort: config.effort ?? {} };
+}
+
+/** The first field a card changes that a person edited since the card was made (`engines.plan`, `effort.plan`), or null. A field counts as
+ *  edited when the value the repo runs (the file's, else the pack's default) is not what it was when the card was built. Throws a
+ *  `PolicyParseError` for a file that does not load. */
+export function editedByHand(previousText: string, currentText: string, changes: ConfigChange[]): string | null {
+  const was = choicesOf(previousText);
+  const now = choicesOf(currentText);
+  for (const { pack, engine, effort } of changes) {
+    const def = PACKS[pack];
+    if (engine && (now.engines[pack] ?? def.engines.default) !== (was.engines[pack] ?? def.engines.default)) return `engines.${pack}`;
+    const base = def.kind === "decision" ? null : def.effort;
+    if (effort && (now.effort[pack] ?? base) !== (was.effort[pack] ?? base)) return `effort.${pack}`;
+  }
+  return null;
 }
 
 function parseMapping(text: string): unknown {

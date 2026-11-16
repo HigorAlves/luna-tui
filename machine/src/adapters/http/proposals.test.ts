@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DataSource } from "typeorm";
@@ -24,7 +24,7 @@ beforeEach(async () => {
 });
 
 const post = (body: unknown) => ({ method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } }) as const;
-const row = (engine: string, effort: string, quality: number, costPerCase: number) => ({ engine, effort, n: 5, quality, costPerCase, at: "2026-11-01" });
+const row = (engine: string, effort: string, quality: number, costPerCase: number) => ({ engine, effort, n: 5, quality, costPerCase, at: new Date().toISOString() });
 const candidates = { plan: [row("claude:opus", "high", 0.67, 1), row("codex:sol", "high", 0.83, 1.2)] };
 
 describe("POST /repos/proposals", () => {
@@ -85,15 +85,33 @@ describe("POST /repos/proposals", () => {
         return { plan: { runs: 12, escalations: 4, stuck: 0, costUsd: 3 } };
       },
     };
-    const app = createApp({ db, pipeline: p, bus: new Bus(), repoSignals, knownRepos });
+    const app = createApp({ db, pipeline: p, bus: new Bus(), repoSignals, knownRepos, clock: () => new Date("2026-11-16T12:00:00.000Z") });
     const dir = repo();
-    const res = await app.request("/repos/proposals", post({ repo: dir, candidates, now: "2026-11-16T12:00:00.000Z" }));
+    // A `now` in the body moves nothing: the machine's clock sets the window.
+    const res = await app.request("/repos/proposals", post({ repo: dir, candidates, now: "2020-01-01T00:00:00.000Z" }));
     const out = (await res.json()) as { changes: Array<{ pack: string; engine: { to: string } }>; taskId: string | null };
     expect(out.changes).toMatchObject([{ pack: "plan", engine: { from: "claude:opus", to: "codex:sol" } }]);
     expect(out.taskId).toEqual(expect.any(String));
     expect(asked).toEqual([[dir, new Date("2026-10-17T12:00:00.000Z")]]);
     const task = await p.get(out.taskId!);
     expect(task).toMatchObject({ route: "config", state: "awaiting_setup" });
+  });
+
+  it("says which pack it skipped because no engine ran most of its runs", async () => {
+    const repoSignals: RepoSignals = { forRepo: async () => ({ plan: { runs: 12, escalations: 4, stuck: 0, costUsd: 3, engines: { "claude:opus": 7, "codex:sol": 5 } } }) };
+    const app = createApp({ db, pipeline: pipeline(), bus: new Bus(), repoSignals, knownRepos });
+    const res = await app.request("/repos/proposals", post({ repo: repo(), candidates }));
+    expect(await res.json()).toEqual({ changes: [], taskId: null, skipped: [{ pack: "plan", reason: "plan ran on mixed engines: claude:opus 7 of 12 runs, under 80%" }] });
+  });
+
+  it("refuses scorecards older than 90 days and scorecards of another model", async () => {
+    const repoSignals: RepoSignals = { forRepo: async () => ({ plan: { runs: 12, escalations: 4, stuck: 0, costUsd: 3 } }) };
+    const app = createApp({ db, pipeline: pipeline(), bus: new Bus(), repoSignals, knownRepos });
+    const old = new Date(Date.now() - 91 * 86_400_000).toISOString();
+    const stale = { plan: [row("claude:opus", "high", 0.67, 1), { ...row("codex:sol", "high", 0.83, 1.2), at: old }] };
+    expect(await (await app.request("/repos/proposals", post({ repo: repo(), candidates: stale }))).json()).toEqual({ changes: [], taskId: null });
+    const swapped = { plan: [row("claude:opus", "high", 0.67, 1), { ...row("codex:sol", "high", 0.83, 1.2), model: "gpt-5-old" }] };
+    expect(await (await app.request("/repos/proposals", post({ repo: repo(), candidates: swapped }))).json()).toEqual({ changes: [], taskId: null });
   });
 
   it("does not propose again what the person declined", async () => {
@@ -116,6 +134,57 @@ describe("POST /repos/proposals", () => {
     const res = await app.request(`/tasks/${made.taskId}/decision`, post({ decision: "approved" }));
     expect(res.status).toBe(409);
     expect(await res.json()).toMatchObject({ error: "config_changed" });
+  });
+
+  it("answers 409 config_changed when a person edited a field the card changes, and leaves the edit alone", async () => {
+    const p = pipeline();
+    const repoSignals: RepoSignals = { forRepo: async () => ({ plan: { runs: 12, escalations: 4, stuck: 0, costUsd: 3 } }) };
+    const app = createApp({ db, pipeline: p, bus: new Bus(), repoSignals, knownRepos });
+    const dir = repo();
+    const made = (await (await app.request("/repos/proposals", post({ repo: dir, candidates }))).json()) as { taskId: string };
+    writeFileSync(join(dir, "luna.yaml"), "engines:\n  plan: codex:sol\n");
+    const res = await app.request(`/tasks/${made.taskId}/decision`, post({ decision: "approved" }));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: "config_changed" });
+    expect(readFileSync(join(dir, "luna.yaml"), "utf8")).toBe("engines:\n  plan: codex:sol\n");
+  });
+
+  it("still applies the changes when the edit was to something else", async () => {
+    const p = pipeline();
+    const repoSignals: RepoSignals = { forRepo: async () => ({ plan: { runs: 12, escalations: 4, stuck: 0, costUsd: 3 } }) };
+    const app = createApp({ db, pipeline: p, bus: new Bus(), repoSignals, knownRepos });
+    const dir = repo();
+    const made = (await (await app.request("/repos/proposals", post({ repo: dir, candidates }))).json()) as { taskId: string };
+    writeFileSync(join(dir, "luna.yaml"), "engines:\n  plan: claude:opus\n# edited\n");
+    const res = await app.request(`/tasks/${made.taskId}/decision`, post({ decision: "approved" }));
+    expect(res.status).toBe(200);
+    expect(readFileSync(join(dir, "luna.yaml"), "utf8")).toContain("# edited");
+    expect(readFileSync(join(dir, "luna.yaml"), "utf8")).toContain("plan: codex:sol");
+  });
+
+  it("answers 422 invalid_config to a luna.yaml that does not load, and makes no card", async () => {
+    const p = pipeline();
+    const repoSignals: RepoSignals = { forRepo: async () => ({ plan: { runs: 12, escalations: 4, stuck: 0, costUsd: 3 } }) };
+    const app = createApp({ db, pipeline: p, bus: new Bus(), repoSignals, knownRepos });
+    const dir = repo();
+    writeFileSync(join(dir, "luna.yaml"), "engines: [broken\n");
+    const res = await app.request("/repos/proposals", post({ repo: dir, candidates }));
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({ error: "invalid_config" });
+    expect((await p.list()).filter((t) => t.route === "config")).toEqual([]);
+  });
+
+  it("answers 422 to a repo whose policy is in PIPELINE.md: a luna.yaml would override it", async () => {
+    const p = pipeline();
+    const repoSignals: RepoSignals = { forRepo: async () => ({ plan: { runs: 12, escalations: 4, stuck: 0, costUsd: 3 } }) };
+    const app = createApp({ db, pipeline: p, bus: new Bus(), repoSignals, knownRepos });
+    const dir = mkdtempSync(join(tmpdir(), "proposals-legacy-"));
+    writeFileSync(join(dir, "PIPELINE.md"), "max_concurrent: 2\n");
+    known.push(dir);
+    const res = await app.request("/repos/proposals", post({ repo: dir, candidates }));
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({ error: "invalid_config", message: expect.stringContaining("PIPELINE.md") });
+    expect((await p.list()).filter((t) => t.route === "config")).toEqual([]);
   });
 
   it("answers 400 to a body without a repo or with a bad candidate", async () => {

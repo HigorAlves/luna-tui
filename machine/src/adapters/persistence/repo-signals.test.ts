@@ -1,4 +1,5 @@
 // The repo signals read a repo's stage runs, the loop guard's stops and the ledger's cost, per pack, from a date on.
+import type { EngineId } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -77,6 +78,26 @@ describe("pgRepoSignals", () => {
     expect(got.test_design).toBeUndefined();
     expect(got.plan).toBeUndefined();
     expect(got.setup).toEqual({ runs: 1, escalations: 0, stuck: 0, costUsd: 0.5 });
+  });
+
+  it("gives triage a signal although the question council runs inside it", async () => {
+    const mine = await save("/r/app");
+    for (let i = 0; i < 2; i++) await db.getRepository(StageRunEntity).save({ taskId: mine.id, stage: "triage", attempt: 1, status: "passed", outcome: "pass", costUsd: "0.2500", startedAt: new Date() });
+    await escalate(mine.id, "triage");
+    const got = await pgRepoSignals(db, economy([], [])).forRepo("/r/app", new Date(Date.now() - DAY));
+    expect(got.triage).toEqual({ runs: 2, escalations: 1, stuck: 0, costUsd: 0.5 });
+    expect(got.question_council).toBeUndefined();
+  });
+
+  it("counts a pack's runs per engine, and leaves out a run that recorded none", async () => {
+    const mine = await save("/r/app");
+    const run = (engine: EngineId | null) => db.getRepository(StageRunEntity).save({ taskId: mine.id, stage: "verifying", attempt: 1, status: "passed", outcome: "pass", costUsd: "1.0000", engine, startedAt: new Date() });
+    await run("codex:sol");
+    await run("codex:sol");
+    await run("claude:opus");
+    await run(null);
+    const got = await pgRepoSignals(db, economy([], [])).forRepo("/r/app", new Date(Date.now() - DAY));
+    expect(got.verifying).toEqual({ runs: 4, escalations: 0, stuck: 0, costUsd: 4, engines: { "codex:sol": 2, "claude:opus": 1 } });
   });
 
   it("is empty for a repo with no runs", async () => {

@@ -2,7 +2,7 @@
 // log (every `stage_done escalated` transition), the economy's guard log (the loop guard's stops) and its ledger (cost of
 // the runs that are no stage run, such as the guard's own judge). A stage run counts for a pack only when its task state
 // runs exactly one agent pack; a shared state (test_design, implementing, ...) gives no signal, so no proposal follows from mixed runs.
-import type { PackId } from "@hardness/contracts";
+import type { EngineId, PackId } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { EconomyStore } from "../../application/economy.ts";
@@ -10,7 +10,7 @@ import type { RepoSignals } from "../../application/repo-signals.ts";
 import type { RepoSignal } from "../../domain/config-proposal.ts";
 import { soleAgentPackForState } from "../../domain/packs.ts";
 
-type StageRow = { stage: string; runs: string; cost: string | null };
+type StageRow = { stage: string; engine: string | null; runs: string; cost: string | null };
 type EscalationRow = { stage: string; escalations: string };
 
 export function pgRepoSignals(db: DataSource, economy: EconomyStore): RepoSignals {
@@ -19,10 +19,10 @@ export function pgRepoSignals(db: DataSource, economy: EconomyStore): RepoSignal
       const out: Partial<Record<PackId, RepoSignal>> = {};
       const of = (pack: PackId): RepoSignal => (out[pack] ??= { runs: 0, escalations: 0, stuck: 0, costUsd: 0 });
       const rows: StageRow[] = await db.query(
-        `select r.stage, count(*) as runs, sum(r.cost_usd) as cost
+        `select r.stage, r.engine, count(*) as runs, sum(r.cost_usd) as cost
            from stage_runs r join tasks t on t.id = r.task_id
           where t.repo_path = $1 and r.started_at >= $2
-          group by r.stage`,
+          group by r.stage, r.engine`,
         [repo, since],
       );
       for (const row of rows) {
@@ -31,6 +31,11 @@ export function pgRepoSignals(db: DataSource, economy: EconomyStore): RepoSignal
         const signal = of(pack);
         signal.runs += Number(row.runs);
         signal.costUsd += Number(row.cost ?? 0);
+        // The engine each run recorded: the rule trusts what ran, not what luna.yaml or the pack default says.
+        if (row.engine) {
+          const engine = row.engine as EngineId;
+          signal.engines = { ...signal.engines, [engine]: (signal.engines?.[engine] ?? 0) + Number(row.runs) };
+        }
       }
       // A stage run keeps its own outcome: a loop-guard stop, a stuck-detector stop and a second scope red are all stored as
       // `fail`. The pipeline event is what escalates them, so escalations are counted from the event log, per state it left.

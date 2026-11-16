@@ -81,7 +81,7 @@ import { EngineBudgetWatch } from "../../application/engine-gates.ts";
 import { type Credentials, machineCredentials } from "../credentials/index.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import { checkLunaConfigText } from "../../domain/luna-config.ts";
-import { proposeConfig } from "../../domain/config-proposal.ts";
+import { proposalSkips, proposeConfig } from "../../domain/config-proposal.ts";
 import { PolicyParseError } from "../../domain/policy.ts";
 import { type RepoSignals, noRepoSignals } from "../../application/repo-signals.ts";
 import { type ConfigProofs, ConfigProofError } from "../../application/config-proofs.ts";
@@ -162,6 +162,8 @@ export interface AppDeps {
   repoSignals?: RepoSignals;
   /** Every checkout the machine knows, for `POST /repos/proposals`; without it no repo is known and the route answers 404 `unknown_repo`. */
   knownRepos?: () => Promise<string[]>;
+  /** What time it is for `POST /repos/proposals` (its signal, decline and evidence windows); tests inject one. Defaults to the system clock. */
+  clock?: () => Date;
   /** What keeps the machine from doing its job (`readinessProblems`), read on each `GET /health`; absent, `/health` is always ok. */
   problems?: () => Promise<string[]> | string[];
   /** The machine's sandbox policy in force (`sandbox.yaml`), shown on `GET /health`; absent, not shown. */
@@ -220,7 +222,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], problems: problemsOf, sandboxPolicy }: AppDeps): Hono {
+export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], clock = () => new Date(), problems: problemsOf, sandboxPolicy }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -584,19 +586,23 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
   // A config proposal: the scorecards come in the body, the repo's luna.yaml and its own run signals are read here, a fixed rule picks the
   // changes (domain/config-proposal.ts), and a non-empty result waits at the setup gate as a `config` card.
   app.post("/repos/proposals", async (c) => {
-    const { repo: given, candidates, now } = await body(c, ProposalsInput);
+    const { repo: given, candidates } = await body(c, ProposalsInput);
     if (!isAbsolute(given)) throw new BadRequest("repo must be an absolute path");
     // Approving the card writes luna.yaml into this path, so it is the normalised path of a repo the machine knows.
     const repo = resolvePath(given);
     if (!(await knownRepos()).some((known) => resolvePath(known) === repo)) return fail(c, 404, "unknown_repo", "the machine does not know that repository");
-    const at = now ? new Date(now) : new Date();
+    const at = clock();
     try {
       const [current, signals, declined] = await Promise.all([pipeline.configChoices(repo), repoSignals.forRepo(repo, new Date(at.getTime() - SIGNAL_DAYS * DAY_MS)), pipeline.declinedConfigChanges(repo, at)]);
-      const changes = proposeConfig({ current, candidates, signals, declined, now: at.toISOString() });
-      if (changes.length === 0) return c.json({ changes, taskId: null });
+      const input = { current, candidates, signals, declined, now: at.toISOString() };
+      const changes = proposeConfig(input);
+      // A pack left out for mixed engines is named, so a person knows why it got no proposal.
+      const skipped = proposalSkips(input);
+      const extra = skipped.length > 0 ? { skipped } : {};
+      if (changes.length === 0) return c.json({ changes, taskId: null, ...extra });
       const task = await serialize(await pipeline.proposeConfig(repo, changes));
       bus.publish({ type: "task.updated", task, seq: task.seq });
-      return c.json({ changes, taskId: task.id });
+      return c.json({ changes, taskId: task.id, ...extra });
     } catch (error) {
       if (error instanceof PolicyParseError) return fail(c, 422, "invalid_config", error.message);
       throw error;

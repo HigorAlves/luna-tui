@@ -10,6 +10,11 @@ describe("proposalCandidates", () => {
     expect(proposalCandidates([row({})], {})).toEqual({ plan: [{ engine: "claude:sonnet", effort: "medium", n: 5, quality: 0.8, costPerCase: 0.2, at: "2026-11-10T00:00:00.000Z" }] });
   });
 
+  it("carries the scorecard's model, so the machine can refuse a card from before a model swap", () => {
+    expect(proposalCandidates([row({ model: "claude-sonnet-5-5" })], {}).plan?.[0]).toMatchObject({ model: "claude-sonnet-5-5" });
+    expect(proposalCandidates([row({ model: null })], {}).plan?.[0]).toMatchObject({ model: null });
+  });
+
   it("skips an agent row with no cost", () => {
     expect(proposalCandidates([row({ costPerCase: null })], {})).toEqual({});
   });

@@ -15,7 +15,7 @@ export function proposalCandidates(agentRows: AgentRow[], defaults: Record<strin
   const add = (pack: PackId, candidate: ProposalCandidate) => (out[pack] = [...(out[pack] ?? []), candidate]);
   for (const r of agentRows) {
     if (r.costPerCase === null) continue;
-    add(r.pack, { engine: r.engine, effort: r.effort, n: r.n, quality: r.passRate, costPerCase: r.costPerCase, at: r.at });
+    add(r.pack, { engine: r.engine, effort: r.effort, n: r.n, quality: r.passRate, costPerCase: r.costPerCase, at: r.at, ...(r.model !== undefined && { model: r.model }) });
   }
   for (const [name, entry] of Object.entries(defaults)) {
     const pack = PackId.safeParse(name).data;

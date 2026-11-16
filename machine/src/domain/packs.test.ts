@@ -12,13 +12,20 @@ describe("soleAgentPackForState", () => {
   it("names none for a state that several agent packs run in", () => {
     expect(soleAgentPackForState("test_design")).toBeNull();
     expect(soleAgentPackForState("implementing")).toBeNull();
-    expect(soleAgentPackForState("triage")).toBeNull();
     expect(soleAgentPackForState("evidence")).toBeNull();
+  });
+
+  it("leaves out the council packs, which never decide a stage's outcome", () => {
+    expect(soleAgentPackForState("triage")).toBe("triage");
+  });
+
+  it("keeps test_design unattributed: the planner, the test designer and the code map all decide there", () => {
+    expect(soleAgentPackForState("test_design")).toBeNull();
   });
 
   it("agrees with the agent packs the registry says run in the state", () => {
     for (const state of ["setup", "test_design", "implementing", "triage", "verifying", "e2e", "evidence", "ci_watch", "reviewing", "addressing", "awaiting_ship"] as const) {
-      const agents = PackId.options.filter((id) => PACKS[id].kind !== "decision" && packStates(id).includes(state));
+      const agents = PackId.options.filter((id) => PACKS[id].kind !== "decision" && !["council_security", "council_second", "question_council"].includes(id) && packStates(id).includes(state));
       expect(soleAgentPackForState(state)).toBe(agents.length === 1 ? agents[0] : null);
     }
   });

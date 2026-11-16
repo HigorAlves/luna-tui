@@ -55,9 +55,11 @@ The owner pins a decision on Jev (`PINNED` in `evals/src/scorecard.ts`). These s
 The steps above move the machine's default. A repo can also ask for its own engine and effort per pack in `luna.yaml`. After new baselines exist, the machine can draft that change:
 
 1. Run `pnpm eval propose --repo <abs path> --dry-run`. It prints the request and calls nothing.
-2. Run `pnpm eval propose --repo <abs path>`. The machine must be up. The command reads `MACHINE_API_TOKEN` or `~/.config/hardness/machine-api-token`. `--machine <url>` or `MACHINE_URL` names another machine.
+2. Run `pnpm eval propose --repo <abs path>`. The machine must be up. The command reads `MACHINE_API_TOKEN` or `~/.config/hardness/machine-api-token`. `--machine <url>` or `MACHINE_URL` names another machine. The default is `http://127.0.0.1:4317` (`pnpm dev`).
 3. The output lists the changes and the card id. It says `no change proposed` when the repo's runs do not call for one.
 4. On the board, open the card. `a` writes `luna.yaml`. `N` rejects it, and the same change stays out for 30 days.
+
+Today only `triage` can produce a proposal. A pack needs both eval cases and run signals in the repo. The packs with cases are `triage`, `plan` and `slack_triage` (plus the decision packs). `plan` shares the `test_design` state with the test designer and the code map, so it has no signal. `slack_triage` runs in no task state, so it has none. The decision packs run on demand, so they have none. Other packs, such as `verifying` and `setup`, have run signals but no eval cases yet. A scorecard also counts for 90 days only, and only for the engine's current model. Re-run the baselines after a model swap.
 
 The rule is in [architecture](../architecture.md#config-proposals).
 
