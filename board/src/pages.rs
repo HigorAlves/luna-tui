@@ -11,7 +11,7 @@ use crate::{
         origin_lines, plain, pr_for, pr_url, record_group, run_error, ship_risk_is_high,
         slice_progress,
     },
-    model::{Approval, PullRequest, Task, TaskDetail, criteria_summary, questions_of},
+    model::{Approval, PullRequest, Task, TaskDetail, criteria_summary, questions_of, settled_by_council_of},
     reference::{Page, RefGroup},
     text::{self, ellipsis, truncate_middle},
     theme,
@@ -1511,6 +1511,24 @@ pub(crate) fn gate_page(
         &gate_question(task, detail).unwrap_or_else(|| task.status_label()),
     )];
     if let Some(approval) = detail.and_then(TaskDetail::open_approval) {
+        let settled = settled_by_council_of(approval);
+        if !settled.is_empty() {
+            main.push(Line::default());
+            main.push(title("Settled by the council (T to overrule)"));
+            for (question, answer, confidence, evidence) in settled {
+                main.extend(hanging(
+                    vec![Span::raw("  "), Span::styled("- ", theme::label())],
+                    &format!("{question} {answer} ({confidence:.2})"),
+                    width,
+                ));
+                if !evidence.is_empty() {
+                    main.push(Line::from(Span::styled(
+                        format!("    evidence: {}", plain(&evidence.join(", "))),
+                        theme::dim(),
+                    )));
+                }
+            }
+        }
         for (i, (question, suggested)) in questions_of(approval).into_iter().enumerate() {
             main.push(Line::default());
             main.extend(hanging(
@@ -2142,7 +2160,7 @@ mod first_page_tests {
     use crate::{
         detail::Section,
         testkit::{
-            escalated_app, plan_gate_app, questions_app, release_question_app, render,
+            council_questions_app, escalated_app, plan_gate_app, questions_app, release_question_app, render,
             running_build_app, ship_stage_app,
         },
     };
@@ -2386,6 +2404,23 @@ mod first_page_tests {
             "{}",
             rail_of(&screen)
         );
+    }
+
+    #[test]
+    fn the_questions_page_lists_what_the_council_settled_above_the_open_questions() {
+        let mut app = council_questions_app();
+        let main = main_pane(&render(&mut app, 180, 50));
+        in_order(
+            &main,
+            &[
+                "Settled by the council",
+                "Round half up or half to even? half to even (0.91)",
+                "evidence: src/round.rs:12, docs/money.md:4",
+                "1. Which currency does the report use?",
+            ],
+        );
+        let plain = main_pane(&render(&mut questions_app(), 180, 50));
+        assert!(!plain.contains("Settled by the council"));
     }
 
     #[test]
