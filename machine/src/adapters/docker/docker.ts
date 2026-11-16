@@ -1,7 +1,7 @@
 // Runs one stage in a fresh container and deletes it afterwards. The worktree is mounted at
 // /work (read-only for read-only stages), the stage input at /in, and results come back in /out.
 import { statSync } from "node:fs";
-import { chmod, chown, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -96,32 +96,39 @@ export function setSecretsRoot(dir: string): void {
   secretsRoot = dir;
 }
 
-/** Writes each secret as a 0600 file named for it, in a 0700 folder made new; a name that is not a variable name is refused before anything is written. `owner` (`uid:gid`) is given to a root machine, so the container's user can read them. */
-export async function writeSecretFiles(dir: string, values: Readonly<Record<string, string>>, owner?: string | null): Promise<void> {
+/** Makes `dir` a private folder of the machine's user: 0700, owned by it, not a link. It is what keeps other host users out of the secrets inside it, whatever their own modes. */
+async function ensurePrivateFolder(dir: string): Promise<void> {
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const found = await lstat(dir);
+  const uid = process.getuid?.();
+  if (!found.isDirectory() || (uid !== undefined && found.uid !== uid)) throw new Error(`${dir} is not a private folder of the machine's user (a plain folder it owns): no secret is written in it`);
+  await chmod(dir, 0o700);
+}
+
+/** Writes each secret as a 0644 file named for it, in a 0755 folder made new, inside a parent that is 0700 and the machine's own (made so here). The parent keeps other host users out; the container's user reads the files whatever its uid, with no capability, so nothing is chowned. A name that is not a variable name is refused before anything is written. */
+export async function writeSecretFiles(dir: string, values: Readonly<Record<string, string>>): Promise<void> {
   for (const name of Object.keys(values)) {
     const problem = secretNameProblem(name);
     if (problem) throw new Error(`secret "${name}" cannot be a file in ${SECRETS_MOUNT}: ${problem}`);
   }
-  const ids = owner && /^\d+:\d+$/.test(owner) && process.getuid?.() === 0 ? owner.split(":").map(Number) : null;
+  await ensurePrivateFolder(dirname(dir));
   await rm(dir, { recursive: true, force: true });
-  await mkdir(dir, { recursive: true, mode: 0o700 });
-  await chmod(dir, 0o700);
-  if (ids) await chown(dir, ids[0]!, ids[1]!);
+  await mkdir(dir, { recursive: true, mode: 0o755 });
+  await chmod(dir, 0o755);
   for (const [name, value] of Object.entries(values)) {
     const file = join(dir, name);
-    await writeFile(file, value, { mode: 0o600 });
-    await chmod(file, 0o600);
-    if (ids) await chown(file, ids[0]!, ids[1]!);
+    await writeFile(file, value, { mode: 0o644 });
+    await chmod(file, 0o644);
   }
 }
 
 /** A folder of secret files of its own, for one command or the app; `remove` deletes it. */
-export async function makeSecretFolder(values: Readonly<Record<string, string>>, owner?: string | null): Promise<{ dir: string; remove(): Promise<void> }> {
-  await mkdir(secretsRoot, { recursive: true, mode: 0o700 });
+export async function makeSecretFolder(values: Readonly<Record<string, string>>, _owner?: string | null): Promise<{ dir: string; remove(): Promise<void> }> {
+  await ensurePrivateFolder(secretsRoot);
   const dir = await mkdtemp(join(secretsRoot, "s-"));
   const remove = () => rm(dir, { recursive: true, force: true });
   try {
-    await writeSecretFiles(dir, values, owner);
+    await writeSecretFiles(dir, values);
   } catch (error) {
     await remove();
     throw error;
@@ -340,7 +347,7 @@ export async function runSandbox(run: SandboxRun, given: Partial<RunDeps> = {}):
         await mkdir(outDir, { recursive: true });
         await writeFile(join(inDir, "stage.json"), JSON.stringify(run.input, null, 2));
         const secrets = stageSecrets(run);
-        if (Object.keys(secrets).length > 0) await writeSecretFiles(secretsPath, secrets, run.user === undefined ? hostUser() : run.user);
+        if (Object.keys(secrets).length > 0) await writeSecretFiles(secretsPath, secrets);
         await deps.execOrThrow("docker", sandboxArgs({ ...run, ...(card ? { cardNetwork: card } : {}), network: services.network, serviceEnv: services.env }, inDir, outDir));
       }
       const known = { ...(run.redactValues ?? {}), ...(run.secrets ?? {}) };
@@ -505,7 +512,7 @@ export async function execInSandbox(
   if (run.limits?.runtime) await deps.checkRuntime?.(run.limits.runtime);
   const own = !run.cardNetwork && run.egress ? await deps.openCardNetwork(run.name, run.egress, { proxyImage: run.egress.proxyImage }) : null;
   const card = run.cardNetwork ?? own;
-  const folder = run.secrets && Object.keys(run.secrets).length > 0 ? await makeSecretFolder(run.secrets, run.user === undefined ? hostUser() : run.user).catch(async (error) => { await own?.teardown(); throw error; }) : null;
+  const folder = run.secrets && Object.keys(run.secrets).length > 0 ? await makeSecretFolder(run.secrets).catch(async (error) => { await own?.teardown(); throw error; }) : null;
   try {
     const services = run.servicesUp
       ? { network: run.network ?? null, env: run.serviceEnv ?? {}, teardown: async () => {} }

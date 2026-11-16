@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -72,6 +72,41 @@ describe("luna-env", () => {
     expect(ok.stdout + ok.stderr).toBe("");
     const refused = lunaEnv({ TOKEN: "super-secret-value", "bad-name": "super-secret-value" }, ["/bin/sh", "-c", "true"]);
     expect(refused.stdout + refused.stderr).not.toContain("super-secret-value");
+  });
+
+  const asRoot = process.getuid?.() === 0;
+
+  it.skipIf(asRoot)("exits non-zero, naming the folder and no value, when the folder exists but cannot be listed, and runs nothing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "luna-env-"));
+    dirs.push(dir);
+    const secrets = join(dir, "secrets");
+    mkdirSync(secrets);
+    writeFileSync(join(secrets, "TOKEN"), "super-secret-value", { mode: 0o600 });
+    chmodSync(secrets, 0o000);
+    try {
+      const out = spawnSync("/bin/sh", [join(runner, "luna-env"), "/bin/sh", "-c", "printf RAN"], { encoding: "utf8", env: { PATH: process.env.PATH ?? "", LUNA_SECRETS_DIR: secrets } });
+      expect(out.status).not.toBe(0);
+      expect(out.stdout).toBe("");
+      expect(out.stderr).toContain(secrets);
+      expect(out.stderr).not.toContain("super-secret-value");
+    } finally {
+      chmodSync(secrets, 0o755);
+    }
+  });
+
+  it.skipIf(asRoot)("exits non-zero, naming the file and no value, when a secret file cannot be read, and runs nothing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "luna-env-"));
+    dirs.push(dir);
+    const secrets = join(dir, "secrets");
+    mkdirSync(secrets);
+    writeFileSync(join(secrets, "GOOD"), "good-value", { mode: 0o644 });
+    writeFileSync(join(secrets, "TOKEN"), "super-secret-value", { mode: 0o000 });
+    const out = spawnSync("/bin/sh", [join(runner, "luna-env"), "/bin/sh", "-c", "printf RAN"], { encoding: "utf8", env: { PATH: process.env.PATH ?? "", LUNA_SECRETS_DIR: secrets } });
+    expect(out.status).not.toBe(0);
+    expect(out.stdout).toBe("");
+    expect(out.stderr).toContain("TOKEN");
+    expect(out.stderr).not.toContain("super-secret-value");
+    expect(out.stderr).not.toContain("good-value");
   });
 
   it("says how it is used when given no command", () => {
