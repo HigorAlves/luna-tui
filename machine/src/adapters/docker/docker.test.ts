@@ -9,6 +9,9 @@ import { RuntimeUnavailableError } from "./runtimes.ts";
 import { CACHE_ENV, SecretsMissingError, type RunDeps, cacheVolumeFor, hostUser, execInSandbox, runSandbox, sandboxArgs, sandboxExecArgs, sandboxExecutor, secretNameProblem, writeSecretFiles, type SandboxRun } from "./docker.ts";
 import { EgressUnsupportedError } from "./egress.ts";
 
+/** A unit test never asks the real daemon: the seccomp and runtime start checks pass here, and the tests that test them pass their own. */
+const NO_DAEMON = { checkSeccomp: async () => {}, checkRuntime: async () => {} } as Partial<RunDeps>;
+
 function run(over: Partial<SandboxRun> = {}): SandboxRun {
   return {
     name: "c1",
@@ -326,7 +329,7 @@ describe("sandboxExecutor's image", () => {
   const fake = (async (r: { image: string }) => (seen.push(r.image), { code: 0, stdout: "", stderr: "" })) as never;
   it("is the one the repository resolves to, given explicitly, never guessed from the folder", async () => {
     seen.length = 0;
-    const exec = sandboxExecutor({ machine: "machine:dev", imageOf: async (repo) => `img-of-${repo}` }, fake);
+    const exec = sandboxExecutor({ machine: "machine:dev", imageOf: async (repo) => `img-of-${repo}` }, fake, NO_DAEMON);
     await exec("true", [], { cwd: "/wt/same-name/task-1", repoPath: "/a/shop" });
     await exec("true", [], { cwd: "/wt/same-name/task-2", repoPath: "/b/shop" });
     await exec("true", [], { cwd: "/wt/same-name/task-3" });
@@ -338,7 +341,7 @@ describe("sandboxExecutor's container env", () => {
   it("gives a check the repository's container env, under the HARDNESS_ variables the caller passes", async () => {
     const envs: Array<Record<string, string>> = [];
     const fake = (async (r: { env: Record<string, string> }) => (envs.push(r.env), { code: 0, stdout: "", stderr: "" })) as never;
-    const exec = sandboxExecutor({ machine: "m", imageOf: async () => "img", containerEnvOf: async (repo) => (repo === "/a/shop" ? { CI: "1", HARDNESS_X: "from-repo" } : ({} as Record<string, string>)) }, fake);
+    const exec = sandboxExecutor({ machine: "m", imageOf: async () => "img", containerEnvOf: async (repo) => (repo === "/a/shop" ? { CI: "1", HARDNESS_X: "from-repo" } : ({} as Record<string, string>)) }, fake, NO_DAEMON);
     await exec("true", [], { cwd: "/wt/shop/task-1", repoPath: "/a/shop", env: { HARDNESS_X: "from-caller" } });
     await exec("true", [], { cwd: "/wt/other/task-1", repoPath: "/b/other" });
     expect(envs[0]).toEqual({ CI: "1", HARDNESS_X: "from-caller" });
@@ -352,7 +355,7 @@ describe("sandboxExecutor's list and size", () => {
     const fake = (async (r: { egress?: unknown; limits?: unknown }) => (runs.push(r), { code: 0, stdout: "", stderr: "" })) as never;
     const asked: Array<string | undefined> = [];
     const spec = { allow: ["github.com:443"], allowPrivate: [], proxyImage: "machine:dev" };
-    const exec = sandboxExecutor({ machine: "machine:dev", imageOf: async () => "img", egress: async (repo) => (asked.push(repo), spec), limitsOf: async (repo) => (repo ? { cpu: 6, memoryGb: 12 } : { cpu: 2, memoryGb: 4 }) }, fake);
+    const exec = sandboxExecutor({ machine: "machine:dev", imageOf: async () => "img", egress: async (repo) => (asked.push(repo), spec), limitsOf: async (repo) => (repo ? { cpu: 6, memoryGb: 12 } : { cpu: 2, memoryGb: 4 }) }, fake, NO_DAEMON);
     await exec("true", [], { cwd: "/wt/a/task-1", repoPath: "/a/shop" });
     await exec("true", [], { cwd: "/wt/a/task-2" });
     expect(asked).toEqual(["/a/shop", undefined]);
@@ -364,7 +367,7 @@ describe("sandboxExecutor's list and size", () => {
     const runs: Array<{ cacheVolume?: string; limits?: unknown }> = [];
     const fake = (async (r: { cacheVolume?: string }) => (runs.push(r), { code: 0, stdout: "", stderr: "" })) as never;
     const limitsOf = async (_repo: string | undefined, trust?: "trusted" | "untrusted") => ({ cpu: 2, memoryGb: 4, cacheTrust: trust ?? ("trusted" as const), ...(trust === "untrusted" ? { runtime: "runsc" } : {}) });
-    const exec = sandboxExecutor({ machine: "machine:dev", imageOf: async () => "img", limitsOf }, fake);
+    const exec = sandboxExecutor({ machine: "machine:dev", imageOf: async () => "img", limitsOf }, fake, NO_DAEMON);
     await exec("true", [], { cwd: "/wt/other-name/task-1", repoPath: "/a/shop" });
     await exec("true", [], { cwd: "/wt/other-name/task-1", repoPath: "/a/shop", trust: "untrusted" });
     expect(runs.map((r) => r.cacheVolume)).toEqual(["hardness-cache-shop", "hardness-cache-shop-untrusted"]);
@@ -431,6 +434,7 @@ describe("sandboxExecutor's session: the services start once for a pass of check
     const given = {
       openCardNetwork: async () => (events.push("open network"), card as never),
       startServices: async (_name: string, _services: unknown, options?: { network?: { name: string } }) => (events.push(`start services on ${options?.network?.name}`), { network: "net-s", env: { DATABASE_URL: "postgres://postgres/t" }, teardown: async () => void events.push("teardown services") }),
+      ...NO_DAEMON,
     } as unknown as Partial<RunDeps>;
     const fake = (async (r: Record<string, unknown>) => (runs.push(r), { code: 0, stdout: "", stderr: "" })) as never;
     const exec = sandboxExecutor({ machine: "machine:dev", imageOf: async () => "img", egress: async () => spec }, fake, given);
@@ -484,7 +488,7 @@ describe("sandboxExecutor's session: the services start once for a pass of check
   it("removes the network when the services do not come up, and passes the error on", async () => {
     const events: string[] = [];
     const card = { name: "n", dns: "1.1.1.1", containerArgs: () => [], blocked: async () => [], teardown: async () => void events.push("teardown network") };
-    const given = { openCardNetwork: async () => card as never, startServices: async () => { throw new Error("postgres never became ready"); } } as unknown as Partial<RunDeps>;
+    const given = { ...NO_DAEMON, openCardNetwork: async () => card as never, startServices: async () => { throw new Error("postgres never became ready"); } } as unknown as Partial<RunDeps>;
     const exec = sandboxExecutor({ machine: "m", imageOf: async () => "img", egress: async () => spec }, (async () => ({ code: 0, stdout: "", stderr: "" })) as never, given);
     await expect(exec.session!({ cwd: "/wt/a/task-1", services: { postgres: { image: "postgres:16" } } })).rejects.toThrow("never became ready");
     expect(events).toEqual(["teardown network"]);
@@ -781,7 +785,7 @@ describe("sandboxExecutor's secrets", () => {
     const fake = (async (r: { secrets?: Record<string, string> }) => (runs.push(r), { code: 0, stdout: "", stderr: "" })) as never;
     const loads: Array<[string, string[]]> = [];
     const store = { folder: (repo: string) => `/secrets/${repo}`, load: async (repo: string, names: string[]) => (loads.push([repo, names]), names.includes("GONE_ONE") ? { values: {}, missing: [{ name: "GONE_ONE", reason: "absent" }] } : { values: Object.fromEntries(names.map((n) => [n, "v".repeat(10)])), missing: [] }) };
-    const exec = sandboxExecutor({ machine: "m", imageOf: async () => "img", secrets: store }, fake);
+    const exec = sandboxExecutor({ machine: "m", imageOf: async () => "img", secrets: store }, fake, NO_DAEMON);
     await exec("true", [], { cwd: "/wt/a/t1", repoPath: "/a/shop", secrets: ["DB_URL"] });
     await exec("true", [], { cwd: "/wt/a/t1", repoPath: "/a/shop" });
     expect(loads).toEqual([["/a/shop", ["DB_URL"]]]);
@@ -798,7 +802,7 @@ describe("sandboxExecutor's secrets", () => {
 describe("a secret's value in what a run returns", () => {
   const secret = ["red", "act", "w".repeat(10)].join("-");
   it("is replaced in a check's stdout and stderr before they are returned", async () => {
-    const deps = { exec: async (_c: string, args: string[]) => (args[0] === "run" ? { code: 0, stdout: `ok ${secret}`, stderr: `err ${Buffer.from(secret).toString("base64")}` } : { code: 0, stdout: "", stderr: "" }), startServices: async () => ({ network: null, env: {}, teardown: async () => {} }) } as unknown as Partial<RunDeps>;
+    const deps = { ...NO_DAEMON, exec: async (_c: string, args: string[]) => (args[0] === "run" ? { code: 0, stdout: `ok ${secret}`, stderr: `err ${Buffer.from(secret).toString("base64")}` } : { code: 0, stdout: "", stderr: "" }), startServices: async () => ({ network: null, env: {}, teardown: async () => {} }) } as unknown as Partial<RunDeps>;
     const out = await execInSandbox({ name: "c", image: "img", worktree: "/wt", argv: ["true"], secrets: { DB_URL: secret } }, {}, deps);
     expect(out.stdout).toBe("ok [secret:DB_URL]");
     expect(out.stderr).toBe("err [secret:DB_URL]");
@@ -807,6 +811,7 @@ describe("a secret's value in what a run returns", () => {
   it("is replaced in the transcript before transcript.log is written, and in the refused hosts", async () => {
     const dir = mkdtempSync(join(tmpdir(), "docker-transcript-"));
     const deps = {
+      ...NO_DAEMON,
       exec: async (_c: string, args: string[]) => (args[0] === "logs" ? { code: 0, stdout: `the agent printed ${secret}`, stderr: "" } : args[0] === "wait" ? { code: 0, stdout: "0", stderr: "" } : { code: 0, stdout: "", stderr: "" }),
       execOrThrow: async () => "",
       startServices: async () => ({ network: null, env: {}, teardown: async () => {} }),
@@ -826,6 +831,7 @@ describe("values kept only to be redacted", () => {
     const envs: Array<NodeJS.ProcessEnv | undefined> = [];
     const mixed = `${secret.toUpperCase()}.example.com`.toLowerCase();
     const deps = {
+      ...NO_DAEMON,
       exec: async (_c: string, args: string[]) => (args[0] === "logs" ? { code: 0, stdout: `printed ${secret}`, stderr: "" } : args[0] === "wait" ? { code: 0, stdout: "0", stderr: "" } : { code: 0, stdout: "", stderr: "" }),
       execOrThrow: async (_c: string, _a: string[], options?: { env?: NodeJS.ProcessEnv }) => (envs.push(options?.env), ""),
       startServices: async () => ({ network: null, env: {}, teardown: async () => {} }),

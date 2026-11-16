@@ -3705,7 +3705,7 @@ describe("re-attaching to a container after a restart", () => {
   it("still escalates when the container is gone", async () => {
     const task = await newTask();
     await running(task.id, "hardness-c1");
-    const restarted = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, containerRunning: async () => false });
+    const restarted = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, containerRunning: async () => false, removeContainer: async () => {} });
     expect(await restarted.recover()).toBe(1);
     expect(await restarted.get(task.id)).toMatchObject({ state: "escalated", resumeTo: "implementing" });
     expect((await restarted.stageRuns(task.id))[0]).toMatchObject({ status: "aborted" });
