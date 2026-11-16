@@ -300,6 +300,25 @@ pub fn row_text(action: &Action, task: Option<&Task>) -> String {
     format!("{what}  {card}  {}", action.why)
 }
 
+/// What the person reads under the selected row before `y`: the full payload, sanitised, because model text can steer it.
+/// `gate` is the kind of the gate an `approve` would pass.
+pub fn payload_lines(action: &Action, gate: Option<&str>) -> Vec<String> {
+    let clean = |text: &str| crate::text::sanitize(text, false);
+    let mut out = Vec::new();
+    if let Some(reason) = action.reason.as_deref() {
+        out.push(format!("reason: {}", clean(reason)));
+    }
+    if let Some(answers) = &action.answers {
+        for (question, answer) in answers {
+            out.push(format!("{} -> {}", clean(question), clean(answer)));
+        }
+    }
+    if action.kind == "approve" {
+        out.push(format!("gate: {}", clean(gate.unwrap_or("unknown"))));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3021,7 +3021,11 @@ pub fn settled_by_council_of(approval: &Approval) -> Vec<(String, String, f64, V
                         s["confidence"].as_f64().unwrap_or_default(),
                         s["evidence"]
                             .as_array()
-                            .map(|e| e.iter().filter_map(|l| l.as_str().map(str::to_string)).collect())
+                            .map(|e| {
+                                e.iter()
+                                    .filter_map(|l| l.as_str().map(str::to_string))
+                                    .collect()
+                            })
                             .unwrap_or_default(),
                     ))
                 })

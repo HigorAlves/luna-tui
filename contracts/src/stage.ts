@@ -391,6 +391,10 @@ export const ForemanCard = z.object({
   gate: z.string().nullable(),
   /** What the open gate asks the person. */
   gateSummary: z.string().max(200).nullable(),
+  /** What the open gate decides, when it is more than the plan: triage's outcome (`conversation`, `archive`, `split`, `split_failed`) or `ship_approval` for the release question. */
+  gateOutcome: z.string().nullable(),
+  /** The card's route; a `config` card's approval writes a file. */
+  route: z.string(),
   /** Why the card is escalated, when it is. */
   escalation: z.string().nullable(),
   /** The open questions of a card that waits at awaiting_answers; empty otherwise. */

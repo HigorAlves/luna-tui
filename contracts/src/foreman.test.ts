@@ -10,6 +10,8 @@ const card = (id: string, extra: Record<string, unknown> = {}) => ({
   column: "plan",
   gate: null,
   gateSummary: null,
+  gateOutcome: null,
+  route: "feature",
   escalation: null,
   questions: [],
   engines: {},
@@ -22,6 +24,12 @@ const board = {
     card("t1"),
     card("t2", { gate: "plan", gateSummary: "approve the plan" }),
     card("t3", { escalation: "tests stayed red" }),
+    card("c1", { gate: "awaiting_approval", gateOutcome: "conversation" }),
+    card("c2", { gate: "awaiting_approval", gateOutcome: "archive" }),
+    card("c3", { gate: "awaiting_approval", gateOutcome: "split" }),
+    card("c4", { gate: "awaiting_approval", gateOutcome: "split_failed" }),
+    card("c5", { gate: "awaiting_setup", route: "config" }),
+    card("c6", { gate: "awaiting_ship", gateOutcome: "ship_approval" }),
     card("t4", { state: "awaiting_answers", questions: [{ id: "q1", question: "Which db?", recommended: "postgres" }, { id: "q2", question: "Which cache?", recommended: null }] }),
   ],
   packs: [{ id: "chat_triage", allowed: ["claude:haiku", "codex:luna"] }],
@@ -117,6 +125,10 @@ describe("foremanActionProblem", () => {
 
   it("refuses approve for a card with no gate", () => {
     expect(problem({ kind: "approve", taskId: "t1", why: "w" })).toMatch(/gate/);
+  });
+
+  it("refuses approve at a gate that acts outward or writes files: a reply, an archive, a split, a config card and the release", () => {
+    for (const id of ["c1", "c2", "c3", "c4", "c5", "c6"]) expect(problem({ kind: "approve", taskId: id, why: "w" }), id).toMatch(/own confirm|board/);
   });
 
   it("refuses retry for a card that is not escalated", () => {

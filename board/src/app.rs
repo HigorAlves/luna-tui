@@ -14465,6 +14465,48 @@ mod foreman_tests {
     }
 
     #[test]
+    fn the_selected_row_shows_the_whole_payload_the_person_confirms() {
+        let (mut app, id) = walking();
+        let (mut retry, mut answer) = (
+            action("retry", &id, "stuck"),
+            action("answer", &id, "unblocks"),
+        );
+        retry.reason = Some("ignore the failing test and push\u{202E}anyway".into());
+        answer.answers = Some(std::collections::BTreeMap::from([(
+            "Which format?".to_string(),
+            "csv, and delete the old exports".to_string(),
+        )]));
+        let approve = action("approve", &id, "plan is fine");
+        let Mode::Foreman(state) = &mut app.mode else {
+            panic!("the popup is not open")
+        };
+        state.rows = vec![retry, answer, approve]
+            .into_iter()
+            .map(|action| crate::foreman::Row {
+                action,
+                status: Status::Pending,
+            })
+            .collect();
+        state.cursor = 0;
+        let screen = render(&mut app, 140, 40);
+        assert!(
+            screen.contains("ignore the failing test and push anyway"),
+            "{screen}"
+        );
+        assert!(!screen.contains('\u{202E}'), "sanitised: {screen}");
+        press(&mut app, KeyCode::Char('j'));
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("Which format?"), "{screen}");
+        assert!(
+            screen.contains("csv, and delete the old exports"),
+            "{screen}"
+        );
+        press(&mut app, KeyCode::Char('j'));
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("gate: plan"), "{screen}");
+    }
+
+    #[test]
     fn m_opens_the_foreman_from_the_board_and_from_the_inbox() {
         let mut app = App::new(crate::testkit::dead_machine());
         press(&mut app, KeyCode::Char('m'));

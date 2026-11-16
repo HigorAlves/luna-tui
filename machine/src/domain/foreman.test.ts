@@ -6,7 +6,7 @@ import type { TaskRow } from "./task.ts";
 
 const NOW = new Date("2026-11-16T12:00:00Z");
 const task = (id: string, over: Partial<TaskRow> = {}): TaskRow =>
-  ({ id, title: `Card ${id}`, repoPath: "/work/luna", state: "triage", resumeTo: null, reason: null, stages: {}, updatedAt: new Date("2026-11-10T00:00:00Z"), ...over }) as TaskRow;
+  ({ id, title: `Card ${id}`, repoPath: "/work/luna", state: "triage", route: "feature", resumeTo: null, reason: null, stages: {}, updatedAt: new Date("2026-11-10T00:00:00Z"), ...over }) as TaskRow;
 const packs = [{ id: "foreman" as const, engines: PACKS.foreman.engines }];
 const board = (tasks: TaskRow[], gates: Parameters<typeof buildForemanBoard>[1] = new Map()) => buildForemanBoard(tasks, gates, packs, NOW);
 
@@ -44,6 +44,18 @@ describe("buildForemanBoard", () => {
     expect(a).toMatchObject({ gate: "awaiting_approval", gateSummary: "Approve the plan: 3 slices", escalation: null, repo: "luna", column: "Plan" });
     const b = out.cards.find((c) => c.id === "b")!;
     expect(b).toMatchObject({ gate: null, gateSummary: null, escalation: "tests stay red", column: "Build" });
+  });
+
+  it("carries the route and the gate's outcome", () => {
+    const gates = new Map([
+      ["a", { state: "awaiting_approval" as const, requested: { outcome: "archive" } }],
+      ["s", { state: "awaiting_ship" as const, requested: { gate: "ship_approval" } }],
+    ]);
+    const out = board([task("a", { route: "config" } as Partial<TaskRow>), task("s"), task("n")], gates);
+    const by = (id: string) => out.cards.find((c) => c.id === id)!;
+    expect(by("a")).toMatchObject({ gateOutcome: "archive", route: "config" });
+    expect(by("s")).toMatchObject({ gateOutcome: "ship_approval" });
+    expect(by("n")).toMatchObject({ gateOutcome: null });
   });
 
   it("caps the gate summary at 200 characters", () => {

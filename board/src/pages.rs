@@ -11,7 +11,10 @@ use crate::{
         origin_lines, plain, pr_for, pr_url, record_group, run_error, ship_risk_is_high,
         slice_progress,
     },
-    model::{Approval, PullRequest, Task, TaskDetail, criteria_summary, questions_of, settled_by_council_of},
+    model::{
+        Approval, PullRequest, Task, TaskDetail, criteria_summary, questions_of,
+        settled_by_council_of,
+    },
     reference::{Page, RefGroup},
     text::{self, ellipsis, truncate_middle},
     theme,
@@ -2160,8 +2163,8 @@ mod first_page_tests {
     use crate::{
         detail::Section,
         testkit::{
-            council_questions_app, escalated_app, plan_gate_app, questions_app, release_question_app, render,
-            running_build_app, ship_stage_app,
+            council_questions_app, escalated_app, plan_gate_app, questions_app,
+            release_question_app, render, running_build_app, ship_stage_app,
         },
     };
 

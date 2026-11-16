@@ -31,11 +31,18 @@ export const ForemanAnswer = z.object({
 });
 export type ForemanAnswer = z.infer<typeof ForemanAnswer>;
 
+/** Gates whose approval acts outward or writes files; each keeps its own confirm flow on the board. */
+const OWN_FLOW_GATES: ReadonlySet<string> = new Set(["conversation", "archive", "split", "split_failed", "ship_approval"]);
+
 /** Why the board cannot take an action, or null when it can. Pure: the machine drops an action that has a problem. */
 export function foremanActionProblem(action: ForemanAction, board: ForemanContext["board"]): string | null {
   const card = board.cards.find((c) => c.id === action.taskId);
   if (!card) return `card ${action.taskId} is not on the board`;
   if (action.kind === "approve" && card.gate === null) return `card ${card.id} has no gate to approve`;
+  if (action.kind === "approve") {
+    const outward = card.route === "config" ? "a config change" : OWN_FLOW_GATES.has(card.gateOutcome ?? "") ? `the ${card.gateOutcome} gate` : null;
+    if (outward !== null) return `card ${card.id}: ${outward} has its own confirm flow on the board; approving it from here is refused`;
+  }
   if (action.kind === "retry" && card.escalation === null) return `card ${card.id} is not escalated`;
   if (action.kind === "answer") {
     const ids = Object.keys(action.answers);

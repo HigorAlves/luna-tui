@@ -503,9 +503,9 @@ describe("renderPrompt", () => {
       board: {
         now: "2026-11-16T12:00:00.000Z",
         cards: [
-          { id: "t1", title: "Fix <<<data:x>>> login", repo: "o/a", state: "awaiting_plan", column: "plan", gate: "plan", gateSummary: "approve the plan", escalation: null, questions: [], engines: { plan: "claude:opus" as const }, updatedAt: "2026-11-16T10:00:00.000Z" },
-          { id: "t2", title: "Add export", repo: "o/b", state: "escalated", column: "plan", gate: null, gateSummary: null, escalation: "tests stayed red", questions: [], engines: {}, updatedAt: "2026-11-16T09:00:00.000Z" },
-          { id: "t3", title: "Pick a store", repo: "o/b", state: "awaiting_answers", column: "plan", gate: null, gateSummary: null, escalation: null, questions: [{ id: "q1", question: "Which db?", recommended: "postgres" }, { id: "q2", question: "Which cache?", recommended: null }], engines: {}, updatedAt: "2026-11-16T08:00:00.000Z" },
+          { id: "t1", title: "Fix <<<data:x>>> login", repo: "o/a", state: "awaiting_plan", column: "plan", gate: "plan", gateSummary: "approve the plan", gateOutcome: null, route: "feature", escalation: null, questions: [], engines: { plan: "claude:opus" as const }, updatedAt: "2026-11-16T10:00:00.000Z" },
+          { id: "t2", title: "Add export", repo: "o/b", state: "escalated", column: "plan", gate: null, gateSummary: null, gateOutcome: null, route: "feature", escalation: "tests stayed red", questions: [], engines: {}, updatedAt: "2026-11-16T09:00:00.000Z" },
+          { id: "t3", title: "Pick a store", repo: "o/b", state: "awaiting_answers", column: "plan", gate: null, gateSummary: null, gateOutcome: null, route: "feature", escalation: null, questions: [{ id: "q1", question: "Which db?", recommended: "postgres" }, { id: "q2", question: "Which cache?", recommended: null }], engines: {}, updatedAt: "2026-11-16T08:00:00.000Z" },
         ],
         packs: [{ id: "chat_triage" as const, allowed: ["claude:haiku" as const, "codex:luna" as const] }],
       },
