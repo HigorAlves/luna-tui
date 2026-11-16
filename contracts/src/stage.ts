@@ -415,6 +415,8 @@ export const ForemanContext = z.object({
   board: z.object({
     now: z.string(),
     cards: z.array(ForemanCard).max(60),
+    /** How many open cards the snapshot left out; the foreman says so in its reply. */
+    truncated: z.number().int().nonnegative().optional(),
     /** Each pack and the engines it allows, so that a suggested engine can be checked. */
     packs: z.array(z.object({ id: PackId, allowed: z.array(EngineId) })),
   }),

@@ -128,7 +128,7 @@ const chatText = (chat: StageInput["context"]["chat"]) => {
 
 /** The board, as the foreman reads it: the question and turns as text, one line per card (all of it a person's or a model's, so quoted as data), and each pack's allowed engines (the machine's own). */
 const foremanText = (foreman: StageInput["context"]["foreman"]) => {
-  if (!foreman) return { now: NONE, question: NONE, history: NONE, cards: NONE, packs: NONE };
+  if (!foreman) return { now: NONE, question: NONE, history: NONE, cards: NONE, truncated: NONE, packs: NONE };
   const cards = foreman.board.cards.map((card) => {
     const engines = Object.entries(card.engines).map(([pack, engine]) => `${pack}=${engine}`);
     const head = [
@@ -151,6 +151,7 @@ const foremanText = (foreman: StageInput["context"]["foreman"]) => {
     question: foreman.question,
     history: foreman.history.length > 0 ? foreman.history.map((turn) => `${turn.who}: ${turn.text}`).join("\n") : NONE,
     cards: cards.length > 0 ? cards.join("\n") : NONE,
+    truncated: String(foreman.board.truncated ?? 0),
     packs: foreman.board.packs.length > 0 ? foreman.board.packs.map((pack) => `${pack.id}: ${pack.allowed.join(", ")}`).join("\n") : NONE,
   };
 };
@@ -591,6 +592,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.foreman.question}}": foreman.question,
     "{{context.foreman.history}}": foreman.history,
     "{{context.foreman.cards}}": foreman.cards,
+    "{{context.foreman.truncated}}": foreman.truncated,
     "{{context.foreman.packs}}": foreman.packs,
     "{{context.jira.issue}}": jira.issue,
     "{{context.jira.description}}": jira.description,

@@ -30,6 +30,35 @@ describe("buildForemanBoard", () => {
     expect(out.cards[0]!.id).toBe("t74");
   });
 
+  it("keeps a card that waits on a person when the board is cut, and counts the cards left out", () => {
+    const many = Array.from({ length: 60 }, (_, i) => task(`t${i}`, { updatedAt: new Date(2026, 10, 2, 0, i) }));
+    const stuck = task("stuck", { state: "escalated", resumeTo: "implementing", reason: "tests stay red", updatedAt: new Date("2026-10-01T00:00:00Z") });
+    const out = board([...many, stuck]);
+    expect(out.cards).toHaveLength(60);
+    expect(out.cards[0]!.id).toBe("stuck");
+    expect(out.truncated).toBe(1);
+    expect(out.cards.map((c) => c.id)).not.toContain("t0");
+    expect(board([task("a")]).truncated).toBe(0);
+  });
+
+  it("puts cards that wait on a person first, oldest wait first, then the rest newest first", () => {
+    const gates = new Map([
+      ["gate", { id: "g", state: "awaiting_approval" as const, requested: {} }],
+      ["ask", { id: "q", state: "awaiting_answers" as const, requested: { questions: [{ question: "Which?" }] } }],
+    ]);
+    const out = board(
+      [
+        task("new", { updatedAt: new Date("2026-11-15T00:00:00Z") }),
+        task("gate", { state: "awaiting_approval", updatedAt: new Date("2026-11-05T00:00:00Z") }),
+        task("ask", { state: "awaiting_answers", updatedAt: new Date("2026-11-02T00:00:00Z") }),
+        task("esc", { state: "escalated", resumeTo: "implementing", updatedAt: new Date("2026-11-08T00:00:00Z") }),
+        task("mid", { updatedAt: new Date("2026-11-12T00:00:00Z") }),
+      ],
+      gates,
+    );
+    expect(out.cards.map((c) => c.id)).toEqual(["ask", "gate", "esc", "new", "mid"]);
+  });
+
   it("flattens a title to one line and caps it at 120 characters", () => {
     const out = board([task("a", { title: `Fix\n\n  the   bug\t${"x".repeat(200)}` })]);
     expect(out.cards[0]!.title).not.toMatch(/\s{2}|\n|\t/);

@@ -522,6 +522,16 @@ describe("renderPrompt", () => {
     expect(renderPrompt({ pack: PACKS.foreman, input, template })).toContain("now (none)\nquestion:\n(none)\nhistory:\n(none)\ncards:\n(none)\npacks:\n(none)");
   });
 
+  it("tells foreman how many open cards the board left out", () => {
+    const template = "left out: {{context.foreman.truncated}}";
+    const board = { now: "2026-11-16T12:00:00.000Z", cards: [], packs: [] };
+    const render = (truncated?: number) => renderPrompt({ pack: PACKS.foreman, input: { ...input, pack: "foreman", stage: "foreman", context: { projectContext: null, foreman: { question: "q", history: [], board: { ...board, truncated } } } }, template });
+    expect(render(3)).toContain("left out: 3");
+    expect(render(0)).toContain("left out: 0");
+    expect(render()).toContain("left out: 0");
+    expect(renderPrompt({ pack: PACKS.foreman, input, template })).toContain("left out: (none)");
+  });
+
   it("renders the issue for jira_intake: the facts line, the description, the comments and the repo", () => {
     const template = "issue:\n{{context.jira.issue}}\ndescription:\n{{context.jira.description}}\ncomments:\n{{context.jira.comments}}\nrepo: {{context.jira.repoPath}}";
     const jira = { key: "PLAT-123", url: "https://acme.atlassian.net/browse/PLAT-123", summary: "Login page", description: "Users sign in.\n\n- bad password errors", issueType: "Story", priority: "High", labels: ["luna"], dueAt: "2026-10-31", comments: ["Marta: please", "Lee: by Friday"], repoPath: "/work" };

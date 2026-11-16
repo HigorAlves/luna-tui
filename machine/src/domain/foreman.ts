@@ -49,9 +49,16 @@ export function buildForemanBoard(
   packs: ReadonlyArray<{ id: PackId; engines: { allowed: readonly EngineId[] } }>,
   now: Date,
 ): ForemanContext["board"] {
-  const cards = tasks
+  // A card that waits on a person comes first, the oldest wait first; the rest follow, newest first. The cut then drops the quiet cards.
+  const waits = (t: TaskRow): boolean => t.state === "escalated" || t.state === "awaiting_answers" || gates.has(t.id);
+  const open = tasks
     .filter((t) => !isTerminal(t.state))
-    .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+    .sort((a, b) => {
+      const [wa, wb] = [waits(a), waits(b)];
+      if (wa !== wb) return wa ? -1 : 1;
+      return wa ? a.updatedAt.getTime() - b.updatedAt.getTime() : b.updatedAt.getTime() - a.updatedAt.getTime();
+    });
+  const cards = open
     .slice(0, FOREMAN_MAX_CARDS)
     .map((t): ForemanCard => {
       const gate = gates.get(t.id);
@@ -73,5 +80,5 @@ export function buildForemanBoard(
         updatedAt: t.updatedAt.toISOString(),
       };
     });
-  return { now: now.toISOString(), cards, packs: packs.map((p) => ({ id: p.id, allowed: [...p.engines.allowed] })) };
+  return { now: now.toISOString(), cards, truncated: open.length - cards.length, packs: packs.map((p) => ({ id: p.id, allowed: [...p.engines.allowed] })) };
 }
