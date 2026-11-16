@@ -405,6 +405,14 @@ export const ForemanCard = z.object({
   questions: z.array(z.object({ id: z.string().min(1), question: z.string(), recommended: z.string().nullable() })),
   engines: StageEngines,
   updatedAt: z.string(),
+  /** What the open gate flagged (`requested.flagged`): a card with a flag is not approved from here. */
+  flagged: z.array(z.string().max(120)).max(10).optional(),
+  /** The plan council's verdict at the gate: whether it passed and how many findings its members left open; null when the plan had no council. */
+  council: z.object({ passed: z.boolean(), open: z.number().int().nonnegative() }).nullable().optional(),
+  /** How many of the card's questions the question council settled. */
+  settledByCouncil: z.number().int().nonnegative().optional(),
+  /** `untrusted` for a card from a stranger on GitHub; its plan is not approved from here. */
+  trust: z.enum(["trusted", "untrusted"]).optional(),
 });
 export type ForemanCard = z.infer<typeof ForemanCard>;
 
@@ -417,6 +425,8 @@ export const ForemanContext = z.object({
     cards: z.array(ForemanCard).max(60),
     /** How many open cards the snapshot left out; the foreman says so in its reply. */
     truncated: z.number().int().nonnegative().optional(),
+    /** The base images and Dockerfiles that wait for a person's approval; each keeps its own flow on the board. */
+    pending: z.array(z.object({ repo: z.string(), kind: z.enum(["base", "dockerfile"]), ref: z.string() })).max(50).optional(),
     /** Each pack and the engines it allows, so that a suggested engine can be checked. */
     packs: z.array(z.object({ id: PackId, allowed: z.array(EngineId) })),
   }),

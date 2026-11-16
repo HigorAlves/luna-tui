@@ -58,7 +58,7 @@ import type { MachinePolicy } from "@hardness/contracts";
 import { EconomyApproveInput, type EconomyConfig, EconomyRepoInput, EconomyRestoreInput } from "@hardness/contracts";
 import { ForemanAnswer, type ForemanSuggestion, ForemanContext, foremanActionProblem, isTerminal } from "@hardness/contracts";
 import { buildForemanBoard } from "../../domain/foreman.ts";
-import { isAbsolute, resolve as resolvePath } from "node:path";
+import { basename, isAbsolute, resolve as resolvePath } from "node:path";
 import { type Context, Hono } from "hono";
 import type { Economy } from "../../application/economy.ts";
 import { economyMetrics } from "../../domain/economy/metrics.ts";
@@ -340,7 +340,12 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     const glances = await pipeline.glances(open.map((row) => row.id));
     const gates = new Map([...glances].flatMap(([id, glance]) => (glance.gate ? [[id, glance.gate] as const] : [])));
     const packs = Object.values(PACKS).filter((pack) => packInfo(pack).states.length > 0);
-    const board = buildForemanBoard(open, gates, packs, new Date());
+    // Base images and Dockerfiles that wait for approval keep their own board flow; the foreman only names them.
+    const pending = ((await repoHealth?.().catch(() => [])) ?? []).flatMap((health) => [
+      ...(health.image.pendingBase ? [{ repo: basename(health.repo), kind: "base" as const, ref: health.image.pendingBase }] : []),
+      ...(health.image.pendingDockerfile ? [{ repo: basename(health.repo), kind: "dockerfile" as const, ref: health.image.pendingDockerfile.path }] : []),
+    ]);
+    const board = buildForemanBoard(open, gates, packs, new Date(), pending.slice(0, 50));
     let answer: ForemanAnswer;
     try {
       const result = await runs.run({ pack: "foreman", context: { foreman: { question, history: history ?? [], board } } }, "board", c.req.raw.signal);

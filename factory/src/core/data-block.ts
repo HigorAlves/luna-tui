@@ -63,7 +63,7 @@ const block = [
   "context.sweepFailures", "context.blastRadius", "context.checks", "context.scenarioTests", "context.testsCommit.files", "context.unlockedTests", "context.coverage", "context.qaTargets", "context.video.narration", "context.video.sheets", "decisions", "priorFindings", "context.projectContext", "context.testCases", "context.ci", "context.review", "context.threads", "context.ship", "context.retro",
   "context.video.scenarios", "context.video.steps", "context.video.chapters", "context.video.target", "context.video.timeline", "context.video.report", "context.video.transcript", "context.video.fixCards",
   "context.slack.watches", "context.slack.rules", "context.slack.items", "context.chat.rules", "context.chat.items",
-  "context.foreman.question", "context.foreman.history", "context.foreman.cards",
+  "context.foreman.question", "context.foreman.history", "context.foreman.cards", "context.foreman.pending",
   "context.split", "context.jira.issue", "context.jira.description", "context.jira.comments", "context.intake", "context.ticket", "context.check", "context.propose", "context.factCandidates",
   "context.conversation.thread", "context.conversation.card", "context.conversation.evidence", "context.conversation.docs", "context.conversation.tone",
   "context.eval.rubric", "context.eval.input", "context.eval.checks", "context.eval.answer",
@@ -143,6 +143,7 @@ export const CAPS: Readonly<Record<string, number>> = {
   "context.foreman.question": 2_000,
   "context.foreman.history": 24_000,
   "context.foreman.cards": 32_000,
+  "context.foreman.pending": 4_000,
   // The video packs.
   "context.video.scenarios": 200_000,
   "context.video.steps": 32_000,

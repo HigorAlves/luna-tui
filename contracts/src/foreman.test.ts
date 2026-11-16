@@ -132,6 +132,32 @@ describe("foremanActionProblem", () => {
     for (const id of ["c1", "c2", "c3", "c4", "c5", "c6"]) expect(problem({ kind: "approve", taskId: id, why: "w" }), id).toMatch(/own confirm|board/);
   });
 
+  it("refuses approve for a card with flagged findings or an open council finding", () => {
+    const flagged = ForemanContext.parse({ ...context, board: { ...board, cards: [card("f1", { gate: "plan", flagged: ["coverage"] }), card("f2", { gate: "plan", council: { passed: false, open: 2 } }), card("f3", { gate: "plan", council: { passed: true, open: 0 }, flagged: [] })] } }).board;
+    const check = (id: string) => foremanActionProblem(ForemanAction.parse({ kind: "approve", taskId: id, why: "w" }), flagged);
+    expect(check("f1")).toMatch(/flagged/);
+    expect(check("f2")).toMatch(/council/);
+    expect(check("f3")).toBeNull();
+  });
+
+  it("refuses archive, abort and send_back for a config card: an archive is not a decline and the proposal would come back", () => {
+    const config = ForemanContext.parse({ ...context, board: { ...board, cards: [card("k1", { gate: "awaiting_setup", route: "config" })] } }).board;
+    for (const action of [{ kind: "archive" }, { kind: "abort" }, { kind: "send_back", reason: "r" }]) {
+      expect(foremanActionProblem(ForemanAction.parse({ ...action, taskId: "k1", why: "w" }), config), action.kind).toMatch(/config/);
+    }
+    expect(foremanActionProblem(ForemanAction.parse({ kind: "archive", taskId: "t1", why: "w" }), ForemanContext.parse(context).board)).toBeNull();
+  });
+
+  it("reads the flags, the council, the settled count and the trust of a card, and the repo's pending approvals", () => {
+    const parsed = ForemanContext.parse({
+      ...context,
+      board: { ...board, pending: [{ repo: "luna", kind: "base", ref: "node:24" }, { repo: "luna", kind: "dockerfile", ref: "Dockerfile" }], cards: [card("p1", { flagged: ["coverage"], council: { passed: false, open: 1 }, settledByCouncil: 2, trust: "untrusted" })] },
+    });
+    expect(parsed.board.cards[0]).toMatchObject({ flagged: ["coverage"], council: { passed: false, open: 1 }, settledByCouncil: 2, trust: "untrusted" });
+    expect(parsed.board.pending).toHaveLength(2);
+    expect(ForemanContext.safeParse({ ...context, board: { ...board, cards: [card("p2", { trust: "bogus" })] } }).success).toBe(false);
+  });
+
   it("keeps the open approval's id on a card, null when none is open", () => {
     const parsed = ForemanContext.parse({ ...context, board: { ...board, cards: [card("t2", { gate: "plan", approvalId: "ap-1" }), card("t1")] } });
     expect(parsed.board.cards.map((c) => c.approvalId)).toEqual(["ap-1", null]);

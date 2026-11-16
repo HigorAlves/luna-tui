@@ -4,10 +4,13 @@ import { type EngineId, type ForemanCard, type ForemanContext, type PackId, colu
 import { basename } from "node:path";
 
 import type { TaskRow } from "./task.ts";
+import { trustOf } from "./trust.ts";
 
 export const FOREMAN_MAX_CARDS = 60;
 const TITLE_MAX = 120;
 const SUMMARY_MAX = 200;
+const FLAG_MAX = 120;
+const FLAGS_MAX = 10;
 
 /** A card's open approval: the gate it waits at and what the machine asked there. */
 export interface OpenGate {
@@ -43,11 +46,30 @@ function outcomeOf(gate: OpenGate | undefined): string | null {
   return gate.requested.gate === "ship_approval" ? "ship_approval" : null;
 }
 
+function flagsOf(gate: OpenGate | undefined): string[] {
+  const raw = gate?.requested.flagged;
+  return Array.isArray(raw) ? raw.filter((f): f is string => typeof f === "string").slice(0, FLAGS_MAX).map((f) => flat(f, FLAG_MAX)) : [];
+}
+
+/** The plan council's verdict: passed, and the findings each member's last turn left open. Null when the gate holds no council. */
+function councilOf(gate: OpenGate | undefined): ForemanCard["council"] {
+  const council = gate?.requested.council as { passed?: unknown; transcript?: unknown } | undefined;
+  if (!council || typeof council !== "object") return null;
+  const turns = Array.isArray(council.transcript) ? (council.transcript as Array<{ member?: unknown; findings?: unknown }>) : [];
+  let open = 0;
+  for (const member of ["security", "second"]) {
+    const last = turns.findLast((t) => t?.member === member);
+    open += Array.isArray(last?.findings) ? last.findings.length : 0;
+  }
+  return { passed: council.passed === true, open };
+}
+
 export function buildForemanBoard(
   tasks: readonly TaskRow[],
   gates: ReadonlyMap<string, OpenGate>,
   packs: ReadonlyArray<{ id: PackId; engines: { allowed: readonly EngineId[] } }>,
   now: Date,
+  pending: NonNullable<ForemanContext["board"]["pending"]> = [],
 ): ForemanContext["board"] {
   // A card that waits on a person comes first, the oldest wait first; the rest follow, newest first. The cut then drops the quiet cards.
   const waits = (t: TaskRow): boolean => t.state === "escalated" || t.state === "awaiting_answers" || gates.has(t.id);
@@ -78,7 +100,11 @@ export function buildForemanBoard(
         questions,
         engines: t.stages ?? {},
         updatedAt: t.updatedAt.toISOString(),
+        flagged: flagsOf(gate),
+        council: councilOf(gate),
+        settledByCouncil: (t.record?.qa ?? []).filter((q) => q.by === "council").length,
+        trust: trustOf(t),
       };
     });
-  return { now: now.toISOString(), cards, truncated: open.length - cards.length, packs: packs.map((p) => ({ id: p.id, allowed: [...p.engines.allowed] })) };
+  return { now: now.toISOString(), cards, truncated: open.length - cards.length, packs: packs.map((p) => ({ id: p.id, allowed: [...p.engines.allowed] })), pending };
 }

@@ -87,6 +87,40 @@ describe("buildForemanBoard", () => {
     expect(by("n")).toMatchObject({ approvalId: null, gateOutcome: null });
   });
 
+  it("names the flags, the council, what the council settled and the trust of a card", () => {
+    const gates = new Map([
+      ["a", { id: "g", state: "awaiting_approval" as const, requested: { flagged: ["coverage", "council.security"], council: { passed: false, transcript: [{ member: "security", round: 1, findings: [{ title: "x" }, { title: "y" }] }, { member: "security", round: 2, findings: [{ title: "y" }] }, { member: "second", round: 2, findings: [] }] } } }],
+      ["b", { id: "h", state: "awaiting_approval" as const, requested: { council: { passed: true, transcript: [] } } }],
+    ]);
+    const qa = [{ question: "a", answer: "x", by: "council" as const }, { question: "b", answer: "y" }, { question: "c", answer: "z", by: "council" as const }];
+    const out = board(
+      [
+        task("a", { state: "awaiting_approval", source: { kind: "github", authorAssociation: "NONE" } } as Partial<TaskRow>),
+        task("b", { state: "awaiting_approval", record: { qa } } as Partial<TaskRow>),
+        task("c"),
+      ],
+      gates,
+    );
+    const by = (id: string) => out.cards.find((c) => c.id === id)!;
+    expect(by("a")).toMatchObject({ flagged: ["coverage", "council.security"], council: { passed: false, open: 1 }, trust: "untrusted", settledByCouncil: 0 });
+    expect(by("b")).toMatchObject({ flagged: [], council: { passed: true, open: 0 }, trust: "trusted", settledByCouncil: 2 });
+    expect(by("c")).toMatchObject({ flagged: [], council: null, settledByCouncil: 0, trust: "trusted" });
+    expect(ForemanContext.shape.board.safeParse(out).success).toBe(true);
+  });
+
+  it("caps the flags at 10 and each flag at 120 characters", () => {
+    const gates = new Map([["a", { state: "awaiting_approval" as const, requested: { flagged: Array.from({ length: 15 }, () => "f".repeat(300)) } }]]);
+    const flagged = board([task("a")], gates).cards[0]!.flagged!;
+    expect(flagged).toHaveLength(10);
+    expect(flagged[0]).toHaveLength(120);
+  });
+
+  it("lists the repos' pending base and Dockerfile approvals on the board", () => {
+    const pending = [{ repo: "luna", kind: "base" as const, ref: "node:24" }];
+    expect(buildForemanBoard([], new Map(), packs, NOW, pending).pending).toEqual(pending);
+    expect(board([]).pending).toEqual([]);
+  });
+
   it("caps the gate summary at 200 characters", () => {
     const gates = new Map([["a", { state: "awaiting_approval" as const, requested: { summary: "s".repeat(500) } }]]);
     expect(board([task("a")], gates).cards[0]!.gateSummary).toHaveLength(200);
