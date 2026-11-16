@@ -40,6 +40,12 @@ describe("the browser the machine launches", () => {
     expect(readFileSync(join(machineDir, "runner-video", "tools", "cards.ts"), "utf8")).toContain(FLAG);
   });
 
+  it("runs without Chromium's own sandbox, which cannot start under --cap-drop ALL and Docker's seccomp: the wrapper and the recorder both pass --no-sandbox", () => {
+    const qa = readFileSync(join(machineDir, "runner-qa", "Dockerfile"), "utf8");
+    expect(qa).toMatch(/exec "%s" --no-sandbox /);
+    expect(readFileSync(join(machineDir, "runner-video", "tools", "cards.ts"), "utf8")).toContain("--no-sandbox");
+  });
+
   it("is told to a browser launched another way, in the e2e prompt", () => {
     expect(readFileSync(join(machineDir, "..", "factory", "prompts", "e2e.md"), "utf8")).toContain(FLAG);
   });

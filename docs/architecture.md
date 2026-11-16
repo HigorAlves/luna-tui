@@ -900,6 +900,8 @@ The machine moves a card made before this (a linked worktree of the user's repos
 
 ### A sandbox's network
 
+Every stage, check and app container also starts with `--cap-drop ALL`, `--ipc private`, `--security-opt no-new-privileges`, a read-only root and a pids limit. A repo's services keep five capabilities (`CHOWN`, `SETUID`, `SETGID`, `DAC_OVERRIDE`, `FOWNER`) because official database images start as root and drop to their own user; they also get `no-new-privileges` and a pids limit of 512. Before a container starts, the machine reads `docker info` for `name=seccomp`. A daemon with no seccomp filter, or with the default profile `unconfined`, ends the card as `env_broken` (step `seccomp`). The QA and recording Chromium run with `--no-sandbox`: its own sandbox needs user namespaces, which this container profile does not give, and the container is the boundary.
+
 Every container that the machine starts joins a network of its run's own. The machine makes the network with `--internal`, no IPv6 and the `isolated` gateway mode of the bridge (Docker Engine 28.0 or newer). An older daemon ends the card as `env_broken` naming the version. There is no fallback to a weaker network. `MACHINE_EGRESS=off` on the machine is the switch of the owner, never `luna.yaml`.
 
 The network has no route out and no gateway address on the host. The only door is a proxy that the machine starts for the run. The proxy is a second container of the machine's own image (never a repository's). It sits on that network and on one ordinary bridge (`hardness-egress`, containers on it cannot talk to each other). The machine starts it with the list of the run on its command line, so nothing in a stage container can change it.

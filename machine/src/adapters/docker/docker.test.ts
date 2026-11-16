@@ -24,6 +24,11 @@ function run(over: Partial<SandboxRun> = {}): SandboxRun {
 }
 
 describe("sandboxArgs", () => {
+  it("drops every capability and gives the container its own IPC namespace", () => {
+    const args = sandboxArgs(run(), "/in", "/out");
+    expect(args.join(" ")).toContain("--cap-drop ALL --ipc private");
+  });
+
   it("runs under Docker's init, so a killed process group is reaped and not left as a zombie that still looks alive", () => {
     const args = sandboxArgs(run(), "/in", "/out");
     expect(args).toContain("--init");
@@ -180,6 +185,11 @@ describe("sandboxArgs", () => {
 });
 
 describe("sandboxExecArgs", () => {
+  it("drops every capability and gives the command its own IPC namespace", () => {
+    const args = sandboxExecArgs({ name: "c1", image: "img:1", worktree: "/wt", argv: ["true"] });
+    expect(args.join(" ")).toContain("--cap-drop ALL --ipc private");
+  });
+
   it("runs a project's checks under Docker's init too: its suite kills process groups (exec.test.ts) and needs them reaped", () => {
     const checks = sandboxExecArgs({ name: "chk0", image: "img:1", worktree: "/wt", argv: ["pnpm", "test"] } as never);
     expect(checks).toContain("--init");
@@ -456,6 +466,7 @@ describe("runSandbox and execInSandbox on a run's own network", () => {
       },
       openCardNetwork: over.open ?? (async (name: string) => (events.push(`open ${name}`), network("own") as never)),
       findCardNetwork: async (name: string) => (events.push(`find ${name}`), network("found") as never),
+      checkSeccomp: async () => {},
     };
     return { deps, events, calls, network };
   }
@@ -536,6 +547,31 @@ describe("corepack in every container", () => {
       for (const env of ["COREPACK_HOME=/tmp/corepack", "COREPACK_ENABLE_DOWNLOAD_PROMPT=0", "COREPACK_DEFAULT_TO_LATEST=0"]) expect(args).toContain(env);
       expect(args.join(" ")).not.toContain("/cache/corepack");
     }
+  });
+});
+
+describe("a daemon with no seccomp filter", () => {
+  const broken = async () => {
+    const { SeccompUnavailableError } = await import("./seccomp.ts");
+    throw new SeccompUnavailableError("the daemon reports no seccomp profile");
+  };
+  function fakesFor() {
+    const calls: string[][] = [];
+    const deps: Partial<RunDeps> = {
+      exec: async (_c, args) => (calls.push(args), { code: 0, stdout: "", stderr: "" }),
+      execOrThrow: async (_c, args) => (calls.push(args), ""),
+    };
+    return { deps, calls };
+  }
+  it("runs no stage: the check refuses before any container or network is made", async () => {
+    const { deps, calls } = fakesFor();
+    await expect(runSandbox(run({ runDir: "/nonexistent" }), { ...deps, checkSeccomp: broken })).rejects.toThrow(/seccomp/);
+    expect(calls).toEqual([]);
+  });
+  it("runs no check command either", async () => {
+    const { deps, calls } = fakesFor();
+    await expect(execInSandbox({ name: "c1", image: "img:1", worktree: "/wt", argv: ["true"] }, {}, { ...deps, checkSeccomp: broken })).rejects.toThrow(/seccomp/);
+    expect(calls).toEqual([]);
   });
 });
 

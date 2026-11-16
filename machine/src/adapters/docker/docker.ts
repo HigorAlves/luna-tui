@@ -15,6 +15,7 @@ import type { SecretStore } from "../../application/secrets.ts";
 import { type BlockedRow, type CardNetwork, findCardNetwork, openCardNetwork } from "./egress.ts";
 import { serviceName, startServices } from "./services.ts";
 import { type ExecResult, exec, execOrThrow, OUTPUT_CAP } from "../process/exec.ts";
+import { seccompChecker } from "./seccomp.ts";
 
 /** Label on every stage container, so leftovers can be found and removed. */
 export const CONTAINER_LABEL = "dev.hardness.stage";
@@ -161,8 +162,13 @@ export interface RunDeps {
   startServices: typeof startServices;
   openCardNetwork: typeof openCardNetwork;
   findCardNetwork: typeof findCardNetwork;
+  /** Throws `SeccompUnavailableError` when the daemon has no seccomp filter: no container starts on it. */
+  checkSeccomp: () => Promise<void>;
 }
-const HOST_DEPS: RunDeps = { exec, execOrThrow, startServices, openCardNetwork, findCardNetwork };
+const HOST_DEPS: RunDeps = { exec, execOrThrow, startServices, openCardNetwork, findCardNetwork, checkSeccomp: seccompChecker(exec) };
+
+/** Every container drops all capabilities and has its own IPC namespace: a stage needs none of root's powers, and shares no shared memory with the host. */
+export const HARDEN_ARGS = ["--cap-drop", "ALL", "--ipc", "private"];
 
 /** The `docker run` argument list for one stage. Pure: the credential's variables are named, never valued. */
 export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): string[] {
@@ -172,7 +178,7 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
   // but nothing it does needs write access outside its mounted worktree, /in, /out or /tmp.
   // The tmpfs is `exec`: Docker's default is noexec, and `go test` runs the test binary it
   // builds under TMPDIR. The worktree bind mount is executable anyway, so this hides nothing.
-  args.push(...INIT_ARGS, "--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...sandboxLimits(run.limits));
+  args.push(...INIT_ARGS, "--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...HARDEN_ARGS, ...sandboxLimits(run.limits));
   const user = run.user === undefined ? hostUser() : run.user;
   if (user) args.push("--user", user);
   args.push(
@@ -231,6 +237,7 @@ function networkArgs(network: string | null | undefined, serviceEnv: Record<stri
 
 export async function runSandbox(run: SandboxRun, given: Partial<RunDeps> = {}): Promise<SandboxResult> {
   const deps: RunDeps = { ...HOST_DEPS, ...given };
+  if (!run.attach) await deps.checkSeccomp();
   // The run's own card network, when it has a list: opened here and removed in `finally`, whatever the outcome. A card network
   // it is handed (the browser run's, the app's) is joined and left alone; a re-attached run's is found by name and removed at its end.
   let own: CardNetwork | null = null;
@@ -380,7 +387,7 @@ const identityEnv = (identity: { name: string; email: string } | null | undefine
 export function sandboxExecArgs(run: SandboxExec): string[] {
   const [command, ...rest] = run.argv;
   const args = ["run", "--rm", "--name", run.name, "--label", `${CONTAINER_LABEL}=1`];
-  args.push(...INIT_ARGS, "--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...sandboxLimits(run.limits));
+  args.push(...INIT_ARGS, "--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...HARDEN_ARGS, ...sandboxLimits(run.limits));
   const user = run.user === undefined ? hostUser() : run.user;
   if (user) args.push("--user", user);
   args.push("-e", "HOME=/tmp", "-e", "TMPDIR=/tmp", ...COREPACK_ENV.flatMap((env) => ["-e", env]), ...blankedEnv(), ...GIT_CONFIG_ENV.flatMap((env) => ["-e", env]), ...identityEnv(run.gitIdentity));
@@ -404,6 +411,7 @@ export async function execInSandbox(
   given: Partial<RunDeps> = {},
 ): Promise<ExecResult & { blocked?: BlockedRow[] }> {
   const deps: RunDeps = { ...HOST_DEPS, ...given };
+  await deps.checkSeccomp();
   const own = !run.cardNetwork && run.egress ? await deps.openCardNetwork(run.name, run.egress, { proxyImage: run.egress.proxyImage }) : null;
   const card = run.cardNetwork ?? own;
   try {

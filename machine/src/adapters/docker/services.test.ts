@@ -25,7 +25,10 @@ function dockerFake(ready: number[] = [0]) {
 describe("serviceArgs", () => {
   it("runs the service detached on the run's network, reachable by its key, labelled like a stage container", () => {
     expect(serviceArgs("hardness-net-r1", "r1", "postgres", postgres)).toEqual([
-      "run", "-d", "--name", "r1-svc-postgres", "--label", "dev.hardness.stage=1", "--network", "hardness-net-r1", "--network-alias", "postgres",
+      "run", "-d", "--name", "r1-svc-postgres", "--label", "dev.hardness.stage=1",
+      // Official images start as root and drop to their own user, so the few capabilities that takes stay; the rest go.
+      "--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--cap-add", "CHOWN,SETUID,SETGID,DAC_OVERRIDE,FOWNER", "--pids-limit", "512",
+      "--network", "hardness-net-r1", "--network-alias", "postgres",
       "-e", "POSTGRES_USER=app", "-e", "POSTGRES_PASSWORD=app", "postgres:16",
     ]);
     expect(serviceName("r1", "postgres")).toBe("r1-svc-postgres");
