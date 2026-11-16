@@ -6,6 +6,7 @@ import { type BudgetAlert, type EvidenceContext, FACTORY_DEFAULTS, Ledger, PrAct
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
+import { baseRefusal } from "./domain/sandbox-bounds.ts";
 import { readinessProblems } from "./application/readiness.ts";
 import { Bus } from "./adapters/http/bus.ts";
 import { StreamWatcher } from "./adapters/http/watch.ts";
@@ -133,7 +134,7 @@ if (applied.length > 0) {
 }
 
 /** Every repo's luna.yaml (or older PIPELINE.md), read on demand; shared so a bad edit warns once. */
-const policies = new PolicyStore();
+const policies = new PolicyStore({ machinePolicy: config.sandboxPolicy });
 /** Run traces: a local Laminar (`MACHINE_TRACES`, `LMNR_*`); the no-op without a key. Built before
  *  the pipeline so the first stage run after boot is traced. */
 const telemetry = await buildTelemetry(config.traces, { reachable: (traces) => probeCollector(traces, { timeoutMs: 1500 }) });
@@ -812,7 +813,10 @@ const knownRepos = async (): Promise<string[]> => {
 const approveBase = async (repo: string, base: string): Promise<{ ok: true } | { ok: false; reason: string }> => {
   if (!agentDeps) return { ok: false, reason: "repository images are off on this machine" };
   if (!(await knownRepos()).includes(repo)) return { ok: false, reason: "the machine does not know that repository" };
-  const spec = imageSpecOf((await policies.for(repo)).factory.sandbox.image);
+  const bounded = await policies.for(repo);
+  const refusal = baseRefusal(bounded);
+  if (refusal) return { ok: false, reason: refusal };
+  const spec = imageSpecOf(bounded.factory.sandbox.image);
   if (spec.kind !== "repo" || spec.base !== base) return { ok: false, reason: "that is not the base in the repository's luna.yaml now" };
   await agentDeps.approvals.approve(repo, base);
   agentDeps.repoImages.approved(repo);
@@ -821,6 +825,7 @@ const approveBase = async (repo: string, base: string): Promise<{ ok: true } | {
 const app = createApp({
   knownRepos,
   // The identity is read on each call, so a machine fixed in place turns healthy without a restart; the token and the stub reason are fixed at boot.
+  sandboxPolicy: config.sandboxPolicy,
   problems: async () => readinessProblems({ githubToken: config.githubToken, identity: await gitIdentity(process.cwd()), stubReason }),
   approveBase,
   ...(config.economy ? { economy: { port: economy, knownRepos, configOf: async (repo: string) => (await policies.for(repo)).factory.economy } } : {}),

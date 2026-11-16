@@ -626,6 +626,8 @@ export interface RepoHealth {
     /** A base the repository's luna.yaml names that no person approved yet (flattened, capped); it runs on the machine's image until `POST /repos/base/approve`. */
     pendingBase: string | null;
   };
+  /** What the machine's sandbox policy dropped or refused from this repository's luna.yaml (egress hosts, the base image), one sentence each; absent when nothing was. */
+  bounds?: string[];
   graph: {
     /** `policy.graph` is on. */
     on: boolean;

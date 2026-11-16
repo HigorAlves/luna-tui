@@ -50,8 +50,9 @@ import { removeNestedRepositories } from "../adapters/git/machine-repo.ts";
 import { ensureClone, isClone, removeClone } from "../adapters/git/clone.ts";
 import type { ProofRig } from "../application/config-proof.ts";
 import { policyOf } from "../domain/luna-config.ts";
+import { sandboxSizeOf } from "../domain/sandbox-bounds.ts";
 import { randomUUID } from "node:crypto";
-import { DEFAULT_SANDBOX_SIZE, execInSandbox, imageExists, imageId, imageLabel, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
+import { execInSandbox, imageExists, imageId, imageLabel, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { removeLeftoverApps } from "../adapters/docker/app.ts";
 import { openCardNetwork, openPlainNetwork, removeLeftoverNetworks } from "../adapters/docker/egress.ts";
 import { startServices } from "../adapters/docker/services.ts";
@@ -215,8 +216,7 @@ export async function buildRealStages(
     ...(egress ? { egress: (repoPath: string | undefined) => egress.for({ repoPath: repoPath ?? null, kind: "check" }) } : {}),
     // A check container reads the repository's own size, as a stage does (the limit carried from 11a).
     limitsOf: async (repoPath) => {
-      const sandbox = repoPath ? (await policies.for(repoPath)).factory.sandbox : { cpu: DEFAULT_SANDBOX_SIZE.cpu, memory_gb: DEFAULT_SANDBOX_SIZE.memoryGb };
-      return { cpu: sandbox.cpu, memoryGb: sandbox.memory_gb };
+      return sandboxSizeOf(await policies.for(repoPath ?? null));
     },
   });
   // The machine installs from the lockfile before a stage that writes, and before a check on a card's workspace (Verify's fresh one included).

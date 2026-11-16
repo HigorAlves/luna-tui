@@ -10,6 +10,7 @@ import type { ExecResult } from "../adapters/process/exec.ts";
 import { safe } from "../domain/evidence-markdown.ts";
 import { hostRedactor, secretRedactor } from "../domain/redact-secrets.ts";
 import type { Policy } from "../domain/policy.ts";
+import { sandboxSizeOf } from "../domain/sandbox-bounds.ts";
 import type { EgressPolicy } from "./egress-policy.ts";
 import type { InstallInput, InstallOutcome } from "./install.ts";
 import type { SecretStore } from "./secrets.ts";
@@ -120,7 +121,7 @@ export async function openApp(deps: AppDeps, input: OpenAppInput): Promise<OpenA
 
   try {
     services = await deps.startServices(runName, policy.services, { network: { name: card.name, dns: card.dns } });
-    const limits = { cpu: policy.factory.sandbox.cpu, memoryGb: policy.factory.sandbox.memory_gb };
+    const limits = sandboxSizeOf(policy);
     const cacheVolume = cacheVolumeFor(input.repoPath);
     if (seed.command) {
       const seeded = await deps.exec({ name: `${container}-seed`, image, worktree: input.workspace, limits, argv: ["sh", "-c", seed.command], env: services.env, cacheVolume, cardNetwork: card, services: policy.services, servicesUp: true, network: services.network, serviceEnv: services.env, ...(seed.secrets.length > 0 ? { secrets: pick(seed.secrets) } : {}) }, { timeoutMs: SEED_TIMEOUT_MS });
@@ -202,7 +203,7 @@ export async function openPreview(deps: AppDeps, input: OpenAppInput & { branch:
     await report().catch(() => {});
     await card.teardown();
   };
-  const limits = { cpu: policy.factory.sandbox.cpu, memoryGb: policy.factory.sandbox.memory_gb };
+  const limits = sandboxSizeOf(policy);
   const minutes = deploy.timeout_minutes;
   try {
     if (deploy.command) {

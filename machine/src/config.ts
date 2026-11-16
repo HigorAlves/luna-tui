@@ -3,7 +3,9 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { type EngineBudgets, RUNNING, type RuntimeId, type TaskState, engineBudgetKeyProblem, hostPatternProblem, normalizeHostPattern } from "@hardness/contracts";
+import { parse as parseYaml } from "yaml";
+
+import { type EngineBudgets, type MachinePolicy, MachinePolicySchema, RUNNING, type RuntimeId, type TaskState, engineBudgetKeyProblem, hostPatternProblem, machinePolicyProblem, normalizeHostPattern } from "@hardness/contracts";
 
 import type { TracesMode } from "./application/telemetry.ts";
 import { isLoopback } from "./adapters/http/access.ts";
@@ -89,6 +91,8 @@ export interface Config {
   restartPolicy: RestartPolicy;
   /** Run traces to a local Laminar (`MACHINE_TRACES`, `LMNR_*`); `{ mode: "off" }` without a key. */
   traces: TracesConfig;
+  /** What the owner lets any repository's sandbox ask for (`MACHINE_SANDBOX_POLICY`, default `~/.config/hardness/sandbox.yaml`); the defaults when the file is absent. A repo's luna.yaml stays within it. */
+  sandboxPolicy: MachinePolicy;
 }
 
 export interface SlackInboxConfig {
@@ -284,6 +288,30 @@ function egressFrom(env: NodeJS.ProcessEnv): Config["egress"] {
   return { enabled: raw !== "off", engineHosts };
 }
 
+/** The sandbox policy file's name in `~/.config/hardness`. */
+export const SANDBOX_POLICY_FILE = "sandbox.yaml";
+
+/** The machine sandbox policy: the file `MACHINE_SANDBOX_POLICY` names, else `~/.config/hardness/sandbox.yaml`. Absent: the defaults. Unreadable or invalid: an error naming the file and the key. */
+export function sandboxPolicyFrom(env: NodeJS.ProcessEnv, home: string): MachinePolicy {
+  const file = env.MACHINE_SANDBOX_POLICY?.trim() || join(home, ".config", "hardness", SANDBOX_POLICY_FILE);
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return MachinePolicySchema.parse({});
+    throw new Error(`MACHINE_SANDBOX_POLICY ${file} cannot be read: ${(error as Error).message}`);
+  }
+  let raw: unknown;
+  try {
+    raw = parseYaml(text) ?? {};
+  } catch (error) {
+    throw new Error(`MACHINE_SANDBOX_POLICY ${file} is not valid YAML: ${(error as Error).message}`);
+  }
+  const parsed = MachinePolicySchema.safeParse(raw);
+  if (!parsed.success) throw new Error(`MACHINE_SANDBOX_POLICY ${file}: ${machinePolicyProblem(raw)}`);
+  return parsed.data;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const port = env.MACHINE_PORT === undefined ? DEFAULT_PORT : Number(env.MACHINE_PORT);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
@@ -460,6 +488,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     engineBudgets: engineBudgets(env),
     restartPolicy,
     traces: tracesConfig(env, home),
+    sandboxPolicy: sandboxPolicyFrom(env, home),
   };
 }
 

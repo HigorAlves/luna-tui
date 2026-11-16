@@ -23,13 +23,15 @@ export const CONTAINER_LABEL = "dev.hardness.stage";
 export interface SandboxSize {
   cpu: number;
   memoryGb: number;
+  /** The owner's seccomp profile (an absolute path), from the machine sandbox policy; absent, docker's default. */
+  seccomp?: string;
 }
 export const DEFAULT_SANDBOX_SIZE: SandboxSize = { cpu: 2, memoryGb: 4 };
 /** Docker's own init (tini) as PID 1. Without it the stage's entrypoint is PID 1 and never reaps: a process group the stage kills (a test runner's timeout, an abort)
  *  leaves zombies that `kill(pid, 0)` still reports alive, and the repo's own suite (`exec.test.ts` "kills the group") fails inside the container and escalates the card. */
 export const INIT_ARGS = ["--init"];
 
-export const sandboxLimits = (size: SandboxSize = DEFAULT_SANDBOX_SIZE): string[] => ["--memory", `${size.memoryGb}g`, "--cpus", `${size.cpu}`, "--pids-limit", "1024"];
+export const sandboxLimits = (size: SandboxSize = DEFAULT_SANDBOX_SIZE): string[] => ["--memory", `${size.memoryGb}g`, "--cpus", `${size.cpu}`, "--pids-limit", "1024", ...(size.seccomp ? ["--security-opt", `seccomp=${size.seccomp}`] : [])];
 export const SANDBOX_LIMITS = sandboxLimits();
 /** `docker wait` gets this long past the stage's own timeout before the container is forced down. */
 const WAIT_GRACE_MS = 60_000;

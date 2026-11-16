@@ -54,6 +54,7 @@ import {
   UpdateTaskInput,
   type RepoHealth,
 } from "@hardness/contracts";
+import type { MachinePolicy } from "@hardness/contracts";
 import { EconomyApproveInput, type EconomyConfig, EconomyRepoInput, EconomyRestoreInput } from "@hardness/contracts";
 import { ForemanAnswer, type ForemanSuggestion, ForemanContext, foremanActionProblem, isTerminal } from "@hardness/contracts";
 import { buildForemanBoard } from "../../domain/foreman.ts";
@@ -163,6 +164,8 @@ export interface AppDeps {
   knownRepos?: () => Promise<string[]>;
   /** What keeps the machine from doing its job (`readinessProblems`), read on each `GET /health`; absent, `/health` is always ok. */
   problems?: () => Promise<string[]> | string[];
+  /** The machine's sandbox policy in force (`sandbox.yaml`), shown on `GET /health`; absent, not shown. */
+  sandboxPolicy?: MachinePolicy;
 }
 
 /** `POST /foreman`: the question and the last turns of the talk. */
@@ -217,7 +220,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], problems: problemsOf }: AppDeps): Hono {
+export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], problems: problemsOf, sandboxPolicy }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -305,8 +308,9 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
   // 503 with the problems when the machine cannot do its job (no GitHub token, no git identity, stub stages): the compose healthcheck and `up --wait` then fail visibly. The stage pool is still in the body.
   app.get("/health", async (c) => {
     const problems = (await problemsOf?.()) ?? [];
-    if (problems.length === 0) return c.json({ ok: true, slots: pipeline.slots });
-    return c.json({ ok: false, problems, slots: pipeline.slots }, 503);
+    const policy = sandboxPolicy ? { sandboxPolicy } : {};
+    if (problems.length === 0) return c.json({ ok: true, slots: pipeline.slots, ...policy });
+    return c.json({ ok: false, problems, slots: pipeline.slots, ...policy }, 503);
   });
 
   /** Every pack in the registry, with the task states it runs in. */

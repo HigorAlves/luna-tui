@@ -36,4 +36,17 @@ describe("a repository's image and graph health", () => {
     });
     expect(row!.graph).toMatchObject({ building: true, lastFailure: "the graph build failed (exit code 1)" });
   });
+
+  it("shows what the machine's sandbox policy dropped from the repo's luna.yaml, only when it dropped something", async () => {
+    const [bounded, plain] = await repoHealthOf({
+      repos: ["/a/bounded", "/a/plain"],
+      policy: async (r) => ({ graph: true, ...(r === "/a/bounded" ? { bounds: { notes: ["sandbox.cpu 16 is capped at 4"], egress: ['sandbox.egress.allow: "x.pastebin.com" dropped'], image: ['sandbox.image.base "node:22" is refused'], seccomp: null } } : { bounds: { notes: [], egress: [], image: [], seccomp: null } }) }),
+      machineImage: "hardness-runner:dev",
+      images: { pending: async () => null, status: () => null },
+      graph: { stampOf: async () => null },
+      watch: { health: () => ({ building: false, lastFailure: null }) },
+    });
+    expect(bounded!.bounds).toEqual(['sandbox.image.base "node:22" is refused', 'sandbox.egress.allow: "x.pastebin.com" dropped']);
+    expect(plain).not.toHaveProperty("bounds");
+  });
 });

@@ -6,6 +6,9 @@ import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import { CONFIG_FILE, parseLunaConfig } from "../domain/luna-config.ts";
+import type { MachinePolicy } from "@hardness/contracts";
+
+import { boundSandbox } from "../domain/sandbox-bounds.ts";
 import { DEFAULT_POLICY, type Policy, parsePolicy } from "../domain/policy.ts";
 
 export { CONFIG_FILE };
@@ -24,6 +27,8 @@ interface Cached {
 
 export interface PolicyStoreOptions {
   warn?: (message: string) => void;
+  /** The owner's sandbox policy: every policy this store hands out has its `factory.sandbox` held within it. Absent, a repo's values stand. */
+  machinePolicy?: MachinePolicy;
 }
 
 const fresh = (): Policy => ({ ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {}, sla: {}, engines: {}, engineBudgets: {}, decisions: {}, freeze: [] });
@@ -32,12 +37,22 @@ export class PolicyStore {
   private readonly cache = new Map<string, Cached>();
   private readonly warn: (message: string) => void;
 
+  private readonly machinePolicy: MachinePolicy | null;
+
   constructor(options: PolicyStoreOptions = {}) {
     this.warn = options.warn ?? ((message) => console.warn(message));
+    this.machinePolicy = options.machinePolicy ?? null;
   }
 
-  /** The repo's policy right now; the defaults for a repo without one, or for no repo. */
+  /** The repo's policy right now, its sandbox held within the machine's policy; the defaults for a repo without one, or for no repo. */
   async for(repoPath: string | null): Promise<Policy> {
+    const policy = await this.read(repoPath);
+    if (!this.machinePolicy) return policy;
+    const { sandbox, bounds } = boundSandbox(policy.factory.sandbox, this.machinePolicy);
+    return { ...policy, factory: { ...policy.factory, sandbox }, bounds };
+  }
+
+  private async read(repoPath: string | null): Promise<Policy> {
     if (!repoPath) return fresh();
     const cached = this.cache.get(repoPath) ?? { stamp: null, policy: fresh(), badStamp: null, deprecationSaid: false };
     const found = await this.locate(repoPath);
