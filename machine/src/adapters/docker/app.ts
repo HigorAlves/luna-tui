@@ -5,7 +5,7 @@ import { type ExecResult, exec as hostExec } from "../process/exec.ts";
 
 export const APP_ALIAS = "luna-app";
 
-export interface AppSpec extends Pick<SandboxExec, "image" | "worktree" | "limits" | "cacheVolume" | "cardNetwork" | "services" | "serviceEnv" | "user" | "secretsDir"> {
+export interface AppSpec extends Pick<SandboxExec, "image" | "worktree" | "limits" | "cacheVolume" | "cardNetwork" | "services" | "serviceEnv" | "serviceHosts" | "user" | "secretsDir"> {
   name: string;
   /** The repository's container env; the app's own PORT and HOST win. */
   env?: Record<string, string>;

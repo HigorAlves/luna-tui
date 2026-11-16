@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ExecResult } from "../process/exec.ts";
 import { serviceHardeningOf } from "./docker.ts";
-import { ServiceNotReadyError, serviceArgs, serviceName, startServices } from "./services.ts";
+import { ServiceNotReadyError, hostArgs, serviceArgs, serviceName, startServices } from "./services.ts";
 
 const postgres = {
   image: "postgres:16",
@@ -12,11 +12,12 @@ const postgres = {
 };
 
 /** A docker fake: records every call; `ready` answers the readiness probes in order. */
-function dockerFake(ready: number[] = [0]) {
+function dockerFake(ready: number[] = [0], addresses: Record<string, string> = {}) {
   const calls: string[][] = [];
   const exec = async (command: string, args: string[]): Promise<ExecResult> => {
     calls.push([command, ...args]);
     if (args[0] === "exec") return { code: ready.length > 1 ? ready.shift()! : ready[0]!, stdout: "", stderr: "" };
+    if (args[0] === "inspect") return { code: 0, stdout: `${addresses[args.at(-1)!] ?? "172.30.0.5"}\n`, stderr: "" };
     if (args[0] === "logs") return { code: 0, stdout: "", stderr: "database system is starting up\n" };
     return { code: 0, stdout: "", stderr: "" };
   };
@@ -133,5 +134,57 @@ describe("startServices on a card network it is given", () => {
     const set = await startServices("r1", { postgres }, { exec, pollMs: 0 });
     await set.teardown();
     expect(calls.filter((c) => c[1] === "network").map((c) => c[2])).toEqual(["create", "rm"]);
+  });
+});
+
+describe("startServices hosts", () => {
+  it("reads each service's address on the network, as the alias and as the container name", async () => {
+    const { calls, exec } = dockerFake([0], { "r1-svc-postgres": "172.30.0.7", "r1-svc-redis": "172.30.0.8" });
+    const set = await startServices("r1", { postgres, redis: { image: "redis:7" } }, { exec, pollMs: 0 });
+    expect(set.hosts).toEqual([
+      { name: "postgres", address: "172.30.0.7" },
+      { name: "r1-svc-postgres", address: "172.30.0.7" },
+      { name: "redis", address: "172.30.0.8" },
+      { name: "r1-svc-redis", address: "172.30.0.8" },
+    ]);
+    expect(calls).toContainEqual(["docker", "inspect", "-f", '{{(index .NetworkSettings.Networks "hardness-net-r1").IPAddress}}', "r1-svc-postgres"]);
+  });
+
+  it("asks for the address on the card network when one is given", async () => {
+    const { calls, exec } = dockerFake();
+    await startServices("r1", { postgres }, { exec, network: { name: "hardness-card-r1", dns: "172.30.0.2" } });
+    expect(calls.find((c) => c[1] === "inspect")![3]).toContain('"hardness-card-r1"');
+  });
+
+  it("has none for a repo with no services", async () => {
+    const { exec } = dockerFake();
+    expect((await startServices("r1", {}, { exec })).hosts).toEqual([]);
+  });
+
+  it("refuses an address that is not an IPv4 literal, and tears the run down", async () => {
+    const { calls, exec } = dockerFake([0], { "r1-svc-postgres": "--privileged" });
+    await expect(startServices("r1", { postgres }, { exec })).rejects.toThrow(/address/);
+    expect(calls).toContainEqual(["docker", "rm", "-f", "r1-svc-postgres"]);
+  });
+
+  it("refuses a service name that could pass for an argument", async () => {
+    const { exec } = dockerFake();
+    await expect(startServices("r1", { "--privileged": { image: "x" } }, { exec })).rejects.toThrow(/name/);
+  });
+});
+
+describe("hostArgs", () => {
+  it("is one --add-host per name and address", () => {
+    expect(hostArgs([{ name: "postgres", address: "172.30.0.7" }])).toEqual(["--add-host", "postgres:172.30.0.7"]);
+    expect(hostArgs([])).toEqual([]);
+    expect(hostArgs(undefined)).toEqual([]);
+  });
+
+  it("refuses a bad name or address", () => {
+    expect(() => hostArgs([{ name: "--privileged", address: "172.30.0.7" }])).toThrow(/name/);
+    expect(() => hostArgs([{ name: "a:b", address: "172.30.0.7" }])).toThrow(/name/);
+    expect(() => hostArgs([{ name: "db", address: "172.30.0.7,evil" }])).toThrow(/address/);
+    expect(() => hostArgs([{ name: "db", address: "999.1.1.1" }])).toThrow(/address/);
+    expect(() => hostArgs([{ name: "db", address: "::1" }])).toThrow(/address/);
   });
 });

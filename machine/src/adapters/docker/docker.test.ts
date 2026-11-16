@@ -7,6 +7,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { ExecResult } from "../process/exec.ts";
 import { RuntimeUnavailableError } from "./runtimes.ts";
 import { CACHE_ENV, SecretsMissingError, type RunDeps, cacheVolumeFor, hostUser, execInSandbox, runSandbox, sandboxArgs, sandboxExecArgs, sandboxExecutor, secretNameProblem, writeSecretFiles, type SandboxRun } from "./docker.ts";
+import { appArgs } from "./app.ts";
 import { EgressUnsupportedError } from "./egress.ts";
 
 /** A unit test never asks the real daemon: the seccomp and runtime start checks pass here, and the tests that test them pass their own. */
@@ -532,7 +533,7 @@ describe("runSandbox and execInSandbox on a run's own network", () => {
       },
       startServices: async (_name, _services, options) => {
         events.push(`services on ${options?.network?.name ?? "none"}`);
-        return { network: options?.network?.name ?? null, env: {}, teardown: async () => void events.push("teardown services") };
+        return { network: options?.network?.name ?? null, env: {}, hosts: [], teardown: async () => void events.push("teardown services") };
       },
       openCardNetwork: over.open ?? (async (name: string) => (events.push(`open ${name}`), network("own") as never)),
       findCardNetwork: async (name: string) => (events.push(`find ${name}`), network("found") as never),
@@ -870,5 +871,32 @@ describe("secret names", () => {
     const dir = join(mkdtempSync(join(tmpdir(), "secret-names-")), "s");
     await expect(writeSecretFiles(dir, { DB_URL: "x", NODE_OPTIONS: "--require=/tmp/evil.js" })).rejects.toThrow(/NODE_OPTIONS/);
     expect(existsSync(join(dir, "DB_URL"))).toBe(false);
+  });
+});
+
+describe("service hosts reach every container that joins the services", () => {
+  const hosts = [{ name: "postgres", address: "172.30.0.7" }, { name: "r1-svc-postgres", address: "172.30.0.7" }];
+  const pairs = (args: string[]) => args.flatMap((a, i) => (a === "--add-host" ? [args[i + 1]] : []));
+  it("adds --add-host to the stage container, on a plain network and on a card network", () => {
+    expect(pairs(sandboxArgs(run({ network: "net", serviceHosts: hosts }), "/i", "/o"))).toEqual(["postgres:172.30.0.7", "r1-svc-postgres:172.30.0.7"]);
+    const card = { name: "c", dns: "172.30.0.2", containerArgs: () => ["--network", "c", "--dns", "172.30.0.2"], teardown: async () => {}, blocked: async () => [] };
+    expect(pairs(sandboxArgs(run({ cardNetwork: card as never, network: "c", serviceHosts: hosts }), "/i", "/o"))).toEqual(["postgres:172.30.0.7", "r1-svc-postgres:172.30.0.7"]);
+  });
+
+  it("adds them to the check container", () => {
+    expect(pairs(sandboxExecArgs({ name: "c", image: "i", worktree: "/wt", argv: ["true"], network: "net", serviceHosts: hosts }))).toEqual(["postgres:172.30.0.7", "r1-svc-postgres:172.30.0.7"]);
+  });
+
+  it("adds them to the app container", () => {
+    expect(pairs(appArgs({ name: "a", image: "i", worktree: "/wt", command: "x", port: 3000, network: "net", serviceHosts: hosts } as never))).toEqual(["postgres:172.30.0.7", "r1-svc-postgres:172.30.0.7"]);
+  });
+
+  it("adds none without services", () => {
+    expect(sandboxArgs(run(), "/i", "/o")).not.toContain("--add-host");
+    expect(sandboxExecArgs({ name: "c", image: "i", worktree: "/wt", argv: ["true"] })).not.toContain("--add-host");
+  });
+
+  it("refuses a bad host rather than build the argument", () => {
+    expect(() => sandboxExecArgs({ name: "c", image: "i", worktree: "/wt", argv: ["true"], network: "net", serviceHosts: [{ name: "db", address: "1.2.3.4 --privileged" }] })).toThrow(/address/);
   });
 });

@@ -40,6 +40,16 @@ Restart the machine. It reads the policy file at start, so an edit counts after 
 
 Start an untrusted card, such as an issue from an author outside the repository. The task gets a note: "This card runs untrusted ... the runsc container runtime". Its stage, check, install, app and service containers start with `--runtime runsc`. The egress proxy always stays on `runc`.
 
+## Service names and the proxy
+
+Under `runsc`, Docker's DNS does not resolve other containers by name or alias. The machine writes each service's name and address into the container's `/etc/hosts` with `--add-host`. So `postgres://postgres/app` works under `runsc` as under `runc`. A repo needs no change.
+
+A DNS lookup that the proxy refuses leaves no row in the card's refused hosts under `runsc`. The lookup does not reach the proxy's resolver the way it does under `runc`. Read a missing host from the command's own error, not from the proxy rows.
+
+## Docker Desktop
+
+Do not use gVisor on Docker Desktop. It shows files shared from the host as owned by root, so a container cannot write the worktree as its own user. Use a Linux host.
+
 ## If it fails
 
 Without `runsc` in the daemon, the card ends as `env_broken` at step `runtime`. The reason says the policy names a runtime that the daemon does not have. Do one of these:
