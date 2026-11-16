@@ -2,7 +2,7 @@
 // `evals/<pack>/cases/<id>/stage.json` (a StageInput) and `expect.json`; a case that needs a
 // repo names a fixture as its `task.repoPath` (`fixtures/golden-task`), copied fresh per run
 // without `.golden/`, which holds the reference fixes and hidden tests no model may see.
-import { type EngineId, EvalJudgeAnswer, PACK_LIMITS, type PackId, StageInput } from "@hardness/contracts";
+import { type Effort, EffortId, type EngineId, EvalJudgeAnswer, PACK_LIMITS, type PackId, StageInput } from "@hardness/contracts";
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -64,9 +64,9 @@ export function prepareWorktree(input: StageInput, repoRoot: string, runDir: str
 }
 
 /** The case's input as it runs today: on `engine`, with the pack's current limits. */
-export function caseInput(input: StageInput, engine: EngineId): StageInput {
+export function caseInput(input: StageInput, engine: EngineId, effort?: Effort): StageInput {
   const { maxTurns, timeoutMs } = PACK_LIMITS[input.pack];
-  return { ...input, engine, limits: { maxTurns, timeoutMs } };
+  return { ...input, engine, limits: { maxTurns, timeoutMs }, ...(effort ? { effort } : {}) };
 }
 
 /** What the judge reads about one case and one answer. */
@@ -106,9 +106,22 @@ export function verdictOf(answer: unknown, costUsd: number | null): JudgeVerdict
   return { ...parsed.data, costUsd };
 }
 
-/** Where an engine's baseline for a pack lives: `baselines/<engine>/<pack>.json`, `:` as `-` so it checks out anywhere. */
-export function baselinePath(evalsDir: string, engine: EngineId, pack: PackId): string {
-  return join(evalsDir, "baselines", engine.replaceAll(":", "-"), `${pack}.json`);
+/** An engine as a folder or file name: `:` as `-` so it checks out anywhere, `@<effort>` when the run set one. */
+export function engineSlug(engine: EngineId, effort?: Effort): string {
+  return `${engine.replaceAll(":", "-")}${effort ? `@${effort}` : ""}`;
+}
+
+/** Where an engine's baseline for a pack lives: `baselines/<engine>/<pack>.json`, or `baselines/<engine>@<effort>/<pack>.json` for a run at an effort. */
+export function baselinePath(evalsDir: string, engine: EngineId, pack: PackId, effort?: Effort): string {
+  return join(evalsDir, "baselines", engineSlug(engine, effort), `${pack}.json`);
+}
+
+/** `--effort`: low, medium or high; absent means the pack's own. */
+export function parseEffort(raw: string | undefined): Effort | undefined {
+  if (raw === undefined) return undefined;
+  const parsed = EffortId.safeParse(raw);
+  if (!parsed.success) throw new Error("--effort must be low, medium or high");
+  return parsed.data;
 }
 
 /** Cases from a Laminar dataset's datapoints, for grading what a person labelled before it is committed: each parsed with the pack's context schema, a bad one reported and skipped. */

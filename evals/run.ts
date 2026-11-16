@@ -3,11 +3,12 @@
 // then grades each answer: the pack's schema, the case's checks, then the eval_judge pack.
 //
 //   pnpm eval --pack slack_triage --engine codex:luna [--against claude:haiku] [--case <id>]...
-//             [--no-judge | --judge] [--trials N] [--dataset <name>] [--save-baseline] [--image hardness-runner:dev]
+//             [--effort low|medium|high] [--no-judge | --judge] [--trials N] [--dataset <name>] [--save-baseline] [--image hardness-runner:dev]
 //
 // A decision pack runs without the judge (its grade is the label and the confidence); --judge adds it.
 // --trials N runs each case N times, each in its own container; --dataset <name> takes the cases from
-// that Laminar dataset (its labelled datapoints) instead of the folder.
+// that Laminar dataset (its labelled datapoints) instead of the folder. --effort sets the run's effort
+// (the pack's own without it); its baselines and run folders carry @<effort>.
 //
 // Set LMNR_PROJECT_API_KEY (or ~/.config/hardness/lmnr-project-api-key) and each case is a trace and each
 // engine's run an evaluation in your local Laminar (compose profile observe); MACHINE_TRACES=full attaches transcripts.
@@ -28,7 +29,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-import { type EvalCase, baselinePath, caseInput, datasetCases, judgeInput, loadCases, parseTrials, prepareWorktree, verdictOf } from "./src/cases.ts";
+import { type EvalCase, baselinePath, caseInput, datasetCases, engineSlug, judgeInput, loadCases, parseEffort, parseTrials, prepareWorktree, verdictOf } from "./src/cases.ts";
 import { formatDiff, formatScorecard } from "./src/format.ts";
 import { type CaseResult, type JudgeVerdict, type Scorecard, caseResult, diffScorecards, gradeAnswer, scorecard } from "./src/grade.ts";
 import { evalDatapoint } from "./src/report.ts";
@@ -45,6 +46,7 @@ const { values } = parseArgs({
     "no-judge": { type: "boolean", default: false },
     judge: { type: "boolean", default: false },
     trials: { type: "string" },
+    effort: { type: "string" },
     dataset: { type: "string" },
     "save-baseline": { type: "boolean", default: false },
     image: { type: "string", default: process.env.RUNNER_IMAGE ?? "hardness-runner:dev" },
@@ -64,6 +66,13 @@ const judge = values["no-judge"] || (PACKS[pack].kind === "decision" && !values.
 const trials = (() => {
   try {
     return parseTrials(values.trials);
+  } catch (error) {
+    return fail((error as Error).message);
+  }
+})();
+const effort = (() => {
+  try {
+    return parseEffort(values.effort);
   } catch (error) {
     return fail((error as Error).message);
   }
@@ -107,13 +116,13 @@ const slug = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
 /** One case on one engine: run it, grade it, and (when the answer is on the schema) judge it. */
 async function runCase(evalCase: EvalCase, engine: EngineId, index: number, trial: number, evaluation: Evaluation): Promise<CaseResult> {
-  const runDir = join(EVALS, ".runs", stamp, slug(engine), trial > 1 ? `${evalCase.id}-trial-${trial}` : evalCase.id);
+  const runDir = join(EVALS, ".runs", stamp, engineSlug(engine, effort).toLowerCase(), trial > 1 ? `${evalCase.id}-trial-${trial}` : evalCase.id);
   mkdirSync(runDir, { recursive: true });
   const worktree = prepareWorktree(evalCase.input, ROOT, runDir);
   const span = telemetry.run({ kind: "eval", pack, engine, client: "eval", sessionId: `eval-${pack}-${stamp}` });
   const started = Date.now();
   const run = await runPackOnce(
-    { name: `hardness-eval-${slug(pack)}-${slug(evalCase.id)}-${slug(engine)}-${stamp.slice(11, 19)}${trial > 1 ? `-t${trial}` : ""}`, image, runDir, worktree, input: caseInput(evalCase.input, engine), engine, labels: { luna: "eval" }, extraEnv: span.childEnv(), egressKind: "agent" },
+    { name: `hardness-eval-${slug(pack)}-${slug(evalCase.id)}-${slug(engine)}-${stamp.slice(11, 19)}${trial > 1 ? `-t${trial}` : ""}`, image, runDir, worktree, input: caseInput(evalCase.input, engine, effort), engine, labels: { luna: "eval" }, extraEnv: span.childEnv(), egressKind: "agent" },
     { credentials, ...(egress ? { egress } : {}) },
   ).catch((error: Error) => ({ output: null, error: error.message }) as const);
   const caseRun = { id: evalCase.id, output: run.output, error: run.error, wallMs: Date.now() - started };
@@ -152,19 +161,19 @@ async function judgeAnswer(evalCase: EvalCase, answer: unknown, engine: EngineId
 
 const cards: Scorecard[] = [];
 for (const engine of engines) {
-  const evaluation = await telemetry.evaluation({ name: `${engine} ${stamp.slice(0, 10)}`, groupName: pack, metadata: { pack, engine, judge, trials, cases: cases.map((c) => c.id) } });
+  const evaluation = await telemetry.evaluation({ name: `${engine} ${stamp.slice(0, 10)}`, groupName: pack, metadata: { pack, engine, ...(effort ? { effort } : {}), judge, trials, cases: cases.map((c) => c.id) } });
   const results: CaseResult[] = [];
   for (const [index, evalCase] of cases.entries()) for (let trial = 1; trial <= trials; trial++) results.push(await runCase(evalCase, engine, index * trials + trial - 1, trial, evaluation));
   await evaluation.finish();
   if (evaluation.id) console.log(`laminar: evaluation ${evaluation.id} (${engine} on ${pack})`);
-  const card = scorecard({ pack, engine, judge, at: new Date().toISOString(), ...(trials > 1 ? { trials } : {}) }, results);
+  const card = scorecard({ pack, engine, judge, at: new Date().toISOString(), ...(effort ? { effort } : {}), ...(trials > 1 ? { trials } : {}) }, results);
   cards.push(card);
-  writeFileSync(join(EVALS, ".runs", stamp, `${slug(engine)}-${pack}.json`), `${JSON.stringify(card, null, 2)}\n`);
+  writeFileSync(join(EVALS, ".runs", stamp, `${engineSlug(engine, effort).toLowerCase()}-${pack}.json`), `${JSON.stringify(card, null, 2)}\n`);
 }
 
 for (const card of cards) {
   console.log(`\n${formatScorecard(card)}`);
-  const path = baselinePath(EVALS, card.engine, pack);
+  const path = baselinePath(EVALS, card.engine, pack, card.effort);
   if (values["save-baseline"]) {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, `${JSON.stringify(card, null, 2)}\n`);

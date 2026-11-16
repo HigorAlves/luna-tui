@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { readingProblems } from "./preflight.ts";
 import { TOKEN_SHAPE } from "./scrub.ts";
-import { baselinePath, caseInput, datasetCases, judgeInput, loadCases, parseTrials, prepareWorktree, verdictOf } from "./cases.ts";
+import { baselinePath, caseInput, datasetCases, engineSlug, judgeInput, loadCases, parseEffort, parseTrials, prepareWorktree, verdictOf } from "./cases.ts";
 
 /** Every `@host` whose host is not a reserved one: `.example`, `example.com|org|net` or `.invalid`. */
 const unsafeAddresses = (text: string): string[] => [...text.matchAll(/@([a-z0-9-]+(?:\.[a-z0-9-]+)+)/gi)].map((m) => m[1]!).filter((host) => !/(?:^|\.)example(?:\.(?:com|org|net))?$|\.invalid$|^example$/i.test(host));
@@ -85,6 +85,17 @@ describe("the runs' inputs", () => {
     expect(run).toMatchObject({ engine: "codex:sol", limits: { maxTurns: PACK_LIMITS.triage.maxTurns, timeoutMs: PACK_LIMITS.triage.timeoutMs }, task: { repoPath: "fixtures/golden-task" } });
   });
 
+  it("adds an effort to the run only when one is given", () => {
+    expect(caseInput(input(), "codex:sol")).not.toHaveProperty("effort");
+    expect(caseInput(input(), "codex:sol", "high")).toMatchObject({ effort: "high" });
+  });
+
+  it("reads --effort: low, medium or high, else a refusal", () => {
+    expect(parseEffort(undefined)).toBeUndefined();
+    expect(parseEffort("medium")).toBe("medium");
+    expect(() => parseEffort("max")).toThrow("--effort must be low, medium or high");
+  });
+
   it("gives the judge the case, its rubric and checks, and the answer, on its own engine and limits", () => {
     const evalCase = { id: "bug", pack: "triage" as const, input: input(), expect: { schema: 1 as const, rubric: "names formatPrice", checks: [{ kind: "equals" as const, path: "kind", value: "brief" }] } };
     const judged = judgeInput(evalCase, { kind: "brief" }, "claude:opus");
@@ -102,6 +113,12 @@ describe("the runs' inputs", () => {
 
   it("keeps a baseline per engine and pack, with no colon in the path", () => {
     expect(baselinePath("/e", "claude:opus", "triage")).toBe("/e/baselines/claude-opus/triage.json");
+  });
+
+  it("keeps a baseline per effort in its own folder, and the old paths as they were", () => {
+    expect(baselinePath("/e", "claude:opus", "plan", "high")).toBe("/e/baselines/claude-opus@high/plan.json");
+    expect(engineSlug("codex:sol")).toBe("codex-sol");
+    expect(engineSlug("codex:sol", "low")).toBe("codex-sol@low");
   });
 });
 
