@@ -4,8 +4,9 @@
 // draft that changed under the person never posts.
 import { z } from "zod";
 
-/** What a draft is. Each wave adds its own kind. */
-export const ComplianceDraftKind = z.enum(["change_evidence"]);
+/** What a draft is: wave 1's change evidence, wave 3's questionnaire answers, wave 4's access review, wave 5's postmortem,
+ *  wave 7's status report and wave 6's release notes. */
+export const ComplianceDraftKind = z.enum(["change_evidence", "questionnaire", "access_review", "postmortem", "status_report", "release_notes"]);
 export type ComplianceDraftKind = z.infer<typeof ComplianceDraftKind>;
 
 /** `waiting` for a tap; `edited` is still waiting, with the person's text; `ignored` is kept and never posted; `posting` is claimed by an approve. */
@@ -19,8 +20,27 @@ const WikiPath = z
   .regex(/^[A-Za-z0-9][A-Za-z0-9 _.\/-]*\.md$/, "a relative .md path")
   .refine((path) => !path.split("/").includes(".."), "no .. segment");
 
-/** Where an approved draft goes. Each wave adds its own target. */
-export const ComplianceTarget = z.discriminatedUnion("kind", [z.object({ kind: z.literal("wiki"), repo: Slug, path: WikiPath })]);
+const SlackChannel = z.string().regex(/^[CDG][A-Z0-9]{2,}$/, "a Slack channel id");
+const JiraProject = z.string().regex(/^[A-Z][A-Z0-9_]+$/, "a Jira project key");
+
+/** Where an approved draft goes. The publisher has one writer per kind:
+ *  - `wiki`: the draft's text as one page of a repo's wiki.
+ *  - `slack_thread` / `slack_channel`: the text as a reply in a thread, or a post in a channel.
+ *  - `jira_comment`: the text as a comment on an issue.
+ *  - `jira_actions`: the text's action items, each filed as an issue in a project.
+ *  - `answer_bank`: each question and answer of an approved questionnaire, as a page under `Compliance/Answers/` in a repo's wiki.
+ *  - `access_slices`: each repo's part of an org's signed access review, as a page in that repo's wiki.
+ *  - `github_release`: the text as the body of a repo's release. */
+export const ComplianceTarget = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("wiki"), repo: Slug, path: WikiPath }),
+  z.object({ kind: z.literal("slack_thread"), channel: SlackChannel, ts: z.string().regex(/^\d+\.\d+$/, "a Slack message ts") }),
+  z.object({ kind: z.literal("slack_channel"), channel: SlackChannel }),
+  z.object({ kind: z.literal("jira_comment"), key: z.string().regex(/^[A-Z][A-Z0-9_]+-\d+$/, "a Jira issue key") }),
+  z.object({ kind: z.literal("jira_actions"), project: JiraProject }),
+  z.object({ kind: z.literal("answer_bank"), repo: Slug }),
+  z.object({ kind: z.literal("access_slices"), org: z.string().regex(/^[A-Za-z0-9-]+$/, "a GitHub org"), period: z.string().regex(/^\d{4}-Q[1-4]$/, "a quarter, 2026-Q4") }),
+  z.object({ kind: z.literal("github_release"), repo: Slug, tag: z.string().regex(/^[A-Za-z0-9._\/-]+$/, "a tag") }),
+]);
 export type ComplianceTarget = z.infer<typeof ComplianceTarget>;
 
 export const ComplianceDraft = z.object({

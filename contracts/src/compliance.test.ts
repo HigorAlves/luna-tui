@@ -76,4 +76,32 @@ describe("compliance drafts", () => {
     expect(PACKS.change_exceptions.engines).toMatchObject({ default: "claude:haiku", allowed: ["claude:haiku", "claude:sonnet"] });
     expect(PACKS.change_exceptions.access).toEqual(NO_ACCESS);
   });
+
+  it("names every manager draft the waves add", () => {
+    expect(ComplianceDraftKind.options).toEqual(["change_evidence", "questionnaire", "access_review", "postmortem", "status_report", "release_notes"]);
+  });
+
+  it("parses each target an approved draft can go to", () => {
+    const targets = [
+      { kind: "wiki", repo: "acme/api", path: "Compliance/Answers/encryption-at-rest.md" },
+      { kind: "slack_thread", channel: "C0123ABCD", ts: "1731772800.000100" },
+      { kind: "slack_channel", channel: "C0123ABCD" },
+      { kind: "jira_comment", key: "SEC-42" },
+      { kind: "jira_actions", project: "OPS" },
+      { kind: "answer_bank", repo: "acme/api" },
+      { kind: "access_slices", org: "acme", period: "2026-Q4" },
+      { kind: "github_release", repo: "acme/api", tag: "v1.4.0" },
+    ];
+    for (const target of targets) expect(ComplianceTarget.parse(target)).toEqual(target);
+  });
+
+  it("refuses a malformed channel, thread, key, project, period or tag", () => {
+    expect(() => ComplianceTarget.parse({ kind: "slack_thread", channel: "general", ts: "1731772800.000100" })).toThrow();
+    expect(() => ComplianceTarget.parse({ kind: "slack_thread", channel: "C0123ABCD", ts: "yesterday" })).toThrow();
+    expect(() => ComplianceTarget.parse({ kind: "jira_comment", key: "sec-42" })).toThrow();
+    expect(() => ComplianceTarget.parse({ kind: "jira_actions", project: "OPS-1" })).toThrow();
+    expect(() => ComplianceTarget.parse({ kind: "access_slices", org: "acme", period: "Q4" })).toThrow();
+    expect(() => ComplianceTarget.parse({ kind: "github_release", repo: "acme/api", tag: "v1 4" })).toThrow();
+  });
 });
+
