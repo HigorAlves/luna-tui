@@ -2360,6 +2360,8 @@ export class Pipeline {
       const checks = Object.values(verdicts ?? {});
       if (!riskOk || checks.length === 0 || checks.some((verdict) => verdict !== "proceed") || (Array.isArray(questions) && questions.length > 0)) continue;
       if (Date.now() - open.createdAt.getTime() < minutes * 60_000) continue;
+      // A repo that asks for more than one approver asked for people: the clock is no named approver.
+      if ((await this.planRuleOf(task, open.requested)).rule.needed > 1) continue;
       const reason = risk?.level === "low" ? `auto-approved after ${minutes} min: low risk and every check proceeded` : `auto-approved after ${minutes} min: the council passed and every check proceeded`;
       await this.log(task.id, "plan.auto_approved", { reason });
       await this.decide(task.id, "approved", reason, undefined, { auto: true }).catch((error: unknown) =>
