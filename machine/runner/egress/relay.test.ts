@@ -1,8 +1,14 @@
 import { type IncomingHttpHeaders, type Server, createServer, request } from "node:http";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { connect as netConnect } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { type EgressProxy, createEgressProxy, parseRelayMeta } from "./proxy.ts";
+
+const PROXY_FILE = join(import.meta.dirname, "proxy.ts");
 
 const REAL = "sk-ant-oat01-REAL-SECRET-VALUE";
 const PLACEHOLDER = "sk-ant-oat01-luna-relay-abc123";
@@ -175,6 +181,15 @@ describe("the engine relay", () => {
     });
   }
 
+  it("answers 502 with the refusal reason credential when the credential cannot be read, and never reaches the upstream", async () => {
+    const { port, seen, lines } = await start((_req, res) => (res as import("node:http").ServerResponse).end("ok"), "oauth", [PUBLIC], [], async () => {
+      throw new Error("ENOENT: no such file");
+    });
+    expect((await send(port, { headers: oauth })).status).toBe(502);
+    expect(seen).toHaveLength(0);
+    expect(lines.map((l) => JSON.parse(l) as { relay: Record<string, unknown> })[0]!.relay).toMatchObject({ refused: "credential", status: 502 });
+  });
+
   it("refuses a request that does not carry the run's placeholder, and never reaches the upstream", async () => {
     const { port, seen } = await start((_req, res) => (res as import("node:http").ServerResponse).end("ok"));
     expect((await send(port, { headers: { authorization: "Bearer sk-ant-oat01-guess" } })).status).toBe(401);
@@ -260,5 +275,30 @@ describe("the engine relay", () => {
     expect(parsed[1]!.relay).toMatchObject({ refused: "placeholder", status: 401 });
     const text = lines.join("\n");
     for (const secret of [REAL, PLACEHOLDER, "wrong-value-here"]) expect(text).not.toContain(secret);
+  });
+
+  describe("the relay's start-up check of the token file", () => {
+    const run = (token: string | null) => {
+      const dir = mkdtempSync(join(tmpdir(), "relay-cli-"));
+      const tokenFile = join(dir, "token");
+      const metaFile = join(dir, "meta.json");
+      if (token !== null) writeFileSync(tokenFile, token);
+      writeFileSync(metaFile, JSON.stringify({ kind: "oauth", placeholder: PLACEHOLDER }));
+      return spawnSync(process.execPath, [PROXY_FILE, "--listen", "0", "--relay", `anthropic=${tokenFile}`, "--relay-meta", metaFile, "--relay-listen", "0"], { encoding: "utf8", timeout: 10_000 });
+    };
+    for (const [name, token, reason] of [
+      ["missing", null, "missing"],
+      ["empty", "", "empty"],
+      ["blank", "  \n", "empty"],
+      ["holding a newline inside", "sk-ant-oat01-REAL\nsecond-line", "newline"],
+    ] as const) {
+      it(`exits 1 naming the problem and never the value when the token file is ${name}`, () => {
+        const result = run(token);
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(reason);
+        expect(result.stderr + result.stdout).not.toContain("sk-ant-oat01-REAL");
+        expect(result.stderr + result.stdout).not.toContain("second-line");
+      });
+    }
   });
 });
