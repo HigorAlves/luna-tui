@@ -845,7 +845,7 @@ const app = createApp({
   slack: slackInbox,
   ...(jiraTasks ? { jira: jiraTasks } : {}),
   ...(packRuns ? { runs: packRuns } : {}),
-  ...(checksExec && proofRig ? { configProofs: new ConfigProofs({ exec: checksExec, rig: proofRig, gitIdentity }) } : {}),
+  ...(checksExec && proofRig ? { configProofs: new ConfigProofs({ exec: checksExec, rig: proofRig, gitIdentity, machinePolicy: config.sandboxPolicy }) } : {}),
   // A repo's own runs and cost: its stage runs, the guard's stops and the ledger. Read-only, so it has its own view of the economy's files.
   repoSignals: pgRepoSignals(db, economyStore(config.stateDir)),
   sla: (task) => slaClocks.for(task),

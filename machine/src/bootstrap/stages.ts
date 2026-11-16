@@ -49,8 +49,7 @@ import { PACKAGE_MANAGER_CONFIG, configFilesChanged } from "../application/insta
 import { InstallFailedError, type InstallInput, type InstallOutcome, ensureInstalled } from "../application/install.ts";
 import { removeNestedRepositories } from "../adapters/git/machine-repo.ts";
 import { ensureClone, isClone, removeClone } from "../adapters/git/clone.ts";
-import type { ProofRig } from "../application/config-proof.ts";
-import { policyOf } from "../domain/luna-config.ts";
+import { type ProofRig, proofAppDeps } from "../application/config-proof.ts";
 import { sandboxSizeOf } from "../domain/sandbox-bounds.ts";
 import { type Trust, trustOf } from "../domain/trust.ts";
 import { runtimeChecker } from "../adapters/docker/runtimes.ts";
@@ -289,14 +288,9 @@ export async function buildRealStages(
     },
     app: async ({ repoPath, workspace, config: file, signal }) => {
       const started = Date.now();
-      const policy = policyOf(file);
-      const extra = file.sandbox?.egress?.allow ?? [];
       const blocked: string[] = [];
-      const proofDeps: AppDeps = {
-        ...appDeps,
-        policies: { for: async () => policy },
-        ...(egress ? { egress: { for: async (request) => { const run = await egress.for(request); return { ...run, allow: [...new Set([...run.allow, ...extra])] }; } } } : {}),
-      };
+      // The file may be a model's proposal: its sandbox is held within the machine's policy like a repo's.
+      const proofDeps: AppDeps = proofAppDeps(appDeps, file, config.sandboxPolicy);
       const opened = await openApp(proofDeps, {
         taskId: `proof-${randomUUID()}`,
         repoPath,
@@ -498,7 +492,7 @@ export async function buildRealStages(
       ...(graphs ? { graph: graphs.graph, graphReady } : {}),
     }),
     // Setup reads the repo checkout itself (no worktree yet) and proves what it proposes in the image.
-    setup: setupRunner({ runPack: (context) => runAgent(deps, context, "setup", { checkout: true }), exec: checksExec, rig: proofRig, stateDir: config.stateDir }),
+    setup: setupRunner({ runPack: (context) => runAgent(deps, context, "setup", { checkout: true }), exec: checksExec, rig: proofRig, machinePolicy: config.sandboxPolicy, stateDir: config.stateDir }),
     // ci_watch polls the PR's checks on the host and only calls its pack when one is red.
     ci_watch: ciWatchRunner({
       github,

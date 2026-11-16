@@ -3,8 +3,32 @@
 // person (or the setup skill) wrote. What the egress proxy refused is collected by host, so the file can name the hosts a check needs.
 import type { ExecResult } from "../adapters/process/exec.ts";
 import { checkCommand } from "../domain/checks.ts";
-import type { LunaConfig } from "../domain/luna-config.ts";
-import type { ServiceSpec } from "@hardness/contracts";
+import { type LunaConfig, policyOf } from "../domain/luna-config.ts";
+import type { Policy } from "../domain/policy.ts";
+import type { AppDeps } from "./app-session.ts";
+import { boundSandbox } from "../domain/sandbox-bounds.ts";
+import type { MachinePolicy, ServiceSpec } from "@hardness/contracts";
+
+/** The deps `openApp` starts the proof's app with: the file's bounded policy in place of the repo's, and the egress list of a check plus the file's bounded `sandbox.egress.allow`. */
+export function proofAppDeps(base: AppDeps, file: LunaConfig, machinePolicy: MachinePolicy | undefined): AppDeps {
+  const held = machinePolicy ? boundedProof(file, machinePolicy) : null;
+  const policy = held ? held.policy : policyOf(file);
+  const extra = held ? held.allow : (file.sandbox?.egress?.allow ?? []);
+  const { egress } = base;
+  return {
+    ...base,
+    policies: { for: async () => policy },
+    ...(egress ? { egress: { for: async (request) => { const run = await egress.for(request); return { ...run, allow: [...new Set([...run.allow, ...extra])] }; } } } : {}),
+  };
+}
+
+/** The policy a proof runs on: the file's own, its sandbox held within the machine's (cpu, memory, hosts), with the bounds attached so `sandboxSizeOf` sizes the proof's containers as it
+ *  sizes a card's. The file may be a model's proposal; it widens nothing the owner's policy closed. `allow` is its bounded `sandbox.egress.allow`; `reasons` say what was dropped or capped. */
+export function boundedProof(file: LunaConfig, machinePolicy: MachinePolicy): { policy: Policy; allow: string[]; reasons: string[] } {
+  const base = policyOf(file);
+  const { sandbox, bounds } = boundSandbox(base.factory.sandbox, machinePolicy);
+  return { policy: { ...base, factory: { ...base.factory, sandbox }, bounds }, allow: sandbox.egress.allow, reasons: [...bounds.notes, ...bounds.egress, ...bounds.image] };
+}
 
 const MINUTE = 60_000;
 /** The whole proof shares verifying's budget. */
@@ -55,6 +79,8 @@ export interface Proof {
   log: string;
   /** Hosts a check or the app tried to reach that no list names (`host:port`), first seen first: what `sandbox.egress.allow` may need. */
   refused: string[];
+  /** What the machine's sandbox policy capped or dropped in the file's `sandbox` section, as sentences; empty when it held. */
+  bounds?: string[];
 }
 
 const tailOf = (text: string): string => text.trimEnd().split("\n").slice(-TAIL_LINES).join("\n");
@@ -62,14 +88,16 @@ const tailOf = (text: string): string => text.trimEnd().split("\n").slice(-TAIL_
 /** Proves `config` against `repoPath`: in a throwaway clone when a rig is given (always, outside tests), every check once, then the app start. */
 export async function proveConfig(
   config: LunaConfig,
-  options: { exec: ProofExec; repoPath: string; signal: AbortSignal; env?: NodeJS.ProcessEnv; stage: string; timeoutMs?: number; rig?: ProofRig },
+  options: { exec: ProofExec; repoPath: string; signal: AbortSignal; env?: NodeJS.ProcessEnv; stage: string; timeoutMs?: number; rig?: ProofRig; machinePolicy?: MachinePolicy },
 ): Promise<Proof> {
   const proof: ProofReport[] = [];
   const log: string[] = [];
   const refused: string[] = [];
   const budget = options.timeoutMs ?? PROOF_TIMEOUT_MS;
   const deadline = Date.now() + budget;
-  const allow = config.sandbox?.egress?.allow ?? [];
+  // The file may be a model's proposal: its egress list is held within the machine's policy before any check gets it.
+  const held = options.machinePolicy ? boundedProof(config, options.machinePolicy) : null;
+  const allow = held ? held.allow : (config.sandbox?.egress?.allow ?? []);
   const note = (host: string, port: number) => {
     const at = `${host}:${port}`;
     if (!refused.includes(at) && refused.length < REFUSED_MAX) refused.push(at);
@@ -117,7 +145,7 @@ export async function proveConfig(
   } finally {
     await space?.close().catch(() => {});
   }
-  return { proof, app, log: log.join("\n") || "no checks proposed\n", refused };
+  return { proof, app, log: log.join("\n") || "no checks proposed\n", refused, ...(held ? { bounds: held.reasons } : {}) };
 }
 
 /** The refused hosts as the names `sandbox.egress.allow` takes: a 443 is the default and left off, any other port kept. */

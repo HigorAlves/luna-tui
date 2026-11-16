@@ -5,6 +5,8 @@ import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
+import type { MachinePolicy } from "@hardness/contracts";
+
 import { readRegularFile } from "../adapters/fs/bounded.ts";
 import { CONFIG_FILE, type ConfigCheck, checkLunaConfigText, validateLunaConfig } from "../domain/luna-config.ts";
 import { parse as parseYaml } from "yaml";
@@ -27,6 +29,8 @@ export class ConfigProofs {
       /** Where the proof runs and how the app start is proven: a throwaway clone, never the checkout. */
       rig: ProofRig;
       gitIdentity: (repoPath: string) => Promise<{ name: string; email: string } | null>;
+      /** The owner's sandbox policy: the file's egress list is held within it. */
+      machinePolicy?: MachinePolicy;
       now?: () => Date;
     },
   ) {}
@@ -64,7 +68,7 @@ export class ConfigProofs {
     const config = validateLunaConfig(parseYaml(text) ?? {});
     const identity = await this.deps.gitIdentity(job.repoPath).catch(() => null);
     const env = identity ? { GIT_AUTHOR_NAME: identity.name, GIT_AUTHOR_EMAIL: identity.email, GIT_COMMITTER_NAME: identity.name, GIT_COMMITTER_EMAIL: identity.email } : {};
-    const proof = await proveConfig(config, { exec: this.deps.exec, rig: this.deps.rig, repoPath: job.repoPath, signal: new AbortController().signal, env, stage: "setup" });
+    const proof = await proveConfig(config, { exec: this.deps.exec, rig: this.deps.rig, repoPath: job.repoPath, signal: new AbortController().signal, env, stage: "setup", ...(this.deps.machinePolicy ? { machinePolicy: this.deps.machinePolicy } : {}) });
     return { ...job, state: "done", finishedAt: finished(), check, proof, suggestedAllow: allowEntriesOf(proof.refused) };
   }
 
