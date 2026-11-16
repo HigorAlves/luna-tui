@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { EconomyInput, ProposeContext } from "./economy.ts";
 import { EngineBudgets, EngineId } from "./engines.ts";
+import { EffortId } from "./models.ts";
 import { EvidenceConfigV22, FactoryConfigInput, SecretNameSchema } from "./config-v22.ts";
 import { Scenario } from "./plan.ts";
 import { SizeContext, SplitContext } from "./split.ts";
@@ -206,6 +207,11 @@ export type PackId = z.infer<typeof PackId>;
  *  be one of its pack's `engines.allowed`; the machine checks that against the pack registry. */
 export const StageEngines = z.partialRecord(PackId, EngineId);
 export type StageEngines = z.infer<typeof StageEngines>;
+
+/** An effort per pack: a repo's luna.yaml `effort`, over the pack's own. The machine checks it
+ *  against the engine that runs (`effortProblem`). */
+export const StageEfforts = z.partialRecord(PackId, EffortId);
+export type StageEfforts = z.infer<typeof StageEfforts>;
 
 /** The ordered slices the planner proposes; `touchpoints` are repo-relative paths. */
 export const Slice = z.object({
@@ -514,6 +520,8 @@ export const LunaConfig = z.object({
   sla: SlaConfig.optional(),
   /** The engine a pack runs on in this repo, over its default; a task's own choice wins over it. */
   engines: StageEngines.optional(),
+  /** The effort a pack runs at in this repo, over its default. */
+  effort: StageEfforts.optional(),
   /** Monthly caps in USD on this repo's stage runs, by engine or credential (`openai:sol: 10`). */
   budget: z.object({ engines: EngineBudgets.optional() }).optional(),
   /** How long the machine keeps a task's local Evidence Pack and media; 0 never sweeps it, absent defers to MACHINE_RETENTION_DAYS. */
@@ -1111,6 +1119,8 @@ export const StageInput = z.object({
   pack: PackId,
   /** The engine to run the pack on, one of its `engines.allowed`; absent means the pack's default. */
   engine: EngineId.optional(),
+  /** The effort to run the pack at; absent means the pack's own. */
+  effort: EffortId.optional(),
   attempt: z.number().int(),
   task: z.object({
     id: z.string(),

@@ -16,6 +16,7 @@ import {
   CheckContext,
   EvidencePack,
   EvalJudgeAnswer,
+  LunaConfig,
   CodeMapAnswer,
   PlanAnswer,
   PlanContext,
@@ -107,7 +108,21 @@ describe("VerifyResult", () => {
   });
 });
 
+describe("LunaConfig effort", () => {
+  it("reads an effort per pack and refuses an unknown effort or pack", () => {
+    expect(LunaConfig.safeParse({ effort: { plan: "high" } }).success).toBe(true);
+    expect(LunaConfig.safeParse({ effort: { plan: "max" } }).success).toBe(false);
+    expect(LunaConfig.safeParse({ effort: { nonsense: "low" } }).success).toBe(false);
+  });
+});
+
 describe("StageInput", () => {
+  it("reads an optional effort and refuses one that does not exist", () => {
+    expect(StageInput.safeParse(stageInputExample).success).toBe(true);
+    expect(StageInput.safeParse({ ...stageInputExample, effort: "high" }).success).toBe(true);
+    expect(StageInput.safeParse({ ...stageInputExample, effort: "max" }).success).toBe(false);
+  });
+
   it("reads schema 3 testCases with approach, and still reads schema 2's test field for old images", () => {
     const base = { ...stageInputExample, schema: 3 as const };
     const v3 = StageInput.safeParse({ ...base, context: { ...base.context, testCases: [{ title: "t", criterion: "c", approach: "a" }] } });

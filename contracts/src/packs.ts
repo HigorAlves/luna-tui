@@ -8,7 +8,7 @@ import { z } from "zod";
 import { FACTORY_DEFAULTS } from "./config-v22.ts";
 import { decisionEngines } from "./decision-defaults.ts";
 import { type Access, type LunaTool, NO_ACCESS, access, readOnly } from "./access.ts";
-import type { EngineId } from "./engines.ts";
+import { type EngineId, resolveEngine } from "./engines.ts";
 import type { Effort } from "./models.ts";
 import { AnswerScenario, AnswerStep } from "./plan.ts";
 import { DiffSummaryAnswer } from "./reports.ts";
@@ -1564,6 +1564,15 @@ export function classificationLine(c: TaskClassification): string {
   }
   const extra = [c.urgency !== undefined ? ` · urgency ${levelOf(V1_URGENCY, c.urgency)}` : "", c.risk !== undefined ? ` · risk ${levelOf(V1_RISK, c.risk)}` : "", archive].join("");
   return `${c.kind} · ${c.area ?? c.typeOfWork ?? "unknown"} · ${c.ready ? "ready" : "not ready"} · size ${levelOf(V1_SIZE, c.size)} · lowest confidence ${c.confidence.toFixed(2)} (${c.model})${extra}`;
+}
+
+/** Why `engine` cannot run `pack` at `effort`, or null: a decision pack takes no effort, and an
+ *  engine runs only the efforts its model supports. */
+export function effortProblem(pack: PackId, engine: EngineId, effort: Effort): string | null {
+  if (PACKS[pack].kind === "decision") return `${pack} is a decision pack and takes no effort`;
+  const supported = resolveEngine(engine).caps.effort;
+  if (supported.includes(effort)) return null;
+  return `${engine} does not support effort ${effort} (supports: ${supported.join(", ") || "none"})`;
 }
 
 /** A helper as the pack its child run is: the helper's role on its engine, the parent's access

@@ -2,11 +2,16 @@
 // (./engines.ts) name a catalog key; a pinned ID only changes here, so a model never drifts
 // under an alias and an upgrade is one reviewed line. See RFC 0003.
 
+import { z } from "zod";
+
 /** The harness that runs a model, one per vendor SDK: factory/src/runtimes/<runtime>/. */
 export type RuntimeId = "claude" | "eve" | "jev";
 
 /** How hard the model thinks: the pack asks for one, the model must support it. */
 export type Effort = "low" | "medium" | "high";
+
+/** The zod twin of `Effort`: what a run's input or a repo's luna.yaml may name. */
+export const EffortId = z.enum(["low", "medium", "high"]);
 
 export interface ModelEntry {
   runtime: RuntimeId;
