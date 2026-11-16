@@ -43,6 +43,9 @@ import { saveKept } from "../kept-sandboxes.ts";
 import { LOCKFILES, envOf } from "../../domain/env-hash.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { sandboxSizeOf } from "../../domain/sandbox-bounds.ts";
+import { trustOf, untrustedNote } from "../../domain/trust.ts";
+import { RuntimeUnavailableError } from "../../adapters/docker/runtimes.ts";
+import { envBrokenDetail } from "../env-broken.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
 import { lockedFilesRemoved, lockedFilesTouched } from "../../domain/locked-files.ts";
@@ -293,6 +296,9 @@ async function foldRun(deps: AgentDeps, context: StageContext, pack: PackId, res
   }
 }
 
+/** The cards whose untrusted run has been said on the task, so it is said once. */
+const untrustedNoted = new Set<string>();
+
 async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}, chosen: { image?: string } = {}, ran: { container: boolean } = { container: false }): Promise<StageResult> {
   const { task } = context;
   if (!task.repoPath) {
@@ -303,6 +309,13 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const policy = await (deps.policies ?? sharedPolicies).for(task.repoPath);
   // What the machine's sandbox policy lowered of the repository's cpu and memory: said on the task, so the cap is never silent.
   for (const line of policy.bounds?.notes ?? []) await context.note?.(line).catch(() => {});
+  // A GitHub card from outside the repository's own people: its own cache volume and the policy's runtime for it. Said once on the task.
+  const trust = trustOf(task);
+  const size = sandboxSizeOf(policy, trust);
+  if (trust === "untrusted" && !untrustedNoted.has(task.id)) {
+    untrustedNoted.add(task.id);
+    await context.note?.(untrustedNote(size)).catch(() => {});
+  }
   // The repository's own image, built from the base its luna.yaml names; a build that fails is an environment problem with the reason.
   let stageImage = extra.image ?? deps.image;
   if (deps.repoImages && !extra.checkout && !extra.image) {
@@ -602,7 +615,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   if (deps.install && limits.writable && !extra.checkout && !resume) {
     let installed: InstallOutcome;
     try {
-      installed = await deps.install({ taskId: task.id, repoPath: task.repoPath, workspace: workspace.path, commit: inputCommit, signal: context.signal });
+      installed = await deps.install({ taskId: task.id, repoPath: task.repoPath, workspace: workspace.path, commit: inputCommit, trust, signal: context.signal });
     } catch (error) {
       credential.release();
       throw error;
@@ -648,13 +661,13 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     attach: Boolean(resume),
     // The verifier never sees the card's shared agent session: it reviews from the plan, the scenarios and the Build Report, not the implementer's trail.
     ...(pack === "verifying" ? {} : { sessionMount }),
-    cacheVolume: cacheVolumeFor(task.repoPath),
+    cacheVolume: cacheVolumeFor(task.repoPath, size.cacheTrust),
     image: pack === "e2e" ? deps.qaImage : pack === "recording" ? (deps.videoImage ?? deps.qaImage) : stageImage,
     runDir,
     worktree: workspace.path,
     writable: limits.writable,
     gitDir,
-    limits: sandboxSizeOf(policy),
+    limits: size,
     gitIdentity: limits.writable ? await gitIdentity(task.repoPath) : null,
     // The repo's services run beside every stage that runs its code; a read-only stage only reads.
     services: limits.writable ? policy.services : {},
@@ -686,6 +699,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   });
     ran.container = true;
   } catch (error) {
+    if (error instanceof RuntimeUnavailableError) return { outcome: "escalated", detail: envBrokenDetail(error)! };
     if (!(error instanceof EgressUnsupportedError)) throw error;
     return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "network", reason: error.message, options: ["install Docker Engine 28.0 or newer, or set MACHINE_EGRESS=off on the machine to run without the allow-list, then resume"] } };
   }

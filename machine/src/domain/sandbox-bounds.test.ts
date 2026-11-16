@@ -11,7 +11,7 @@ describe("boundSandbox", () => {
     const repo = sandbox({ cpu: 16, memory_gb: 64, egress: { allow: ["a.example.com", "*.b.example.com"], registries: "always" }, image: { base: "node:22" } });
     const out = boundSandbox(repo, DEFAULT_MACHINE_POLICY);
     expect(out.sandbox).toEqual(repo);
-    expect(out.bounds).toEqual({ notes: [], egress: [], image: [], seccomp: null });
+    expect(out.bounds).toEqual({ notes: [], egress: [], image: [], seccomp: null, runtime: { default: "runc", untrusted: "runc" }, maxPids: 1024, splitCache: true });
   });
 
   it("caps cpu and memory at the policy's maximums, with a note each", () => {
@@ -69,10 +69,26 @@ describe("boundSandbox", () => {
 });
 
 describe("sandboxSizeOf", () => {
+  const base = { notes: [], egress: [], image: [], seccomp: null, runtime: { default: "runc" as const, untrusted: "runc" as const }, maxPids: 1024, splitCache: true };
   it("is the bounded cpu and memory, plus the seccomp path when the policy names one", () => {
     const plain = { factory: { sandbox: sandbox({ cpu: 3, memory_gb: 6 }) } };
-    expect(sandboxSizeOf(plain)).toEqual({ cpu: 3, memoryGb: 6 });
-    expect(sandboxSizeOf({ ...plain, bounds: { notes: [], egress: [], image: [], seccomp: "/p.json" } })).toEqual({ cpu: 3, memoryGb: 6, seccomp: "/p.json" });
+    expect(sandboxSizeOf(plain)).toEqual({ cpu: 3, memoryGb: 6, pids: 1024, cacheTrust: "trusted" });
+    expect(sandboxSizeOf({ ...plain, bounds: { ...base, seccomp: "/p.json" } })).toEqual({ cpu: 3, memoryGb: 6, pids: 1024, cacheTrust: "trusted", seccomp: "/p.json" });
+  });
+
+  it("carries the policy's process limit, and the runtime and cache split of the card's trust", () => {
+    const plain = { factory: { sandbox: sandbox({ cpu: 3, memory_gb: 6 }) } };
+    const bounds = { ...base, maxPids: 256, runtime: { default: "runc" as const, untrusted: "runsc" as const } };
+    expect(sandboxSizeOf({ ...plain, bounds })).toMatchObject({ pids: 256, cacheTrust: "trusted" });
+    expect(sandboxSizeOf({ ...plain, bounds }).runtime).toBeUndefined();
+    expect(sandboxSizeOf({ ...plain, bounds }, "untrusted")).toMatchObject({ pids: 256, runtime: "runsc", cacheTrust: "untrusted" });
+    expect(sandboxSizeOf({ ...plain, bounds: { ...bounds, splitCache: false } }, "untrusted").cacheTrust).toBe("trusted");
+    expect(sandboxSizeOf({ ...plain, bounds: { ...bounds, runtime: { default: "runsc", untrusted: "runc" } } }).runtime).toBe("runsc");
+  });
+
+  it("takes the process limit, the split and the runtimes from the machine policy", () => {
+    const out = boundSandbox(sandbox(), policy({ limits: { max_pids: 200 }, cache: { split_by_trust: false }, runtime: { untrusted: "runsc" } })).bounds;
+    expect(out).toMatchObject({ maxPids: 200, splitCache: false, runtime: { default: "runc", untrusted: "runsc" } });
   });
 });
 

@@ -35,9 +35,21 @@ export const serviceName = (runName: string, key: string): string => `${runName}
 /** Official images start as root and drop to their own user (postgres, redis), so the few capabilities that takes stay and the rest go. */
 const SERVICE_HARDENING = ["--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--cap-add", "CHOWN,SETUID,SETGID,DAC_OVERRIDE,FOWNER", "--pids-limit", "512"];
 
+/** What the machine policy adds to a service container: its process limit (at most 512), the seccomp profile it names, and the runtime for the card's trust (never runc). */
+export interface ServiceHardening {
+  pids?: number;
+  seccomp?: string;
+  runtime?: string;
+}
+const SERVICE_MAX_PIDS = 512;
+
 /** The `docker run` argument list for one service. Pure. */
-export function serviceArgs(network: string, runName: string, key: string, spec: ServiceSpec, dns?: string): string[] {
-  const args = ["run", "-d", "--name", serviceName(runName, key), "--label", `${CONTAINER_LABEL}=1`, ...SERVICE_HARDENING, "--network", network, ...(dns ? ["--dns", dns] : []), "--network-alias", key];
+export function serviceArgs(network: string, runName: string, key: string, spec: ServiceSpec, dns?: string, harden: ServiceHardening = {}): string[] {
+  const hardening = [...SERVICE_HARDENING];
+  hardening[hardening.indexOf("--pids-limit") + 1] = String(Math.min(harden.pids ?? SERVICE_MAX_PIDS, SERVICE_MAX_PIDS));
+  if (harden.seccomp) hardening.push("--security-opt", `seccomp=${harden.seccomp}`);
+  if (harden.runtime) hardening.push("--runtime", harden.runtime);
+  const args = ["run", "-d", "--name", serviceName(runName, key), "--label", `${CONTAINER_LABEL}=1`, ...hardening, "--network", network, ...(dns ? ["--dns", dns] : []), "--network-alias", key];
   for (const [name, value] of Object.entries(spec.env ?? {})) args.push("-e", `${name}=${value}`);
   args.push(spec.image);
   return args;
@@ -47,6 +59,8 @@ export interface StartOptions {
   /** A card network that already exists (adapters/docker/egress.ts): the services join it, with its resolver, and no network is made or removed here. */
   network?: { name: string; dns: string };
   exec?: (command: string, args: string[]) => Promise<ExecResult>;
+  /** The machine policy's process limit, seccomp profile and runtime for these services. */
+  harden?: ServiceHardening;
   readyTimeoutMs?: number;
   pollMs?: number;
   now?: () => number;
@@ -74,7 +88,7 @@ export async function startServices(runName: string, services: Record<string, Se
     }
     for (const key of keys) {
       const spec = services[key]!;
-      const started = await exec("docker", serviceArgs(network, runName, key, spec, given?.dns));
+      const started = await exec("docker", serviceArgs(network, runName, key, spec, given?.dns, options.harden));
       if (started.code !== 0) throw new ServiceNotReadyError(`service ${key} (${spec.image}) did not start: ${started.stderr.trim()}`);
       Object.assign(env, spec.exports ?? {});
     }

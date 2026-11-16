@@ -35,6 +35,27 @@ describe("serviceArgs", () => {
   });
 });
 
+describe("serviceArgs hardening from the policy", () => {
+  it("takes the process limit from the policy, never above 512", () => {
+    const at = (args: string[]) => args[args.indexOf("--pids-limit") + 1];
+    expect(at(serviceArgs("n", "r1", "postgres", postgres, undefined, { pids: 200 }))).toBe("200");
+    expect(at(serviceArgs("n", "r1", "postgres", postgres, undefined, { pids: 4096 }))).toBe("512");
+    expect(at(serviceArgs("n", "r1", "postgres", postgres))).toBe("512");
+  });
+
+  it("adds the seccomp profile and the runtime the policy names", () => {
+    const args = serviceArgs("n", "r1", "postgres", postgres, undefined, { seccomp: "/etc/luna/s.json", runtime: "runsc" });
+    expect(args).toEqual(expect.arrayContaining(["--security-opt", "seccomp=/etc/luna/s.json", "--runtime", "runsc"]));
+    expect(serviceArgs("n", "r1", "postgres", postgres).join(" ")).not.toMatch(/seccomp|--runtime/);
+  });
+
+  it("passes the hardening to each service it starts", async () => {
+    const { calls, exec } = dockerFake();
+    await startServices("r1", { postgres }, { exec, harden: { runtime: "runsc" } });
+    expect(calls[1]).toEqual(["docker", ...serviceArgs("hardness-net-r1", "r1", "postgres", postgres, undefined, { runtime: "runsc" })]);
+  });
+});
+
 describe("startServices", () => {
   it("creates the network, starts each service, waits for its ready line, and hands back the exported env", async () => {
     const { calls, exec } = dockerFake([1, 1, 0]);

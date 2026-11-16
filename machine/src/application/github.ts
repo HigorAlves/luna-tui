@@ -63,6 +63,8 @@ export interface GhIssue {
   url: string;
   /** Its labels' names, for triage_signals; absent when the adapter did not read them. */
   labels?: string[];
+  /** GitHub's `author_association` of whoever opened it; absent when the adapter did not read it (the card then counts as untrusted). */
+  authorAssociation?: string;
   /** The login that opened it; absent when the adapter did not read it. */
   author?: string;
 }

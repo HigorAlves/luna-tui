@@ -52,6 +52,8 @@ import { ensureClone, isClone, removeClone } from "../adapters/git/clone.ts";
 import type { ProofRig } from "../application/config-proof.ts";
 import { policyOf } from "../domain/luna-config.ts";
 import { sandboxSizeOf } from "../domain/sandbox-bounds.ts";
+import { type Trust, trustOf } from "../domain/trust.ts";
+import { runtimeChecker } from "../adapters/docker/runtimes.ts";
 import { randomUUID } from "node:crypto";
 import { execInSandbox, imageExists, imageId, imageLabel, removeLeftoverContainers, runSandbox, sandboxExecutor, setSecretsRoot } from "../adapters/docker/docker.ts";
 import { removeLeftoverApps } from "../adapters/docker/app.ts";
@@ -225,16 +227,16 @@ export async function buildRealStages(
     containerEnvOf,
     ...(egress ? { egress: (repoPath: string | undefined) => egress.for({ repoPath: repoPath ?? null, kind: "check" }) } : {}),
     // A check container reads the repository's own size, as a stage does (the limit carried from 11a).
-    limitsOf: async (repoPath) => {
-      return sandboxSizeOf(await policies.for(repoPath ?? null));
+    limitsOf: async (repoPath, trust) => {
+      return sandboxSizeOf(await policies.for(repoPath ?? null), trust);
     },
   });
   // The machine installs from the lockfile before a stage that writes, and before a check on a card's workspace (Verify's fresh one included).
   const install = (input: InstallInput): Promise<InstallOutcome> =>
     ensureInstalled({ stateDir: config.stateDir, policies, containerEnvOf, repoImages, imageId, lockfilesAt, nestedLockfilesAt, exec: execInSandbox, ...(egress ? { egress } : {}), removeNested: removeNestedRepositories, dirtyFiles, restoreFiles, configChanged: (i) => configFilesChanged({ cardBlobs: (w, c, names) => lockfilesAt(w, c, names), userBlobs: (r, c, names) => blobsAtRepo(r, c, names), baseOf: (w, r) => branchBase(w, r) }, i) }, input);
-  const installFor = async (options: { repoPath?: string; cwd?: string; signal?: AbortSignal }): Promise<void> => {
+  const installFor = async (options: { repoPath?: string; cwd?: string; trust?: Trust; signal?: AbortSignal }): Promise<void> => {
     if (options.repoPath && options.cwd && isClone(options.cwd)) {
-      const installed = await install({ taskId: "_checks", repoPath: options.repoPath, workspace: options.cwd, commit: await headCommit(options.cwd), ...(options.signal ? { signal: options.signal } : {}) });
+      const installed = await install({ taskId: "_checks", repoPath: options.repoPath, workspace: options.cwd, commit: await headCommit(options.cwd), ...(options.trust ? { trust: options.trust } : {}), ...(options.signal ? { signal: options.signal } : {}) });
       if (!installed.ok) throw new InstallFailedError(installed.detail);
     }
   };
@@ -270,6 +272,7 @@ export async function buildRealStages(
     startServices,
     exec: execInSandbox,
     docker: (args, options) => exec("docker", args, options ?? {}),
+    checkRuntime: runtimeChecker(exec),
   };
   // Where a luna.yaml is proven (the setup stage's proposal, `POST /repos/config/prove`): a throwaway clone made as a card's workspace is, never
   // the person's checkout (a check's install wrote Linux binaries into one), and the app started by the browser run's own `openApp`, on the
@@ -432,7 +435,7 @@ export async function buildRealStages(
               return { checks: policy.checks, services: policy.services, wholeSuiteMinutes: policy.factory.build.regression_full_suite_minutes };
             },
           },
-          { worktree: task.worktreePath, repoPath: task.repoPath, signal: context.signal, env: process.env, onBlocked: (_check, rows) => void Promise.all(blockedPayloads(rows, "check").map((payload) => context.emit?.("sandbox.egress_blocked", payload))).catch(() => {}) },
+          { worktree: task.worktreePath, repoPath: task.repoPath, trust: trustOf(task), signal: context.signal, env: process.env, onBlocked: (_check, rows) => void Promise.all(blockedPayloads(rows, "check").map((payload) => context.emit?.("sandbox.egress_blocked", payload))).catch(() => {}) },
         );
       },
       checkpoint: async (context, worktree, follows) => {

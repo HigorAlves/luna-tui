@@ -73,6 +73,14 @@ describe("createPrTask", () => {
     expect(started).toEqual(["new"]);
   });
 
+  it("keeps the author's association on the source, so the card's trust is known", async () => {
+    const { deps, created } = setup();
+    await createPrTask(deps, pr({ authorAssociation: "FIRST_TIME_CONTRIBUTOR" }), "review");
+    await createPrTask(deps, pr(), "review");
+    expect(created[0]!.source).toMatchObject({ kind: "github_pr", authorAssociation: "FIRST_TIME_CONTRIBUTOR" });
+    expect(created[1]!.source).not.toHaveProperty("authorAssociation");
+  });
+
   it("gives each route its own brief", async () => {
     const { deps, created } = setup();
     await createPrTask(deps, pr(), "review");

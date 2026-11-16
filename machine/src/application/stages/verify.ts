@@ -9,7 +9,8 @@ import { branchBase, branchDiffStat, changedPaths as hostChangedPaths, diffText,
 import { RepoImageError } from "../repo-images.ts";
 import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
 import { SeccompUnavailableError } from "../../adapters/docker/seccomp.ts";
-import { seccompDetail } from "../env-broken.ts";
+import { envBrokenDetail, seccompDetail } from "../env-broken.ts";
+import { RuntimeUnavailableError } from "../../adapters/docker/runtimes.ts";
 import { blockedPayloads } from "../egress-policy.ts";
 import { InstallFailedError } from "../install.ts";
 import { SecretsMissingError } from "../../adapters/docker/docker.ts";
@@ -17,6 +18,7 @@ import type { ExecResult } from "../../adapters/process/exec.ts";
 import { type GraphJson, blastRadius } from "../../domain/blast-radius.ts";
 import { failingTestFiles, narrowedArgv } from "../../domain/base-rerun.ts";
 import { checkCommand, selectChecks, skippedReason } from "../../domain/checks.ts";
+import { type Trust, trustOf } from "../../domain/trust.ts";
 import { failureGist } from "../../domain/failure-gist.ts";
 import { addedLineNumbers, coverageFinding, mutationFinding, parseLcov, parseMutationScore, patchCoverage } from "../../domain/coverage.ts";
 import { type EnvRecord, compareEnv } from "../../domain/env-hash.ts";
@@ -37,7 +39,7 @@ export interface VerifyDeps {
   exec: SessionExec<(
     command: string,
     args: string[],
-    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string; image?: string },
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string; image?: string; trust?: Trust },
   ) => Promise<ExecResult>> | null;
   /** Runs the verifying review pack; null when agents are off, which skips the review. */
   runPack: ((context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary; image?: string }) => Promise<StageResult>) | null;
@@ -177,6 +179,7 @@ function escalationOf(error: unknown): StageResult | null {
   // The install failed, or a declared secret is missing: the step's own detail.
   if (error instanceof InstallFailedError || error instanceof SecretsMissingError) return { outcome: "escalated", detail: error.detail };
   if (error instanceof SeccompUnavailableError) return { outcome: "escalated", detail: seccompDetail(error) };
+  if (error instanceof RuntimeUnavailableError) return { outcome: "escalated", detail: envBrokenDetail(error)! };
   if (error instanceof EgressUnsupportedError) return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "network", reason: error.message, options: ["install Docker Engine 28.0 or newer, or set MACHINE_EGRESS=off on the machine to run without the allow-list, then resume"] } };
   // The repository's image could not be built: an environment problem with the reason.
   if (error instanceof RepoImageError) return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "checks", reason: `the repository's image could not be built: ${error.reason}`, options: ["fix sandbox.image.base in luna.yaml, or remove it to use the machine's image, then resume"] } };
@@ -340,7 +343,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     // The repo's services start once for every check, not once per check, and come down however the loop ends.
     let pass: Awaited<ReturnType<typeof openChecksSession<typeof checkExec>>>;
     try {
-      pass = await openChecksSession(checkExec, { cwd, ...(task.repoPath ? { repoPath: task.repoPath } : {}), services: commands.length > 0 ? services : {} });
+      pass = await openChecksSession(checkExec, { cwd, trust: trustOf(task), ...(task.repoPath ? { repoPath: task.repoPath } : {}), services: commands.length > 0 ? services : {} });
     } catch (error) {
       const escalated = escalationOf(error);
       if (escalated) return escalated;
@@ -362,6 +365,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
               timeoutMs: remaining,
               env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" },
               services,
+              trust: trustOf(task),
               ...(task.repoPath ? { repoPath: task.repoPath } : {}),
               ...(declaredSecrets && declaredSecrets.length > 0 ? { secrets: declaredSecrets } : {}),
               ...(state.image ? { image: state.image } : {}),
@@ -439,6 +443,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
                   env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" },
                   services,
                   repoPath: task.repoPath,
+                  trust: trustOf(task),
                   ...(attempt.secrets.length > 0 ? { secrets: attempt.secrets } : {}),
                   ...(state.image ? { image: state.image } : {}),
                 });
@@ -543,7 +548,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       let ran: ExecResult;
       try {
         // As every check: the card's repository names its image, its list and its install; nothing runs on the machine's bare defaults.
-        ran = await checkExec("sh", ["-c", mutationConfig.command], { cwd, signal, timeoutMs: Math.max(deadline - Date.now(), MINUTE), env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" }, services, ...(task.repoPath ? { repoPath: task.repoPath } : {}), ...(state.image ? { image: state.image } : {}) });
+        ran = await checkExec("sh", ["-c", mutationConfig.command], { cwd, signal, timeoutMs: Math.max(deadline - Date.now(), MINUTE), env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" }, services, trust: trustOf(task), ...(task.repoPath ? { repoPath: task.repoPath } : {}), ...(state.image ? { image: state.image } : {}) });
       } catch (error) {
         const escalated = escalationOf(error);
         if (escalated) return escalated;

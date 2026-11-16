@@ -96,6 +96,18 @@ describe("Pipeline.findBySource", () => {
   });
 });
 
+describe("GitHubIntake author association", () => {
+  it("keeps the issue's author association on the card's source; an issue that has none keeps none", async () => {
+    const github = found([{ ...issues[0]!, authorAssociation: "NONE" } as (typeof issues)[number], issues[1]!]);
+    const intake = new GitHubIntake({ pipeline, github, repos: ["o/a"], label: "x", intervalMs: 1000 });
+    await intake.pollOnce();
+    const tasks = await pipeline.list();
+    const of = (n: number) => tasks.find((t) => t.source?.kind === "github" && t.source.number === n)!.source;
+    expect(of(7)).toMatchObject({ kind: "github", authorAssociation: "NONE" });
+    expect(of(8)).not.toHaveProperty("authorAssociation");
+  });
+});
+
 describe("GitHubIntake with triage_signals", () => {
   const classified = (kind: string, confidence = 0.9) => ({ kind, area: "machine", ready: kind !== "question", size: 1, confidence, at: "2026-11-03T12:00:00.000Z", model: "typesafe-ai/jev" });
   const labelled = [{ ...issues[0]!, labels: ["enhancement"] }, { ...issues[1]!, title: "How do I turn on dark mode?", labels: [] }];

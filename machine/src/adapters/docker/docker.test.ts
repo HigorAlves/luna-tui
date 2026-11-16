@@ -5,6 +5,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ExecResult } from "../process/exec.ts";
+import { RuntimeUnavailableError } from "./runtimes.ts";
 import { CACHE_ENV, SecretsMissingError, type RunDeps, cacheVolumeFor, hostUser, execInSandbox, runSandbox, sandboxArgs, sandboxExecArgs, sandboxExecutor, secretNameProblem, writeSecretFiles, type SandboxRun } from "./docker.ts";
 import { EgressUnsupportedError } from "./egress.ts";
 
@@ -169,6 +170,20 @@ describe("sandboxArgs", () => {
   it("names a repo's cache volume after the repo, safely", () => {
     expect(cacheVolumeFor("/r/luna-tui")).toBe("hardness-cache-luna-tui");
     expect(cacheVolumeFor("/r/My App.v2/")).toBe("hardness-cache-my-app-v2");
+  });
+
+  it("splits the cache volume by trust: an untrusted card gets its own", () => {
+    expect(cacheVolumeFor("/r/luna-tui", "untrusted")).toBe("hardness-cache-luna-tui-untrusted");
+    expect(cacheVolumeFor("/r/luna-tui", "trusted")).toBe("hardness-cache-luna-tui");
+  });
+
+  it("takes the process limit from the size, and adds --runtime only when it names one", () => {
+    const flags = (args: string[]) => args.join(" ");
+    expect(flags(sandboxArgs(run({ limits: { cpu: 2, memoryGb: 4, pids: 256 } }), "/i", "/o"))).toContain("--pids-limit 256");
+    expect(flags(sandboxExecArgs({ name: "c", image: "i", worktree: "/wt", argv: ["x"], limits: { cpu: 2, memoryGb: 4, pids: 2048 } }))).toContain("--pids-limit 2048");
+    expect(sandboxArgs(run(), "/i", "/o")).not.toContain("--runtime");
+    expect(sandboxArgs(run({ limits: { cpu: 2, memoryGb: 4, runtime: "runsc" } }), "/i", "/o")).toEqual(expect.arrayContaining(["--runtime", "runsc"]));
+    expect(sandboxExecArgs({ name: "c", image: "i", worktree: "/wt", argv: ["x"], limits: { cpu: 2, memoryGb: 4, runtime: "runsc" } })).toEqual(expect.arrayContaining(["--runtime", "runsc"]));
   });
 
   it("joins the run's service network and gets what the services export, so the code finds its database by hostname", () => {
@@ -343,6 +358,17 @@ describe("sandboxExecutor's list and size", () => {
     expect(asked).toEqual(["/a/shop", undefined]);
     expect(runs[0]).toMatchObject({ egress: spec, limits: { cpu: 6, memoryGb: 12 } });
     expect(runs[1]).toMatchObject({ limits: { cpu: 2, memoryGb: 4 } });
+  });
+
+  it("names a check's cache volume from the repository, as the stages do (not from the card folder's parent), split by the card's trust", async () => {
+    const runs: Array<{ cacheVolume?: string; limits?: unknown }> = [];
+    const fake = (async (r: { cacheVolume?: string }) => (runs.push(r), { code: 0, stdout: "", stderr: "" })) as never;
+    const limitsOf = async (_repo: string | undefined, trust?: "trusted" | "untrusted") => ({ cpu: 2, memoryGb: 4, cacheTrust: trust ?? ("trusted" as const), ...(trust === "untrusted" ? { runtime: "runsc" } : {}) });
+    const exec = sandboxExecutor({ machine: "machine:dev", imageOf: async () => "img", limitsOf }, fake);
+    await exec("true", [], { cwd: "/wt/other-name/task-1", repoPath: "/a/shop" });
+    await exec("true", [], { cwd: "/wt/other-name/task-1", repoPath: "/a/shop", trust: "untrusted" });
+    expect(runs.map((r) => r.cacheVolume)).toEqual(["hardness-cache-shop", "hardness-cache-shop-untrusted"]);
+    expect(runs[1]!.limits).toMatchObject({ runtime: "runsc" });
   });
 });
 
@@ -604,6 +630,26 @@ describe("a daemon with no seccomp filter", () => {
     const { deps, calls } = fakesFor();
     await expect(execInSandbox({ name: "c1", image: "img:1", worktree: "/wt", argv: ["true"] }, {}, { ...deps, checkSeccomp: broken })).rejects.toThrow(/seccomp/);
     expect(calls).toEqual([]);
+  });
+  it("refuses a stage or a check that names a runtime the daemon lacks, before any container is made", async () => {
+    const { deps, calls } = fakesFor();
+    const asked: string[] = [];
+    const missing = async (runtime: string) => {
+      asked.push(runtime);
+      throw new RuntimeUnavailableError(`no ${runtime}`);
+    };
+    const limits = { cpu: 2, memoryGb: 4, runtime: "runsc" };
+    await expect(runSandbox(run({ runDir: "/nonexistent", limits }), { ...deps, checkSeccomp: async () => {}, checkRuntime: missing })).rejects.toThrow(RuntimeUnavailableError);
+    await expect(execInSandbox({ name: "c1", image: "img:1", worktree: "/wt", argv: ["true"], limits }, {}, { ...deps, checkSeccomp: async () => {}, checkRuntime: missing })).rejects.toThrow(/no runsc/);
+    expect(asked).toEqual(["runsc", "runsc"]);
+    expect(calls).toEqual([]);
+  });
+  it("asks nothing about the runtime of a run that names none", async () => {
+    const { deps } = fakesFor();
+    const checkRuntime = async () => {
+      throw new Error("must not be asked");
+    };
+    await expect(runSandbox(run({ runDir: "/nonexistent" }), { ...deps, checkSeccomp: async () => {}, checkRuntime })).rejects.not.toThrow(/must not be asked/);
   });
 });
 

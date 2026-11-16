@@ -308,8 +308,11 @@ How the bounds apply to a repo's `luna.yaml`, each with a reason left where you 
 | `egress.repo_hosts: deny` | every repo egress host is dropped | the same |
 | `egress.max_repo_hosts` | only the first N repo hosts are kept | the same |
 | `images.repo_base: deny` | `sandbox.image.base` is ignored (the machine's image runs) and `POST /repos/base/approve` refuses | the same, and the refusal |
-| `seccomp: <path>` | stage, check and app containers get `--security-opt seccomp=<path>` | none; it is the machine's own setting |
+| `seccomp: <path>` | stage, check, app and service containers get `--security-opt seccomp=<path>` | none; it is the machine's own setting |
 | `images.devcontainer: deny` | `.devcontainer/devcontainer.json` is not read: no image and no `containerEnv` from it | none |
+| `limits.max_pids` | the `--pids-limit` of stage, check and app containers; a service gets the same value, at most 512 | none; it is the machine's own setting |
+| `runtime.default`, `runtime.untrusted` | `--runtime` for stage, check, install, app and service containers of a trusted or an untrusted card (`runsc` is gVisor). `runc` adds no flag. A daemon without the runtime ends the card as `env_broken`, step `runtime`. The egress proxy stays on `runc` | a note on the task says an untrusted card runs untrusted |
+| `cache.split_by_trust` | an untrusted card (a GitHub issue or PR from outside `OWNER`, `MEMBER` or `COLLABORATOR`, or with no association on record) uses `hardness-cache-<repo>-untrusted`; `false` shares one volume | the same note |
 
 ### Toolchains
 
@@ -319,7 +322,7 @@ When the machine probes a repo's own base image, it also runs the version comman
 
 When a repo's `luna.yaml` names no `sandbox.image.base`, the machine reads `.devcontainer/devcontainer.json` or `.devcontainer.json` from your checkout (comments and trailing commas are fine). Its `image` is the base, and you approve it as you approve any base. Its `containerEnv` (plain strings, not the proxy, the loader or `PATH`) reaches the repo's install, checks and app, not agent stages. `features`, lifecycle commands (`postCreateCommand` and the rest), `mounts`, `runArgs`, `remoteUser` and `build.dockerfile` are not applied; `GET /repos` lists each under `notes` as "not applied: <why>".
 
-`runtime`, `cache`, `limits.max_pids` and `bash_sandbox` are accepted now and read by later changes.
+`bash_sandbox` is accepted and has no effect: the nested Bash sandbox was not built (see RFC 0009).
 
 ## GitHub gates
 

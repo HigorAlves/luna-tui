@@ -27,6 +27,8 @@ export interface PullRequest {
   title: string;
   url: string;
   author: string;
+  /** GitHub's `author_association` of the author (`OWNER`, `MEMBER`, `COLLABORATOR`, `CONTRIBUTOR`, `NONE`, …); absent from a source that does not say. A card made from the PR keeps it for its trust. */
+  authorAssociation?: string | null;
   /** You authored it. */
   mine: boolean;
   /** Your review is requested, directly or through a team. */
