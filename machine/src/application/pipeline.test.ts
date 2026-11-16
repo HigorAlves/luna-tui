@@ -3702,6 +3702,47 @@ describe("re-attaching to a container after a restart", () => {
     expect((await restarted.events(task.id)).map((e) => e.kind)).toContain("stage.reattached");
   });
 
+  it("sweeps the leftover run secrets before it re-attaches, keeping the run whose container is still running", async () => {
+    const live = await newTask();
+    const gone = await newTask();
+    await running(live.id, "hardness-c1");
+    await running(gone.id, "hardness-c2");
+    const events: string[] = [];
+    let kept: ReadonlySet<string> | undefined;
+    const runnerFor = (stage: TaskState): StageRunner =>
+      stage === "implementing"
+        ? async (context) => {
+            events.push("run");
+            return { outcome: "pass", run: { containerId: context.resume?.container } };
+          }
+        : stubs.runnerFor(stage);
+    const restarted = new Pipeline(db, runnerFor, {
+      inline: true,
+      policies: previewOn,
+      hasConfig: () => true,
+      containerRunning: async (name) => name === "hardness-c1",
+      removeContainer: async () => {},
+      sweepRunSecrets: async (keep) => {
+        events.push("sweep");
+        kept = keep;
+      },
+    });
+    await restarted.recover();
+    const liveRun = (await restarted.stageRuns(live.id)).find((r) => r.containerId === "hardness-c1")!;
+    const goneRun = (await restarted.stageRuns(gone.id)).find((r) => r.containerId === "hardness-c2")!;
+    expect(events[0]).toBe("sweep");
+    expect(events.filter((e) => e === "sweep")).toHaveLength(1);
+    expect([...kept!]).toEqual([liveRun.id]);
+    expect(kept!.has(goneRun.id)).toBe(false);
+  });
+
+  it("goes on with recovery when the sweep throws", async () => {
+    const task = await newTask();
+    await running(task.id, "hardness-c1");
+    const restarted = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, containerRunning: async () => false, removeContainer: async () => {}, sweepRunSecrets: async () => { throw new Error("EACCES"); } });
+    expect(await restarted.recover()).toBe(1);
+  });
+
   it("still escalates when the container is gone", async () => {
     const task = await newTask();
     await running(task.id, "hardness-c1");

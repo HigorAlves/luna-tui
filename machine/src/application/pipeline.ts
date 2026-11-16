@@ -262,6 +262,8 @@ export interface PipelineOptions {
   maxPerStage?: Record<string, number>;
   /** Whether a stage container is still running at boot; tests pass a fake. */
   containerRunning?: (name: string) => Promise<boolean>;
+  /** Removes the leftover relay and secrets folders of runs a killed machine left, except the runs in `keep` (their container still runs); recover() awaits it before it re-attaches. Tests pass a fake. */
+  sweepRunSecrets?: (keep: ReadonlySet<string>) => Promise<unknown>;
   /** Stops and removes a container recover() decided not to re-attach to; tests pass a fake. */
   removeContainer?: (name: string) => Promise<void>;
   /** Undoes one commit in a worktree; tests pass a fake. */
@@ -463,6 +465,7 @@ export class Pipeline {
   private readonly maxPerStage: Record<string, number>;
   private readonly containerRunning: (name: string) => Promise<boolean>;
   private readonly removeContainer: (name: string) => Promise<void>;
+  private readonly sweepRunSecrets: ((keep: ReadonlySet<string>) => Promise<unknown>) | undefined;
   /** The stage each loop is driving right now, for the per-stage caps. */
   private readonly stages = new Map<string, TaskState>();
   /** Loops polling GitHub (ci_watch, and shipping while its monitor waits for a merge): they hold no slot, so the pool is free for work that computes. */
@@ -528,6 +531,7 @@ export class Pipeline {
     this.maxPerStage = options.maxPerStage ?? {};
     this.containerRunning = options.containerRunning ?? containerRunning;
     this.removeContainer = options.removeContainer ?? removeContainer;
+    this.sweepRunSecrets = options.sweepRunSecrets;
     this.revertCommit = options.revertCommit ?? revertCommit;
     this.diffStat = options.diffStat ?? branchDiffStat;
     this.closeDeps = options.closeDeps;
@@ -2482,6 +2486,8 @@ export class Pipeline {
       if (run?.containerId && (await this.containerRunning(run.containerId))) resumable.set(task.id, run);
     }
     await this.store.markRunningStageRunsAborted([...resumable.values()].map((r) => r.id));
+    // The leftover real-token and secret folders go before anything re-attaches, and never those of a run whose container is still running: its proxy still mounts them.
+    await this.sweepRunSecrets?.(new Set([...resumable.values()].map((r) => r.id))).catch((error: unknown) => console.error("could not sweep the leftover run secrets", error));
     let escalated = 0;
     for (const task of stuck) {
       const run = resumable.get(task.id);

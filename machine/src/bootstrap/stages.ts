@@ -73,7 +73,6 @@ import { judgeRedCheck } from "../application/stages/build-watch.ts";
 import { runSweep } from "../application/stages/sweep.ts";
 import { noIdentityDetail } from "../application/env-broken.ts";
 import { rmSync } from "node:fs";
-import { sweepRunSecrets } from "../adapters/docker/leftover-secrets.ts";
 import { basename, join, resolve, sep } from "node:path";
 import { readdir } from "node:fs/promises";
 import { readRegularFile } from "../adapters/fs/bounded.ts";
@@ -224,8 +223,7 @@ export async function buildRealStages(
   // The secret files of a check, a seed, a deploy and the app live under the state dir (the host daemon mounts them, also when the machine is a container); a killed machine leaves none behind.
   setSecretsRoot(join(config.stateDir, "run-secrets"));
   rmSync(join(config.stateDir, "run-secrets"), { recursive: true, force: true });
-  // ... and so is the real token or a secret file a killed run left in its own folder.
-  void sweepRunSecrets(config.stateDir).catch(() => {});
+  // ... the real token or a secret file a killed run left in its own folder goes too, but in recover(), which knows which runs still have a container.
   const sandboxChecks = sandboxExecutor({
     secrets,
     machine: config.runnerImage,
