@@ -12,6 +12,7 @@ mod detail;
 mod digest;
 mod discover;
 mod economy;
+mod foreman;
 mod herdr;
 mod inbox;
 mod intake;
