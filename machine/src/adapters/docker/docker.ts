@@ -156,7 +156,7 @@ export interface SandboxRun {
   input: Record<string, unknown>;
   timeoutMs: number;
   /** Only the stage's own engine's credential: its variables (written as files in the run's secrets folder, never `-e`), and mounts (the Codex login's per-run copy). */
-  credential: Pick<RunCredential, "env" | "mounts">;
+  credential: Pick<RunCredential, "env" | "mounts" | "relay">;
   labels: Record<string, string>;
   /** Extra container env: the run's trace context (StageContext.traceEnv), or tooling such as the sandbox smoke. */
   extraEnv?: Record<string, string>;
@@ -310,7 +310,7 @@ export async function runSandbox(run: SandboxRun, given: Partial<RunDeps> = {}):
   // it is handed (the browser run's, the app's) is joined and left alone; a re-attached run's is found by name and removed at its end.
   let own: CardNetwork | null = null;
   if (run.attach) own = run.cardNetwork ? null : run.egress ? await deps.findCardNetwork(run.name) : null;
-  else if (!run.cardNetwork && run.egress) own = await deps.openCardNetwork(run.name, run.egress, { proxyImage: run.egress.proxyImage });
+  else if (!run.cardNetwork && run.egress) own = await deps.openCardNetwork(run.name, run.credential.relay ? { ...run.egress, relay: run.credential.relay } : run.egress, { proxyImage: run.egress.proxyImage });
   const card = run.cardNetwork ?? own;
   const secretsPath = join(run.runDir, "secrets");
   try {

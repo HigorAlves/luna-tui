@@ -634,7 +634,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const found = PACKS[pack];
   const owners = [credentialOwner(choice.engine), ...(found.kind === "decision" ? [] : helpersOn(found, resolveEngine(choice.engine).runtime).map((h) => credentialOwner(h.engine)))];
   const egress = deps.egress
-    ? await deps.egress.for({ repoPath: task.repoPath, kind: "agent", owners: [...new Set(owners)], targets: pack === "e2e" || pack === "recording" ? targetHosts(input.context.qaTargets ?? []) : [] })
+    ? await deps.egress.for({ repoPath: task.repoPath, kind: "agent", owners: [...new Set(owners)], ...(credential.relay ? { relayed: ["claude" as const] } : {}), targets: pack === "e2e" || pack === "recording" ? targetHosts(input.context.qaTargets ?? []) : [] })
     : undefined;
   let sandbox: SandboxResult;
   try {
@@ -661,7 +661,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     input: input as unknown as Record<string, unknown>,
     // The input's budget, which implementing scales with the plan's slice count.
     timeoutMs: input.limits.timeoutMs,
-    credential: { env: credential.env, mounts: credential.mounts },
+    credential: { env: credential.env, mounts: credential.mounts, ...(credential.relay ? { relay: credential.relay } : {}) },
     labels: { "dev.hardness.task": task.id },
     mounts: [
       ...(graphContext && graphDir ? [{ host: graphDir, container: GRAPH_MOUNT, readOnly: true }] : []),

@@ -22,6 +22,18 @@ function recording({ missing = [] as string[], busy = [] as string[], held = [] 
   return { credentials, log, waits };
 }
 
+describe("prepareStageCredentials with a relayed Claude", () => {
+  it("carries the Claude relay of the stage's own engine or of a helper's through the merge", async () => {
+    const relay = { kind: "oauth" as const, placeholder: "ph", file: "/r/anthropic" };
+    const credentials: Credentials = {
+      check: async () => ({ available: true }),
+      prepare: async (engine) => ({ env: { K: engine }, mounts: [], ...(engine.startsWith("claude") ? { relay } : {}), release: async () => {} }),
+    };
+    expect((await prepareStageCredentials(credentials, PACKS.verifying, "claude:opus", "/run")).relay).toEqual(relay);
+    expect((await prepareStageCredentials(credentials, PACKS.verifying, "codex:sol", "/run")).relay).toEqual(relay);
+  });
+});
+
 describe("prepareStageCredentials", () => {
   it("gives verifying the Claude token and the Codex login its second opinion needs, each released after", async () => {
     const { credentials, log, waits } = recording();

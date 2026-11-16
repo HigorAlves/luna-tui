@@ -447,7 +447,7 @@ describe("runSandbox and execInSandbox on a run's own network", () => {
   const ok = (stdout = ""): ExecResult => ({ code: 0, stdout, stderr: "" });
 
   /** Fake deps: every step lands in `events`, in order. */
-  function fakes(over: { failRun?: boolean; open?: () => Promise<never> } = {}) {
+  function fakes(over: { failRun?: boolean; open?: (name: string, spec: unknown) => Promise<never> } = {}) {
     const events: string[] = [];
     const calls: string[][] = [];
     const network = (label: string) => ({
@@ -488,6 +488,16 @@ describe("runSandbox and execInSandbox on a run's own network", () => {
     expect(result.blocked).toEqual(rows);
     const started = calls.find((c) => c[0] === "run")!;
     expect(started).toEqual(expect.arrayContaining(["--network", "net-own", "--dns", "172.30.0.2"]));
+  });
+
+  it("hands the credential's relay to the proxy and puts only the placeholder in the container's secret files", async () => {
+    const seen: unknown[] = [];
+    const { deps, calls } = fakes({ open: async (name: string, spec: unknown) => (seen.push(spec), { name: `net-${name}`, dns: "172.30.0.2", containerArgs: () => ["--network", "n"], blocked: async () => [], teardown: async () => {} } as never) });
+    const relay = { kind: "oauth" as const, placeholder: "sk-ant-oat01-luna-relay-ph", file: "/state/r/relay/anthropic" };
+    const base = run({ runDir: tmp(), egress: { allow: [], allowPrivate: [], proxyImage: "machine:dev" } });
+    await runSandbox({ ...base, credential: { env: { CLAUDE_CODE_OAUTH_TOKEN: relay.placeholder }, mounts: [], relay } }, deps);
+    expect(seen).toEqual([{ allow: [], allowPrivate: [], proxyImage: "machine:dev", relay }]);
+    expect(calls.find((c) => c[0] === "run")!.join(" ")).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
   });
 
   it("execInSandbox with the services already up starts none and removes none: the seed runs against the app's own database", async () => {

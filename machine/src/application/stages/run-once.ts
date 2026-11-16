@@ -54,7 +54,7 @@ export async function runPackOnce(run: OneRun, deps: OneRunDeps): Promise<OneRun
     if (error instanceof CredentialWaitError) return { output: null, error: error.message, ...(run.signal?.aborted ? {} : { credentialBusy: true as const }) };
     throw error;
   }
-  const egress = deps.egress ? await deps.egress.for({ repoPath: null, kind: run.egressKind ?? "pack", owners: [credentialOwner(run.engine)] }).catch((error) => credential.release().then(() => Promise.reject(error))) : undefined;
+  const egress = deps.egress ? await deps.egress.for({ repoPath: null, kind: run.egressKind ?? "pack", owners: [credentialOwner(run.engine)], ...(credential.relay ? { relayed: ["claude" as const] } : {}) }).catch((error) => credential.release().then(() => Promise.reject(error))) : undefined;
   const result = await (deps.sandbox ?? runSandbox)({
     ...(egress ? { egress } : {}),
     name: run.name,
@@ -65,7 +65,7 @@ export async function runPackOnce(run: OneRun, deps: OneRunDeps): Promise<OneRun
     gitDir: null,
     input: run.input as unknown as Record<string, unknown>,
     timeoutMs: run.input.limits.timeoutMs,
-    credential: { env: credential.env, mounts: credential.mounts },
+    credential: { env: credential.env, mounts: credential.mounts, ...(credential.relay ? { relay: credential.relay } : {}) },
     labels: run.labels,
     extraEnv: run.extraEnv ?? {},
     signal: run.signal,

@@ -19,6 +19,16 @@ describe("the host tables", () => {
   });
 });
 
+describe("egressFor with the engine relay", () => {
+  it("takes api.anthropic.com out of an agent's list when Claude is relayed, and leaves the other engines' hosts", () => {
+    const relayed = egressFor("agent", { ...base, owners: ["claude", "codex"], relayed: ["claude"] }).allow;
+    expect(relayed).not.toContain("api.anthropic.com:443");
+    expect(relayed).toContain("chatgpt.com:443");
+    expect(egressFor("agent", { ...base, owners: ["claude", "codex"] }).allow).toContain("api.anthropic.com:443");
+    expect(egressFor("pack", { ...base, owners: ["claude"], relayed: ["claude"] }).allow).not.toContain("api.anthropic.com:443");
+  });
+});
+
 describe("egressFor", () => {
   it("gives an install GitHub, the repository's allow list and the registries, each with a port", () => {
     const { allow, allowPrivate } = egressFor("install", { ...base, allow: ["Docs.Example.com", "*.cdn.example.com:8443"], registries: "install" });

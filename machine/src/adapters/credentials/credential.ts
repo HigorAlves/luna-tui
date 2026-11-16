@@ -11,11 +11,23 @@ export interface CredentialMount {
   readOnly: boolean;
 }
 
+/** The Claude credential kept outside the stage: the real value is a file the egress proxy reads, and the stage holds `placeholder` in its place. */
+export interface EngineRelay {
+  /** `oauth` is a subscription token (`authorization: Bearer`), `api-key` an API key (`x-api-key`). */
+  kind: "oauth" | "api-key";
+  /** What the stage holds instead of the credential, of the same kind. */
+  placeholder: string;
+  /** The host path of the real credential (0444, in a 0700 folder under the run folder); the proxy mounts that file alone, read-only. */
+  file: string;
+}
+
 /** What one run gets. */
 export interface RunCredential {
   /** Passed to the container by name; the values ride in docker's own environment. */
   env: Record<string, string>;
   mounts: CredentialMount[];
+  /** Set when the credential stays outside the stage; `env` then holds the placeholder. */
+  relay?: EngineRelay;
   /** Called once the container is gone, whatever its outcome. */
   release(): Promise<void>;
 }
@@ -46,6 +58,8 @@ export interface CredentialLoader {
 export interface CredentialOptions {
   /** Defaults to the machine's own environment. */
   env?: NodeJS.ProcessEnv;
+  /** Keep the Claude credential outside the stage, behind the egress proxy's relay (`MACHINE_ENGINE_RELAY`). Default off: the value is the stage's, as before. */
+  engineRelay?: boolean;
   /** Where `~/.config/hardness` and `~/.codex` are; defaults to the machine user's home. */
   home?: string;
   /** One line per notable event (a refreshed token written back, or not); defaults to console.log. */
