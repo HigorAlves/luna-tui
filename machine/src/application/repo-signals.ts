@@ -1,5 +1,5 @@
 // What a repo's own runs say about each pack: how often it escalated or got stuck, and what it cost. A port only; the
-// config proposal reads it. The adapter that backs it comes with the signals query (a later slice).
+// config proposal reads it. `adapters/persistence/repo-signals.ts` backs it.
 import type { PackId } from "@hardness/contracts";
 
 import type { RepoSignal } from "../domain/config-proposal.ts";

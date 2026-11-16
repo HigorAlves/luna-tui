@@ -119,7 +119,7 @@ import { similarCards } from "./application/size-estimate.ts";
 import { shipRunner } from "./application/stages/ship.ts";
 import { StubStages } from "./application/stages/stubs.ts";
 import { verifyRunner } from "./application/stages/verify.ts";
-import { noRepoSignals } from "./application/repo-signals.ts";
+import { pgRepoSignals } from "./adapters/persistence/repo-signals.ts";
 
 const config = loadConfig();
 // Each card has a git directory of the machine's own here, never mounted into a container.
@@ -846,8 +846,8 @@ const app = createApp({
   ...(jiraTasks ? { jira: jiraTasks } : {}),
   ...(packRuns ? { runs: packRuns } : {}),
   ...(checksExec && proofRig ? { configProofs: new ConfigProofs({ exec: checksExec, rig: proofRig, gitIdentity }) } : {}),
-  // No signals are read yet, so `POST /repos/proposals` finds no change; the signals adapter replaces this in a later slice.
-  repoSignals: noRepoSignals(),
+  // A repo's own runs and cost: its stage runs, the guard's stops and the ledger. Read-only, so it has its own view of the economy's files.
+  repoSignals: pgRepoSignals(db, economyStore(config.stateDir)),
   sla: (task) => slaClocks.for(task),
   slaAll: (tasks) => slaClocks.forAll(tasks),
   shipView: async (taskId) => shipViewOf(await loadCursor(config.stateDir, taskId)),
