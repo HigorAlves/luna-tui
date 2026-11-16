@@ -30,6 +30,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import { type EvalCase, baselinePath, caseInput, datasetCases, engineSlug, judgeInput, loadCases, parseEffort, parseTrials, prepareWorktree, verdictOf } from "./src/cases.ts";
+import { IGNORED_EFFORT, honourEffort } from "./src/effort-check.ts";
 import { formatDiff, formatScorecard } from "./src/format.ts";
 import { type CaseResult, type JudgeVerdict, type Scorecard, caseResult, diffScorecards, gradeAnswer, scorecard } from "./src/grade.ts";
 import { evalDatapoint } from "./src/report.ts";
@@ -111,6 +112,7 @@ for (const engine of engines) {
   if (!PACKS[pack].engines.allowed.includes(engine)) console.log(`note: ${engine} is not in ${pack}'s allowed engines; running it as a candidate`);
 }
 
+let effortIgnored = false;
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 const slug = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
@@ -130,7 +132,9 @@ async function runCase(evalCase: EvalCase, engine: EngineId, index: number, tria
   let verdict: JudgeVerdict | null = null;
   if (judge && schema.pass) verdict = await judgeAnswer(evalCase, answer, judge, join(runDir, "judge"));
   else if (judge) verdict = { error: "not judged: no answer on the schema" };
-  const result = { ...caseResult(pack, evalCase.expect, caseRun, verdict), ...(trials > 1 ? { trial } : {}) };
+  const honoured = honourEffort(effort, run.output, caseResult(pack, evalCase.expect, caseRun, verdict));
+  if (honoured.ignored) effortIgnored = true;
+  const result = { ...honoured.result, ...(trials > 1 ? { trial } : {}) };
   await span.end({
     outcome: result.pass ? "pass" : "fail",
     engine,
@@ -174,7 +178,9 @@ for (const engine of engines) {
 for (const card of cards) {
   console.log(`\n${formatScorecard(card)}`);
   const path = baselinePath(EVALS, card.engine, pack, card.effort);
-  if (values["save-baseline"]) {
+  if (values["save-baseline"] && effortIgnored) {
+    console.log(`  baseline NOT saved: ${IGNORED_EFFORT}`);
+  } else if (values["save-baseline"]) {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, `${JSON.stringify(card, null, 2)}\n`);
     console.log(`  baseline saved: ${path.slice(ROOT.length + 1)}`);
@@ -184,6 +190,10 @@ for (const card of cards) {
   } else {
     console.log("  no baseline yet: --save-baseline writes one");
   }
+}
+if (effortIgnored) {
+  console.log(`\n${IGNORED_EFFORT}`);
+  process.exitCode = 1;
 }
 if (cards.length === 2) console.log(`\n${formatDiff(diffScorecards(cards[1]!, cards[0]!))}`);
 await telemetry.flush();
