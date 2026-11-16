@@ -9,6 +9,7 @@ import { type EngineBudgets, type MachinePolicy, MachinePolicySchema, RUNNING, t
 
 import type { TracesMode } from "./application/telemetry.ts";
 import { isLoopback } from "./adapters/http/access.ts";
+import { normaliseSite } from "./domain/datadog-site.ts";
 import { DEFAULT_GATE_SECS, parseDuration } from "./domain/sla.ts";
 
 /** Settings read from the environment. Defaults match compose.dev.yml and herdr's config. */
@@ -74,6 +75,10 @@ export interface Config {
   slackInbox: SlackInboxConfig;
   /** Jira Cloud: the site, your Atlassian email and API token. Null means Jira is off (unset, or `MACHINE_JIRA=off`). */
   jira: JiraConfig | null;
+  /** Datadog, for incident detection: your API and application keys (both empty when unset), the site and a query appended to the monitor and Error Tracking searches. */
+  datadog: DatadogConfig;
+  /** Sentry, for incident detection: an auth token and organization, optional project slugs and the address. Null means Sentry is off. */
+  sentry: SentryConfig | null;
   /** The ticket SLAs a repo's luna.yaml does not set: the gate target (`MACHINE_SLA_GATE`, 1h) and the cycle target (`MACHINE_SLA_CYCLE`, none), in seconds. */
   sla: { gateSecs: number | null; cycleSecs: number | null };
   /** Days to keep a closed task's events/stage runs before pruning them. 0 disables pruning. */
@@ -115,6 +120,28 @@ export interface SlackInboxConfig {
   scope: "opted_in" | "all";
   /** `HH:MM` local time for the morning digest DM; null means none. */
   digestAt: { hour: number; minute: number } | null;
+}
+
+export interface DatadogConfig {
+  /** `MACHINE_DATADOG_API_KEY`; empty with the application key means Datadog is off. */
+  apiKey: string;
+  /** `MACHINE_DATADOG_APP_KEY`. */
+  appKey: string;
+  /** `MACHINE_DATADOG_SITE`: `datadoghq.com`, `datadoghq.eu`, `us5.datadoghq.com` … */
+  site: string;
+  /** `MACHINE_DATADOG_SCOPE`: appended to every monitor and Error Tracking query, e.g. `env:prod team:payments`. */
+  scope: string;
+}
+
+export interface SentryConfig {
+  /** `MACHINE_SENTRY_TOKEN`: an auth token with `event:read`, `project:read` and `org:read`. */
+  token: string;
+  /** `MACHINE_SENTRY_ORG`: the organization's slug. */
+  org: string;
+  /** `MACHINE_SENTRY_PROJECTS`: project slugs to read; empty reads every project. */
+  projects: string[];
+  /** `MACHINE_SENTRY_URL`, without a trailing slash: `https://sentry.io`, or a self-hosted address. */
+  url: string;
 }
 
 export interface JiraConfig {
@@ -463,6 +490,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       jira = { site, email, token, cloudId: env.MACHINE_JIRA_CLOUD_ID?.trim() || null, tokenExpiresAt: expires };
     }
   }
+  const ddApiKey = env.MACHINE_DATADOG_API_KEY?.trim() ?? "";
+  const ddAppKey = env.MACHINE_DATADOG_APP_KEY?.trim() ?? "";
+  if ((ddApiKey === "") !== (ddAppKey === "")) throw new Error("MACHINE_DATADOG_API_KEY and MACHINE_DATADOG_APP_KEY go together; set both or neither");
+  let sentry: SentryConfig | null = null;
+  const sentryToken = env.MACHINE_SENTRY_TOKEN?.trim() ?? "";
+  const sentryOrg = env.MACHINE_SENTRY_ORG?.trim() ?? "";
+  if ((sentryToken === "") !== (sentryOrg === "")) throw new Error("MACHINE_SENTRY_TOKEN and MACHINE_SENTRY_ORG go together; set both or neither");
+  if (sentryToken !== "") {
+    if (!/^[\w.-]+$/.test(sentryOrg)) throw new Error(`MACHINE_SENTRY_ORG must be the organization's slug, got "${env.MACHINE_SENTRY_ORG}"`);
+    const projects = (env.MACHINE_SENTRY_PROJECTS ?? "").split(",").map((p) => p.trim()).filter((p) => p !== "");
+    for (const project of projects) if (!/^[\w.-]+$/.test(project)) throw new Error(`MACHINE_SENTRY_PROJECTS must list project slugs, got "${project}"`);
+    const url = (env.MACHINE_SENTRY_URL?.trim() || "https://sentry.io").replace(/\/+$/, "");
+    if (!/^https:\/\/[^/\s]+$/.test(url)) throw new Error(`MACHINE_SENTRY_URL must be an https address like https://sentry.io, got "${env.MACHINE_SENTRY_URL}"`);
+    sentry = { token: sentryToken, org: sentryOrg, projects, url };
+  }
   const sla = {
     gateSecs: env.MACHINE_SLA_GATE === undefined || env.MACHINE_SLA_GATE === "" ? DEFAULT_GATE_SECS : parseDuration(env.MACHINE_SLA_GATE, "MACHINE_SLA_GATE"),
     cycleSecs: env.MACHINE_SLA_CYCLE === undefined || env.MACHINE_SLA_CYCLE === "" ? null : parseDuration(env.MACHINE_SLA_CYCLE, "MACHINE_SLA_CYCLE"),
@@ -516,6 +558,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       scope: slackScope,
     },
     jira,
+    sentry,
+    datadog: { apiKey: ddApiKey, appKey: ddAppKey, site: normaliseSite(env.MACHINE_DATADOG_SITE ?? "datadoghq.com") || "datadoghq.com", scope: (env.MACHINE_DATADOG_SCOPE ?? "").trim() },
     sla,
     retentionDays,
     worktreeRetentionDays,

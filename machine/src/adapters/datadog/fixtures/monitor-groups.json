@@ -1,0 +1,22 @@
+{
+  "groups": [
+    {
+      "monitor_id": 4411,
+      "monitor_name": "API gateway 5xx rate is high",
+      "group": "service:api-gateway,env:prod",
+      "status": "Alert",
+      "last_triggered_ts": 1793176800,
+      "last_nodata_ts": null,
+      "monitor_tags": ["team:platform"]
+    },
+    {
+      "monitor_id": 5120,
+      "monitor_name": "Disk space low on workers",
+      "group": "*",
+      "status": "Warn",
+      "last_triggered_ts": null
+    }
+  ],
+  "counts": { "status": [{ "count": 1, "name": "Alert" }, { "count": 1, "name": "Warn" }], "type": [{ "count": 2, "name": "metric alert" }] },
+  "metadata": { "page": 0, "page_size": 100, "total_count": 2 }
+}

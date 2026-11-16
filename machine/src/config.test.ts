@@ -57,6 +57,8 @@ describe("loadConfig", () => {
       slack: null,
       slackInbox: { enabled: true, userToken: null, appToken: null, intervalMs: 60_000, markRead: false, rulesPath: expect.stringMatching(/\/\.local\/state\/hardness\/slack-triage\.md$/) as string, digestAt: null, scope: "opted_in" },
       jira: null,
+      sentry: null,
+      datadog: { apiKey: "", appKey: "", site: "datadoghq.com", scope: "" },
       sla: { gateSecs: 172_800, cycleSecs: null },
       sandboxPolicy: DEFAULT_MACHINE_POLICY,
     });
@@ -85,6 +87,32 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_INBOX_INTERVAL: "0" })).toThrow(/MACHINE_SLACK_INBOX_INTERVAL/);
     expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_DIGEST_AT: "8am" })).toThrow(/MACHINE_SLACK_DIGEST_AT/);
     expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_DIGEST_AT: "25:00" })).toThrow(/MACHINE_SLACK_DIGEST_AT/);
+  });
+
+  it("reads the Datadog keys, which go together, the site and the scope", () => {
+    expect(() => loadConfig({ HOME: "/h", MACHINE_DATADOG_API_KEY: "a" })).toThrow(/MACHINE_DATADOG_API_KEY and MACHINE_DATADOG_APP_KEY go together/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_DATADOG_APP_KEY: "b" })).toThrow(/go together/);
+    expect(loadConfig({ HOME: "/h", MACHINE_DATADOG_API_KEY: "a", MACHINE_DATADOG_APP_KEY: "b" }).datadog).toEqual({ apiKey: "a", appKey: "b", site: "datadoghq.com", scope: "" });
+    expect(loadConfig({ HOME: "/h", MACHINE_DATADOG_SITE: "https://api.datadoghq.eu", MACHINE_DATADOG_SCOPE: " env:prod team:payments " }).datadog).toEqual({ apiKey: "", appKey: "", site: "datadoghq.eu", scope: "env:prod team:payments" });
+    for (const [given, site] of [["app.datadoghq.eu", "datadoghq.eu"], ["api.us5.datadoghq.com", "us5.datadoghq.com"], ["https://app.datadoghq.com/", "datadoghq.com"], ["us3.datadoghq.com", "us3.datadoghq.com"]] as const) {
+      expect(loadConfig({ HOME: "/h", MACHINE_DATADOG_SITE: given }).datadog.site).toBe(site);
+    }
+  });
+
+  it("reads Sentry: a token and an org go together, projects and the url are optional", () => {
+    expect(loadConfig({ HOME: "/h" }).sentry).toBeNull();
+    expect(() => loadConfig({ HOME: "/h", MACHINE_SENTRY_TOKEN: "t" })).toThrow(/MACHINE_SENTRY_TOKEN and MACHINE_SENTRY_ORG go together/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_SENTRY_ORG: "acme" })).toThrow(/go together/);
+    expect(loadConfig({ HOME: "/h", MACHINE_SENTRY_TOKEN: " t ", MACHINE_SENTRY_ORG: "acme" }).sentry).toEqual({ token: "t", org: "acme", projects: [], url: "https://sentry.io" });
+    expect(loadConfig({ HOME: "/h", MACHINE_SENTRY_TOKEN: "t", MACHINE_SENTRY_ORG: "acme", MACHINE_SENTRY_PROJECTS: " web, api-gateway ,", MACHINE_SENTRY_URL: "https://sentry.acme.internal/" }).sentry).toEqual({
+      token: "t",
+      org: "acme",
+      projects: ["web", "api-gateway"],
+      url: "https://sentry.acme.internal",
+    });
+    expect(() => loadConfig({ HOME: "/h", MACHINE_SENTRY_TOKEN: "t", MACHINE_SENTRY_ORG: "acme/x" })).toThrow(/MACHINE_SENTRY_ORG/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_SENTRY_TOKEN: "t", MACHINE_SENTRY_ORG: "acme", MACHINE_SENTRY_PROJECTS: "web,bad slug" })).toThrow(/MACHINE_SENTRY_PROJECTS/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_SENTRY_TOKEN: "t", MACHINE_SENTRY_ORG: "acme", MACHINE_SENTRY_URL: "http://x" })).toThrow(/MACHINE_SENTRY_URL/);
   });
 
   it("resolves the state dir by one rule the evals' harvest shares", async () => {

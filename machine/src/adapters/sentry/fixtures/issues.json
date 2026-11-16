@@ -1,0 +1,31 @@
+[
+  {
+    "id": "4501234567",
+    "shortId": "API-GATEWAY-3F",
+    "title": "TypeError: Cannot read properties of undefined (reading 'id')",
+    "culprit": "POST /v2/checkout",
+    "level": "error",
+    "status": "unresolved",
+    "count": "1342",
+    "userCount": 87,
+    "firstSeen": "2026-11-15T22:04:11.000Z",
+    "lastSeen": "2026-11-16T09:41:50.000Z",
+    "permalink": "https://sentry.io/organizations/acme/issues/4501234567/",
+    "project": { "id": "11", "name": "API Gateway", "slug": "api-gateway" },
+    "metadata": { "type": "TypeError", "value": "Cannot read properties of undefined (reading 'id')" }
+  },
+  {
+    "id": "4501234999",
+    "shortId": "WEB-9Z",
+    "title": "ChunkLoadError: Loading chunk 42 failed",
+    "culprit": "app/routes/dashboard.js",
+    "level": "fatal",
+    "status": "unresolved",
+    "count": "12",
+    "userCount": 4,
+    "firstSeen": "2026-11-16T07:00:00.000Z",
+    "lastSeen": "2026-11-16T09:10:00.000Z",
+    "permalink": "https://sentry.io/organizations/acme/issues/4501234999/",
+    "project": { "id": "12", "name": "Web", "slug": "web" }
+  }
+]
