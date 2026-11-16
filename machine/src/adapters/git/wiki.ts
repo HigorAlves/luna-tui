@@ -163,3 +163,16 @@ export function createWiki(options: WikiOptions): Wiki {
     },
   };
 }
+
+const shared = new Map<string, Wiki>();
+
+/** The machine's one wiki for a state dir (cache under `<stateDir>/wikis`): the publisher and the compliance review share it, so
+ *  calls on one repo's wiki queue behind one lock and one checkout. */
+export function sharedWiki(stateDir: string): Wiki {
+  let wiki = shared.get(stateDir);
+  if (!wiki) {
+    wiki = createWiki({ cacheDir: join(stateDir, "wikis") });
+    shared.set(stateDir, wiki);
+  }
+  return wiki;
+}

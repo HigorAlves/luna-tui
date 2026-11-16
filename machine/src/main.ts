@@ -74,7 +74,7 @@ import { PgPackRunStore } from "./adapters/persistence/pack-run-store.ts";
 import { MINUTE_MS, Ticker } from "./application/ticker.ts";
 import { ChangeEvidence } from "./application/change-evidence.ts";
 import { ComplianceDrafts, publisher as compliancePublisher } from "./application/compliance-drafts.ts";
-import { createWiki } from "./adapters/git/wiki.ts";
+import { sharedWiki } from "./adapters/git/wiki.ts";
 import { graphifyGraph } from "./adapters/graph/graphify.ts";
 import { imageId, imageLabel, runSandbox } from "./adapters/docker/docker.ts";
 import { removeRunNetwork } from "./adapters/docker/egress.ts";
@@ -842,7 +842,7 @@ const changeEvidence = new ChangeEvidence({
   repos: complianceRepos,
   stateDir: config.stateDir,
 });
-const compliance = { drafts: complianceDrafts, publisher: compliancePublisher({ drafts: complianceDrafts, wiki: createWiki({ cacheDir: join(config.stateDir, "wikis") }) }), evidence: changeEvidence, repos: complianceRepos };
+const compliance = { drafts: complianceDrafts, publisher: compliancePublisher({ drafts: complianceDrafts, wiki: sharedWiki(config.stateDir) }), evidence: changeEvidence, repos: complianceRepos };
 /** A person approves the exact base the repository's luna.yaml (on the user's checkout) names now, or the exact key of the Dockerfile its devcontainer builds now; any other is refused. */
 const approveBase = async (repo: string, base: string): Promise<{ ok: true } | { ok: false; reason: string }> => {
   if (!agentDeps) return { ok: false, reason: "repository images are off on this machine" };

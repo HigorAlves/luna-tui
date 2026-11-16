@@ -82,7 +82,7 @@ import { buildTestsStep } from "../application/stages/build-tests.ts";
 import { exec } from "../adapters/process/exec.ts";
 import { type GitHub, noTokenGitHub } from "../application/github.ts";
 import { type ComplianceDeps } from "../application/stages/compliance-review.ts";
-import { createWiki } from "../adapters/git/wiki.ts";
+import { sharedWiki } from "../adapters/git/wiki.ts";
 import { type ShipGateProbe, shipGateProbe } from "../application/ship-gate-probe.ts";
 
 export interface RealStagesResult {
@@ -383,7 +383,7 @@ export async function buildRealStages(
   // The compliance review runs beside the review and Verify packs on the repo's declared regimes, with its wiki's control pages.
   const compliance: ComplianceDeps = {
     regimes: async (repoPath) => (repoPath ? ((await policies.for(repoPath)).compliance ?? []) : []),
-    wiki: createWiki({ cacheDir: join(config.stateDir, "wiki") }),
+    wiki: sharedWiki(config.stateDir),
     run: (subContext, review, context) => runAgent(deps, subContext, "compliance_review", { ...(review ? { review } : {}), compliance: context }),
   };
   const real: Partial<Record<TaskState, StageRunner>> = {

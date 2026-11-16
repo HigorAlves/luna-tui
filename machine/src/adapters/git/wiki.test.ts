@@ -6,7 +6,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { WikiError, noWiki } from "../../application/wiki.ts";
 import { exec, execOrThrow } from "../process/exec.ts";
-import { createWiki } from "./wiki.ts";
+import { createWiki, sharedWiki } from "./wiki.ts";
 import { HOST_GIT } from "./worktree.ts";
 
 const SLUG = "acme/widgets";
@@ -155,5 +155,13 @@ describe("noWiki", () => {
     const wiki = noWiki("no git host");
     await expect(wiki.readPages(SLUG, "")).rejects.toThrow("no git host");
     await expect(wiki.writePages(SLUG, [], "m")).rejects.toBeInstanceOf(WikiError);
+  });
+});
+
+describe("sharedWiki", () => {
+  it("gives every caller with one state dir the same wiki, so its per-repo lock and cache are one", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "wiki-shared-"));
+    expect(sharedWiki(stateDir)).toBe(sharedWiki(stateDir));
+    expect(sharedWiki(stateDir)).not.toBe(sharedWiki(mkdtempSync(join(tmpdir(), "wiki-shared-"))));
   });
 });
