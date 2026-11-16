@@ -53,6 +53,37 @@ describe("the network commands", () => {
   });
 });
 
+describe("the engine relay", () => {
+  const relay = { kind: "oauth" as const, placeholder: "sk-ant-oat01-luna-relay-abc", file: "/state/runs/r1/relay/anthropic" };
+
+  it("starts the proxy with the credential as a read-only file mount, never as a value", () => {
+    const args = proxyArgs({ run: "r1", image: IMAGE, bridge: "hardness-egress", allow: [], allowPrivate: [], relay });
+    expect(args).toContain("/state/runs/r1/relay/anthropic:/run/relay/anthropic:ro");
+    expect(args[args.indexOf("/state/runs/r1/relay/anthropic:/run/relay/anthropic:ro") - 1]).toBe("-v");
+    const tail = args.slice(args.indexOf("--relay"));
+    expect(tail).toEqual(["--relay", "anthropic=/run/relay/anthropic", "--relay-kind", "oauth", "--relay-placeholder", relay.placeholder, "--relay-listen", "3129"]);
+    expect(args).not.toContain("-e");
+    expect(proxyArgs({ run: "r1", image: IMAGE, bridge: "b", allow: [], allowPrivate: [] })).not.toContain("--relay");
+  });
+
+  it("starts a proxy for a run whose list is empty but that has a relay, and points a container at it, with its address in NO_PROXY", async () => {
+    const { calls, exec } = dockerFake();
+    const net = await openCardNetwork("r1", { allow: [], allowPrivate: [], relay }, { exec, proxyImage: IMAGE, pollMs: 0 });
+    expect(calls.some((c) => c[1] === "run")).toBe(true);
+    const args = net.containerArgs(["luna-app"]);
+    const env = Object.fromEntries(args.filter((_, i) => args[i - 1] === "-e").map((e) => [e.slice(0, e.indexOf("=")), e.slice(e.indexOf("=") + 1)] as [string, string]));
+    expect(env.ANTHROPIC_BASE_URL).toBe("http://172.30.0.2:3129");
+    for (const name of ["NO_PROXY", "no_proxy"]) expect(env[name]).toBe("localhost,127.0.0.1,::1,luna-app,172.30.0.2");
+    expect(args.join(" ")).not.toContain(relay.file);
+  });
+
+  it("sets no base URL when there is no relay", async () => {
+    const { exec } = dockerFake();
+    const net = await openCardNetwork("r1", { allow: ["github.com:443"], allowPrivate: [] }, { exec, proxyImage: IMAGE, pollMs: 0 });
+    expect(net.containerArgs().join(" ")).not.toContain("ANTHROPIC_BASE_URL");
+  });
+});
+
 describe("proxyArgs", () => {
   const args = proxyArgs({ run: "r1", image: IMAGE, bridge: "hardness-egress", allow: ["github.com:443", "a.example.com:443"], allowPrivate: [] });
 

@@ -25,6 +25,8 @@ export interface EgressInputs {
   registryHosts: readonly string[];
   /** The credential owners of the run's engine and of each helper. */
   owners?: readonly CredentialOwner[];
+  /** Owners whose credential is relayed through the proxy: their hosts leave the CONNECT list, since the stage reaches them only through the relay. */
+  relayed?: readonly CredentialOwner[];
   /** The machine's own extra engine hosts (`MACHINE_EGRESS_ENGINE_HOSTS`). */
   engineHosts?: readonly string[];
   /** Hosts the repository's config names for a browser run. */
@@ -56,7 +58,7 @@ export function egressFor(kind: EgressKind, inputs: EgressInputs): EgressSpec {
       if (entry) hosts.push(entry);
     }
   };
-  const engines = () => add([...(inputs.owners ?? []).flatMap((owner) => ENGINE_HOSTS[owner]), ...(inputs.engineHosts ?? [])]);
+  const engines = () => add([...(inputs.owners ?? []).filter((owner) => !inputs.relayed?.includes(owner)).flatMap((owner) => ENGINE_HOSTS[owner]), ...(inputs.engineHosts ?? [])]);
   if (kind === "pack") engines();
   else {
     add(GITHUB_HOSTS);

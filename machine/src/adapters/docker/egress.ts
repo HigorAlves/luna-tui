@@ -4,6 +4,7 @@
 // nothing in a stage container can change it. See docs/architecture.md "A sandbox's network".
 import { z } from "zod";
 
+import type { EngineRelay } from "../credentials/credential.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { type ExecResult, exec as hostExec } from "../process/exec.ts";
 
@@ -12,6 +13,10 @@ const STAGE_LABEL = "dev.hardness.stage=1";
 export const EGRESS_BRIDGE = "hardness-egress";
 const ISOLATED = "com.docker.network.bridge.gateway_mode_ipv4";
 export const PROXY_PORT = 3128;
+/** The engine relay's port on the proxy: plain HTTP, for the stage's `ANTHROPIC_BASE_URL`. */
+export const RELAY_PORT = 3129;
+/** Where the proxy finds the real credential: the one file, mounted alone and read-only. */
+const RELAY_FILE = "/run/relay/anthropic";
 const PROXY_PROGRAM = "/opt/luna/bin/node";
 const PROXY_FILE = "/opt/luna/egress/proxy.ts";
 const LOG_TAIL = 2000;
@@ -51,15 +56,19 @@ export interface ProxyOptions {
   bridge: string;
   allow: readonly string[];
   allowPrivate: readonly string[];
+  /** The Claude credential's relay: its file is mounted, its placeholder and kind are arguments. The credential itself is never an argument or a variable. */
+  relay?: EngineRelay;
 }
 
-/** `docker run` for a run's proxy. Pure: no mount and no variable, the list is its command line. */
+/** `docker run` for a run's proxy. Pure: no variable; the list is its command line, and the only mount is the relay's credential file. */
 export function proxyArgs(options: ProxyOptions): string[] {
   const args = ["run", "-d", "--name", proxyName(options.run), "--label", STAGE_LABEL, "--network", options.bridge];
   args.push("--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "128", "--memory", "256m", "--cpus", "0.5", "--user", "65534:65534");
   args.push("--sysctl", "net.ipv4.ip_unprivileged_port_start=0");
   if (options.allowPrivate.some((entry) => entry.startsWith("host.docker.internal:"))) args.push("--add-host", "host.docker.internal:host-gateway");
+  if (options.relay) args.push("-v", `${options.relay.file}:${RELAY_FILE}:ro`);
   args.push("--entrypoint", PROXY_PROGRAM, options.image, PROXY_FILE, "--listen", String(PROXY_PORT), "--allow", [...options.allow].sort().join(","), "--allow-private", [...options.allowPrivate].sort().join(","));
+  if (options.relay) args.push("--relay", `anthropic=${RELAY_FILE}`, "--relay-kind", options.relay.kind, "--relay-placeholder", options.relay.placeholder, "--relay-listen", String(RELAY_PORT));
   return args;
 }
 
@@ -128,12 +137,12 @@ export interface OpenOptions {
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Makes a run's card network and, when its list has an entry, the proxy on it. Throws `EgressUnsupportedError` when the daemon cannot make the isolated network. */
-export async function openCardNetwork(runName: string, spec: { allow: readonly string[]; allowPrivate: readonly string[] }, options: OpenOptions): Promise<CardNetwork> {
+export async function openCardNetwork(runName: string, spec: { allow: readonly string[]; allowPrivate: readonly string[]; relay?: EngineRelay }, options: OpenOptions): Promise<CardNetwork> {
   const exec = options.exec ?? hostExec;
   const bridge = options.bridge ?? EGRESS_BRIDGE;
   const network = cardNetworkName(runName);
   const proxy = proxyName(runName);
-  const hasProxy = spec.allow.length + spec.allowPrivate.length > 0;
+  const hasProxy = spec.allow.length + spec.allowPrivate.length > 0 || spec.relay !== undefined;
   let torn = false;
   const teardown = async (): Promise<void> => {
     if (torn) return;
@@ -163,7 +172,7 @@ export async function openCardNetwork(runName: string, spec: { allow: readonly s
     let address = "127.0.0.1";
     if (hasProxy) {
       await ensureEgressBridge(exec, bridge);
-      const started = await exec("docker", proxyArgs({ run: runName, image: options.proxyImage, bridge, allow: spec.allow, allowPrivate: spec.allowPrivate }));
+      const started = await exec("docker", proxyArgs({ run: runName, image: options.proxyImage, bridge, allow: spec.allow, allowPrivate: spec.allowPrivate, ...(spec.relay ? { relay: spec.relay } : {}) }));
       if (started.code !== 0) throw new Error(`egress proxy ${proxy} did not start: ${started.stderr.trim()}`);
       const joined = await exec("docker", ["network", "connect", network, proxy]);
       if (joined.code !== 0) throw new Error(`egress proxy ${proxy} could not join ${network}: ${joined.stderr.trim()}`);
@@ -180,12 +189,14 @@ export async function openCardNetwork(runName: string, spec: { allow: readonly s
       containerArgs(aliases = []) {
         const args = ["--network", network, "--dns", address];
         if (!hasProxy) return args;
-        const noProxy = ["localhost", "127.0.0.1", "::1", ...aliases].join(",");
+        // The SDK sends a plain-HTTP base URL through HTTP_PROXY when it is set, so the relay's address must be exempt.
+        const noProxy = ["localhost", "127.0.0.1", "::1", ...aliases, ...(spec.relay ? [address] : [])].join(",");
         const env: Array<[string, string]> = [
           ...["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "YARN_HTTP_PROXY", "YARN_HTTPS_PROXY"].map((name): [string, string] => [name, proxyUrl]),
           ["NO_PROXY", noProxy],
           ["no_proxy", noProxy],
           ["NODE_USE_ENV_PROXY", "1"],
+          ...(spec.relay ? [["ANTHROPIC_BASE_URL", `http://${address}:${RELAY_PORT}`] as [string, string]] : []),
         ];
         return [...args, ...env.flatMap(([name, value]) => ["-e", `${name}=${value}`])];
       },

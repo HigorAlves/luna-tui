@@ -25,6 +25,8 @@ export interface EgressRequest {
   kind: EgressKind;
   /** The credential owners of the run's engine and of each helper's (an agent or a pack). */
   owners?: readonly CredentialOwner[];
+  /** Owners whose credential the run holds only as a placeholder (the engine relay): their hosts are left off the list. */
+  relayed?: readonly CredentialOwner[];
   /** Hosts the repository's config names for a browser run. */
   targets?: readonly string[];
 }
@@ -85,6 +87,7 @@ export function egressPolicy(deps: EgressPolicyDeps): EgressPolicy {
         registries: sandbox.registries,
         registryHosts: registryHostsOf(lockfiles, nested),
         ...(request.owners ? { owners: request.owners } : {}),
+        ...(request.relayed ? { relayed: request.relayed } : {}),
         engineHosts: agentLike ? (deps.engineHosts ?? []) : [],
         targets: request.targets ?? [],
         machineEntries: agentLike ? (deps.traceEntries ?? []) : [],

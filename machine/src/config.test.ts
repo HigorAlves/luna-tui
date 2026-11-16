@@ -22,7 +22,7 @@ describe("loadConfig", () => {
       host: "127.0.0.1",
       apiToken: null,
       agents: true,
-      egress: { enabled: true, engineHosts: [] },
+      egress: { enabled: true, engineHosts: [], relay: true },
       maxConcurrentTasks: DEFAULT_MAX_CONCURRENT_TASKS,
       runnerImage: "hardness-runner:dev",
       runnerQaImage: "hardness-runner-qa:dev",
@@ -328,9 +328,19 @@ describe("loadConfig", () => {
   });
 });
 
+describe("MACHINE_ENGINE_RELAY", () => {
+  it("is on by default, off with off, and never on without the egress proxy that serves it", () => {
+    expect(loadConfig({ HOME: "/h" }).egress.relay).toBe(true);
+    expect(loadConfig({ HOME: "/h", MACHINE_ENGINE_RELAY: "off" }).egress.relay).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_ENGINE_RELAY: "on" }).egress.relay).toBe(true);
+    expect(loadConfig({ HOME: "/h", MACHINE_EGRESS: "off" }).egress.relay).toBe(false);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_ENGINE_RELAY: "maybe" })).toThrow(/MACHINE_ENGINE_RELAY/);
+  });
+});
+
 describe("MACHINE_EGRESS and MACHINE_EGRESS_ENGINE_HOSTS", () => {
   it("are on and empty by default; off is the owner's switch", () => {
-    expect(loadConfig({ HOME: "/h" }).egress).toEqual({ enabled: true, engineHosts: [] });
+    expect(loadConfig({ HOME: "/h" }).egress).toEqual({ enabled: true, engineHosts: [], relay: true });
     expect(loadConfig({ HOME: "/h", MACHINE_EGRESS: "off" }).egress.enabled).toBe(false);
     expect(loadConfig({ HOME: "/h", MACHINE_EGRESS: "on" }).egress.enabled).toBe(true);
     expect(() => loadConfig({ HOME: "/h", MACHINE_EGRESS: "maybe" })).toThrow(/MACHINE_EGRESS/);

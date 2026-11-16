@@ -1,8 +1,12 @@
-// Finds the Claude credential for stage containers. The value only ever travels in the
-// docker process's environment; it is never logged or written to the run folder.
+// Finds the Claude credential for stage containers. It is never logged. With the relay (`engineRelay`) the stage never
+// holds it: it is a file only the egress proxy mounts, and the stage gets a placeholder. Without, it is the stage's own
+// secret file, as for every other engine.
+import { randomBytes } from "node:crypto";
+import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
+import { join } from "node:path";
 
-import { type CredentialLoader, type CredentialOptions, NoCredentialError, secretFile, secretsDir } from "./credential.ts";
+import { type CredentialLoader, type CredentialOptions, type EngineRelay, NoCredentialError, type RunCredential, secretFile, secretsDir } from "./credential.ts";
 
 export interface Credential {
   /** The environment variable Claude Code reads. */
@@ -23,6 +27,20 @@ export async function loadCredential(env = process.env, dir = secretsDir(homedir
   return null;
 }
 
+/** The relayed credential: the real value in `<runDir>/relay/anthropic` (a 0700 folder, a 0444 file, so the proxy's user reads it once the file is mounted alone), and a placeholder with the same prefix (`sk-ant-oat01-`, `sk-ant-api03-`) and a random tail in its place. */
+async function relayed(credential: Credential, runDir: string): Promise<RunCredential> {
+  const oauth = credential.name === "CLAUDE_CODE_OAUTH_TOKEN";
+  const placeholder = `${oauth ? "sk-ant-oat01-" : "sk-ant-api03-"}luna-relay-${randomBytes(16).toString("hex")}`;
+  const dir = join(runDir, "relay");
+  const file = join(dir, "anthropic");
+  await rm(dir, { recursive: true, force: true });
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await writeFile(file, credential.value, { mode: 0o444 });
+  await chmod(file, 0o444);
+  const relay: EngineRelay = { kind: oauth ? "oauth" : "api-key", placeholder, file };
+  return { env: { [credential.name]: placeholder }, mounts: [], relay, release: () => rm(dir, { recursive: true, force: true }) };
+}
+
 /** The `claude` runtime's loader: the one variable Claude Code reads, nothing else. */
 export function claudeCredentials(opts: CredentialOptions = {}): CredentialLoader {
   const load = () => loadCredential(opts.env ?? process.env, secretsDir(opts.home ?? homedir()));
@@ -30,9 +48,10 @@ export function claudeCredentials(opts: CredentialOptions = {}): CredentialLoade
     async check() {
       return (await load()) ? { available: true } : { available: false, reason: NO_CLAUDE };
     },
-    async prepare() {
+    async prepare(runDir) {
       const credential = await load();
       if (!credential) throw new NoCredentialError(NO_CLAUDE);
+      if (opts.engineRelay) return relayed(credential, runDir);
       return { env: { [credential.name]: credential.value }, mounts: [], release: async () => {} };
     },
   };

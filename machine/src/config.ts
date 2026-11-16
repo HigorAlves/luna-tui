@@ -22,7 +22,7 @@ export interface Config {
   /** Run Triage and Implementer as real agents. Off: every stage is a stub. */
   agents: boolean;
   /** The sandbox's network (`MACHINE_EGRESS`, on by default): off, every run joins an ordinary bridge as before the allow-list. `engineHosts` (`MACHINE_EGRESS_ENGINE_HOSTS`) are host patterns added to every agent's engine hosts. The owner's switches: never read from `luna.yaml`. */
-  egress: { enabled: boolean; engineHosts: string[] };
+  egress: { enabled: boolean; engineHosts: string[]; /** `MACHINE_ENGINE_RELAY` (on by default; always off with egress off): the Claude credential stays in the egress proxy, and a stage holds a placeholder. */ relay: boolean };
   /** Tasks that can be driving a stage at once, across every repo. The rest queue. */
   maxConcurrentTasks: number;
   /** Running tasks one repo may hold at once, so it cannot take every slot; null means no cap. */
@@ -285,7 +285,9 @@ function egressFrom(env: NodeJS.ProcessEnv): Config["egress"] {
     const problem = hostPatternProblem(entry);
     if (problem) throw new Error(`MACHINE_EGRESS_ENGINE_HOSTS: ${problem}`);
   }
-  return { enabled: raw !== "off", engineHosts };
+  const relay = env.MACHINE_ENGINE_RELAY?.trim();
+  if (relay !== undefined && relay !== "" && relay !== "on" && relay !== "off") throw new Error(`MACHINE_ENGINE_RELAY must be on or off, got "${relay}"`);
+  return { enabled: raw !== "off", engineHosts, relay: raw !== "off" && relay !== "off" };
 }
 
 /** The sandbox policy file's name in `~/.config/hardness`. */

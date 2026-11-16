@@ -262,7 +262,7 @@ const raiseAlert = (alert: BudgetAlert) => {
 const repoEngineBudgets = async (repo: string) => (await policies.for(repo)).engineBudgets;
 /** The monthly caps per engine: alerts as a run's cost crosses them, and each engine's standing for `GET /engines`. */
 const engineBudgets = new EngineBudgetWatch({ budgets: config.engineBudgets, repoBudgets: repoEngineBudgets, spend: engineSpend, onAlert: raiseAlert });
-const credentials = gatedCredentials(machineCredentials(), [
+const credentials = gatedCredentials(machineCredentials({ engineRelay: config.egress.relay }), [
   runtimeKillSwitch(config.disabledRuntimes),
   engineBudgetGate({ budgets: config.engineBudgets, repoBudgets: repoEngineBudgets, spend: engineSpend }),
 ]);

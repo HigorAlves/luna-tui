@@ -14,6 +14,9 @@ import { createServer as createHttpServer, request as httpRequest } from "node:h
 import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node:http";
 import { connect as netConnect, createServer as createNetServer, isIP } from "node:net";
 import type { Server as NetServer, Socket } from "node:net";
+import { readFile } from "node:fs/promises";
+import { request as httpsRequest } from "node:https";
+import { connect as tlsConnect } from "node:tls";
 import { fileURLToPath } from "node:url";
 
 export type Via = "connect" | "http" | "dns";
@@ -147,6 +150,20 @@ function clean(text: string): string {
   return text.slice(0, MAX_NAME).replace(/[^\x21-\x7e]/g, "?");
 }
 
+/** The engine relay: plain HTTP in from the stage, TLS to `api.anthropic.com` out, the run's placeholder swapped for the real credential. */
+export interface RelayOptions {
+  /** Which header carries the credential: `authorization: Bearer` (a subscription token) or `x-api-key`. */
+  kind: "oauth" | "api-key";
+  /** What the stage holds in place of the credential. A request without it is refused. */
+  placeholder: string;
+  /** The real credential, read when a request arrives. Never logged. */
+  credential: () => Promise<string>;
+  /** Default true. False only in a test, where a plain server stands in for the API. */
+  tls?: boolean;
+}
+
+export const RELAY_HOST = "api.anthropic.com";
+
 export interface ProxyOptions {
   allow: readonly string[];
   allowPrivate: readonly string[];
@@ -157,11 +174,13 @@ export interface ProxyOptions {
   /** A socket to an address and port the proxy has already checked. */
   connect: (port: number, address: string) => Socket;
   log: (line: string) => void;
+  /** Absent, no relay is served. */
+  relay?: RelayOptions;
 }
 
 export interface EgressProxy {
-  /** Binds the proxy on `port` and, when given, DNS refusal on `dnsPort` (UDP and TCP). Port 0 picks one. */
-  listen(port: number, dnsPort: number | null, host?: string): Promise<{ port: number; dnsPort: number | null }>;
+  /** Binds the proxy on `port` and, when given, DNS refusal on `dnsPort` (UDP and TCP) and the relay on `relayPort` (needs `relay`). Port 0 picks one. */
+  listen(port: number, dnsPort: number | null, host?: string, relayPort?: number | null): Promise<{ port: number; dnsPort: number | null; relayPort: number | null }>;
   close(): Promise<void>;
 }
 
@@ -385,6 +404,75 @@ export function createEgressProxy(options: ProxyOptions): EgressProxy {
     } else socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
   });
 
+  // ---- the relay: one listener, one upstream, one header swapped ----
+  const relayOptions = options.relay;
+  const relayRefuse = (res: ServerResponse, status: number, reason: string, method: string, path: string): void => {
+    say({ relay: { refused: reason, method, path: clean(path), status } });
+    res.writeHead(status, { Connection: "close", "Content-Length": "0" });
+    res.end();
+  };
+  function onRelayRequest(req: IncomingMessage, res: ServerResponse): void {
+    const relay = relayOptions!;
+    const method = req.method ?? "-";
+    const target = req.url ?? "";
+    // Origin-form, under /v1/ and nothing that climbs out of it: a request for another host or path is never forwarded.
+    const path = target.split("?")[0]!;
+    if (!target.startsWith("/v1/") || path.split("/").some((part) => part === "." || part === "..") || path.includes("//") || path.includes("\\")) {
+      return relayRefuse(res, 403, "path", method, path);
+    }
+    const sent = relay.kind === "oauth" ? req.headers.authorization : req.headers["x-api-key"];
+    const wanted = relay.kind === "oauth" ? `Bearer ${relay.placeholder}` : relay.placeholder;
+    if (typeof sent !== "string" || sent !== wanted) return relayRefuse(res, 401, "placeholder", method, path);
+    const started = Date.now();
+    void (async () => {
+      let address: string;
+      let real: string;
+      try {
+        const addresses = await withTimeout(options.resolve(RELAY_HOST), RESOLVE_TIMEOUT_MS);
+        if (addresses.length === 0 || !addresses.every(isPublicV4)) return relayRefuse(res, 502, "address", method, path);
+        address = addresses[0]!;
+        real = await relay.credential();
+      } catch {
+        return relayRefuse(res, 502, "unresolved", method, path);
+      }
+      const headers: Record<string, string | string[]> = {};
+      for (const [key, value] of Object.entries(req.headers)) {
+        if (value !== undefined && !HOP.has(key) && key !== "authorization" && key !== "x-api-key" && key !== "cookie") headers[key] = value;
+      }
+      headers.host = RELAY_HOST;
+      if (relay.kind === "oauth") headers.authorization = `Bearer ${real}`;
+      else headers["x-api-key"] = real;
+      const connection = () => {
+        const raw = options.connect(443, address);
+        return relay.tls === false ? raw : tlsConnect({ socket: raw, servername: RELAY_HOST });
+      };
+      const make = relay.tls === false ? httpRequest : httpsRequest;
+      const upstream = make({ method: req.method, path: target, headers, createConnection: connection });
+      upstream.setTimeout(IDLE_TIMEOUT_MS, () => upstream.destroy());
+      res.on("close", () => upstream.destroy());
+      upstream.on("response", (response) => {
+        const out: Record<string, string | string[]> = {};
+        for (const [key, value] of Object.entries(response.headers)) if (value !== undefined && !HOP.has(key)) out[key] = value;
+        res.writeHead(response.statusCode ?? 502, out);
+        res.flushHeaders();
+        response.pipe(res);
+        response.on("end", () => say({ relay: { method, path: clean(path), status: response.statusCode ?? 502, ms: Date.now() - started } }));
+      });
+      upstream.on("error", () => {
+        if (!res.headersSent) relayRefuse(res, 502, "upstream", method, path);
+        else res.destroy();
+      });
+      req.pipe(upstream);
+    })();
+  }
+  const relayServer: HttpServer | null = relayOptions
+    ? createHttpServer({ maxHeaderSize: MAX_HEAD_BYTES, headersTimeout: 10_000, requestTimeout: 0, keepAliveTimeout: 1 }, onRelayRequest)
+    : null;
+  if (relayServer) {
+    relayServer.maxConnections = MAX_CONNECTIONS;
+    relayServer.on("clientError", (_error: Error, socket: Socket) => socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"));
+  }
+
   const udp = createSocket("udp4");
   udp.on("message", (message, remote) => {
     const refusal = refusalFor(message);
@@ -423,19 +511,21 @@ export function createEgressProxy(options: ProxyOptions): EgressProxy {
     });
 
   return {
-    async listen(port, dnsPort, host = "0.0.0.0") {
+    async listen(port, dnsPort, host = "0.0.0.0", relayPort = null) {
       const bound = await listening(http, port, host);
-      if (dnsPort === null) return { port: bound, dnsPort: null };
+      const relayBound = relayServer && relayPort !== null ? await listening(relayServer, relayPort, host) : null;
+      if (dnsPort === null) return { port: bound, dnsPort: null, relayPort: relayBound };
       const tcpPort = await listening(dnsTcp, dnsPort, host);
       await new Promise<void>((resolve, reject) => {
         udp.once("error", reject);
         udp.bind(tcpPort, host, () => resolve());
       });
-      return { port: bound, dnsPort: tcpPort };
+      return { port: bound, dnsPort: tcpPort, relayPort: relayBound };
     },
     async close() {
       http.closeAllConnections();
-      await Promise.all([new Promise<void>((r) => http.close(() => r())), new Promise<void>((r) => dnsTcp.close(() => r())), new Promise<void>((r) => { try { udp.close(() => r()); } catch { r(); } })]);
+      relayServer?.closeAllConnections();
+      await Promise.all([new Promise<void>((r) => (relayServer?.listening ? relayServer.close(() => r()) : r())), new Promise<void>((r) => http.close(() => r())), new Promise<void>((r) => dnsTcp.close(() => r())), new Promise<void>((r) => { try { udp.close(() => r()); } catch { r(); } })]);
     },
   };
 }
@@ -478,7 +568,19 @@ if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.
   };
   if (args.includes("--check")) process.exit(selfCheck() ? 0 : 1);
   const port = Number(value("--listen") ?? "3128");
+  // `--relay anthropic=<file> --relay-kind oauth|api-key --relay-placeholder <value> --relay-listen 3129`: the credential is a file, never an argument.
+  const relayFile = /^anthropic=(\/.+)$/.exec(value("--relay") ?? "")?.[1];
+  const relayKind = value("--relay-kind");
+  const placeholder = value("--relay-placeholder");
+  if (value("--relay") !== undefined && (!relayFile || (relayKind !== "oauth" && relayKind !== "api-key") || !placeholder)) {
+    process.stderr.write("egress proxy: --relay needs anthropic=<absolute file>, --relay-kind oauth|api-key and --relay-placeholder\n");
+    process.exit(1);
+  }
+  const relayPort = Number(value("--relay-listen") ?? "3129");
   const proxy = createEgressProxy({
+    ...(relayFile && placeholder && (relayKind === "oauth" || relayKind === "api-key")
+      ? { relay: { kind: relayKind, placeholder, credential: async () => (await readFile(relayFile, "utf8")).replace(/\s+/g, "") } }
+      : {}),
     allow: listOf(value("--allow")),
     allowPrivate: listOf(value("--allow-private")),
     resolve: systemResolve(),
@@ -486,8 +588,8 @@ if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.
     connect: (p, address) => netConnect(p, address),
     log: (line) => process.stdout.write(`${line}\n`),
   });
-  proxy.listen(port, 53).then(
-    () => process.stdout.write(`${JSON.stringify({ ready: { port } })}\n`),
+  proxy.listen(port, 53, "0.0.0.0", relayFile ? relayPort : null).then(
+    () => process.stdout.write(`${JSON.stringify({ ready: { port, ...(relayFile ? { relay: relayPort } : {}) } })}\n`),
     (error: unknown) => {
       process.stderr.write(`egress proxy: ${error instanceof Error ? error.message : String(error)}\n`);
       process.exit(1);
