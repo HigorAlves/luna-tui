@@ -37,6 +37,7 @@ import {
   PACKS,
   PackId,
   RunInput,
+  ProposalsInput,
   SetupRepoInput,
   ConfigCheckInput,
   SlackItemPatch,
@@ -79,6 +80,9 @@ import { EngineBudgetWatch } from "../../application/engine-gates.ts";
 import { type Credentials, machineCredentials } from "../credentials/index.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import { checkLunaConfigText } from "../../domain/luna-config.ts";
+import { proposeConfig } from "../../domain/config-proposal.ts";
+import { PolicyParseError } from "../../domain/policy.ts";
+import { type RepoSignals, noRepoSignals } from "../../application/repo-signals.ts";
 import { type ConfigProofs, ConfigProofError } from "../../application/config-proofs.ts";
 import type { Watcher } from "../../application/ports.ts";
 import { ApproverRequiredError, CoverageGapsError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, MergeError, DedupAnswerError, UnknownRepositoryError, NoCasesToEditError, NoContextGateError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SplitAutoApprovalError, SplitChangedError, SplitNotValidError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, FindingNotFoundError, NoEvidenceError, NotReleaseOwnerError, WorktreeUnpushedError } from "../../application/pipeline.ts";
@@ -153,6 +157,8 @@ export interface AppDeps {
   runs?: PackRunsPort;
   /** Proofs of a repository's own luna.yaml for the setup skill; without it (no sandbox) `POST /repos/config/prove` answers 503. */
   configProofs?: ConfigProofs;
+  /** The repo's own run signals for `POST /repos/proposals`; defaults to none, so no proposal is made until an adapter backs it. */
+  repoSignals?: RepoSignals;
   /** What keeps the machine from doing its job (`readinessProblems`), read on each `GET /health`; absent, `/health` is always ok. */
   problems?: () => Promise<string[]> | string[];
 }
@@ -161,6 +167,10 @@ export interface AppDeps {
 const ForemanInput = z.object({ question: ForemanContext.shape.question, history: ForemanContext.shape.history.optional() });
 
 class BadRequest extends Error {}
+
+/** The window of a repo's own runs that a config proposal reads. */
+const SIGNAL_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** The client closed the request first (nginx's 499): nobody reads it, the log does. */
 const CLIENT_CLOSED = 499;
@@ -205,7 +215,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, problems: problemsOf }: AppDeps): Hono {
+export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), problems: problemsOf }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -555,6 +565,25 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
   app.post("/repos/setup", async (c) => {
     const { repoPath } = await body(c, SetupRepoInput);
     return c.json(await serialize(await pipeline.setupRepo(repoPath)), 201);
+  });
+
+  // A config proposal: the scorecards come in the body, the repo's luna.yaml and its own run signals are read here, a fixed rule picks the
+  // changes (domain/config-proposal.ts), and a non-empty result waits at the setup gate as a `config` card.
+  app.post("/repos/proposals", async (c) => {
+    const { repo, candidates, now } = await body(c, ProposalsInput);
+    if (!isAbsolute(repo)) throw new BadRequest("repo must be an absolute path");
+    const at = now ? new Date(now) : new Date();
+    try {
+      const [current, signals, declined] = await Promise.all([pipeline.configChoices(repo), repoSignals.forRepo(repo, new Date(at.getTime() - SIGNAL_DAYS * DAY_MS)), pipeline.declinedConfigChanges(repo, at)]);
+      const changes = proposeConfig({ current, candidates, signals, declined, now: at.toISOString() });
+      if (changes.length === 0) return c.json({ changes, taskId: null });
+      const task = await serialize(await pipeline.proposeConfig(repo, changes));
+      bus.publish({ type: "task.updated", task, seq: task.seq });
+      return c.json({ changes, taskId: task.id });
+    } catch (error) {
+      if (error instanceof PolicyParseError) return fail(c, 422, "invalid_config", error.message);
+      throw error;
+    }
   });
 
   // The setup skill's checks of a luna.yaml: `check` reads the text it is given (nothing runs, nothing is written); `prove` runs every check of the

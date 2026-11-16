@@ -427,9 +427,36 @@ A person turns the loop, one step at a time, today. Nothing below runs by itself
 5. **Measure.** `pnpm eval preflight` (no model call) checks the cases, the image and the credentials. `pnpm eval baseline-plan` prints the commands. A person runs the baselines (`pnpm eval --pack <p> --engine <e> --save-baseline`). A person runs `pnpm eval scorecard`.
 6. **Decide.** `pnpm eval defaults` prints the proposal. `pnpm eval defaults --write` (optionally `--except <pack>`) writes `contracts/src/decision-defaults.json`. `pnpm eval calibrate --pack <p>` proposes the confidence bars from labelled answers. `pnpm eval calibrate --weights` proposes the priority weights and bands from the priority files. Each prints its evidence and the `luna.yaml` lines. It marks them proposed, not applied. A person edits `luna.yaml`. The steps for one pack are in [revisit a decision's default engine](runbooks/revisit-a-default-engine.md).
 
-#### The automatic loop: TBD
+#### Config proposals
 
-**Nobody has built or designed it.** No scheduled harvest, re-measure, bar change or engine change exists. No document should say one does. It would need these things. It needs a scheduled harvest and re-measure. It needs enough ground truth from real cards to know what to optimise. The own floors of the tools are 20 labelled answers per question and 30 priority files. Most packs have far fewer today. It needs a rule for when the evidence is enough to propose a change of engine or bar. It needs a rule for which changes a person must approve. It needs a way to undo a change that made things worse. It needs a budget for the metered engine.
+The machine can draft a `luna.yaml` change from evidence. A person still turns the loop. Nothing here runs by itself.
+
+**How it starts.** A person runs `pnpm eval propose --repo <abs path>`. The command turns the baselines in `evals/baselines/` and the scorecards in `decision-defaults.json` into candidates. It posts them to `POST /repos/proposals`. `--dry-run` prints the request and calls nothing. The machine adds the repo's own signals from the last 30 days (`SIGNAL_DAYS`). It reads them per pack:
+
+- `runs` and `escalations` come from the repo's `stage_runs`. An escalated outcome counts as an escalation.
+- `stuck` counts the loop guard's stops in the repo's economy log.
+- `costUsd` is the stage runs' cost plus the cost the ledger holds for runs that are no stage run.
+
+**The rule.** `proposeConfig` (`machine/src/domain/config-proposal.ts`) is a fixed rule. It calls no model. It decides per pack, from these constants:
+
+- A candidate needs `MIN_CASES = 3` cases. A pack needs `MIN_RUNS = 10` runs in the repo. Otherwise the pack has no signal.
+- The trouble rate is (escalations + stuck) / runs.
+- At `TROUBLE = 0.25` or more, the pack steps up. It takes the candidate with the best quality, at least `GAIN = 0.10` above the current one.
+- Below `CALM = 0.10`, the pack steps down. It takes the cheapest candidate that costs at most `CHEAPER = 0.7` of the current one and loses at most `TOLERANCE = 0.05` of quality.
+- A change is only to an engine the pack allows, at an effort that engine supports.
+- One proposal holds at most `MAX_CHANGES = 3` changes. Step-ups come first.
+
+Each change carries a `why` built from the numbers. It is never model text.
+
+**The gate.** The proposal is a card on route `config`. It waits at `awaiting_setup` with the new `luna.yaml`, the old one and the changes. The board shows the changes as a table above the file. `a` writes the file to the repo. `N` rejects the card. A config card is never sent back. A repo has at most one open config card. A new proposal replaces what the open card asks.
+
+**The decline memory.** A rejected card stays archived with its changes. For `DECLINE_DAYS = 30` days, the rule does not propose the same change again.
+
+**Still by hand:**
+
+- Measuring. A person re-runs the evals (`pnpm eval --pack <p> --engine <e> --effort <x> --save-baseline`) when a model, a pack or a prompt changes. The rule trusts the baselines as they are.
+- Asking. A person runs `pnpm eval propose`. No schedule runs it.
+- Approving. A person reads the card on the board. Nothing writes `luna.yaml` without an approval.
 
 #### Not built (waves 18 and before: what the improvement loop does not yet gather or do)
 
@@ -438,6 +465,7 @@ A person turns the loop, one step at a time, today. Nothing below runs by itself
 - For `fix_scope`, "a person sent it to the verifier or the planner" is not a signal anywhere yet. `size_estimate` labels lines only. The retro holds no counted file count, so `est_files` stays unlabelled.
 - A `learned()` call that names neither a card nor a repository gets the machine's default. The machine keeps the truth, whatever a repository says. One example is `intake_dedup` from a Slack or Jira intake with no card. Another is a conversation channel that no repository or two repositories claim. A third is a ticket with no repository link. Calls that name no task get the default `learning` values and no `repo`.
 - `pnpm eval calibrate --repo <path>` (a repository's own bars beside the pack's) does not exist yet.
+- A config proposal changes only a pack's engine and effort. It does not change the bars or the priority weights. No schedule harvests, re-measures or proposes. The signals leave out `POST /runs` calls, because `pack_runs` records no repo. A change that made things worse has no automatic undo: a person restores `luna.yaml` from git.
 - The second reading of every hand-written case came in the same pass as the first, not independently. Read `pnpm eval cases --pack <p>` before a baseline counts on it.
 
 ## Token economy

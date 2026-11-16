@@ -99,7 +99,7 @@ generates the tables below. A test fails when they drift from the registry.
 | `T` | correct the triage record |
 | `p` | post these questions at the source |
 | `A` | memory review: approve, skip the rules |
-| `N` | reject the plan, with a comment; reject the split, with a comment; reject the release, archive the card |
+| `N` | reject the plan, with a comment; reject the split, with a comment; reject the proposal, archive the card; reject the release, archive the card |
 | `u` | open to excuse untestable criteria |
 | `r` | send back with a reason |
 | `x` then `S` | ship: approve and open the PR |
@@ -265,7 +265,7 @@ These are the popup's keys. `?` inside it lists them with the ticket's state.
 | `T` | correct the triage record |
 | `p` | post these questions at the source |
 | `A` | memory review: approve, skip the rules |
-| `N` | reject the plan, with a comment; reject the split, with a comment; reject the release, archive the card |
+| `N` | reject the plan, with a comment; reject the split, with a comment; reject the proposal, archive the card; reject the release, archive the card |
 | `u` | approve, excusing untestable criteria |
 | `r` | send back with a reason |
 | `S` | ship: approve and open the PR |
@@ -656,7 +656,7 @@ What the ticket shows:
 | `a` | start; approve the setup; answer triage's questions; approve the plan; approve the split; archive the ticket; post the reply and close the ticket; approve the tests; ship: publish, watch the PR; ship: approve the release; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
 | `T` | correct the triage record |
 | `p` | post these questions at the source |
-| `N` | reject the plan, with a comment; reject the split, with a comment; reject the release, archive the card |
+| `N` | reject the plan, with a comment; reject the split, with a comment; reject the proposal, archive the card; reject the release, archive the card |
 | `u` | approve, excusing untestable criteria |
 | `r` | send back with a reason |
 | `S` | ship: approve and open the PR |

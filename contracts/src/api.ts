@@ -9,7 +9,7 @@ import type { SlackSnapshot } from "./slack.ts";
 import type { JiraLink, TaskSla } from "./jira.ts";
 import type { AgentPack, AgentRole, Pack } from "./packs.ts";
 import { type CredentialOwner, EngineId } from "./engines.ts";
-import type { ModelEntry, RuntimeId } from "./models.ts";
+import { EffortId, type ModelEntry, type RuntimeId } from "./models.ts";
 import { type CardFields, CardEntryFields } from "./card.ts";
 import type { CardEventName } from "./card-events.ts";
 import type { TaskReports } from "./reports.ts";
@@ -88,6 +88,25 @@ export type EconomyImported = z.infer<typeof EconomyImported>;
 /** `POST /repos/setup`: have the setup pack propose a luna.yaml for the checkout at `repoPath`. */
 export const SetupRepoInput = z.object({ repoPath: z.string().trim().min(1) });
 export type SetupRepoInput = z.infer<typeof SetupRepoInput>;
+
+/** One scorecard row for `POST /repos/proposals`: an engine at an effort (null for a decision pack) over `n` cases. `quality` is the pass rate (agent pack) or the acted-on accuracy (decision pack). */
+export const ProposalCandidate = z.object({
+  engine: EngineId,
+  effort: EffortId.nullable(),
+  n: z.number().int().min(0),
+  quality: z.number().min(0).max(1),
+  costPerCase: z.number().min(0),
+  at: z.string().min(1),
+});
+export type ProposalCandidate = z.infer<typeof ProposalCandidate>;
+
+/** `POST /repos/proposals`: the scorecards for a repo; the machine adds the repo's own run signals and its luna.yaml. `now` is for tests and replays. */
+export const ProposalsInput = z.object({
+  repo: z.string().trim().min(1),
+  candidates: z.partialRecord(PackId, z.array(ProposalCandidate)),
+  now: z.iso.datetime().optional(),
+});
+export type ProposalsInput = z.infer<typeof ProposalsInput>;
 
 /** A luna.yaml's text to check (`POST /repos/config/check`): at most 256 KiB, as the machine reads the file. */
 export const ConfigCheckInput = z.object({ text: z.string().max(256 * 1024) });
