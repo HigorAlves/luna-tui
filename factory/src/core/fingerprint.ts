@@ -2,7 +2,7 @@
 // from the task's data. Two runs with one fingerprint gave the model the same template, role (with
 // the runtime's addendum), skills, access, answer schema and factory rules, so a change in quality
 // between them is the model's or the task's; a new fingerprint names a change in the harness.
-import { type Access, type Pack, type ResolvedEngine, type RunInfo, type ToolMask, answerJsonSchema } from "@hardness/contracts";
+import { type Access, type Effort, type Pack, type ResolvedEngine, type RunInfo, type ToolMask, answerJsonSchema } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -70,7 +70,7 @@ export function sdkInfo(name: string): { name: string; version: string } {
 
 /** What a run ran on and its fingerprint: `template` is the prompt template, or what a decision
  *  pack asks in its place. */
-export function runInfo(runtime: Runtime, engine: ResolvedEngine, pack: Pack, template: string, factoryRoot: string, mask?: ToolMask): RunInfo {
+export function runInfo(runtime: Runtime, engine: ResolvedEngine, pack: Pack, template: string, factoryRoot: string, mask?: ToolMask, effort?: Effort): RunInfo {
   // Only Claude narrows by a mask (eve's apps are built with the image), so only its runs are told apart by one.
   const applied = runtime.id === "claude" && pack.kind === "agent" ? maskedPack(pack, mask) : pack;
   const hash = fingerprint({
@@ -81,5 +81,5 @@ export function runInfo(runtime: Runtime, engine: ResolvedEngine, pack: Pack, te
     answer: answerJsonSchema(pack),
     mask: applied === pack ? null : maskKey(mask),
   });
-  return { runtime: runtime.id, engine: engine.id, modelId: engine.modelId, sdk: sdkInfo(runtime.sdk), fingerprint: hash };
+  return { runtime: runtime.id, engine: engine.id, modelId: engine.modelId, ...(effort && { effort }), sdk: sdkInfo(runtime.sdk), fingerprint: hash };
 }

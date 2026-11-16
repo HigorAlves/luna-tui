@@ -1,6 +1,6 @@
 // What main.ts hands a runtime and what it gets back. A runtime runs one prepared stage on its
 // vendor's SDK; reading the input, rendering the prompt and writing the result stay in main.ts.
-import type { Pack, ResolvedEngine, RuntimeId, StageInput } from "@hardness/contracts";
+import type { Effort, Pack, ResolvedEngine, RuntimeId, StageInput } from "@hardness/contracts";
 
 import type { DelegateTool } from "./delegate.ts";
 import type { JudgePort } from "./economy/session.ts";
@@ -13,6 +13,8 @@ export interface RunContext {
   /** The engine the stage runs on, resolved to its pinned model ID; its runtime is this one. */
   engine: ResolvedEngine;
   input: StageInput;
+  /** How hard the model thinks: the input's effort, else the pack's own (main.ts settles it); absent means the pack's own. */
+  effort?: Effort;
   prompt: string;
   paths: {
     /** The factory package: roles/, prompts/ and plugin/ are read from here. */

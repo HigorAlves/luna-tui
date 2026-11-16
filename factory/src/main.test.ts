@@ -204,6 +204,7 @@ describe("factory main (dry run)", () => {
       runtime: "claude",
       engine: "claude:haiku",
       modelId: "claude-haiku-5-5",
+      effort: PACKS.triage.effort,
       sdk: { name: "@anthropic-ai/claude-agent-sdk", version: expect.stringMatching(/^\d+\.\d+\.\d+/) },
       fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
@@ -221,6 +222,26 @@ describe("factory main (dry run)", () => {
     const { stdout } = run(stageInput("triage", { engine: "claude:haiku" }));
     const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
     expect(options.model).toBe("claude-haiku-5-5");
+  });
+
+  it("runs a pack at the effort the input names, over the pack's own", () => {
+    expect(PACKS.triage.effort).not.toBe("low");
+    const claude = run(stageInput("triage", { effort: "low" }));
+    expect(JSON.parse(claude.stdout.slice(claude.stdout.indexOf("{"), claude.stdout.lastIndexOf("}") + 1))).toMatchObject({ effort: "low" });
+    expect(claude.result.run).toMatchObject({ effort: "low" });
+    const eve = run(stageInput("triage", { engine: "codex:sol", effort: "low" }));
+    expect(JSON.parse(eve.stdout.slice(eve.stdout.indexOf("{"), eve.stdout.lastIndexOf("}") + 1))).toMatchObject({ reasoning: "low" });
+  });
+
+  it("records the pack's own effort when the input names none", () => {
+    expect(run(stageInput("triage")).result.run).toMatchObject({ effort: PACKS.triage.effort });
+  });
+
+  it("fails the stage as invalid input on an effort the engine does not support", () => {
+    // A decision engine supports no effort.
+    const { code, result } = run(stageInput("triage", { engine: "jev", effort: "low" }));
+    expect(code).toBe(0);
+    expect(result).toMatchObject({ ok: false, outcome: "fail", error: "invalid stage input: jev does not support effort low (supports: none)" });
   });
 
   it("ends the stage, without a crash, on an engine whose runtime cannot run the pack", () => {

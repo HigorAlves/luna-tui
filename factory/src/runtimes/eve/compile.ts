@@ -97,7 +97,8 @@ export function agentFiles(pack: AgentPack, options: CompileOptions): Record<str
     "",
     "export default defineAgent({",
     `  model: ${model.expr},`,
-    `  reasoning: "${pack.effort}",`,
+    // The run's effort, which the runner sets in the server's environment (it starts one per run); the pack's own otherwise.
+    `  reasoning: (process.env.LUNA_EFFORT ?? "${pack.effort}") as "low" | "medium" | "high",`,
     "  defaultTools: false,",
     `  limits: { sessionUsage: ${usageLimit(pack)} },`,
     "});",

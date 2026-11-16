@@ -2,7 +2,7 @@
 // factory/roles/<role>/role.md; the effort, tools, limits and skills come from the pack, the model
 // from the engine it runs on.
 import type { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
-import { type AgentPack, type AgentRole, type Helper, resolveEngine } from "@hardness/contracts";
+import { type AgentPack, type AgentRole, type Effort, type Helper, resolveEngine } from "@hardness/contracts";
 
 import { readRole } from "../../core/roles.ts";
 
@@ -30,13 +30,13 @@ const HELPER: Partial<Record<AgentRole, HelperSpec>> = {
 export const subagentHelpers = (pack: AgentPack): Helper[] => pack.helpers.filter((h) => resolveEngine(h.engine).runtime === "claude");
 
 /** The definition a pack runs as on `modelId`, keyed by its role name, plus one per helper it may dispatch. */
-export function agentDefinitions(pack: AgentPack, rolesDir: string, modelId: string): Record<string, AgentDefinition> {
+export function agentDefinitions(pack: AgentPack, rolesDir: string, modelId: string, effort: Effort = pack.effort): Record<string, AgentDefinition> {
   if (!pack.agent) return {};
   const helpers = Object.fromEntries(
     subagentHelpers(pack).map(({ role, engine }) => {
       const { description, body } = readRole(rolesDir, role);
       const helper: HelperSpec = HELPER[role] ?? { tools: ["Read", "Glob", "Grep"] };
-      return [role, { description, prompt: body, effort: pack.effort, ...helper, model: resolveEngine(engine).modelId }];
+      return [role, { description, prompt: body, effort, ...helper, model: resolveEngine(engine).modelId }];
     }),
   );
   const { description, body: prompt } = readRole(rolesDir, pack.agent);
@@ -48,7 +48,7 @@ export function agentDefinitions(pack: AgentPack, rolesDir: string, modelId: str
       // list on the definition replaces the toolset and drops the SDK's StructuredOutput tool,
       // so the stage's JSON answer would arrive as text instead of `structured_output`.
       model: modelId,
-      effort: pack.effort,
+      effort,
       // No `maxTurns` either: the query's own limit is the slice-scaled budget the machine set.
       skills: pack.skills.map((skill) => `${PLUGIN_NAME}:${skill}`),
     },

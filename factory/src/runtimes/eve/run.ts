@@ -102,6 +102,7 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
   if (pack.kind === "agent" && pack.agent === null) return { ...EMPTY_RUN, error: `pack ${pack.id} has no agent to run` };
   // A decision pack is one turn: the questions as the message, the answer schema as the output schema.
   const decision = pack.kind === "decision" ? pack : null;
+  const effort = ctx.effort ?? (pack.kind === "agent" ? pack.effort : "low");
   // A mask changes the Claude run's tools; eve's apps are built with the image, so it is said once and ignored.
   if (pack.kind === "agent" && input.context.economy?.mask && maskKey(input.context.economy.mask) !== null) emit({ kind: "note", payload: { phase: "economy_mask_skipped", pack: pack.id, reason: "an eve app is built with the image; a mask does not narrow it" } });
   const message = decision ? renderDecision(decision.questions, stateOf(input)) : prompt;
@@ -116,7 +117,7 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
       agent: app,
       built: existsSync(entry),
       model: `${apiKey ? "openai" : "chatgpt"}(${engine.modelId})`,
-      reasoning: pack.kind === "agent" ? pack.effort : "low",
+      reasoning: pack.kind === "agent" ? effort : "low",
       tools: pack.kind === "agent" ? [...eveTools(pack.access), ...(delegatedHelpers(pack, "eve").length > 0 ? [DELEGATE] : [])] : [],
       skills: pack.kind === "agent" && pack.access.skills ? pack.skills : [],
       maxModelCalls: maxTurns,
@@ -184,6 +185,8 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
         LUNA_FACTORY: "1",
         LUNA_EVE_SECRETS: secretsFile,
         LUNA_EVE_MODEL: engine.modelId,
+        // The compiled agent's reasoning (compile.ts) reads this when the server starts.
+        LUNA_EFFORT: effort,
         LUNA_EVE_AUTH: apiKey ? "api-key" : "chatgpt",
         // The compiled token budget (compile.ts) scales with the turns this run was given.
         LUNA_EVE_MAX_TURNS: String(maxTurns),

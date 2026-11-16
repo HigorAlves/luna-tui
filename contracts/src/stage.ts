@@ -1256,6 +1256,8 @@ export const RunInfo = z.object({
   runtime: z.string(),
   engine: z.string(),
   modelId: z.string(),
+  /** The effort the run ran at; absent on runs recorded before it was set per run. */
+  effort: EffortId.optional(),
   sdk: z.object({ name: z.string(), version: z.string() }),
   fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
 });

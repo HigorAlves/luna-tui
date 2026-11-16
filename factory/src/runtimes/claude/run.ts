@@ -104,7 +104,7 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
     // The folders a stage reads or writes beside /work: without them the SDK refuses a shell read of /in/stage.json that the guard's roots allow.
     additionalDirectories: [paths.input, paths.out, paths.scratch],
     agent: pack.agent,
-    agents: agentDefinitions(pack, join(paths.factoryRoot, "roles"), engine.modelId),
+    agents: agentDefinitions(pack, join(paths.factoryRoot, "roles"), engine.modelId, ctx.effort ?? pack.effort),
     systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: [FACTORY_RULES, ...commandsLine(pack.access.commands)].join("\n") },
     plugins: [{ type: "local" as const, path: join(paths.factoryRoot, "plugin") }],
     // With skills masked the SDK offers only the rest (it hides the others from the model and rejects their calls); with no mask the key is absent.
@@ -124,7 +124,7 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
     },
     // The pinned ID, never an alias: the model does not change under the stage between runs.
     model: engine.modelId,
-    effort: pack.effort,
+    effort: ctx.effort ?? pack.effort,
     // The scratch folder is the model's TMPDIR: the one place outside /work and /out it may write.
     env: { ...env, LUNA_FACTORY: "1", TMPDIR: paths.scratch },
   };

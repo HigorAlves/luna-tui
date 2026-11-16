@@ -34,7 +34,8 @@ describe("agentFiles", () => {
     const agent = files["agent/agent.ts"]!;
     expect(agent).toContain('import { stageModel } from "../../../src/runtimes/eve/agent/model.ts"');
     expect(agent).toContain("model: stageModel()");
-    expect(agent).toContain('reasoning: "high"');
+    // The run's effort, set in the server's environment, over the pack's own.
+    expect(agent).toContain('process.env.LUNA_EFFORT ?? "high"');
     expect(agent).toContain("defaultTools: false");
     expect(agent).toMatch(/limits: \{ sessionUsage: /);
     // The budget follows the turns the run was given, as the runner's call cap and the dry run do.
