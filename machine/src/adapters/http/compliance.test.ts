@@ -43,7 +43,7 @@ const fields = (over: Partial<ComplianceDraft> = {}) => ({
 let incidentList: Incident[] = [];
 let wrote: unknown[][];
 let wikiFails: string | null;
-const mk = (wired = true, questionnaires?: { rerun: (id: string, repo: string) => Promise<ComplianceDraft> }) => {
+const mk = (wired = true, questionnaires?: { rerun: (id: string, repo: string) => Promise<ComplianceDraft> }, vulns?: { list(): Promise<unknown[]> }, releaseNotes?: { draft(input: unknown): Promise<unknown> }) => {
   wrote = [];
   wikiFails = null;
   const stateDir = mkdtempSync(join(tmpdir(), "compliance-http-"));
@@ -62,7 +62,7 @@ const mk = (wired = true, questionnaires?: { rerun: (id: string, repo: string) =
     orgs: async () => ["acme"],
     buildQuarter: vi.fn(async (org: string) => drafts.open(fields({ id: `access_review:${org}:2026-Q4`, kind: "access_review", title: `Access review, ${org}, 2026-Q4`, period: "2026-Q4", targets: [{ kind: "access_slices", org, period: "2026-Q4" }] }))),
   };
-  const compliance = wired ? { drafts, publisher: publisher({ drafts, wiki }), evidence, repos: async () => ["acme/web"], access, incidents: { list: async () => incidentList }, ...(questionnaires ? { questionnaires } : {}) } : undefined;
+  const compliance = wired ? { drafts, publisher: publisher({ drafts, wiki }), evidence, repos: async () => ["acme/web"], access, incidents: { list: async () => incidentList }, ...(questionnaires ? { questionnaires } : {}), ...(vulns ? { vulns: vulns as never } : {}), ...(releaseNotes ? { releaseNotes: releaseNotes as never } : {}) } : undefined;
   const app = createApp({ db, pipeline: new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true }), bus: new Bus(), ...(compliance ? { compliance } : {}), access: { host: "127.0.0.1", port: 1, token: "tok" } });
   return { app, drafts };
 };
@@ -200,5 +200,34 @@ describe("the compliance routes", () => {
     expect(await res.json()).toMatchObject({ id: "change_evidence:acme/web:2026-09", status: "waiting" });
     expect((await run({ repo: "acme/other", period: "2026-09" })).status).toBe(400);
     expect((await run({ repo: "acme/web", period: "2026-13" })).status).toBe(400);
+  });
+
+  it("list the vulnerability alerts the cards stand for, behind the token, and answer 503 without the job", async () => {
+    const rows = [{ repo: "acme/web", key: "dependabot:7", severity: "high", lane: "fast", deadline: "2026-12-01", cardId: "c1", overdue: false }];
+    const { app } = mk(true, undefined, { list: async () => rows });
+    expect((await app.request("/compliance/vulns")).status).toBe(401);
+    const res = await app.request("/compliance/vulns", { headers: auth });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ alerts: rows });
+    expect((await mk().app.request("/compliance/vulns", { headers: auth })).status).toBe(503);
+    expect((await mk(false).app.request("/compliance/vulns", { headers: auth })).status).toBe(503);
+  });
+
+  it("draft release notes for a known repo and tag, and refuse an unknown repo, a bad tag or a missing job", async () => {
+    const draft = vi.fn(async (_input: unknown) => ({ id: "release_notes:acme/web:v1.4.0" }));
+    const { app } = mk(true, undefined, undefined, { draft });
+    const run = (body: unknown, target = app) => target.request("/compliance/release-notes", { method: "POST", headers: auth, body: JSON.stringify(body) });
+    expect((await app.request("/compliance/release-notes", { method: "POST", body: "{}" })).status).toBe(401);
+    const ok = await run({ repo: "acme/web", tag: "v1.4.0", since: "2026-10-01T00:00:00Z" });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ id: "release_notes:acme/web:v1.4.0" });
+    expect(draft).toHaveBeenCalledWith({ repo: "acme/web", tag: "v1.4.0", since: "2026-10-01T00:00:00Z" });
+    await run({ repo: "acme/web", tag: "v1.5.0" });
+    expect(draft).toHaveBeenLastCalledWith({ repo: "acme/web", tag: "v1.5.0" });
+    expect((await run({ repo: "acme/other", tag: "v1" })).status).toBe(400);
+    expect((await run({ repo: "acme/web", tag: "v 1" })).status).toBe(400);
+    expect((await run({ repo: "acme/web", tag: "v1", since: "last week" })).status).toBe(400);
+    expect(draft).toHaveBeenCalledTimes(2);
+    expect((await run({ repo: "acme/web", tag: "v1" }, mk().app)).status).toBe(503);
   });
 });

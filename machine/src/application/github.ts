@@ -154,6 +154,36 @@ export interface RulesetBypassActor {
   mode: string;
 }
 
+export type AlertSeverity = "critical" | "high" | "medium" | "low";
+
+/** An open Dependabot alert. */
+export interface DependabotAlert {
+  number: number;
+  package: string;
+  ecosystem: string;
+  severity: AlertSeverity;
+  manifestPath: string;
+  vulnerableRange: string;
+  /** The first version that fixes it; null when none does yet. */
+  patchedVersion: string | null;
+  ghsa: string;
+  cve: string | null;
+  summary: string;
+  url: string;
+  createdAt: string;
+}
+
+/** An open code-scanning alert. */
+export interface CodeScanningAlert {
+  number: number;
+  rule: string;
+  severity: AlertSeverity;
+  tool: string;
+  path: string;
+  url: string;
+  createdAt: string;
+}
+
 export interface GitHub {
   /** Who the token belongs to, and the slugs of their teams (empty when the token cannot read them). */
   viewer(): Promise<{ login: string; teams: string[] }>;
@@ -229,6 +259,10 @@ export interface GitHub {
   adminsEnforced(slug: string, branch: string): Promise<boolean | "unknown">;
   /** Whether each login made any contribution to the org's repos since `since` (ISO); a login GitHub does not know is false. */
   memberActivity(org: string, logins: string[], since: string): Promise<Map<string, boolean>>;
+  /** The open Dependabot alerts of `slug`; "unknown" when the token cannot read them (403 or 404). */
+  dependabotAlerts(slug: string): Promise<DependabotAlert[] | "unknown">;
+  /** The open code-scanning alerts of `slug`; "unknown" when the token cannot read them (403 or 404). */
+  codeScanningAlerts(slug: string): Promise<CodeScanningAlert[] | "unknown">;
   /** Every check run and commit status on `ref`. */
   prChecks(slug: string, ref: string): Promise<Check[]>;
   /** The failed jobs' logs of a workflow run, joined. */
@@ -245,6 +279,10 @@ export interface GitHub {
    *  A draft has no tag and fires no release event, so no workflow of the repo runs because evidence was published. */
   ensureRelease(slug: string, tag: string, release: { name: string; prerelease: boolean }): Promise<{ id: number; url: string }>;
   releaseAssets(slug: string, releaseId: number): Promise<Array<{ id: number; name: string; url: string }>>;
+  /** Replaces a release's body. */
+  updateReleaseBody(slug: string, releaseId: number, body: string): Promise<void>;
+  /** The latest published release (never a draft or a pre-release), or null when the repo has none. */
+  latestRelease(slug: string): Promise<{ tag: string; publishedAt: string } | null>;
   /** Uploads a file to a release; `url` is the asset's download url. */
   uploadReleaseAsset(slug: string, releaseId: number, name: string, data: Buffer, contentType: string): Promise<{ url: string }>;
 }
@@ -304,6 +342,10 @@ export function noTokenGitHub(): GitHub {
     prHeadSha: refuse,
     ensureRelease: refuse,
     releaseAssets: refuse,
+    updateReleaseBody: refuse,
+    latestRelease: refuse,
+    dependabotAlerts: refuse,
+    codeScanningAlerts: refuse,
     uploadReleaseAsset: refuse,
   };
 }

@@ -16,7 +16,7 @@ describe("context-only packs", () => {
     const none = PackId.options.filter((id) => packStates(id).length === 0);
     // A new context-only pack must be given a context key or be denied: never on demand by accident.
     expect(none.filter((id) => !NOT_ON_DEMAND.includes(id)).sort()).toEqual(Object.keys(CONTEXT_OF).sort());
-    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["access_review", "breach_assess", "change_exceptions", "chat_triage", "ci_failure_class", "comment_intent", "conversation_assess", "conversation_relation", "conversation_reply", "coverage_check", "decompose", "e2e_failure_cause", "escalation_reason", "event_class", "evidence_format", "evidence_valid", "fact_propose", "finding_classify", "fix_scope", "foreman", "frame_privacy", "intake_dedup", "jira_intake", "loop_judge", "loop_redirect", "plan_check", "postmortem", "pr_link", "questionnaire", "red_check", "risk_score", "scope_check", "size_estimate", "slack_triage", "split_check", "ticket_assess", "ticket_recommend", "ticket_reply", "ticket_validity", "triage_signals", "worth_learning"]);
+    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["access_review", "breach_assess", "change_exceptions", "chat_triage", "ci_failure_class", "comment_intent", "conversation_assess", "conversation_relation", "conversation_reply", "coverage_check", "decompose", "e2e_failure_cause", "escalation_reason", "event_class", "evidence_format", "evidence_valid", "fact_propose", "finding_classify", "fix_scope", "foreman", "frame_privacy", "intake_dedup", "jira_intake", "loop_judge", "loop_redirect", "plan_check", "postmortem", "pr_link", "questionnaire", "red_check", "release_notes", "risk_score", "scope_check", "size_estimate", "slack_triage", "split_check", "ticket_assess", "ticket_recommend", "ticket_reply", "ticket_validity", "triage_signals", "vuln_triage", "worth_learning"]);
     expect(isContextPack("triage")).toBe(false);
     expect(isContextPack("reviewing_memory")).toBe(false);
     expect(isContextPack("chat_triage")).toBe(true);
@@ -130,6 +130,28 @@ describe("buildContextPackInput", () => {
     const input = buildContextPackInput("questionnaire", { questionnaire });
     expect(StageInput.parse(input)).toEqual(input);
     expect(input).toMatchObject({ pack: "questionnaire", stage: "questionnaire", task: { id: "questionnaire", title: "Questionnaire for acme/api", repoPath: "" }, context: { projectContext: null, questionnaire }, limits: { maxTurns: 2 } });
+  });
+
+  it("builds vuln_triage's input around a synthetic task named for the alert, the alert and policy under context.vulns", () => {
+    const vulns = { repo: "acme/api", alert: { source: "dependabot" as const, number: 7, severity: "high" as const, title: "Prototype pollution", url: "https://github.com/acme/api/security/dependabot/7", createdAt: "2026-11-01T00:00:00Z", package: "lodash", ecosystem: "npm", manifestPath: "pnpm-lock.yaml", vulnerableRange: "< 4.17.21", patchedVersion: "4.17.21", ghsa: "GHSA-aaaa", cve: null, rule: null, tool: null, path: null }, policy: null, today: "2026-11-16" };
+    expect(isContextPack("vuln_triage")).toBe(true);
+    expect(packStates("vuln_triage")).toEqual([]);
+    expect(contextSchema("vuln_triage").safeParse({ vulns }).success).toBe(true);
+    expect(contextSchema("vuln_triage").safeParse({ chat }).success).toBe(false);
+    const input = buildContextPackInput("vuln_triage", { vulns });
+    expect(StageInput.parse(input)).toEqual(input);
+    expect(input).toMatchObject({ pack: "vuln_triage", stage: "vuln_triage", task: { id: "vuln-triage", title: "Vulnerability alert of acme/api", repoPath: "" }, context: { projectContext: null, vulns }, limits: { maxTurns: 1, timeoutMs: 120_000 } });
+  });
+
+  it("builds release_notes' input around a synthetic task named for the release, the PRs under context.release", () => {
+    const release = { repo: "acme/api", tag: "v1.4.0", since: "2026-10-01T00:00:00Z", prs: [{ number: 38, title: "Export a report as CSV", author: "marta", body: "Adds the button.", url: "https://github.com/acme/api/pull/38" }] };
+    expect(isContextPack("release_notes")).toBe(true);
+    expect(packStates("release_notes")).toEqual([]);
+    expect(contextSchema("release_notes").safeParse({ release }).success).toBe(true);
+    expect(contextSchema("release_notes").safeParse({ chat }).success).toBe(false);
+    const input = buildContextPackInput("release_notes", { release });
+    expect(StageInput.parse(input)).toEqual(input);
+    expect(input).toMatchObject({ pack: "release_notes", stage: "release_notes", task: { id: "release-notes", title: "Release notes of acme/api v1.4.0", repoPath: "" }, context: { projectContext: null, release }, limits: { maxTurns: 1, timeoutMs: 120_000 } });
   });
 
   it("builds the plan checks' input around a synthetic task named for the brief, the plan under context.plan", () => {

@@ -34,6 +34,8 @@ function stub(answers: Record<string, unknown>) {
         getCombinedStatusForRef: endpoint("repos.getCombinedStatusForRef"),
         listReleases: endpoint("repos.listReleases"),
         createRelease: endpoint("repos.createRelease"),
+        updateRelease: endpoint("repos.updateRelease"),
+        getLatestRelease: endpoint("repos.getLatestRelease"),
         listReleaseAssets: "repos.listReleaseAssets",
         getContent: endpoint("repos.getContent"),
         uploadReleaseAsset: endpoint("repos.uploadReleaseAsset"),
@@ -841,5 +843,64 @@ describe("ruleBypasses", () => {
 
   it("any other failure is a GitHubError", async () => {
     await expect(failing(500).ruleBypasses("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z")).rejects.toBeInstanceOf(GitHubError);
+  });
+});
+
+describe("security alerts", () => {
+  const DEPENDABOT = "GET /repos/{owner}/{repo}/dependabot/alerts";
+  const SCANNING = "GET /repos/{owner}/{repo}/code-scanning/alerts";
+  const denied = (status: number) => Object.assign(new Error("denied"), { status });
+  const failing = (status: number) => new OctokitGitHub({ paginate: vi.fn(async () => Promise.reject(denied(status))) } as unknown as OctokitLike);
+  const dependabot = {
+    number: 7,
+    created_at: "2026-11-01T00:00:00Z",
+    html_url: "https://x/security/dependabot/7",
+    dependency: { package: { name: "lodash", ecosystem: "npm" }, manifest_path: "pnpm-lock.yaml" },
+    security_advisory: { ghsa_id: "GHSA-aaaa", cve_id: "CVE-2026-1", summary: "Prototype pollution", severity: "high" },
+    security_vulnerability: { vulnerable_version_range: "< 4.17.21", first_patched_version: { identifier: "4.17.21" } },
+  };
+
+  it("lists the open Dependabot alerts, every page, in the shape the triage reads", async () => {
+    const { github, calls } = stub({ [DEPENDABOT]: [dependabot, { ...dependabot, number: 8, security_advisory: { ghsa_id: "GHSA-bbbb", cve_id: null, summary: "s", severity: "critical" }, security_vulnerability: { vulnerable_version_range: "< 2", first_patched_version: null } }] });
+    expect(await github.dependabotAlerts("o/a")).toEqual([
+      { number: 7, package: "lodash", ecosystem: "npm", severity: "high", manifestPath: "pnpm-lock.yaml", vulnerableRange: "< 4.17.21", patchedVersion: "4.17.21", ghsa: "GHSA-aaaa", cve: "CVE-2026-1", summary: "Prototype pollution", url: "https://x/security/dependabot/7", createdAt: "2026-11-01T00:00:00Z" },
+      expect.objectContaining({ number: 8, severity: "critical", patchedVersion: null, cve: null }),
+    ]);
+    expect(calls[0]).toEqual([`paginate ${DEPENDABOT}`, { owner: "o", repo: "a", state: "open", per_page: 100 }]);
+  });
+
+  it("lists the open code-scanning alerts", async () => {
+    const { github, calls } = stub({ [SCANNING]: [{ number: 3, rule: { id: "js/sql-injection", security_severity_level: "critical", severity: "error" }, tool: { name: "CodeQL" }, most_recent_instance: { location: { path: "src/db.ts" } }, html_url: "https://x/security/code-scanning/3", created_at: "2026-11-02T00:00:00Z" }, { number: 4, rule: { id: "js/unused", severity: "note" }, tool: { name: "CodeQL" }, most_recent_instance: {}, html_url: "https://x/4", created_at: "2026-11-03T00:00:00Z" }] });
+    expect(await github.codeScanningAlerts("o/a")).toEqual([
+      { number: 3, rule: "js/sql-injection", severity: "critical", tool: "CodeQL", path: "src/db.ts", url: "https://x/security/code-scanning/3", createdAt: "2026-11-02T00:00:00Z" },
+      { number: 4, rule: "js/unused", severity: "low", tool: "CodeQL", path: "", url: "https://x/4", createdAt: "2026-11-03T00:00:00Z" },
+    ]);
+    expect(calls[0]).toEqual([`paginate ${SCANNING}`, { owner: "o", repo: "a", state: "open", per_page: 100 }]);
+  });
+
+  it("is unknown when the token cannot read the alerts (403 or 404), and any other failure is a GitHubError", async () => {
+    for (const status of [403, 404]) {
+      expect(await failing(status).dependabotAlerts("o/a")).toBe("unknown");
+      expect(await failing(status).codeScanningAlerts("o/a")).toBe("unknown");
+    }
+    await expect(failing(500).dependabotAlerts("o/a")).rejects.toBeInstanceOf(GitHubError);
+    await expect(failing(500).codeScanningAlerts("o/a")).rejects.toBeInstanceOf(GitHubError);
+  });
+});
+
+describe("release notes", () => {
+  it("replaces a release's body", async () => {
+    const { github, calls } = stub({ "repos.updateRelease": {} });
+    await github.updateReleaseBody("o/a", 11, "## Fixes");
+    expect(calls[0]).toEqual(["repos.updateRelease", { owner: "o", repo: "a", release_id: 11, body: "## Fixes" }]);
+  });
+
+  it("reads the latest published release, or null when there is none", async () => {
+    const { github } = stub({ "repos.getLatestRelease": { tag_name: "v1.2.0", published_at: "2026-10-01T00:00:00Z" } });
+    expect(await github.latestRelease("o/a")).toEqual({ tag: "v1.2.0", publishedAt: "2026-10-01T00:00:00Z" });
+    const none = stub({ "repos.getLatestRelease": Object.assign(new Error("Not Found"), { status: 404 }) });
+    expect(await none.github.latestRelease("o/a")).toBeNull();
+    const broken = stub({ "repos.getLatestRelease": Object.assign(new Error("boom"), { status: 500 }) });
+    await expect(broken.github.latestRelease("o/a")).rejects.toBeInstanceOf(GitHubError);
   });
 });

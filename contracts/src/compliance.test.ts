@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { AccessReviewAnswer, AccessReviewContext, PostmortemAnswer, PostmortemContext, QuestionnaireAnswer, QuestionnaireContext, ChangeExceptionKind, ChangeExceptionsAnswer, ChangeExceptionsContext, NO_ACCESS, PACKS, ComplianceActInput, ComplianceDraft, ComplianceDraftKind, ComplianceDraftsResponse, ComplianceEditInput, ComplianceTarget } from "./index.ts";
+import { AccessReviewAnswer, AccessReviewContext, PostmortemAnswer, PostmortemContext, QuestionnaireAnswer, QuestionnaireContext, VulnTriageAnswer, VulnTriageContext, ReleaseNotesAnswer, ReleaseNotesContext, ChangeExceptionKind, ChangeExceptionsAnswer, ChangeExceptionsContext, NO_ACCESS, PACKS, ComplianceActInput, ComplianceDraft, ComplianceDraftKind, ComplianceDraftsResponse, ComplianceEditInput, ComplianceTarget } from "./index.ts";
 
 const draft = {
   id: "change_evidence:acme/api:2026-10",
@@ -178,5 +178,50 @@ describe("compliance drafts", () => {
     expect(PACKS.postmortem.engines).toMatchObject({ default: "claude:sonnet", allowed: ["claude:sonnet", "claude:opus"] });
     expect(PACKS.postmortem.access).toEqual(NO_ACCESS);
   });
-});
 
+  it("gives the vulnerability triage one alert, the company's policy and today, and answers a lane, a deadline and a work item", () => {
+    const alert = { source: "dependabot", number: 7, severity: "high", title: "Prototype pollution in lodash", url: "https://github.com/acme/api/security/dependabot/7", createdAt: "2026-11-01T00:00:00Z", package: "lodash", ecosystem: "npm", manifestPath: "pnpm-lock.yaml", vulnerableRange: "< 4.17.21", patchedVersion: "4.17.21", ghsa: "GHSA-aaaa-bbbb-cccc", cve: "CVE-2026-1", rule: null, tool: null, path: null };
+    const context = { repo: "acme/api", alert, policy: { path: "Compliance/Policies/Vulnerability-Management.md", text: "High: 14 days." }, today: "2026-11-16" };
+    expect(VulnTriageContext.parse(context)).toEqual(context);
+    expect(VulnTriageContext.parse({ ...context, policy: null }).policy).toBeNull();
+    expect(() => VulnTriageContext.parse({ ...context, alert: { ...alert, source: "snyk" } })).toThrow();
+    expect(() => VulnTriageContext.parse({ ...context, today: "yesterday" })).toThrow();
+    expect(() => VulnTriageContext.parse({ ...context, alert: { ...alert, title: "x".repeat(501) } })).toThrow();
+    const answer = { lane: "fast", deadline: "2026-12-16", severity: "high", title: "Bump lodash to 4.17.21", goal: "Close Dependabot alert 7.", acceptance_criteria: ["The alert closes", "The suite passes"], reason: "A patch bump with a patched version." };
+    expect(VulnTriageAnswer.parse(answer)).toEqual(answer);
+    expect(() => VulnTriageAnswer.parse({ ...answer, lane: "slow" })).toThrow();
+    expect(() => VulnTriageAnswer.parse({ ...answer, deadline: "16/12/2026" })).toThrow();
+    expect(() => VulnTriageAnswer.parse({ ...answer, title: "x".repeat(121) })).toThrow();
+    expect(() => VulnTriageAnswer.parse({ ...answer, goal: "x".repeat(601) })).toThrow();
+    expect(() => VulnTriageAnswer.parse({ ...answer, reason: "x".repeat(301) })).toThrow();
+    expect(() => VulnTriageAnswer.parse({ ...answer, acceptance_criteria: [] })).toThrow();
+    expect(() => VulnTriageAnswer.parse({ ...answer, acceptance_criteria: Array(6).fill("c") })).toThrow();
+  });
+
+  it("runs the vulnerability triager as a text-only agent on haiku or sonnet, with no hands", () => {
+    expect(PACKS.vuln_triage).toMatchObject({ kind: "agent", agent: "vuln-triager", writable: false, maxTurns: 1, effort: "low", template: "vuln_triage.md", helpers: [], skills: [] });
+    expect(PACKS.vuln_triage.engines).toMatchObject({ default: "claude:haiku", allowed: ["claude:haiku", "claude:sonnet"] });
+    expect(PACKS.vuln_triage.access).toEqual(NO_ACCESS);
+  });
+
+  it("gives the release writer the merged PRs and answers highlights, sections of items with their PRs, and breaking changes", () => {
+    const pr = { number: 38, title: "Export a report as CSV", author: "marta", body: "Adds the button.", url: "https://github.com/acme/api/pull/38" };
+    const context = { repo: "acme/api", tag: "v1.4.0", since: "2026-10-01T00:00:00Z", prs: [pr] };
+    expect(ReleaseNotesContext.parse(context)).toEqual(context);
+    expect(ReleaseNotesContext.parse({ ...context, prs: [{ ...pr, author: null }] }).prs[0]!.author).toBeNull();
+    expect(() => ReleaseNotesContext.parse({ ...context, prs: [{ ...pr, body: "x".repeat(2001) }] })).toThrow();
+    expect(() => ReleaseNotesContext.parse({ ...context, prs: Array(201).fill(pr) })).toThrow();
+    expect(() => ReleaseNotesContext.parse({ ...context, tag: "v1 4" })).toThrow();
+    const answer = { highlights: ["CSV export"], sections: [{ heading: "Features", items: [{ text: "Export a report as CSV", prs: [38] }] }], breaking: [] };
+    expect(ReleaseNotesAnswer.parse(answer)).toEqual(answer);
+    expect(() => ReleaseNotesAnswer.parse({ ...answer, highlights: Array(6).fill("h") })).toThrow();
+    expect(() => ReleaseNotesAnswer.parse({ ...answer, sections: [{ heading: "Chores", items: [] }] })).toThrow();
+    expect(() => ReleaseNotesAnswer.parse({ ...answer, sections: [{ heading: "Fixes", items: [{ text: "x".repeat(201), prs: [] }] }] })).toThrow();
+  });
+
+  it("runs the release writer as a text-only agent on haiku or sonnet, with no hands", () => {
+    expect(PACKS.release_notes).toMatchObject({ kind: "agent", agent: "release-writer", writable: false, maxTurns: 1, effort: "low", template: "release_notes.md", helpers: [], skills: [] });
+    expect(PACKS.release_notes.engines).toMatchObject({ default: "claude:haiku", allowed: ["claude:haiku", "claude:sonnet"] });
+    expect(PACKS.release_notes.access).toEqual(NO_ACCESS);
+  });
+});

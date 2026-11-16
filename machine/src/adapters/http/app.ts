@@ -70,6 +70,8 @@ import type { ChangeEvidence } from "../../application/change-evidence.ts";
 import type { AccessReview } from "../../application/access-review.ts";
 import type { IncidentJob } from "../../application/incidents.ts";
 import type { Questionnaires } from "../../application/questionnaires.ts";
+import type { Vulns } from "../../application/vulns.ts";
+import type { ReleaseNotes } from "../../application/release-notes.ts";
 import { type ComplianceDrafts, type CompliancePublisher, DraftNotFoundError, DraftRefusedError, DraftStatusError, StaleDraftError } from "../../application/compliance-drafts.ts";
 import { type TicketMachine, TicketNotFound, TicketRefusal } from "../../application/ticket-machine.ts";
 import { streamSSE } from "hono/streaming";
@@ -137,7 +139,7 @@ export interface AppDeps {
   /** The Ticket Machine; without it the `/tickets` routes are absent. */
   tickets?: TicketMachine;
   /** The manager's drafts (RFC 0008): the store, the publisher an approve goes through, the monthly evidence job, the quarterly access review, the incidents and the `owner/name` of every repo the machine knows. Without it the `/compliance` routes answer 503. */
-  compliance?: { drafts: ComplianceDrafts; publisher: CompliancePublisher; evidence: Pick<ChangeEvidence, "buildMonth">; repos: () => Promise<string[]>; access?: Pick<AccessReview, "orgs" | "buildQuarter">; incidents: Pick<IncidentJob, "list">; questionnaires?: Pick<Questionnaires, "rerun"> };
+  compliance?: { drafts: ComplianceDrafts; publisher: CompliancePublisher; evidence: Pick<ChangeEvidence, "buildMonth">; repos: () => Promise<string[]>; access?: Pick<AccessReview, "orgs" | "buildQuarter">; incidents: Pick<IncidentJob, "list">; vulns?: Pick<Vulns, "list">; releaseNotes?: Pick<ReleaseNotes, "draft">; questionnaires?: Pick<Questionnaires, "rerun"> };
   /** Closes a task's herdr watch tab when it is deleted; closing it on `closed` is main.ts's job. */
   watcher?: Watcher;
   /** Enables `POST /dev/stubs` when the stub stages are in use. */
@@ -185,6 +187,11 @@ const ForemanInput = z.object({ question: ForemanContext.shape.question, history
 
 class BadRequest extends Error {}
 
+const ReleaseNotesRunInput = z.object({
+  repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/name"),
+  tag: z.string().regex(/^[A-Za-z0-9._\/-]+$/, "a tag"),
+  since: z.string().datetime().optional(),
+});
 const EvidenceRunInput = z.object({ repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/name"), period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "YYYY-MM") });
 const AccessRunInput = z.object({ org: z.string().regex(/^[A-Za-z0-9-]+$/, "a GitHub org") });
 
@@ -724,6 +731,15 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
       const { repo } = await body(c, ComplianceRepoInput);
       if (!(await compliance.repos()).includes(repo)) return fail(c, 400, "unknown_repository", "the machine does not know that repository");
       return c.json(await compliance.questionnaires.rerun(id(c), repo));
+    });
+    // The security alerts a card stands for, with each one's lane, deadline and whether it is overdue.
+    app.get("/compliance/vulns", async (c) => (compliance?.vulns ? c.json({ alerts: await compliance.vulns.list() }) : off(c)));
+    // Release notes for a tag, drafted from the PRs merged since the last release (or `since`); the person approves them onto the release.
+    app.post("/compliance/release-notes", async (c) => {
+      if (!compliance?.releaseNotes) return off(c);
+      const { repo, tag, since } = await body(c, ReleaseNotesRunInput);
+      if (!(await compliance.repos()).includes(repo)) return fail(c, 400, "unknown_repository", "the machine does not know that repository");
+      return c.json(await compliance.releaseNotes.draft({ repo, tag, ...(since ? { since } : {}) }));
     });
     // An on-demand rebuild of a month, for testing a past one: the same draft the monthly job opens.
     app.post("/compliance/evidence/run", async (c) => {

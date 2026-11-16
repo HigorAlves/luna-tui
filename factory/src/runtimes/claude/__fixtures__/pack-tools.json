@@ -756,6 +756,14 @@
     "allowedTools": [],
     "tools": []
   },
+  "vuln_triage": {
+    "allowedTools": [],
+    "tools": []
+  },
+  "release_notes": {
+    "allowedTools": [],
+    "tools": []
+  },
   "compliance_review": {
     "allowedTools": [
       "Read",

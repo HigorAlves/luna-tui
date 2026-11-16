@@ -81,6 +81,8 @@ import { jiraActionsWriter } from "./application/jira-actions.ts";
 import { breachAssessor } from "./application/breach-assessment.ts";
 import { createSentry } from "./adapters/sentry/rest.ts";
 import { createDatadog } from "./adapters/datadog/rest.ts";
+import { Vulns } from "./application/vulns.ts";
+import { ReleaseNotes, githubReleaseWriter } from "./application/release-notes.ts";
 import { ComplianceDrafts, publisher as compliancePublisher } from "./application/compliance-drafts.ts";
 import { sharedWiki } from "./adapters/git/wiki.ts";
 import { questionnaireWriters } from "./application/compliance-writers.ts";
@@ -914,7 +916,32 @@ const questionnaires = new Questionnaires({
   stateDir: config.stateDir,
 });
 questionnaireJob = questionnaires;
-const compliance = { questionnaires, drafts: complianceDrafts, publisher: compliancePublisher({ drafts: complianceDrafts, wiki, handlers: { access_slices: accessSlicesWriter({ wiki, stateDir: config.stateDir }), jira_actions: jiraActionsWriter({ jira: jiraApi, stateDir: config.stateDir }), ...questionnaireWriters({ wiki, sender: slackSender, jira: jiraApi, stateDir: config.stateDir }) } }), evidence: changeEvidence, access: accessReview, repos: complianceRepos, incidents: incidentJob };
+/** Alerts become cards: the `vuln_triage` pack reads each new one with the repository's policy page. */
+const vulns = new Vulns({
+  github,
+  wiki,
+  triage: async (context) => {
+    if (!packRuns) throw new Error("agents are off: no model to triage the alert");
+    return (await ownCalls(packRuns).run({ pack: "vuln_triage", context: { vulns: context } }, INTAKE_CLIENT)).answer;
+  },
+  pipeline,
+  repos: complianceRepos,
+  repoPathOf: async (slug) => {
+    for (const path of await knownRepos()) if ((await originSlugOf(path).catch(() => null)) === slug) return path;
+    return null;
+  },
+  stateDir: config.stateDir,
+});
+/** Release notes, on demand: the `release_notes` pack drafts them, and an approve sets the body of the release. */
+const releaseNotes = new ReleaseNotes({
+  github,
+  drafts: complianceDrafts,
+  write: async (context) => {
+    if (!packRuns) throw new Error("agents are off: no model to write the release notes");
+    return (await ownCalls(packRuns).run({ pack: "release_notes", context: { release: context } }, INTAKE_CLIENT)).answer;
+  },
+});
+const compliance = { questionnaires, drafts: complianceDrafts, publisher: compliancePublisher({ drafts: complianceDrafts, wiki, handlers: { access_slices: accessSlicesWriter({ wiki, stateDir: config.stateDir }), jira_actions: jiraActionsWriter({ jira: jiraApi, stateDir: config.stateDir }), github_release: githubReleaseWriter(github), ...questionnaireWriters({ wiki, sender: slackSender, jira: jiraApi, stateDir: config.stateDir }) } }), evidence: changeEvidence, access: accessReview, repos: complianceRepos, incidents: incidentJob, vulns, releaseNotes };
 /** A person approves the exact base the repository's luna.yaml (on the user's checkout) names now, or the exact key of the Dockerfile its devcontainer builds now; any other is refused. */
 const approveBase = async (repo: string, base: string): Promise<{ ok: true } | { ok: false; reason: string }> => {
   if (!agentDeps) return { ok: false, reason: "repository images are off on this machine" };
@@ -1088,6 +1115,12 @@ incidentTicker?.start();
 console.log(incidentTicker ? `incidents: reading ${incidentSourceNames.join(", ")} every 5 minutes` : "incidents: off (MACHINE_INCIDENTS=off, or no Sentry, Datadog, Jira or Slack channel configured)");
 
 /** The minute tick: a gate goes overdue, a stage passes 80% of its target, with no event to say so. */
+// Alerts are read every six hours, and once soon after boot; with no GitHub token every read refuses and the pass only logs.
+const vulnsTicker = new Ticker(() => void vulns.tick().catch((error: unknown) => console.warn("compliance vulns failed", error)), 6 * 60 * MINUTE_MS);
+const vulnsFirst = setTimeout(() => void vulns.tick().catch((error: unknown) => console.warn("compliance vulns failed", error)), 3 * MINUTE_MS);
+vulnsFirst.unref();
+vulnsTicker.start();
+console.log("compliance: Dependabot and code-scanning alerts become cards with deadlines, checked every 6 hours");
 const slaTicker = new Ticker(() => {
   void pipeline
     .list()
@@ -1140,6 +1173,8 @@ async function shutdown(): Promise<void> {
   graphTicker?.stop();
   complianceTicker?.stop();
   incidentTicker?.stop();
+  vulnsTicker.stop();
+  clearTimeout(vulnsFirst);
   if (complianceFirst) clearTimeout(complianceFirst);
   accessTicker?.stop();
   if (accessFirst) clearTimeout(accessFirst);

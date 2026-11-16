@@ -163,3 +163,33 @@ export const QuestionnaireAnswer = z.object({
   unanswered: z.array(z.object({ n: z.number().int().min(1), question: z.string().min(1).max(2000), why: z.string().min(1).max(400) })).max(300),
 });
 export type QuestionnaireAnswer = z.infer<typeof QuestionnaireAnswer>;
+
+/** release_notes: the user-facing notes of one release, from the merged PRs. Each item names the PRs it covers; the machine drops a number it did not give. */
+export const ReleaseNotesAnswer = z.object({
+  highlights: z.array(z.string().min(1).max(200)).max(5),
+  sections: z.array(
+    z.object({
+      heading: z.enum(["Features", "Fixes", "Security", "Other"]),
+      items: z.array(z.object({ text: z.string().min(1).max(200), prs: z.array(z.number().int().min(1)).max(20) })).max(50),
+    }),
+  ),
+  /** Each breaking change, in plain words. */
+  breaking: z.array(z.string().min(1).max(300)).max(10),
+});
+export type ReleaseNotesAnswer = z.infer<typeof ReleaseNotesAnswer>;
+
+/** vuln_triage: one security alert turned into a work item. `fast` is a patch or minor bump with a patched version, `hold` waits for the person, `full` is every other card. */
+export const VulnLane = z.enum(["fast", "full", "hold"]);
+export type VulnLane = z.infer<typeof VulnLane>;
+
+export const VulnTriageAnswer = z.object({
+  lane: VulnLane,
+  /** YYYY-MM-DD: from the company's policy when it gave one, else the defaults of the role. */
+  deadline: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD"),
+  severity: z.enum(["critical", "high", "medium", "low"]),
+  title: z.string().min(1).max(120),
+  goal: z.string().min(1).max(600),
+  acceptance_criteria: z.array(z.string().min(1).max(300)).min(1).max(5),
+  reason: z.string().min(1).max(300),
+});
+export type VulnTriageAnswer = z.infer<typeof VulnTriageAnswer>;

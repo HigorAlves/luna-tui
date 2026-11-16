@@ -86,6 +86,10 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   docs_drift: [],
   // The questionnaire drafter, run on demand by the questionnaire job.
   questionnaire: [],
+  // The vulnerability triage, run on demand by the vulns job: one call for each new alert.
+  vuln_triage: [],
+  // The release writer, run on demand by POST /compliance/release-notes.
+  release_notes: [],
 };
 
 /** The task states in which the pipeline runs the pack. */

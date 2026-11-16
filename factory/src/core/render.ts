@@ -246,6 +246,47 @@ const questionnaireText = (q: StageInput["context"]["questionnaire"]) => {
   return { repo: q.repo, source: q.source, requester: q.requester ?? NONE, name: q.questionnaire.name, markdown: q.questionnaire.markdown, policies: pages(q.policies), bank: pages(q.bank) };
 };
 
+/** The alert and policy, as vuln_triage reads them: the alert's fields one to a line, the policy page under its path. Both are written by others, so the blocks are quoted data. */
+const vulnsText = (vulns: StageInput["context"]["vulns"]) => {
+  if (!vulns) return { repo: NONE, today: NONE, alert: NONE, policy: NONE };
+  const a = vulns.alert;
+  const fields: Array<[string, string | number | null]> = [
+    ["source", a.source],
+    ["number", a.number],
+    ["severity", a.severity],
+    ["title", a.title],
+    ["created", a.createdAt],
+    ["url", a.url],
+    ["package", a.package],
+    ["ecosystem", a.ecosystem],
+    ["manifest", a.manifestPath],
+    ["vulnerable range", a.vulnerableRange],
+    ["patched version", a.patchedVersion],
+    ["ghsa", a.ghsa],
+    ["cve", a.cve],
+    ["rule", a.rule],
+    ["tool", a.tool],
+    ["path", a.path],
+  ];
+  return {
+    repo: vulns.repo,
+    today: vulns.today,
+    alert: fields.filter(([, value]) => value !== null).map(([key, value]) => `${key}: ${value}`).join("\n"),
+    policy: vulns.policy ? `${vulns.policy.path}\n${vulns.policy.text}` : NONE,
+  };
+};
+
+/** The PRs, as release_notes reads them: one line (number, author, title) and the body indented under it. The titles and bodies are written by others, so the block is quoted data. */
+const releaseText = (release: StageInput["context"]["release"]) => {
+  if (!release) return { repo: NONE, tag: NONE, since: NONE, prs: NONE };
+  const prs = release.prs.map((pr) => {
+    const head = `#${pr.number} · ${pr.author ?? "(unknown)"} · ${pr.title}`;
+    const body = pr.body.trim() === "" ? [] : pr.body.split("\n").map((line) => `   ${line}`);
+    return [head, ...body].join("\n");
+  });
+  return { repo: release.repo, tag: release.tag, since: release.since, prs: prs.length > 0 ? prs.join("\n") : NONE };
+};
+
 /** The issue, as jira_intake reads it: one header line, the description, the comments, the repo. */
 const jiraText = (jira: StageInput["context"]["jira"]) => {
   if (!jira) return { issue: NONE, description: NONE, comments: NONE, repoPath: NONE, classification: NONE };
@@ -573,6 +614,8 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
   const chat = chatText(input.context.chat);
   const foreman = foremanText(input.context.foreman);
   const exceptions = exceptionsText(input.context.exceptions);
+  const vulns = vulnsText(input.context.vulns);
+  const release = releaseText(input.context.release);
   const compliance = complianceText(input.context.compliance);
   const access = accessText(input.context.access);
   const postmortem = postmortemText(input.context.postmortem);
@@ -695,6 +738,14 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.exceptions.period}}": exceptions.period,
     "{{context.exceptions.controls}}": exceptions.controls,
     "{{context.exceptions.items}}": exceptions.items,
+    "{{context.vulns.repo}}": vulns.repo,
+    "{{context.vulns.today}}": vulns.today,
+    "{{context.vulns.alert}}": vulns.alert,
+    "{{context.vulns.policy}}": vulns.policy,
+    "{{context.release.repo}}": release.repo,
+    "{{context.release.tag}}": release.tag,
+    "{{context.release.since}}": release.since,
+    "{{context.release.prs}}": release.prs,
     "{{context.compliance.repo}}": compliance.repo,
     "{{context.compliance.regimes}}": compliance.regimes,
     "{{context.compliance.controls}}": compliance.controls,

@@ -70,7 +70,7 @@ function run(input: unknown, env: Record<string, string> = {}, files: Record<str
 }
 
 // slack_triage, chat_triage, foreman and eval_judge have no worktree and read no project context; their dry runs are below. council_second defaults to an eve engine: its dry run is below.
-const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "foreman" && p.id !== "change_exceptions" && p.id !== "access_review" && p.id !== "postmortem" && p.id !== "questionnaire" && p.id !== "eval_judge" && p.id !== "council_second").map((p) => p.id);
+const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "foreman" && p.id !== "change_exceptions" && p.id !== "access_review" && p.id !== "postmortem" && p.id !== "questionnaire" && p.id !== "vuln_triage" && p.id !== "release_notes" && p.id !== "eval_judge" && p.id !== "council_second").map((p) => p.id);
 
 describe("factory main (dry run)", () => {
   it.each(agentPacks)("%s: renders the prompt, prints the options and leaves a valid result", (pack) => {
@@ -254,6 +254,35 @@ describe("factory main (dry run)", () => {
     expect(prompt).toContain("| 1. Do you encrypt?");
     const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
     expect(options).toMatchObject({ agent: "questionnaire-drafter", agents: ["questionnaire-drafter"], model: "claude-sonnet-5-5", effort: "medium", tools: [], allowedTools: [] });
+  });
+
+  it("vuln_triage: runs over an empty /work with no tools, renders the alert as data and leaves a valid result", () => {
+    const task = { id: "vuln-triage", title: "Vulnerability alert of acme/api", description: "", criteria: [], repoPath: "", branch: "", source: null };
+    const alert = { source: "dependabot", number: 7, severity: "high", title: "Prototype pollution", url: "https://github.com/acme/api/security/dependabot/7", createdAt: "2026-11-01T00:00:00Z", package: "lodash", ecosystem: "npm", manifestPath: "pnpm-lock.yaml", vulnerableRange: "< 4.17.21", patchedVersion: "4.17.21", ghsa: "GHSA-aaaa", cve: null, rule: null, tool: null, path: null };
+    const vulns = { repo: "acme/api", alert, policy: null, today: "2026-11-16" };
+    const { code, stdout, out, result } = run(stageInput("vuln_triage", { task, plan: null, context: { projectContext: null, vulns } }), {}, {}, { emptyWork: true });
+    expect(code).toBe(0);
+    const prompt = readFileSync(join(out, "prompt.md"), "utf8");
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("`vuln-triager` role running the `vuln_triage` stage");
+    expect(prompt).toContain("| package: lodash");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: "vuln-triager", agents: ["vuln-triager"], model: "claude-haiku-5-5", effort: "low", tools: [], allowedTools: [] });
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+    expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
+  });
+
+  it("release_notes: runs over an empty /work with no tools, renders the PRs as data and leaves a valid result", () => {
+    const task = { id: "release-notes", title: "Release notes of acme/api v1.4.0", description: "", criteria: [], repoPath: "", branch: "", source: null };
+    const release = { repo: "acme/api", tag: "v1.4.0", since: "2026-10-01T00:00:00Z", prs: [{ number: 38, title: "Export a report as CSV", author: "marta", body: "Adds the button.", url: "https://github.com/acme/api/pull/38" }] };
+    const { code, stdout, out, result } = run(stageInput("release_notes", { task, plan: null, context: { projectContext: null, release } }), {}, {}, { emptyWork: true });
+    expect(code).toBe(0);
+    const prompt = readFileSync(join(out, "prompt.md"), "utf8");
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("`release-writer` role running the `release_notes` stage");
+    expect(prompt).toContain("| #38 · marta · Export a report as CSV");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: "release-writer", agents: ["release-writer"], model: "claude-haiku-5-5", effort: "low", tools: [], allowedTools: [] });
     expect(StageOutput.safeParse(result).error).toBeUndefined();
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });

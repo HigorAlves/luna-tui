@@ -6,7 +6,10 @@ import { Octokit } from "octokit";
 
 import { PR_QUERY, type PrNode, prFields } from "../../domain/pull-request.ts";
 import {
+  type AlertSeverity,
   type Check,
+  type CodeScanningAlert,
+  type DependabotAlert,
   type GhIssue,
   GitHubError,
   type GitHub,
@@ -46,6 +49,8 @@ export interface OctokitLike {
       getCombinedStatusForRef(params: Record<string, unknown>): Promise<{ data: { statuses: Array<{ context: string; state: string; target_url: string | null }> } }>;
       listReleases(params: Record<string, unknown>): Promise<{ data: Array<{ id: number; tag_name: string; html_url: string; draft?: boolean }> }>;
       createRelease(params: Record<string, unknown>): Promise<{ data: { id: number; html_url: string } }>;
+      updateRelease(params: Record<string, unknown>): Promise<unknown>;
+      getLatestRelease(params: Record<string, unknown>): Promise<{ data: { tag_name: string; published_at: string | null } }>;
       listReleaseAssets: unknown;
       getContent(params: Record<string, unknown>): Promise<{ data: unknown }>;
       uploadReleaseAsset(params: Record<string, unknown>): Promise<{ data: { browser_download_url: string } }>;
@@ -847,6 +852,68 @@ export class OctokitGitHub implements GitHub {
     return seen;
   }
 
+  async dependabotAlerts(slug: string): Promise<DependabotAlert[] | "unknown"> {
+    type Row = {
+      number: number;
+      created_at: string;
+      html_url: string;
+      dependency?: { package?: { name?: string; ecosystem?: string }; manifest_path?: string };
+      security_advisory?: { ghsa_id?: string; cve_id?: string | null; summary?: string; severity?: string };
+      security_vulnerability?: { vulnerable_version_range?: string; first_patched_version?: { identifier?: string } | null };
+    };
+    const rows = await this.openAlerts<Row>(slug, "GET /repos/{owner}/{repo}/dependabot/alerts", "dependabot");
+    if (rows === "unknown") return rows;
+    return rows.map((r) => ({
+      number: r.number,
+      package: r.dependency?.package?.name ?? "",
+      ecosystem: r.dependency?.package?.ecosystem ?? "",
+      severity: alertSeverity(r.security_advisory?.severity),
+      manifestPath: r.dependency?.manifest_path ?? "",
+      vulnerableRange: r.security_vulnerability?.vulnerable_version_range ?? "",
+      patchedVersion: r.security_vulnerability?.first_patched_version?.identifier ?? null,
+      ghsa: r.security_advisory?.ghsa_id ?? "",
+      cve: r.security_advisory?.cve_id ?? null,
+      summary: r.security_advisory?.summary ?? "",
+      url: r.html_url,
+      createdAt: r.created_at,
+    }));
+  }
+
+  async codeScanningAlerts(slug: string): Promise<CodeScanningAlert[] | "unknown"> {
+    type Row = {
+      number: number;
+      created_at: string;
+      html_url: string;
+      rule?: { id?: string | null; severity?: string | null; security_severity_level?: string | null };
+      tool?: { name?: string | null };
+      most_recent_instance?: { location?: { path?: string } };
+    };
+    const rows = await this.openAlerts<Row>(slug, "GET /repos/{owner}/{repo}/code-scanning/alerts", "code-scanning");
+    if (rows === "unknown") return rows;
+    return rows.map((r) => ({
+      number: r.number,
+      rule: r.rule?.id ?? "",
+      // A security rule carries a level of its own; a plain lint rule only error, warning or note.
+      severity: alertSeverity(r.rule?.security_severity_level ?? r.rule?.severity),
+      tool: r.tool?.name ?? "",
+      path: r.most_recent_instance?.location?.path ?? "",
+      url: r.html_url,
+      createdAt: r.created_at,
+    }));
+  }
+
+  /** Every open alert of one kind; "unknown" when the token cannot read them (an alert feature that is off answers 404 as well). */
+  private async openAlerts<Row>(slug: string, route: string, what: string): Promise<Row[] | "unknown"> {
+    const { owner, repo } = repoRef(slug);
+    try {
+      return await this.octokit.paginate<Row>(route, { owner, repo, state: "open", per_page: 100 });
+    } catch (error) {
+      const { status, message } = error as { status?: number; message?: string };
+      if (status === 403 || status === 404) return "unknown";
+      throw new GitHubError(`listing the ${what} alerts of ${slug} failed${status ? ` (${status})` : ""}: ${message ?? String(error)}`);
+    }
+  }
+
   async prChecks(slug: string, ref: string): Promise<Check[]> {
     const { owner, repo } = repoRef(slug);
     const [runs, statuses] = await Promise.all([
@@ -919,6 +986,23 @@ export class OctokitGitHub implements GitHub {
     return rows.map((a) => ({ id: a.id, name: a.name, url: a.browser_download_url }));
   }
 
+  async updateReleaseBody(slug: string, releaseId: number, body: string): Promise<void> {
+    const { owner, repo } = repoRef(slug);
+    await call(`updating the body of release ${releaseId} of ${slug}`, () => this.octokit.rest.repos.updateRelease({ owner, repo, release_id: releaseId, body }));
+  }
+
+  async latestRelease(slug: string): Promise<{ tag: string; publishedAt: string } | null> {
+    const { owner, repo } = repoRef(slug);
+    try {
+      const { data } = await this.octokit.rest.repos.getLatestRelease({ owner, repo });
+      return data.published_at ? { tag: data.tag_name, publishedAt: data.published_at } : null;
+    } catch (error) {
+      const { status, message } = error as { status?: number; message?: string };
+      if (status === 404) return null;
+      throw new GitHubError(`reading the latest release of ${slug} failed${status ? ` (${status})` : ""}: ${message ?? String(error)}`);
+    }
+  }
+
   async uploadReleaseAsset(slug: string, releaseId: number, name: string, data: Buffer, contentType: string): Promise<{ url: string }> {
     const { owner, repo } = repoRef(slug);
     const { data: asset } = await call(`uploading ${name} to release ${releaseId}`, () =>
@@ -930,6 +1014,23 @@ export class OctokitGitHub implements GitHub {
   async rerunFailedJobs(slug: string, runId: string): Promise<void> {
     const { owner, repo } = repoRef(slug);
     await call(`re-running the failed jobs of run ${runId}`, () => this.octokit.rest.actions.reRunWorkflowFailedJobs({ owner, repo, run_id: Number(runId) }));
+  }
+}
+
+/** GitHub's severity word as the port has it: a plain rule's `error`, `warning` and `note` count as high, medium and low. */
+function alertSeverity(level: string | null | undefined): AlertSeverity {
+  switch (level) {
+    case "critical":
+      return "critical";
+    case "high":
+    case "error":
+      return "high";
+    case "medium":
+    case "moderate":
+    case "warning":
+      return "medium";
+    default:
+      return "low";
   }
 }
 

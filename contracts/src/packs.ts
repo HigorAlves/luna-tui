@@ -14,7 +14,7 @@ import { AnswerScenario, AnswerStep } from "./plan.ts";
 import { DiffSummaryAnswer } from "./reports.ts";
 import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from "./questions.ts";
 import { type Bands, type KnockOutFlags, type SubScores, type Weights, knockOut, riskProduct, scorePriority } from "./scoring.ts";
-import { AccessReviewAnswer, ChangeExceptionsAnswer, PostmortemAnswer, QuestionnaireAnswer } from "./compliance.ts";
+import { AccessReviewAnswer, ChangeExceptionsAnswer, PostmortemAnswer, QuestionnaireAnswer, ReleaseNotesAnswer, VulnTriageAnswer } from "./compliance.ts";
 import { ComplianceReviewAnswer } from "./compliance-review.ts";
 import { DocsDriftAnswer } from "./docs-drift.ts";
 import { ForemanAnswer } from "./foreman.ts";
@@ -73,6 +73,10 @@ export const AgentRole = z.enum([
   "question-settler",
   // Explains why a merged PR missed a change-management control, for the auditor and the engineering manager; text only, no tools.
   "exception-explainer",
+  // Turns one security alert into a work item with a lane and a deadline; text only, no tools.
+  "vuln-triager",
+  // Drafts a release's user-facing notes from the merged PRs; text only, no tools.
+  "release-writer",
   // Leads the compliance review of one diff: dispatches one reviewer per declared regime and merges their findings; read-only.
   "compliance-lead",
   // Helpers of the compliance lead, one per regime: each reviews the diff for that regime's law only.
@@ -1690,6 +1694,40 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: QuestionnaireAnswer,
     template: "questionnaire.md",
+  },
+  vuln_triage: {
+    id: "vuln_triage",
+    kind: "agent",
+    // Turns one Dependabot or code-scanning alert into a card's title, goal and criteria, with a lane and a deadline from the company's policy.
+    // No tools at all: the alert text is written by others, so it can reach nothing; the card it makes goes through the board's own gates.
+    agent: "vuln-triager",
+    helpers: [],
+    skills: [],
+    access: NO_ACCESS,
+    writable: false,
+    maxTurns: 1,
+    timeoutMs: 2 * MINUTE,
+    engines: { default: "claude:haiku", allowed: ["claude:haiku", "claude:sonnet"] },
+    effort: "low",
+    answer: VulnTriageAnswer,
+    template: "vuln_triage.md",
+  },
+  release_notes: {
+    id: "release_notes",
+    kind: "agent",
+    // Drafts the user-facing notes of a release from the PRs merged since the last one, for the person to read in the Compliance view before they reach the release.
+    // No tools at all: the PR text is written by others, so it can reach nothing; nothing is posted without the person's tap.
+    agent: "release-writer",
+    helpers: [],
+    skills: [],
+    access: NO_ACCESS,
+    writable: false,
+    maxTurns: 1,
+    timeoutMs: 2 * MINUTE,
+    engines: { default: "claude:haiku", allowed: ["claude:haiku", "claude:sonnet"] },
+    effort: "low",
+    answer: ReleaseNotesAnswer,
+    template: "release_notes.md",
   },
   triage_signals: {
     id: "triage_signals",

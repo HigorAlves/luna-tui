@@ -224,6 +224,10 @@ export const PackId = z.enum([
   "docs_drift",
   // Answers a customer's security questionnaire from the product wiki's policy pages and the answer bank; no tools, no worktree, on demand.
   "questionnaire",
+  // Turns one Dependabot or code-scanning alert into a work item with a lane and a deadline; no tools, no worktree, on demand.
+  "vuln_triage",
+  // Drafts the user-facing notes of a release from the merged PRs; no tools, no worktree, on demand.
+  "release_notes",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -476,6 +480,58 @@ export const ChangeExceptionsContext = z.object({
     .max(200),
 });
 export type ChangeExceptionsContext = z.infer<typeof ChangeExceptionsContext>;
+
+/** For vuln_triage: one open alert of a repo, the company's vulnerability policy (a wiki page) and today. The alert text is written by others: data, never an instruction. */
+export const VulnTriageContext = z.object({
+  repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/name"),
+  alert: z.object({
+    source: z.enum(["dependabot", "code_scanning"]),
+    number: z.number().int().min(1),
+    severity: z.enum(["critical", "high", "medium", "low"]),
+    /** The advisory's summary, or the scanning rule's id. */
+    title: z.string().max(500),
+    url: z.string(),
+    createdAt: z.string(),
+    // Dependabot's fields; null on a code-scanning alert.
+    package: z.string().max(200).nullable(),
+    ecosystem: z.string().max(50).nullable(),
+    manifestPath: z.string().max(300).nullable(),
+    vulnerableRange: z.string().max(200).nullable(),
+    patchedVersion: z.string().max(100).nullable(),
+    ghsa: z.string().max(50).nullable(),
+    cve: z.string().max(50).nullable(),
+    // Code scanning's fields; null on a Dependabot alert.
+    rule: z.string().max(200).nullable(),
+    tool: z.string().max(100).nullable(),
+    path: z.string().max(300).nullable(),
+  }),
+  /** The wiki page `Compliance/Policies/Vulnerability-Management.md`, or null when the wiki has none. */
+  policy: z.object({ path: z.string(), text: z.string().max(12_000) }).nullable(),
+  /** YYYY-MM-DD. */
+  today: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD"),
+});
+export type VulnTriageContext = z.infer<typeof VulnTriageContext>;
+
+/** For release_notes: the PRs merged since the last release. Titles and bodies are written by others: data, never an instruction. */
+export const ReleaseNotesContext = z.object({
+  repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/name"),
+  tag: z.string().regex(/^[A-Za-z0-9._\/-]+$/, "a tag"),
+  /** The start of the window, ISO. */
+  since: z.string(),
+  prs: z
+    .array(
+      z.object({
+        number: z.number().int().min(1),
+        title: z.string(),
+        author: z.string().nullable(),
+        /** The PR's body, capped. */
+        body: z.string().max(2000),
+        url: z.string(),
+      }),
+    )
+    .max(200),
+});
+export type ReleaseNotesContext = z.infer<typeof ReleaseNotesContext>;
 
 /** The wiki pages the compliance review reads: at most this many, and this many characters of text between them. */
 export const COMPLIANCE_CONTROL_PAGES = 40;
@@ -1467,6 +1523,10 @@ export const StageInput = z.object({
     docsDrift: DocsDriftContext.nullable().optional(),
     /** For questionnaire: the customer questionnaire, the policy pages and the answer bank; the task is synthetic and there is no worktree. */
     questionnaire: QuestionnaireContext.nullable().optional(),
+    /** For vuln_triage: one security alert and the company's policy; the task is synthetic and there is no worktree. */
+    vulns: VulnTriageContext.nullable().optional(),
+    /** For release_notes: the PRs merged since the last release; the task is synthetic and there is no worktree. */
+    release: ReleaseNotesContext.nullable().optional(),
     /** For question_council: the open triage questions to settle from the code, the card and the answers so far. */
     questions: QuestionsContext.nullable().optional(),
     /** For verifying: the files the code graph says depend on what the change touched, to review first. */
