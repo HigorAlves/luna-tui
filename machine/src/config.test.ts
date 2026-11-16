@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -382,5 +382,42 @@ describe("the machine sandbox policy file", () => {
     expect(() => loadConfig({ HOME: dir, MACHINE_SANDBOX_POLICY: unknown })).toThrow(/runtime\.sneaky/);
     const broken = write(join(dir, "broken.yaml"), "limits: [unclosed\n");
     expect(() => loadConfig({ HOME: dir, MACHINE_SANDBOX_POLICY: broken })).toThrow(/broken\.yaml/);
+  });
+
+  describe("the seccomp profile path", () => {
+    const policyWith = (dir: string, seccomp: string): string => write(join(dir, "seccomp.yaml"), `seccomp: ${seccomp}\n`);
+    const start = (dir: string, profile: string) => () => loadConfig({ HOME: dir, MACHINE_SANDBOX_POLICY: policyWith(dir, profile) });
+
+    it("starts with a readable JSON profile", () => {
+      const dir = home();
+      const profile = write(join(dir, "profile.json"), '{"defaultAction":"SCMP_ACT_ERRNO"}');
+      expect(start(dir, profile)().sandboxPolicy.seccomp).toBe(profile);
+    });
+
+    it("refuses a profile that does not exist, naming the key and the path", () => {
+      const dir = home();
+      const missing = join(dir, "gone.json");
+      expect(start(dir, missing)).toThrow(`seccomp ${missing}`);
+    });
+
+    it("refuses a profile that is not a regular file", () => {
+      const dir = home();
+      const folder = join(dir, "folder.json");
+      mkdirSync(folder);
+      expect(start(dir, folder)).toThrow(`seccomp ${folder} is not a regular file`);
+    });
+
+    it.skipIf(process.getuid?.() === 0)("refuses a profile that cannot be read", () => {
+      const dir = home();
+      const profile = write(join(dir, "locked.json"), "{}");
+      chmodSync(profile, 0o000);
+      expect(start(dir, profile)).toThrow(`seccomp ${profile} cannot be read`);
+    });
+
+    it("refuses a profile that is not JSON", () => {
+      const dir = home();
+      const profile = write(join(dir, "bad.json"), "not json");
+      expect(start(dir, profile)).toThrow(`seccomp ${profile} is not valid JSON`);
+    });
   });
 });

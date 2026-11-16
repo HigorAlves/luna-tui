@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -311,7 +311,28 @@ export function sandboxPolicyFrom(env: NodeJS.ProcessEnv, home: string): Machine
   }
   const parsed = MachinePolicySchema.safeParse(raw);
   if (!parsed.success) throw new Error(`MACHINE_SANDBOX_POLICY ${file}: ${machinePolicyProblem(raw)}`);
+  if (parsed.data.seccomp !== "default") checkSeccompProfile(parsed.data.seccomp, file);
   return parsed.data;
+}
+
+/** The policy's seccomp profile must exist, be a readable regular file and parse as JSON: else the machine would start and then fail every stage. Throws, naming the key and the path. */
+function checkSeccompProfile(profile: string, policyFile: string): void {
+  const where = `MACHINE_SANDBOX_POLICY ${policyFile}: seccomp ${profile}`;
+  let text: string;
+  try {
+    if (!statSync(profile).isFile()) throw Object.assign(new Error("not a regular file"), { code: "NOTFILE" });
+    text = readFileSync(profile, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "NOTFILE") throw new Error(`${where} is not a regular file`);
+    if (code === "ENOENT") throw new Error(`${where} does not exist`);
+    throw new Error(`${where} cannot be read: ${(error as Error).message}`);
+  }
+  try {
+    JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${where} is not valid JSON: ${(error as Error).message}`);
+  }
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
