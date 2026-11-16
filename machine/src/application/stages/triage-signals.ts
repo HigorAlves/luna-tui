@@ -6,6 +6,7 @@ import { type ClassifyOptions, type DecisionOverrides, FACTORY_DEFAULTS, type Fa
 
 import { type Located, fastLane, ownersCheck } from "../../domain/fast-lane.ts";
 import { goalRefOf } from "../../domain/goal-ref.ts";
+import { trustOf } from "../../domain/trust.ts";
 import { composeRecord, recordComplete } from "../../domain/triage-record.ts";
 import { askedQuestions, triageVerdicts } from "../../domain/triage-policy.ts";
 
@@ -160,6 +161,12 @@ export function withTriageSignals(triage: StageRunner, deps: TriageSignalDeps): 
     const consult = async (questions: NeedsInputItem[], asked?: Array<{ field: string; guess: string; confidence: number }>): Promise<StageResult | null> => {
       const councilCaps = caps.council ?? FACTORY_DEFAULTS.triage.council;
       if (council.ran || !deps.council || !councilCaps.enabled) return null;
+      // A stranger's card is not read by the council: its questions are the person's.
+      if (trustOf(task) === "untrusted") {
+        council.ran = true;
+        await context.note?.("this card is untrusted, so the question council did not run; every question goes to you").catch(() => {});
+        return null;
+      }
       const open = questions
         .map((q, i) => ({ id: `q${i + 1}`, question: q.question, recommended: q.recommended, field: asked?.[i]?.field ?? null, guess: asked?.[i]?.guess ?? null, confidence: asked?.[i]?.confidence ?? null }))
         .filter((q) => q.field === null || COUNCIL_FIELDS.has(q.field))
