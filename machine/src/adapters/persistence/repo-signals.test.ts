@@ -1,4 +1,5 @@
 // The repo signals read a repo's stage runs, the loop guard's stops and the ledger's cost, per pack, from a date on.
+import type { EngineId } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -90,7 +91,7 @@ describe("pgRepoSignals", () => {
 
   it("counts a pack's runs per engine, and leaves out a run that recorded none", async () => {
     const mine = await save("/r/app");
-    const run = (engine: string | null) => db.getRepository(StageRunEntity).save({ taskId: mine.id, stage: "verifying", attempt: 1, status: "passed", outcome: "pass", costUsd: "1.0000", engine, startedAt: new Date() });
+    const run = (engine: EngineId | null) => db.getRepository(StageRunEntity).save({ taskId: mine.id, stage: "verifying", attempt: 1, status: "passed", outcome: "pass", costUsd: "1.0000", engine, startedAt: new Date() });
     await run("codex:sol");
     await run("codex:sol");
     await run("claude:opus");

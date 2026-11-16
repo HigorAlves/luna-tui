@@ -1,10 +1,10 @@
-import type { Effort, EngineId, PackId } from "@hardness/contracts";
+import { type Effort, type EngineId, type PackId, resolveEngine } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { CALM, type Candidate, type ConfigChange, CHEAPER, DECLINE_DAYS, GAIN, MAX_CHANGES, MIN_CASES, MIN_RUNS, type ProposalInput, type RepoSignal, TOLERANCE, TROUBLE, proposeConfig, proposalSkips, renderProposal } from "./config-proposal.ts";
+import { CALM, type Candidate, type ConfigChange, CHEAPER, DECLINE_DAYS, GAIN, MAX_CHANGES, MAX_EVIDENCE_DAYS, MIN_CASES, MIN_RUNS, type ProposalInput, type RepoSignal, TOLERANCE, TROUBLE, proposeConfig, proposalSkips, renderProposal } from "./config-proposal.ts";
 
 const NOW = "2026-11-16T12:00:00.000Z";
-const candidate = (engine: EngineId, effort: Effort | null, quality: number, costPerCase: number, n = 5): Candidate => ({ engine, effort, n, quality, costPerCase, at: "2026-11-01" });
+const candidate = (engine: EngineId, effort: Effort | null, quality: number, costPerCase: number, n = 5): Candidate => ({ engine, effort, n, quality, costPerCase, at: "2026-11-01T00:00:00.000Z" });
 const signal = (runs: number, trouble: number, stuck = 0): RepoSignal => ({ runs, escalations: trouble, stuck, costUsd: 1 });
 
 /** `plan` runs claude:opus at high by default and also allows codex:sol. */
@@ -55,6 +55,35 @@ describe("the engine a pack ran on", () => {
     });
     expect(proposeConfig(input)).toEqual([]);
     expect(proposalSkips(input)).toEqual([{ pack: "plan", reason: "plan ran on mixed engines: claude:opus 7 of 10 runs, under 80%" }]);
+  });
+});
+
+describe("the evidence's age and model", () => {
+  const pair = (over: Partial<Candidate>, baseOver: Partial<Candidate> = {}) => [{ ...candidate("claude:opus", "high", 0.5, 1), ...baseOver }, { ...candidate("codex:sol", "high", 0.9, 1), ...over }];
+  const run = (candidates: Candidate[]) => proposeConfig(base({ candidates: { plan: candidates }, signals: { plan: signal(10, 5) } }));
+  const daysAgo = (days: number) => new Date(Date.parse(NOW) - days * 86_400_000).toISOString();
+
+  it("refuses a candidate measured more than MAX_EVIDENCE_DAYS ago", () => {
+    expect(MAX_EVIDENCE_DAYS).toBe(90);
+    expect(run(pair({ at: daysAgo(89) }))).toHaveLength(1);
+    expect(run(pair({ at: daysAgo(91) }))).toEqual([]);
+  });
+
+  it("refuses a stale baseline too", () => {
+    expect(run(pair({}, { at: daysAgo(91) }))).toEqual([]);
+  });
+
+  it("refuses a candidate whose date does not parse", () => {
+    expect(run(pair({ at: "last week" }))).toEqual([]);
+  });
+
+  it("refuses a candidate measured on a model that is not the engine's current one", () => {
+    expect(run(pair({ model: "gpt-5-old" }))).toEqual([]);
+    expect(run(pair({ model: resolveEngine("codex:sol").modelId }))).toHaveLength(1);
+  });
+
+  it("accepts a candidate that names no model: a decision scorecard keeps none", () => {
+    expect(run(pair({ model: null }))).toHaveLength(1);
   });
 });
 

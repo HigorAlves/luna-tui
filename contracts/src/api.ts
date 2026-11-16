@@ -97,14 +97,15 @@ export const ProposalCandidate = z.object({
   quality: z.number().min(0).max(1),
   costPerCase: z.number().min(0),
   at: z.string().min(1),
+  /** The model ID the scorecard measured (its `model`). The machine refuses a row whose model is not the engine's current catalog model. A decision scorecard keeps none. */
+  model: z.string().min(1).nullable().optional(),
 });
 export type ProposalCandidate = z.infer<typeof ProposalCandidate>;
 
-/** `POST /repos/proposals`: the scorecards for a repo; the machine adds the repo's own run signals and its luna.yaml. `now` is for tests and replays. */
+/** `POST /repos/proposals`: the scorecards for a repo; the machine adds the repo's own run signals and its luna.yaml. The machine's own clock sets the windows. */
 export const ProposalsInput = z.object({
   repo: z.string().trim().min(1),
   candidates: z.partialRecord(PackId, z.array(ProposalCandidate)),
-  now: z.iso.datetime().optional(),
 });
 export type ProposalsInput = z.infer<typeof ProposalsInput>;
 

@@ -1,7 +1,7 @@
 // The rule that turns evidence into a luna.yaml change: a pack's scorecards (what each engine and effort scored and cost) and
 // the repo's own run signals (how often the pack escalated or got stuck here). A fixed rule decides; no model is called, and
 // `why` is built from the numbers, never from model text. Pure: the caller reads the evidence and says what time it is.
-import { type Effort, type EngineId, PACKS, type PackId, type StageEfforts, type StageEngines, effortProblem } from "@hardness/contracts";
+import { type Effort, type EngineId, PACKS, type PackId, type StageEfforts, type StageEngines, effortProblem, resolveEngine } from "@hardness/contracts";
 import { Document, parse as parseYaml, parseDocument } from "yaml";
 
 import { PolicyParseError } from "./policy.ts";
@@ -23,6 +23,8 @@ export const CALM = 0.1;
 export const GAIN = 0.1;
 /** The share of a pack's runs one engine must have for it to count as the engine the repo runs. */
 export const ENGINE_SHARE = 0.8;
+/** Days a scorecard may be old and still count. */
+export const MAX_EVIDENCE_DAYS = 90;
 /** Days a declined change stays out of new proposals. */
 export const DECLINE_DAYS = 30;
 /** Most changes in one proposal. */
@@ -38,6 +40,8 @@ export interface Candidate {
   quality: number;
   costPerCase: number;
   at: string;
+  /** The model the scorecard measured, when it says. A row whose model is not the engine's current one is refused. */
+  model?: string | null;
 }
 
 /** What a pack did in the repo over the window. */
@@ -115,7 +119,7 @@ function draftFor(pack: PackId, input: ProposalInput): Drafted | null {
   // The engine the repo really ran beats the config and the default: a reviewer may run on codex:sol while the pack defaults to claude:opus.
   const engine = observed.engine ?? input.current.engines[pack] ?? def.engines.default;
   const effort: Effort | null = isDecision ? null : (input.current.effort[pack] ?? (def as { effort: Effort }).effort);
-  const all = input.candidates[pack] ?? [];
+  const all = (input.candidates[pack] ?? []).filter((c) => currentEvidence(c, input.now));
 
   // 1. The baseline: the candidate for the pair the repo runs today.
   const baseline = all.find((c) => c.engine === engine && c.effort === effort);
@@ -152,6 +156,14 @@ function draftFor(pack: PackId, input: ProposalInput): Drafted | null {
     evidence: { current: baseline, next, signal },
   };
   return { change, step, saving: baseline.costPerCase - next.costPerCase };
+}
+
+/** A scorecard counts when it was measured within `MAX_EVIDENCE_DAYS` and, if it names its model, on the engine's current catalog model:
+ *  a card from before a model swap says nothing about the model that runs now. */
+function currentEvidence(c: Candidate, now: string): boolean {
+  const measured = Date.parse(c.at);
+  if (Number.isNaN(measured) || Date.parse(now) - measured > MAX_EVIDENCE_DAYS * DAY_MS) return false;
+  return !c.model || c.model === resolveEngine(c.engine).modelId;
 }
 
 /** An agent pack's candidate names an effort its engine can run; a decision pack's names none. */

@@ -24,7 +24,7 @@ beforeEach(async () => {
 });
 
 const post = (body: unknown) => ({ method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } }) as const;
-const row = (engine: string, effort: string, quality: number, costPerCase: number) => ({ engine, effort, n: 5, quality, costPerCase, at: "2026-11-01" });
+const row = (engine: string, effort: string, quality: number, costPerCase: number) => ({ engine, effort, n: 5, quality, costPerCase, at: new Date().toISOString() });
 const candidates = { plan: [row("claude:opus", "high", 0.67, 1), row("codex:sol", "high", 0.83, 1.2)] };
 
 describe("POST /repos/proposals", () => {
@@ -85,9 +85,10 @@ describe("POST /repos/proposals", () => {
         return { plan: { runs: 12, escalations: 4, stuck: 0, costUsd: 3 } };
       },
     };
-    const app = createApp({ db, pipeline: p, bus: new Bus(), repoSignals, knownRepos });
+    const app = createApp({ db, pipeline: p, bus: new Bus(), repoSignals, knownRepos, clock: () => new Date("2026-11-16T12:00:00.000Z") });
     const dir = repo();
-    const res = await app.request("/repos/proposals", post({ repo: dir, candidates, now: "2026-11-16T12:00:00.000Z" }));
+    // A `now` in the body moves nothing: the machine's clock sets the window.
+    const res = await app.request("/repos/proposals", post({ repo: dir, candidates, now: "2020-01-01T00:00:00.000Z" }));
     const out = (await res.json()) as { changes: Array<{ pack: string; engine: { to: string } }>; taskId: string | null };
     expect(out.changes).toMatchObject([{ pack: "plan", engine: { from: "claude:opus", to: "codex:sol" } }]);
     expect(out.taskId).toEqual(expect.any(String));
@@ -101,6 +102,16 @@ describe("POST /repos/proposals", () => {
     const app = createApp({ db, pipeline: pipeline(), bus: new Bus(), repoSignals, knownRepos });
     const res = await app.request("/repos/proposals", post({ repo: repo(), candidates }));
     expect(await res.json()).toEqual({ changes: [], taskId: null, skipped: [{ pack: "plan", reason: "plan ran on mixed engines: claude:opus 7 of 12 runs, under 80%" }] });
+  });
+
+  it("refuses scorecards older than 90 days and scorecards of another model", async () => {
+    const repoSignals: RepoSignals = { forRepo: async () => ({ plan: { runs: 12, escalations: 4, stuck: 0, costUsd: 3 } }) };
+    const app = createApp({ db, pipeline: pipeline(), bus: new Bus(), repoSignals, knownRepos });
+    const old = new Date(Date.now() - 91 * 86_400_000).toISOString();
+    const stale = { plan: [row("claude:opus", "high", 0.67, 1), { ...row("codex:sol", "high", 0.83, 1.2), at: old }] };
+    expect(await (await app.request("/repos/proposals", post({ repo: repo(), candidates: stale }))).json()).toEqual({ changes: [], taskId: null });
+    const swapped = { plan: [row("claude:opus", "high", 0.67, 1), { ...row("codex:sol", "high", 0.83, 1.2), model: "gpt-5-old" }] };
+    expect(await (await app.request("/repos/proposals", post({ repo: repo(), candidates: swapped }))).json()).toEqual({ changes: [], taskId: null });
   });
 
   it("does not propose again what the person declined", async () => {

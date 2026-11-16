@@ -81,6 +81,8 @@ export interface AgentRow {
   meanTurns: number;
   costPerCase: number | null;
   at: string;
+  /** The model the baseline measured (the scorecard's `model`); null when it recorded none. */
+  model?: string | null;
 }
 
 /** Every agent pack's baselines under `evals/baselines/<engine>[@<effort>]/<pack>.json`, those that parse. The effort is the card's, else the folder's `@<effort>`, else the pack's own. */
@@ -96,7 +98,7 @@ export function loadAgentBaselines(evalsDir: string): AgentRow[] {
         const pack = PACKS[card.pack];
         if (card.schema !== 1 || pack?.kind !== "agent" || !card.summary || !Array.isArray(card.cases)) continue;
         const effort = EffortId.safeParse(card.effort).data ?? suffix.data ?? pack.effort;
-        rows.push({ pack: card.pack, engine: card.engine, effort, n: card.summary.cases, passRate: card.summary.passRate, meanTurns: card.summary.meanTurns, costPerCase: card.summary.costUsd === null || card.summary.cases === 0 ? null : card.summary.costUsd / card.summary.cases, at: card.at });
+        rows.push({ pack: card.pack, engine: card.engine, effort, n: card.summary.cases, passRate: card.summary.passRate, meanTurns: card.summary.meanTurns, costPerCase: card.summary.costUsd === null || card.summary.cases === 0 ? null : card.summary.costUsd / card.summary.cases, at: card.at, model: card.model ?? null });
       } catch {
         // A file that is not a scorecard is not a baseline.
       }
