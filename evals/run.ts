@@ -30,7 +30,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import { type EvalCase, baselinePath, caseInput, datasetCases, engineSlug, judgeInput, loadCases, parseEffort, parseTrials, prepareWorktree, verdictOf } from "./src/cases.ts";
-import { IGNORED_EFFORT, honourEffort } from "./src/effort-check.ts";
+import { IGNORED_EFFORT, effortProblems, honourEffort } from "./src/effort-check.ts";
 import { formatDiff, formatScorecard } from "./src/format.ts";
 import { type CaseResult, type JudgeVerdict, type Scorecard, caseResult, diffScorecards, gradeAnswer, scorecard } from "./src/grade.ts";
 import { evalDatapoint } from "./src/report.ts";
@@ -78,6 +78,9 @@ const effort = (() => {
     return fail((error as Error).message);
   }
 })();
+// An effort a pack or an engine cannot run is refused here, before any case runs or any baseline is written.
+const unrunnable = effortProblems(pack, engines, effort);
+if (unrunnable) fail(unrunnable);
 const image = values.image!;
 const credentials = machineCredentials();
 // The same list a real run of the pack gets (kind agent: the engine's host, GitHub, the registries), so what is measured is what runs; MACHINE_EGRESS=off applies here too.

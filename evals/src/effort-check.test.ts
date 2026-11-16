@@ -1,7 +1,7 @@
 import type { StageOutput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { IGNORED_EFFORT, honourEffort } from "./effort-check.ts";
+import { IGNORED_EFFORT, effortProblems, honourEffort } from "./effort-check.ts";
 import type { CaseResult } from "./grade.ts";
 
 const output = (effort?: string) => ({ ok: true, run: { runtime: "claude", engine: "claude:haiku", modelId: "m", ...(effort ? { effort } : {}), sdk: { name: "s", version: "1" }, fingerprint: "0".repeat(64) } }) as unknown as StageOutput;
@@ -39,5 +39,20 @@ describe("honourEffort", () => {
 
   it("names the rebuild in the message", () => {
     expect(IGNORED_EFFORT).toBe("the runner image does not honour --effort: rebuild it (pnpm images)");
+  });
+});
+
+describe("effortProblems", () => {
+  it("is null when no effort was asked for", () => {
+    expect(effortProblems("risk_score", ["jev"], undefined)).toBeNull();
+  });
+
+  it("refuses a decision pack with an effort, naming the engine", () => {
+    expect(effortProblems("risk_score", ["jev"], "low")).toBe("jev: risk_score is a decision pack and takes no effort");
+  });
+
+  it("checks every engine, --against included, and names the first that cannot run the effort", () => {
+    expect(effortProblems("plan", ["claude:opus", "claude:haiku"], "low")).toBeNull();
+    expect(effortProblems("plan", ["claude:opus", "jev"], "low")).toBe("jev: jev does not support effort low (supports: none)");
   });
 });
