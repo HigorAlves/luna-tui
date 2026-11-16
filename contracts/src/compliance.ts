@@ -4,6 +4,10 @@
 // draft that changed under the person never posts.
 import { z } from "zod";
 
+/** A regime a repo answers to (luna.yaml `compliance:`); the compliance review runs one reviewer for each. */
+export const ComplianceRegime = z.enum(["soc2", "hipaa", "gdpr", "lgpd", "us_privacy"]);
+export type ComplianceRegime = z.infer<typeof ComplianceRegime>;
+
 /** What a draft is: wave 1's change evidence, wave 3's questionnaire answers, wave 4's access review, wave 5's postmortem,
  *  wave 7's status report and wave 6's release notes. */
 export const ComplianceDraftKind = z.enum(["change_evidence", "questionnaire", "access_review", "postmortem", "status_report", "release_notes"]);

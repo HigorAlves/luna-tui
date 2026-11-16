@@ -36,6 +36,7 @@ export * from "./conversation.ts";
 export * from "./slack.ts";
 export * from "./jira.ts";
 export * from "./compliance.ts";
+export * from "./compliance-review.ts";
 
 /** Board columns: the diagram's seven stages, then Done. Same order as the Rust board, which reads the column of each task from `COLUMN_OF` through the API. */
 export const COLUMNS = [

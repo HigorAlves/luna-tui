@@ -48,6 +48,8 @@ function setup(opts: {
   counted?: { added: number; removed: number } | null;
   size?: { target_loc: [number, number]; hard_limit_loc: number; max_children: number; max_rounds: number; depth: number };
   approvals?: StageContext["approvals"];
+  /** The compliance review beside the review pack. */
+  compliance?: NonNullable<Parameters<typeof verifyRunner>[0]["compliance"]>;
   /** An exec that can open a session of checks sharing one set of services. */
   session?: () => Promise<{ exec: (command: string, args: string[], options?: unknown) => Promise<ExecResult>; close: () => Promise<void> }>;
 }) {
@@ -61,6 +63,7 @@ function setup(opts: {
   const run = verifyRunner({
     exec,
     runPack: opts.noPack ? null : runPack,
+    ...(opts.compliance ? { compliance: opts.compliance } : {}),
     stateDir,
     detect: async () => (opts.detected ?? { manager: "pnpm", test: ["pnpm", "run", "test"], lint: ["pnpm", "run", "lint"] }) as never,
     gitIdentity: async () => ("identity" in opts ? opts.identity! : { name: "Ada L", email: "ada@x.dev" }),
@@ -105,6 +108,42 @@ describe("verifying stage", () => {
       expect(passed.findings).toHaveLength(2);
       const hard = setup({ pack: answer([finding({ severity: "blocker", confidence: 0.9 })]) });
       expect((await hard.run(hard.context)).outcome).toBe("fail");
+    });
+  });
+
+  describe("the compliance review", () => {
+    const high = { path: "a.ts", line: 3, severity: "security", title: "Email in the log", body: "b", confidence: 0.9, regime: "gdpr", clause: "GDPR Art. 5(1)(c)", control: null };
+    const compliance = (regimes: string[], run: StageResult | Error) => ({
+      regimes: async () => regimes as never,
+      wiki: { readPages: async () => [], writePages: async () => ({ sha: "x" }) },
+      slugOf: async () => "o/a",
+      run: vi.fn(async () => {
+        if (run instanceof Error) throw run;
+        return run;
+      }),
+    });
+    const answered: StageResult = { outcome: "pass", detail: { answer: { summary: "One.", findings: [high], regimesRun: ["gdpr"] } } };
+
+    it("fails the review on a high finding when a regime is declared, with the clause in its title, before any check runs", async () => {
+      const deps = compliance(["gdpr"], answered);
+      const { run, context, exec } = setup({ compliance: deps });
+      const result = await run(context);
+      expect(deps.run).toHaveBeenCalledTimes(1);
+      expect(result.outcome).toBe("fail");
+      expect(exec).not.toHaveBeenCalled();
+      expect(result.findings).toEqual([expect.objectContaining({ severity: "security", title: "Email in the log [GDPR Art. 5(1)(c)]" })]);
+    });
+
+    it("does not run when no regime is declared, and a failed run never blocks", async () => {
+      const none = compliance([], answered);
+      const first = setup({ compliance: none });
+      expect((await first.run(first.context)).outcome).toBe("pass");
+      expect(none.run).not.toHaveBeenCalled();
+      const broken = compliance(["gdpr"], new Error("container died"));
+      const second = setup({ compliance: broken });
+      const result = await second.run(second.context);
+      expect(result.outcome).toBe("pass");
+      expect(broken.run).toHaveBeenCalledTimes(1);
     });
   });
 

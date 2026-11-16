@@ -174,6 +174,15 @@ describe("parseLunaConfig", () => {
     expect(renderLunaConfig(config)).toContain("effort:\n  triage: low");
   });
 
+  it("reads the compliance regimes into the policy, and keeps them through a render", () => {
+    const config = validateLunaConfig({ compliance: ["soc2", "lgpd"] });
+    expect(policyOf(config).compliance).toEqual(["soc2", "lgpd"]);
+    expect(renderLunaConfig(config)).toContain("compliance:\n  - soc2\n  - lgpd");
+    expect(policyOf(validateLunaConfig({})).compliance).toBeUndefined();
+    expect(() => parseLunaConfig("compliance:\n  - pci\n")).toThrow(/compliance/);
+    expect(() => parseLunaConfig("compliance: [soc2, soc2]\n")).toThrow(/compliance/);
+  });
+
   it("refuses a value it cannot read, naming where", () => {
     expect(() => parseLunaConfig("policy:\n  qa: mobile\n")).toThrow(/policy\.qa/);
     expect(() => parseLunaConfig("policy:\n  max_concurrent: 0\n")).toThrow(/policy\.max_concurrent/);

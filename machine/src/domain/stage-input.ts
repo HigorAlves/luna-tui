@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type ChangeExceptionsContext, type ChatTriageContext, type ForemanContext, type QuestionsContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type Effort, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type PrLinkContext, type ProposeContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
+import { type ChangeExceptionsContext, type ComplianceReviewContext,type ChatTriageContext, type ForemanContext, type QuestionsContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type Effort, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type PrLinkContext, type ProposeContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
 import { isDocsOnly } from "./docs-only.ts";
 
 export { PACK_LIMITS };
@@ -167,6 +167,8 @@ export function buildStageInput(opts: {
   history?: { ledger: Ledger | null; runs: RunSummary[] } | null;
   /** For reviewing (a PR task): the PR's diff and comments the host fetched. */
   review?: ReviewContext | null;
+  /** For compliance_review: the repo's regimes and its wiki's control pages; its diff is `review`. */
+  compliance?: ComplianceReviewContext | null;
   /** For addressing (a PR task): the unresolved threads the host fetched. */
   threads?: ThreadsContext | null;
   /** For pr_reply: the thread and the pack the host built; for reviewing_memory: the retro facts. */
@@ -259,7 +261,8 @@ export function buildStageInput(opts: {
       ...((pack === "e2e" || pack === "recording") && opts.qaTargets ? { qaTargets: opts.qaTargets } : {}),
       ...(VIDEO_PACKS.has(pack) && opts.video ? { video: opts.video } : {}),
       ...((pack === "implementing" || pack === "verifying") && opts.checks ? { checks: opts.checks } : {}),
-      ...(pack === "reviewing" && opts.review ? { review: opts.review } : {}),
+      ...((pack === "reviewing" || pack === "compliance_review") && opts.review ? { review: opts.review } : {}),
+      ...(pack === "compliance_review" && opts.compliance ? { compliance: opts.compliance } : {}),
       ...(pack === "addressing" && opts.threads ? { threads: opts.threads } : {}),
       ...((pack === "pr_reply" || pack === "reviewing_memory") && opts.ship ? { ship: opts.ship } : {}),
       ...(pack === "reviewing_memory" && opts.history ? { ledger: opts.history.ledger, runs: opts.history.runs } : {}),

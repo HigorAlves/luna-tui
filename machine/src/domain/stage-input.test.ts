@@ -307,9 +307,9 @@ describe("buildStageInput", () => {
     const input = buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [] });
     expect(input.plan).toBeNull();
     expect(Object.keys(PACK_LIMITS).sort()).toEqual(
-      ["addressing", "build_tests", "chat_triage", "ci_failure_class", "ci_watch", "code_map", "council_second", "council_security", "coverage_check", "e2e", "e2e_failure_cause", "escalation_reason", "eval_judge", "evidence", "evidence_format", "size_estimate", "split_check", "decompose", "finding_classify", "frame_privacy", "implementing", "jira_intake", "loop_judge", "loop_redirect", "fact_propose", "plan", "plan_check", "plan_fast", "question_council", "red_check", "reviewing", "reviewing_memory", "risk_score", "scope_check", "setup", "slack_triage", "test_design", "test_design_fast", "triage", "triage_signals", "verifying", "video_fix", "video_qa", "video_script", "recording", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "pr_reply", "conversation_assess", "conversation_relation", "conversation_reply", "pr_link", "foreman", "change_exceptions"].sort(),
+      ["addressing", "build_tests", "chat_triage", "ci_failure_class", "ci_watch", "code_map", "council_second", "council_security", "coverage_check", "e2e", "e2e_failure_cause", "escalation_reason", "eval_judge", "evidence", "evidence_format", "size_estimate", "split_check", "decompose", "finding_classify", "frame_privacy", "implementing", "jira_intake", "loop_judge", "loop_redirect", "fact_propose", "plan", "plan_check", "plan_fast", "question_council", "red_check", "reviewing", "reviewing_memory", "risk_score", "scope_check", "setup", "slack_triage", "test_design", "test_design_fast", "triage", "triage_signals", "verifying", "video_fix", "video_qa", "video_script", "recording", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "pr_reply", "conversation_assess", "conversation_relation", "conversation_reply", "pr_link", "foreman", "change_exceptions", "compliance_review"].sort(),
     );
-    expect(Object.keys(PACK_LIMITS)).toHaveLength(62);
+    expect(Object.keys(PACK_LIMITS)).toHaveLength(63);
   });
 
   it("builds slack_triage's input around a synthetic task: the batch in context.slack, no plan, no branch, the pack's limits", () => {
@@ -391,7 +391,7 @@ describe("buildStageInput", () => {
 
   it("hands implementing and verifying the repo's checks from luna.yaml, and no other pack", () => {
     const checks = [{ name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] }];
-    const build = (stage: Exclude<PackId, "escalation_reason" | "build_tests" | "plan" | "code_map" | "council_security" | "council_second" | "question_council" | "plan_fast" | "test_design_fast" | "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause" | "ci_failure_class" | "frame_privacy" | "evidence_format" | "size_estimate" | "split_check" | "decompose" | "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning" | "intake_dedup" | "ticket_validity" | "ticket_assess" | "ticket_recommend" | "ticket_reply" | "pr_link" | "loop_judge" | "loop_redirect" | "fact_propose" | "pr_reply" | "video_script" | "recording" | "video_qa" | "video_fix" | "slack_triage" | "jira_intake" | "triage_signals" | "eval_judge" | "chat_triage" | "conversation_assess" | "conversation_relation" | "conversation_reply" | "foreman" | "change_exceptions">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
+    const build = (stage: Exclude<PackId, "escalation_reason" | "build_tests" | "plan" | "code_map" | "council_security" | "council_second" | "question_council" | "plan_fast" | "test_design_fast" | "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause" | "ci_failure_class" | "frame_privacy" | "evidence_format" | "size_estimate" | "split_check" | "decompose" | "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning" | "intake_dedup" | "ticket_validity" | "ticket_assess" | "ticket_recommend" | "ticket_reply" | "pr_link" | "loop_judge" | "loop_redirect" | "fact_propose" | "pr_reply" | "video_script" | "recording" | "video_qa" | "video_fix" | "slack_triage" | "jira_intake" | "triage_signals" | "eval_judge" | "chat_triage" | "conversation_assess" | "conversation_relation" | "conversation_reply" | "foreman" | "change_exceptions" | "compliance_review">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
     expect(build("implementing").context.checks).toEqual(checks);
     expect(build("verifying").context.checks).toEqual(checks);
     expect(build("triage").context.checks).toBeUndefined();
@@ -459,6 +459,21 @@ describe("Verify and the browser scenarios", () => {
     expect(verify.context.testCases?.map((c: { title: string }) => c.title)).toEqual(["splits sentences"]);
     expect(verify.context.browserScenarios).toBe(1);
     expect(withoutBrowserCases(cases as never[])).toHaveLength(1);
+  });
+});
+
+describe("buildStageInput's compliance review", () => {
+  const compliance = { repo: "acme/api", regimes: ["soc2" as const], controls: [{ path: "Compliance/Controls/ACC-01.md", text: "Review access." }] };
+  const review = { pr: { repo: "acme/api", number: 7, url: "https://github.com/acme/api/pull/7", title: "t", body: null, author: "marta", baseRef: "main", headRef: "feat" }, diff: "diff --git a/a b/a", files: [], existingComments: [] };
+  const build = (pack: "compliance_review" | "reviewing", extra: object) => buildStageInput({ task, stage: "reviewing", pack, attempt: 1, approvals: [], priorFindings: [], ...extra });
+
+  it("hands compliance_review the PR the host fetched and the regimes and controls, and no other pack the controls", () => {
+    const input = build("compliance_review", { review, compliance });
+    expect(StageInput.parse(input)).toEqual(input);
+    expect(input.context).toMatchObject({ review, compliance });
+    expect(input.limits).toEqual({ maxTurns: PACK_LIMITS.compliance_review.maxTurns, timeoutMs: PACK_LIMITS.compliance_review.timeoutMs });
+    expect(build("reviewing", { review, compliance }).context.compliance).toBeUndefined();
+    expect(build("compliance_review", {}).context.compliance).toBeUndefined();
   });
 });
 

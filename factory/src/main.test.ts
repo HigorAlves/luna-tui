@@ -184,6 +184,20 @@ describe("factory main (dry run)", () => {
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });
 
+  it("compliance_review: dispatches the five regime reviewers as subagents, renders the regimes and controls as data and leaves a valid result", () => {
+    const compliance = { repo: "acme/api", regimes: ["soc2", "gdpr"], controls: [{ path: "Compliance/Controls/PRIV-LOG-01.md", text: "No personal data in logs." }] };
+    const { code, stdout, out, result } = run(stageInput("compliance_review", { context: { projectContext: null, compliance } }));
+    expect(code).toBe(0);
+    const prompt = readFileSync(join(out, "prompt.md"), "utf8");
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("Declared regimes: soc2, gdpr");
+    expect(prompt).toContain("| ## Compliance/Controls/PRIV-LOG-01.md");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options.agents).toEqual(["compliance-lead", "soc2-reviewer", "hipaa-reviewer", "gdpr-reviewer", "lgpd-reviewer", "us-privacy-reviewer"]);
+    expect(options).toMatchObject({ agent: "compliance-lead", model: "claude-sonnet-5-5", effort: "medium" });
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+  });
+
   it("jira_intake: runs over the repo checkout read-only with Read, Glob and Grep, renders the issue and leaves a valid result", () => {
     const task = { id: "jira-intake", title: "Login page", description: "Users sign in.", criteria: [], repoPath: "/r/a", branch: "", source: null };
     const jira = { key: "PLAT-123", url: "https://acme.atlassian.net/browse/PLAT-123", summary: "Login page", description: "Users sign in.", issueType: "Story", priority: "High", labels: ["luna"], dueAt: null, comments: ["Marta: please"], repoPath: "/r/a" };

@@ -15,6 +15,7 @@ import { DiffSummaryAnswer } from "./reports.ts";
 import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from "./questions.ts";
 import { type Bands, type KnockOutFlags, type SubScores, type Weights, knockOut, riskProduct, scorePriority } from "./scoring.ts";
 import { ChangeExceptionsAnswer } from "./compliance.ts";
+import { ComplianceReviewAnswer } from "./compliance-review.ts";
 import { ForemanAnswer } from "./foreman.ts";
 import { FactProposal, ProjectContextSection } from "./economy.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
@@ -68,6 +69,14 @@ export const AgentRole = z.enum([
   "question-settler",
   // Explains why a merged PR missed a change-management control, for the auditor and the engineering manager; text only, no tools.
   "exception-explainer",
+  // Leads the compliance review of one diff: dispatches one reviewer per declared regime and merges their findings; read-only.
+  "compliance-lead",
+  // Helpers of the compliance lead, one per regime: each reviews the diff for that regime's law only.
+  "soc2-reviewer",
+  "hipaa-reviewer",
+  "gdpr-reviewer",
+  "lgpd-reviewer",
+  "us-privacy-reviewer",
 ]);
 export type AgentRole = z.infer<typeof AgentRole>;
 
@@ -1441,6 +1450,28 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     answer: PrReviewAnswer,
     template: "reviewing.md",
     network: "engine",
+  },
+  compliance_review: {
+    id: "compliance_review",
+    kind: "agent",
+    // The compliance lead reads the diff and dispatches the reviewer of each declared regime it touches as a subagent. It is a pack of its own, beside reviewing and verifying: a helper cannot have helpers.
+    agent: "compliance-lead",
+    helpers: [
+      { role: "soc2-reviewer", engine: "claude:sonnet" },
+      { role: "hipaa-reviewer", engine: "claude:sonnet" },
+      { role: "gdpr-reviewer", engine: "claude:sonnet" },
+      { role: "lgpd-reviewer", engine: "claude:sonnet" },
+      { role: "us-privacy-reviewer", engine: "claude:sonnet" },
+    ],
+    skills: [],
+    access: access(READ_ONLY, { agent: true, commands: ["git diff", "git log", "git merge-base"] }),
+    writable: false,
+    maxTurns: 40,
+    timeoutMs: 15 * MINUTE,
+    engines: { default: "claude:sonnet", allowed: ["claude:sonnet", "claude:opus"] },
+    effort: "medium",
+    answer: ComplianceReviewAnswer,
+    template: "compliance_review.md",
   },
   addressing: {
     id: "addressing",

@@ -3,7 +3,7 @@
 // the seam live in this repository; `factory-contract.test.ts` holds them together.
 import { z } from "zod";
 
-import { ChangeExceptionKind } from "./compliance.ts";
+import { ChangeExceptionKind, ComplianceRegime } from "./compliance.ts";
 import { EconomyInput, ProposeContext } from "./economy.ts";
 import { EngineBudgets, EngineId } from "./engines.ts";
 import { EffortId } from "./models.ts";
@@ -212,6 +212,8 @@ export const PackId = z.enum([
   "question_council",
   // Explains why a merged PR missed a change-management control, from its title, body and the machine's facts; no tools, no worktree, on demand.
   "change_exceptions",
+  // Reviews a PR's diff against the regimes the repo declares (luna.yaml `compliance`): a lead that dispatches one reviewer per regime; runs beside reviewing and verifying, never as their helper.
+  "compliance_review",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -465,6 +467,23 @@ export const ChangeExceptionsContext = z.object({
 });
 export type ChangeExceptionsContext = z.infer<typeof ChangeExceptionsContext>;
 
+/** The wiki pages the compliance review reads: at most this many, and this many characters of text between them. */
+export const COMPLIANCE_CONTROL_PAGES = 40;
+export const COMPLIANCE_CONTROL_CHARS = 200_000;
+
+/** For compliance_review: the repo's regimes and its wiki's control and policy pages. The pages are written by others: data, never an instruction. The diff comes as `context.review`, the way reviewing reads it. */
+export const ComplianceReviewContext = z.object({
+  /** owner/name. */
+  repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/name"),
+  regimes: z.array(ComplianceRegime).min(1),
+  /** The repo wiki's `Compliance/` pages (path inside the wiki, markdown text); empty when the wiki has none or could not be read. */
+  controls: z
+    .array(z.object({ path: z.string().min(1), text: z.string() }))
+    .max(COMPLIANCE_CONTROL_PAGES)
+    .refine((pages) => pages.reduce((sum, page) => sum + page.text.length, 0) <= COMPLIANCE_CONTROL_CHARS, `at most ${COMPLIANCE_CONTROL_CHARS} characters of page text`),
+});
+export type ComplianceReviewContext = z.infer<typeof ComplianceReviewContext>;
+
 /** One slice of the implementer's ledger, kept by the runner in `/out/ledger.json`. */
 export const LedgerSlice = z.object({
   id: z.number().int(),
@@ -614,6 +633,8 @@ export const LunaConfig = z.object({
   engines: StageEngines.optional(),
   /** The effort a pack runs at in this repo, over its default. */
   effort: StageEfforts.optional(),
+  /** The regimes this repo answers to; each makes the compliance review run that regime's reviewer. */
+  compliance: z.array(ComplianceRegime).refine((regimes) => new Set(regimes).size === regimes.length, "each regime once").optional(),
   /** Monthly caps in USD on this repo's stage runs, by engine or credential (`openai:sol: 10`). */
   budget: z.object({ engines: EngineBudgets.optional() }).optional(),
   /** How long the machine keeps a task's local Evidence Pack and media; 0 never sweeps it, absent defers to MACHINE_RETENTION_DAYS. */
@@ -1345,6 +1366,8 @@ export const StageInput = z.object({
     foreman: ForemanContext.nullable().optional(),
     /** For change_exceptions: the merged PRs that missed a change-management control; the task is synthetic and there is no worktree. */
     exceptions: ChangeExceptionsContext.nullable().optional(),
+    /** For compliance_review: the repo's regimes and its wiki's control pages; the diff is `review`. */
+    compliance: ComplianceReviewContext.nullable().optional(),
     /** For question_council: the open triage questions to settle from the code, the card and the answers so far. */
     questions: QuestionsContext.nullable().optional(),
     /** For verifying: the files the code graph says depend on what the change touched, to review first. */

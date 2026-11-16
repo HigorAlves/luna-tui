@@ -22,6 +22,7 @@ import { type Trust, trustOf } from "../../domain/trust.ts";
 import { failureGist } from "../../domain/failure-gist.ts";
 import { addedLineNumbers, coverageFinding, mutationFinding, parseLcov, parseMutationScore, patchCoverage } from "../../domain/coverage.ts";
 import { type EnvRecord, compareEnv } from "../../domain/env-hash.ts";
+import { type ComplianceDeps, runCompliance } from "./compliance-review.ts";
 import { verifySteps } from "../../domain/verify-order.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { noIdentityDetail } from "../env-broken.ts";
@@ -43,6 +44,8 @@ export interface VerifyDeps {
   ) => Promise<ExecResult>> | null;
   /** Runs the verifying review pack; null when agents are off, which skips the review. */
   runPack: ((context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary; image?: string }) => Promise<StageResult>) | null;
+  /** The compliance review beside the review pack, when the repo declares regimes (`slugOf` names the repo's GitHub slug for its wiki); its findings join the review's. */
+  compliance?: ComplianceDeps & { slugOf: (repoPath: string) => Promise<string | null> };
   stateDir: string;
   detect?: (worktreePath: string) => Promise<DetectedChecks>;
   /** A fresh clone of the card's clone at its head commit, where the checks and the review run; absent, they run in the card's own folder. */
@@ -329,7 +332,16 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       const answer = answerOf(pack.detail);
       // Each finding gets its id; the same finding raised twice is one, at the highest level it was raised at. A finding from before v2.2 reads the same.
       reviewed = mergeDuplicateFindings(((Array.isArray(answer?.findings) ? answer.findings : pack.findings ?? []) as Finding[]).map(normaliseFinding));
-      classification = await classify(reviewed);
+      // The compliance lead reads the same change in the worktree; a blocker of its own fails the review like the verifier's, and its failure never does.
+      if (deps.compliance && task.repoPath) {
+        const slug = await deps.compliance.slugOf(task.repoPath).catch(() => null);
+        const compliance = slug ? await runCompliance(deps.compliance, context, slug, null) : null;
+        if (compliance) {
+          reviewed = mergeDuplicateFindings([...reviewed, ...compliance.findings.map(normaliseFinding)]);
+          classification = { compliance: { regimesRun: compliance.regimesRun, summary: compliance.summary, findings: compliance.findings.length, notes: compliance.notes } };
+        }
+      }
+      classification = { ...classification, ...(await classify(reviewed)) };
       if (pack.outcome === "fail") return { ...pack, detail: { ...pack.detail, step: "review", ...classification } };
       const standing = assemble(pack, reviewed, classification);
       const blockers = standing.outcome === "fail" ? 1 : 0;

@@ -187,6 +187,16 @@ const exceptionsText = (exceptions: StageInput["context"]["exceptions"]) => {
   };
 };
 
+/** The regimes and the wiki's control pages, as compliance_review reads them: each page under its path as a heading. The pages are written by others, so the block is quoted data. */
+const complianceText = (compliance: StageInput["context"]["compliance"]) => {
+  if (!compliance) return { repo: NONE, regimes: NONE, controls: NONE };
+  return {
+    repo: compliance.repo,
+    regimes: compliance.regimes.join(", "),
+    controls: compliance.controls.length > 0 ? compliance.controls.map((page) => `## ${page.path}\n${page.text}`).join("\n") : NONE,
+  };
+};
+
 /** The issue, as jira_intake reads it: one header line, the description, the comments, the repo. */
 const jiraText = (jira: StageInput["context"]["jira"]) => {
   if (!jira) return { issue: NONE, description: NONE, comments: NONE, repoPath: NONE, classification: NONE };
@@ -514,6 +524,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
   const chat = chatText(input.context.chat);
   const foreman = foremanText(input.context.foreman);
   const exceptions = exceptionsText(input.context.exceptions);
+  const compliance = complianceText(input.context.compliance);
   const questions = questionsText(input.context.questions);
   const video = videoText(input.context.video);
   const subs: Record<string, string> = {
@@ -631,6 +642,9 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.exceptions.period}}": exceptions.period,
     "{{context.exceptions.controls}}": exceptions.controls,
     "{{context.exceptions.items}}": exceptions.items,
+    "{{context.compliance.repo}}": compliance.repo,
+    "{{context.compliance.regimes}}": compliance.regimes,
+    "{{context.compliance.controls}}": compliance.controls,
     "{{context.jira.issue}}": jira.issue,
     "{{context.jira.description}}": jira.description,
     "{{context.jira.comments}}": jira.comments,

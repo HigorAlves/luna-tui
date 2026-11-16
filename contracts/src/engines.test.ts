@@ -103,6 +103,7 @@ describe("the engines each pack may run on", () => {
     expect(helpersOn(PACKS.addressing, "claude")).toEqual([{ role: "reply-drafter", engine: "claude:haiku" }]);
     expect(helpersOn(PACKS.triage, "claude")).toEqual([{ role: "reply-drafter", engine: "claude:haiku" }]);
     expect(helpersOn(PACKS.verifying, "claude")).toEqual([{ role: "second-opinion", engine: "codex:sol" }]);
+    expect(helpersOn(PACKS.compliance_review, "claude")).toEqual(["soc2-reviewer", "hipaa-reviewer", "gdpr-reviewer", "lgpd-reviewer", "us-privacy-reviewer"].map((role) => ({ role, engine: "claude:sonnet" })));
   });
 
   it("puts a helper on the stage's own subscription when it runs on eve, and keeps a second opinion in another family", () => {

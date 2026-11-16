@@ -754,6 +754,53 @@
     "allowedTools": [],
     "tools": []
   },
+  "compliance_review": {
+    "allowedTools": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Skill",
+      "mcp__luna__step",
+      "Bash(cat:*)",
+      "Bash(ls:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(pwd:*)",
+      "Bash(echo:*)",
+      "Bash(git branch --show-current:*)",
+      "Bash(git -C /work branch --show-current:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git -C /work rev-parse:*)",
+      "Bash(git status:*)",
+      "Bash(git -C /work status:*)",
+      "Bash(git show:*)",
+      "Bash(git -C /work show:*)",
+      "Bash(graphify query:*)",
+      "Bash(graphify explain:*)",
+      "Bash(graphify path:*)",
+      "Bash(graphify affected:*)",
+      "Bash(graphify god-nodes:*)",
+      "Agent",
+      "Bash(git diff:*)",
+      "Bash(git -C /work diff:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git -C /work ls-files:*)",
+      "Bash(git log:*)",
+      "Bash(git -C /work log:*)",
+      "Bash(git merge-base:*)",
+      "Bash(git -C /work merge-base:*)"
+    ],
+    "tools": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Skill",
+      "mcp__luna__step",
+      "Bash",
+      "Agent"
+    ]
+  },
   "code_map": {
     "allowedTools": [
       "Read",

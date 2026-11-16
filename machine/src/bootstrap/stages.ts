@@ -81,6 +81,8 @@ import { repoCommandsOf } from "../domain/command-check.ts";
 import { buildTestsStep } from "../application/stages/build-tests.ts";
 import { exec } from "../adapters/process/exec.ts";
 import { type GitHub, noTokenGitHub } from "../application/github.ts";
+import { type ComplianceDeps } from "../application/stages/compliance-review.ts";
+import { createWiki } from "../adapters/git/wiki.ts";
 import { type ShipGateProbe, shipGateProbe } from "../application/ship-gate-probe.ts";
 
 export interface RealStagesResult {
@@ -101,6 +103,8 @@ export interface RealStagesResult {
   agentDeps: { egress?: EgressPolicy; image: string; approvals: ApprovedBases; repoImages: ReturnType<typeof makeRepoImages>; imageSource: RepoImageSource; imageEvents: ImageEventSink; repoImageOf: (repoPath: string, signal?: AbortSignal) => Promise<string>; credentials: Credentials; stateDir: string; worktreesDir: string; policies: PolicyStore } | null;
   /** What `Pipeline.tick` asks of an open release question (merged, withdrawn, kept); null when stages are stubs. */
   shipGateProbe: ShipGateProbe | null;
+  /** The compliance review beside the review and Verify packs: the repo's regimes, its wiki's control pages and the pack's run; null when stages are stubs. */
+  compliance: ComplianceDeps | null;
 }
 
 /** Why the runner image cannot give a run its own network and proxy (it was built before the egress proxy went in), or null. */
@@ -117,7 +121,7 @@ export interface ImageEventSink {
 }
 
 /** Every stage a stub: what `buildRealStages` returns when it cannot run agents, with the reason (null for `MACHINE_AGENTS=off`, which is a choice). */
-const stubbed = (stubReason: string | null): RealStagesResult => ({ stubReason, real: {}, verifyPack: null, checksExec: null, proofRig: null, agentDeps: null, shipGateProbe: null });
+const stubbed = (stubReason: string | null): RealStagesResult => ({ stubReason, real: {}, verifyPack: null, checksExec: null, proofRig: null, agentDeps: null, shipGateProbe: null, compliance: null });
 
 /** Real agents for Triage and Implementer when everything they need is there; stubs otherwise. */
 export async function buildRealStages(
@@ -376,6 +380,12 @@ export async function buildRealStages(
     // A fix is made on a fresh clone at the PR's head and comes back as a fast-forward.
     fresh: { ...hostFreshWorkspace, keep: (path: string, taskId: string, runId: string) => keepFolder({ stateDir: config.stateDir, taskId, runId, path }) },
   };
+  // The compliance review runs beside the review and Verify packs on the repo's declared regimes, with its wiki's control pages.
+  const compliance: ComplianceDeps = {
+    regimes: async (repoPath) => (repoPath ? ((await policies.for(repoPath)).compliance ?? []) : []),
+    wiki: createWiki({ cacheDir: join(config.stateDir, "wiki") }),
+    run: (subContext, review, context) => runAgent(deps, subContext, "compliance_review", { ...(review ? { review } : {}), compliance: context }),
+  };
   const real: Partial<Record<TaskState, StageRunner>> = {
     ...agents,
     // Build: a tests step (one failing, tagged test per scenario, committed by the machine) runs before the implementer.
@@ -571,6 +581,7 @@ export async function buildRealStages(
     // The PR tasks' own stages: the host fetches the diff or the threads, the pack answers.
     reviewing: prReviewRunner({
       github,
+      compliance,
       runPack: (context, review) => runAgent(deps, context, "reviewing", { review }),
       ...(reviewLinks ? { links: reviewLinks } : {}),
       ...(jira
@@ -628,7 +639,7 @@ export async function buildRealStages(
   };
   const resolveConflicts: DeliverDeps["resolveConflicts"] = (context, input) =>
     mergeRound({ github, loop: reviewLoop, policies, evidence: { load: evidenceDeps.load, save: saveEvidence, publish: publishByPolicy, store: evidenceStore }, stateDir: config.stateDir }, context, input);
-  return { stubReason: null, real, resolveConflicts, verifyPack, checksExec, proofRig, shipGateProbe: shipGateProbe({ github, ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch } } : {}), policies, evidence: { load: evidenceDeps.load }, stateDir: config.stateDir }), agentDeps: { ...(egress ? { egress } : {}), image: config.runnerImage, approvals, repoImages, imageSource, imageEvents, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
+  return { stubReason: null, compliance, real, resolveConflicts, verifyPack, checksExec, proofRig, shipGateProbe: shipGateProbe({ github, ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch } } : {}), policies, evidence: { load: evidenceDeps.load }, stateDir: config.stateDir }), agentDeps: { ...(egress ? { egress } : {}), image: config.runnerImage, approvals, repoImages, imageSource, imageEvents, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
 }
 
 /** Packs on demand (`POST /runs`): on whenever agents are, off (undefined, the route's 503) only

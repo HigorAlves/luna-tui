@@ -178,6 +178,7 @@ engines:                                  # the engine a pack runs on in this re
   triage: claude:opus                     # must be one of the pack's engines.allowed (GET /packs)
 effort:                                   # the effort a pack runs at in this repo, over its default: low, medium or high
   triage: medium                          # not for a decision pack; the engine that runs must support it
+compliance: [soc2, gdpr]                  # the regimes this repo answers to: soc2, hipaa, gdpr, lgpd, us_privacy; each makes the compliance review run that regime's reviewer
 budget:
   engines: { openai:sol: 10, codex: 0 }   # monthly caps in USD on this repo's stage runs, by engine or credential (never Claude)
 evidence:
@@ -190,6 +191,8 @@ Every key is optional. The machine ignores unknown keys. Under `jira.on`, `jira.
 `engines` maps a pack to the engine it runs on in this repo. An engine outside the pack's `engines.allowed` makes the file invalid. The machine reports it like any other bad value. The last good version stays in force. A setup proposal with such an engine fails the stage, like any proposal the machine cannot read. A task's own choice (`stages` on `POST /tasks`, `PATCH /tasks/:id/stages`) wins over the file. The file wins over the pack's default. The machine reads a pack's engine when its stage starts. So an edit counts from the next stage on. A stage that already runs keeps its engine, also across a restart.
 
 `effort` maps a pack to the effort it runs at in this repo. The value is `low`, `medium` or `high`. A decision pack takes no effort, so the file is invalid with one. A pack that runs on its own, not in a task (`foreman`, `slack_triage`, `chat_triage`, `decompose`, `ticket_reply` and the like), takes none either: the file is invalid with one. An unknown pack or value makes the file invalid too. The file does not check the effort against an engine. The engine can differ per task. The machine checks it when the stage starts. If the engine that runs does not support the effort, the stage runs the pack's own effort. A `stage.engine` event on the task gives the reason. The machine reads the effort when a stage starts. So an edit counts from the next stage on.
+
+`compliance` lists the regimes that apply to this repo: `soc2`, `hipaa`, `gdpr`, `lgpd` and `us_privacy`. A repo with no patient data leaves out `hipaa`. An unknown regime or a repeated one makes the file invalid. The compliance review (pack `compliance_review`) runs on a PR only when the list has at least one regime. Its lead dispatches the reviewer of each regime the diff touches, with the repo's control pages from its wiki (`Compliance/`). The machine reads the list when the review starts. So an edit counts from the next review on.
 
 `budget.engines` caps an engine in this repo the way `MACHINE_ENGINE_BUDGETS` caps it on the machine. It uses the same keys and rules. It counts only this repo's stage runs this month. A key that names no engine or credential makes the file invalid. A key that names Claude also makes the file invalid. At the cap, the repo's tasks run that pack's default with a note. The machine's caps still apply on top.
 

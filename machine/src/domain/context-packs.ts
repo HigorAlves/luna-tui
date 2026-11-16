@@ -48,8 +48,8 @@ export const CONTEXT_OF = {
 
 export type ContextPackId = keyof typeof CONTEXT_OF;
 
-/** Context-only packs `POST /runs` never runs: eval_judge grades eval cases for the evals runner only. */
-export const NOT_ON_DEMAND: readonly PackId[] = ["eval_judge"];
+/** Context-only packs `POST /runs` never runs: eval_judge grades eval cases for the evals runner only; compliance_review reviews a PR in a worktree. */
+export const NOT_ON_DEMAND: readonly PackId[] = ["eval_judge", "compliance_review"];
 
 /** What a context-only pack reads: its one key of the stage input's context. */
 export type PackContext =

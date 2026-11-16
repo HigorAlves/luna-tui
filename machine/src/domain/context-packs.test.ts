@@ -28,6 +28,12 @@ describe("context-only packs", () => {
     expect(isContextPack("eval_judge")).toBe(false);
   });
 
+  it("never include compliance_review: it reviews a PR's diff in a worktree, so a client has nothing to send it", () => {
+    expect(packStates("compliance_review")).toEqual([]);
+    expect(NOT_ON_DEMAND).toContain("compliance_review");
+    expect(isContextPack("compliance_review")).toBe(false);
+  });
+
   it("take an object with the pack's own key and nothing else", () => {
     expect(contextSchema("chat_triage").safeParse({ chat }).success).toBe(true);
     for (const pack of ["risk_score", "coverage_check", "plan_check"] as const) {

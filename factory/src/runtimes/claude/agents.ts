@@ -19,6 +19,12 @@ const HELPER: Partial<Record<AgentRole, HelperSpec>> = {
     skills: [`${PLUGIN_NAME}:review-contract`],
     maxTurns: 25,
   },
+  // One reviewer per regime of the compliance lead: read the diff and the code around it, nothing else.
+  "soc2-reviewer": { tools: ["Read", "Glob", "Grep"], maxTurns: 20 },
+  "hipaa-reviewer": { tools: ["Read", "Glob", "Grep"], maxTurns: 20 },
+  "gdpr-reviewer": { tools: ["Read", "Glob", "Grep"], maxTurns: 20 },
+  "lgpd-reviewer": { tools: ["Read", "Glob", "Grep"], maxTurns: 20 },
+  "us-privacy-reviewer": { tools: ["Read", "Glob", "Grep"], maxTurns: 20 },
   "reply-drafter": {
     tools: ["Read", "Glob", "Grep"],
     skills: [`${PLUGIN_NAME}:receiving-code-review`],
