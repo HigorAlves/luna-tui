@@ -1148,6 +1148,13 @@ describe("planStage's council", () => {
     expect(councilFlags(result)).toEqual(["council.security"]);
   });
 
+  it("keeps a member's round-1 findings open when that member fails in round 2, so the flag is set", async () => {
+    const { run } = setup({ council_security: [member("a gap", [{ title: "No auth on the export" }]), { outcome: "fail", detail: { error: "engine down" } }] }, cfg());
+    const result = await run(context({ task: highTask }));
+    expect(result.detail).toMatchObject({ council: { passed: false, rounds: 2 } });
+    expect(councilFlags(result)).toEqual(["council.security"]);
+  });
+
   it("with rounds 1 asks once, does not re-plan, and flags what was found", async () => {
     const { run, calls } = setup({ council_second: [member("a gap", [{ title: "Slice 2 cannot work" }])] }, cfg({ rounds: 1 }));
     const result = await run(context({ task: highTask }));

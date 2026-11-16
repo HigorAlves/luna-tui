@@ -580,11 +580,15 @@ export function planStage(deps: PlanDeps): StageRunner {
       let roundsRun = 0;
       for (let round = 1 as 1 | 2; round <= councilCfg.rounds; round = 2) {
         const current = plan;
+        const earlier = open;
         open = new Map();
         for (const who of asked) {
           const answered = await turn(who, round, current);
           transcript.push(answered);
+          // A member that did not answer has not settled what it found before: those findings stay open.
+          const kept = answered.summary.startsWith("did not answer") ? earlier.get(who) : undefined;
           if (answered.findings.length > 0) open.set(who, answered.findings);
+          else if (kept) open.set(who, kept);
         }
         roundsRun = round;
         if (open.size === 0 || round === councilCfg.rounds) break;

@@ -253,8 +253,15 @@ fn council_section(r: &Value, width: usize) -> Vec<Line<'static>> {
         .filter_map(|m| turns.iter().rfind(|t| t["member"].as_str() == Some(m)))
         .map(|t| t["findings"].as_array().map_or(0, Vec::len))
         .sum();
+    let silent = turns.iter().any(|t| {
+        t["summary"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("did not answer"))
+    });
     let head = if council["passed"].as_bool() == Some(true) {
         "Council: passed".to_string()
+    } else if silent {
+        "Council: a member did not answer".to_string()
     } else {
         format!("Council: {open} finding(s) open")
     };
@@ -2105,6 +2112,20 @@ mod approver_tests {
             screen.contains("⚑ council: security has findings open"),
             "{screen}"
         );
+    }
+
+    #[test]
+    fn a_member_that_did_not_answer_is_said_instead_of_a_zero_count() {
+        let council = serde_json::json!({"passed": false, "rounds": 2, "transcript": [
+            {"member": "security", "round": 1, "summary": "a gap", "findings": []},
+            {"member": "security", "round": 2, "summary": "did not answer: engine down", "findings": []},
+        ]});
+        let screen = with_council(Some(council), &["council.security"]);
+        assert!(
+            screen.contains("Council: a member did not answer"),
+            "{screen}"
+        );
+        assert!(!screen.contains("0 finding(s) open"), "{screen}");
     }
 
     #[test]
