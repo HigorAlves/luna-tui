@@ -175,6 +175,11 @@ fn machine_flags(approval: &Approval, rows: &[(String, String)]) -> Vec<String> 
             }
             // The stale map has its own sentence above; a plan outside the map is what the plan check's issue says in full.
             "map stale" if stale => {}
+            // `council.<member>`: that member's findings were left open after the last round.
+            _ if name.starts_with("council.") => all.push(Flag::said(format!(
+                "council: {} has findings open",
+                &name["council.".len()..]
+            ))),
             "plan outside map" if issues.iter().any(|i| i.contains("code map")) => {}
             _ => all.push(Flag::said(name)),
         }
@@ -228,6 +233,41 @@ fn machine_flags(approval: &Approval, rows: &[(String, String)]) -> Vec<String> 
         });
         if !(twice || by_id || by_check || by_head) {
             out.push(flag.text.clone());
+        }
+    }
+    out
+}
+
+/// The council's section of the Review page: `Council: passed` or `Council: N finding(s) open`, then one line per turn (member, round,
+/// summary) with its findings indented under it. Empty when the plan had no council. The open findings are those of each member's last turn.
+fn council_section(r: &Value, width: usize) -> Vec<Line<'static>> {
+    let council = &r["council"];
+    let Some(turns) = council["transcript"].as_array() else {
+        return Vec::new();
+    };
+    let open: usize = ["security", "second"]
+        .iter()
+        .filter_map(|m| turns.iter().rfind(|t| t["member"].as_str() == Some(m)))
+        .map(|t| t["findings"].as_array().map_or(0, Vec::len))
+        .sum();
+    let head = if council["passed"].as_bool() == Some(true) {
+        "Council: passed".to_string()
+    } else {
+        format!("Council: {open} finding(s) open")
+    };
+    let mut out = vec![title(&head)];
+    for t in turns {
+        let said = format!(
+            "{} · round {} · {}",
+            t["member"].as_str().unwrap_or("?"),
+            t["round"].as_u64().unwrap_or(0),
+            t["summary"].as_str().unwrap_or("")
+        );
+        out.extend(hanging(vec![Span::raw("  ")], &said, width));
+        for f in t["findings"].as_array().into_iter().flatten() {
+            if let Some(name) = f["title"].as_str() {
+                out.extend(hanging(vec![Span::raw("    ")], name, width));
+            }
         }
     }
     out
@@ -591,6 +631,13 @@ pub(crate) fn review_page(
         for note in &notes {
             main.extend(hanging(vec![Span::raw("  · ")], note, width));
         }
+    }
+    let council = council_section(r, width);
+    if !council.is_empty() {
+        if !main.is_empty() {
+            main.push(Line::default());
+        }
+        main.extend(council);
     }
     // What this gate is really asking when it is not the plan itself: a split, a reply, an archive.
     let ask = gate_main_facts(approval);
@@ -1977,6 +2024,72 @@ mod approver_tests {
         gate.requested["approvers"] = serde_json::json!(["ana"]);
         let screen = render(&mut app, 180, 60);
         assert!(screen.contains("Approvals  1 of 2 given (ana)"), "{screen}");
+    }
+
+    fn with_council(council: Option<serde_json::Value>, flagged: &[&str]) -> String {
+        let mut app = plan_gate_app();
+        app.detail_section = Section::Review;
+        let gate = app
+            .detail
+            .as_mut()
+            .unwrap()
+            .approvals
+            .iter_mut()
+            .find(|a| a.requested["lane"].is_string())
+            .unwrap();
+        gate.requested["flagged"] = serde_json::json!(flagged);
+        if let Some(c) = council {
+            gate.requested["council"] = c;
+        }
+        render(&mut app, 180, 60)
+    }
+
+    #[test]
+    fn a_passed_council_is_one_line_and_each_turn_is_listed() {
+        let council = serde_json::json!({"passed": true, "rounds": 1, "transcript": [
+            {"member": "security", "round": 1, "summary": "nothing to add", "findings": []},
+            {"member": "second", "round": 1, "summary": "the plan holds", "findings": []},
+        ]});
+        let screen = with_council(Some(council), &[]);
+        assert!(screen.contains("Council: passed"), "{screen}");
+        assert!(
+            screen.contains("security · round 1 · nothing to add"),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("second · round 1 · the plan holds"),
+            "{screen}"
+        );
+    }
+
+    #[test]
+    fn findings_left_open_are_counted_indented_and_flagged_by_member() {
+        let council = serde_json::json!({"passed": false, "rounds": 2, "transcript": [
+            {"member": "security", "round": 1, "summary": "a gap", "findings": [
+                {"path": "a.ts", "line": 1, "severity": "high", "title": "No auth on the export", "body": "b", "confidence": 0.9}]},
+            {"member": "second", "round": 1, "summary": "two gaps", "findings": [
+                {"path": "b.ts", "line": 2, "severity": "low", "title": "Slice 2 cannot work", "body": "b", "confidence": 0.8}]},
+            {"member": "security", "round": 2, "summary": "still open", "findings": [
+                {"path": "a.ts", "line": 1, "severity": "high", "title": "No auth on the export", "body": "b", "confidence": 0.9}]},
+            {"member": "second", "round": 2, "summary": "settled", "findings": []},
+        ]});
+        let screen = with_council(Some(council), &["council.security"]);
+        assert!(screen.contains("Council: 1 finding(s) open"), "{screen}");
+        assert!(
+            screen.contains("security · round 2 · still open"),
+            "{screen}"
+        );
+        assert!(screen.contains("    No auth on the export"), "{screen}");
+        assert!(
+            screen.contains("⚑ council: security has findings open"),
+            "{screen}"
+        );
+    }
+
+    #[test]
+    fn a_plan_with_no_council_has_no_council_section() {
+        let screen = with_council(None, &[]);
+        assert!(!screen.contains("Council"), "{screen}");
     }
 
     #[test]
