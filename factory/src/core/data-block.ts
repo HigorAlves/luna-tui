@@ -54,14 +54,16 @@ export type VariableKind = "machine" | "line" | "block";
 // Only what the machine alone writes (a constant, a count, an enum, a hash, a path it chose). Traced one by one: the checks and QA targets
 // are the repository's own text, the scenario tests and the video's narration and sheets carry names a model or a tool wrote, the coverage
 // report lists paths from a report the container wrote, and a classification holds labels a model answered: all foreign.
-const machine = ["agent", "attempt", "skills", "plan.risk", "context.plan.risk", "context.baseCommit", "context.testsCommit", "context.docsOnly", "context.unlockedTests.note", "context.browserScenarios", "context.plan.docsOnly", "context.graph", "context.chat.source", "context.jira.repoPath", "plan.fallback", "context.video.budgetS", "context.conversation.relation", "context.conversation.note"];
+const machine = ["agent", "attempt", "skills", "plan.risk", "context.plan.risk", "context.baseCommit", "context.testsCommit", "context.docsOnly", "context.unlockedTests.note", "context.browserScenarios", "context.plan.docsOnly", "context.graph", "context.chat.source", "context.jira.repoPath", "plan.fallback", "context.video.budgetS", "context.conversation.relation", "context.conversation.note", "context.foreman.now", "context.foreman.truncated", "context.foreman.packs"];
 const line = ["task.title", "task.branch", "task.goal", "task.classification", "context.jira.classification", "context.slack.me", "context.chat.me", "context.eval.pack", "context.eval.case"];
 const block = [
   "task.description", "task.criteria", "task.record", "task.evidence", "plan.brief", "plan.criteria", "plan.criteria.ids", "plan.assumptions", "plan.slices",
-  "context.plan.map", "context.plan.shortlist", "context.plan.replan", "context.plan.coverageNotes", "context.plan.gaps", "context.plan.review", "context.plan.cases",
+  "context.plan.map", "context.plan.shortlist", "context.plan.replan", "context.plan.coverageNotes", "context.plan.gaps", "context.plan.review", "context.plan.cases", "context.plan.council",
+  "context.questions.list", "context.questions.card", "context.questions.answers",
   "context.sweepFailures", "context.blastRadius", "context.checks", "context.scenarioTests", "context.testsCommit.files", "context.unlockedTests", "context.coverage", "context.qaTargets", "context.video.narration", "context.video.sheets", "decisions", "priorFindings", "context.projectContext", "context.testCases", "context.ci", "context.review", "context.threads", "context.ship", "context.retro",
   "context.video.scenarios", "context.video.steps", "context.video.chapters", "context.video.target", "context.video.timeline", "context.video.report", "context.video.transcript", "context.video.fixCards",
   "context.slack.watches", "context.slack.rules", "context.slack.items", "context.chat.rules", "context.chat.items",
+  "context.foreman.question", "context.foreman.history", "context.foreman.cards", "context.foreman.pending",
   "context.split", "context.jira.issue", "context.jira.description", "context.jira.comments", "context.intake", "context.ticket", "context.check", "context.propose", "context.factCandidates",
   "context.conversation.thread", "context.conversation.card", "context.conversation.evidence", "context.conversation.docs", "context.conversation.tone",
   "context.eval.rubric", "context.eval.input", "context.eval.checks", "context.eval.answer",
@@ -92,6 +94,11 @@ export const CAPS: Readonly<Record<string, number>> = {
   "context.plan.coverageNotes": 32_000,
   "context.plan.gaps": 32_000,
   "context.plan.review": 32_000,
+  "context.plan.council": 80_000,
+  // At most six questions, the card (title and description) and the answers so far.
+  "context.questions.list": 16_000,
+  "context.questions.card": 32_000,
+  "context.questions.answers": 32_000,
   // The approved scenarios are the work itself (a 13-scenario plan lost S4-S13 at 2,000).
   "context.plan.cases": 200_000,
   "context.testCases": 200_000,
@@ -132,6 +139,11 @@ export const CAPS: Readonly<Record<string, number>> = {
   "context.slack.items": 120_000,
   "context.chat.rules": 32_000,
   "context.chat.items": 120_000,
+  // The foreman reads the question and the turns whole (2,000 characters each, at most ten turns) and up to sixty cards of about 300 characters.
+  "context.foreman.question": 2_000,
+  "context.foreman.history": 24_000,
+  "context.foreman.cards": 32_000,
+  "context.foreman.pending": 4_000,
   // The video packs.
   "context.video.scenarios": 200_000,
   "context.video.steps": 32_000,

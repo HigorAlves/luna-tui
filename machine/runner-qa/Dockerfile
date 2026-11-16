@@ -23,7 +23,7 @@ RUN apt-get update \
 # chromium-qa is a wrapper, not a link: the machine's egress proxy reads a TLS ClientHello's server name, and a browser that sends an encrypted
 # ClientHello (Chromium's GREASE ECH included) would be closed. A browser launched another way must pass the same flag.
 RUN real="$(find /ms-playwright -maxdepth 3 -type f -name chrome -path '*chromium-*' | head -n1)" \
- && printf '#!/bin/sh\nexec "%s" --disable-features=EncryptedClientHello "$@"\n' "$real" > /usr/local/bin/chromium-qa \
+ && printf '#!/bin/sh\nexec "%s" --no-sandbox --disable-features=EncryptedClientHello "$@"\n' "$real" > /usr/local/bin/chromium-qa \
  && chmod 0755 /usr/local/bin/chromium-qa
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/chromium-qa
 

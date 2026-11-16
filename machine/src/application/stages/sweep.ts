@@ -8,6 +8,7 @@ import type { BlockedRow } from "../../adapters/docker/egress.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import { type CheckCommand, checkCommand } from "../../domain/checks.ts";
 import { envBrokenDetail, noIdentityDetail } from "../env-broken.ts";
+import type { Trust } from "../../domain/trust.ts";
 import { type SessionExec, openChecksSession } from "./checks-session.ts";
 
 const TAIL_LINES = 60;
@@ -45,14 +46,14 @@ export interface CheckRun {
   missingTool?: { cmd: string; tail: string };
 }
 
-type Exec = SessionExec<(command: string, args: string[], options: { cwd?: string; signal?: AbortSignal; timeoutMs?: number; env?: NodeJS.ProcessEnv; services?: Record<string, ServiceSpec>; repoPath?: string; secrets?: string[] }) => Promise<ExecResult & { blocked?: BlockedRow[] }>>;
+type Exec = SessionExec<(command: string, args: string[], options: { cwd?: string; signal?: AbortSignal; timeoutMs?: number; env?: NodeJS.ProcessEnv; services?: Record<string, ServiceSpec>; repoPath?: string; secrets?: string[]; trust?: Trust }) => Promise<ExecResult & { blocked?: BlockedRow[] }>>;
 
-type RunChecksOptions = { commands: readonly CheckCommand[]; exec: Exec; cwd: string; signal?: AbortSignal; env: NodeJS.ProcessEnv; services?: Record<string, ServiceSpec>; repoPath?: string; stage: string; timeoutMs: number; onBlocked?: (check: string, rows: BlockedRow[]) => void };
+type RunChecksOptions = { commands: readonly CheckCommand[]; exec: Exec; cwd: string; signal?: AbortSignal; env: NodeJS.ProcessEnv; services?: Record<string, ServiceSpec>; repoPath?: string; trust?: Trust; stage: string; timeoutMs: number; onBlocked?: (check: string, rows: BlockedRow[]) => void };
 
 /** Runs the commands in order inside one budget of `timeoutMs`; a command that finds the budget spent is reported as failed and skipped.
  *  The repository's services start once for the whole pass (when the exec can open a session) and are removed when it ends, however it ends. */
 export async function runChecks(opts: RunChecksOptions): Promise<CheckRun> {
-  const pass = await openChecksSession(opts.exec, { cwd: opts.cwd, ...(opts.repoPath ? { repoPath: opts.repoPath } : {}), ...(opts.services && opts.commands.length > 0 ? { services: opts.services } : {}) });
+  const pass = await openChecksSession(opts.exec, { cwd: opts.cwd, ...(opts.trust ? { trust: opts.trust } : {}), ...(opts.repoPath ? { repoPath: opts.repoPath } : {}), ...(opts.services && opts.commands.length > 0 ? { services: opts.services } : {}) });
   try {
     return await runCommands({ ...opts, exec: pass.exec });
   } finally {
@@ -73,7 +74,7 @@ async function runCommands(opts: RunChecksOptions): Promise<CheckRun> {
       result = { code: 1, stdout: "", stderr: "skipped: the checks budget ran out" };
       timedOut = true;
     } else {
-      result = await opts.exec(argv[0]!, argv.slice(1), { cwd: opts.cwd, ...(opts.signal ? { signal: opts.signal } : {}), timeoutMs: remaining, env: { ...opts.env, HARDNESS_STAGE: opts.stage }, ...(opts.services ? { services: opts.services } : {}), ...(opts.repoPath ? { repoPath: opts.repoPath } : {}), ...(secrets && secrets.length > 0 ? { secrets } : {}) });
+      result = await opts.exec(argv[0]!, argv.slice(1), { cwd: opts.cwd, ...(opts.signal ? { signal: opts.signal } : {}), timeoutMs: remaining, env: { ...opts.env, HARDNESS_STAGE: opts.stage }, ...(opts.services ? { services: opts.services } : {}), ...(opts.repoPath ? { repoPath: opts.repoPath } : {}), ...(opts.trust ? { trust: opts.trust } : {}), ...(secrets && secrets.length > 0 ? { secrets } : {}) });
       timedOut = result.code !== 0 && Date.now() >= deadline;
     }
     if (result.blocked?.length) opts.onBlocked?.(name, result.blocked);
@@ -115,7 +116,7 @@ export interface SweepOutcome {
 
 const SWEEP_TIMEOUT_MS = 30 * 60_000;
 
-export async function runSweep(deps: SweepDeps, input: { worktree: string; repoPath: string; signal?: AbortSignal; env: NodeJS.ProcessEnv; onBlocked?: (check: string, rows: BlockedRow[]) => void }): Promise<SweepOutcome> {
+export async function runSweep(deps: SweepDeps, input: { worktree: string; repoPath: string; trust?: Trust; signal?: AbortSignal; env: NodeJS.ProcessEnv; onBlocked?: (check: string, rows: BlockedRow[]) => void }): Promise<SweepOutcome> {
   const { checks, services, wholeSuiteMinutes } = await deps.policy(input.repoPath);
   if (!checks || checks.length === 0) return { status: "skipped", ran: [], failed: [], note: "the repository declares no checks, so there was no regression sweep" };
   const changed = await deps.changedPaths(input.worktree, input.repoPath).catch(() => null);
@@ -127,7 +128,7 @@ export async function runSweep(deps: SweepDeps, input: { worktree: string; repoP
   const env = identity ? { ...input.env, GIT_AUTHOR_NAME: identity.name, GIT_AUTHOR_EMAIL: identity.email, GIT_COMMITTER_NAME: identity.name, GIT_COMMITTER_EMAIL: identity.email } : input.env;
   let run: CheckRun;
   try {
-    run = await runChecks({ commands: selected.map(checkCommand), exec: deps.exec, cwd: input.worktree, ...(input.signal ? { signal: input.signal } : {}), env, services, repoPath: input.repoPath, stage: "implementing", timeoutMs: deps.timeoutMs ?? SWEEP_TIMEOUT_MS, ...(input.onBlocked ? { onBlocked: input.onBlocked } : {}) });
+    run = await runChecks({ commands: selected.map(checkCommand), exec: deps.exec, cwd: input.worktree, ...(input.signal ? { signal: input.signal } : {}), env, services, repoPath: input.repoPath, ...(input.trust ? { trust: input.trust } : {}), stage: "implementing", timeoutMs: deps.timeoutMs ?? SWEEP_TIMEOUT_MS, ...(input.onBlocked ? { onBlocked: input.onBlocked } : {}) });
   } catch (error) {
     const escalated = envBrokenDetail(error);
     if (!escalated) throw error;

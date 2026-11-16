@@ -3,11 +3,12 @@
 // then grades each answer: the pack's schema, the case's checks, then the eval_judge pack.
 //
 //   pnpm eval --pack slack_triage --engine codex:luna [--against claude:haiku] [--case <id>]...
-//             [--no-judge | --judge] [--trials N] [--dataset <name>] [--save-baseline] [--image hardness-runner:dev]
+//             [--effort low|medium|high] [--no-judge | --judge] [--trials N] [--dataset <name>] [--save-baseline] [--image hardness-runner:dev]
 //
 // A decision pack runs without the judge (its grade is the label and the confidence); --judge adds it.
 // --trials N runs each case N times, each in its own container; --dataset <name> takes the cases from
-// that Laminar dataset (its labelled datapoints) instead of the folder.
+// that Laminar dataset (its labelled datapoints) instead of the folder. --effort sets the run's effort
+// (the pack's own without it); its baselines and run folders carry @<effort>.
 //
 // Set LMNR_PROJECT_API_KEY (or ~/.config/hardness/lmnr-project-api-key) and each case is a trace and each
 // engine's run an evaluation in your local Laminar (compose profile observe); MACHINE_TRACES=full attaches transcripts.
@@ -28,10 +29,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-import { type EvalCase, baselinePath, caseInput, datasetCases, judgeInput, loadCases, parseTrials, prepareWorktree, verdictOf } from "./src/cases.ts";
+import { type EvalCase, baselinePath, caseInput, datasetCases, engineSlug, judgeInput, loadCases, parseEffort, parseTrials, prepareWorktree, verdictOf } from "./src/cases.ts";
+import { IGNORED_EFFORT, effortProblems, honourEffort } from "./src/effort-check.ts";
 import { formatDiff, formatScorecard } from "./src/format.ts";
 import { type CaseResult, type JudgeVerdict, type Scorecard, caseResult, diffScorecards, gradeAnswer, scorecard } from "./src/grade.ts";
 import { evalDatapoint } from "./src/report.ts";
+import { evalSandbox } from "./src/sandbox.ts";
 
 const EVALS = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(EVALS, "..");
@@ -45,6 +48,7 @@ const { values } = parseArgs({
     "no-judge": { type: "boolean", default: false },
     judge: { type: "boolean", default: false },
     trials: { type: "string" },
+    effort: { type: "string" },
     dataset: { type: "string" },
     "save-baseline": { type: "boolean", default: false },
     image: { type: "string", default: process.env.RUNNER_IMAGE ?? "hardness-runner:dev" },
@@ -68,10 +72,24 @@ const trials = (() => {
     return fail((error as Error).message);
   }
 })();
+const effort = (() => {
+  try {
+    return parseEffort(values.effort);
+  } catch (error) {
+    return fail((error as Error).message);
+  }
+})();
+// An effort a pack or an engine cannot run is refused here, before any case runs or any baseline is written.
+const unrunnable = effortProblems(pack, engines, effort);
+if (unrunnable) fail(unrunnable);
 const image = values.image!;
-const credentials = machineCredentials();
-// The same list a real run of the pack gets (kind agent: the engine's host, GitHub, the registries), so what is measured is what runs; MACHINE_EGRESS=off applies here too.
-const egress = buildEgress({ egress: loadConfig(process.env).egress, runnerImage: image, traces: tracesFromEnv() }, new PolicyStore());
+// The sandbox a real run of the pack gets: the engine relay as the machine sets it (no real token in the stage), the pack's own egress list, a trusted card.
+// MACHINE_EGRESS=off and MACHINE_ENGINE_RELAY apply here too.
+const machineConfig = loadConfig(process.env);
+const sandboxOf = (of: PackId) => evalSandbox(of, machineConfig.egress.relay);
+const credentials = machineCredentials(sandboxOf(pack).credentials);
+const policies = new PolicyStore({ machinePolicy: machineConfig.sandboxPolicy });
+const egress = buildEgress({ egress: machineConfig.egress, runnerImage: image, traces: tracesFromEnv(), sandboxPolicy: machineConfig.sandboxPolicy }, policies);
 
 // Traces and evaluations go to the same local Laminar the machine reports to, when a key is set.
 // A collector that is down is one line and a run with no traces; the SDK is not even loaded.
@@ -102,26 +120,29 @@ for (const engine of engines) {
   if (!PACKS[pack].engines.allowed.includes(engine)) console.log(`note: ${engine} is not in ${pack}'s allowed engines; running it as a candidate`);
 }
 
+let effortIgnored = false;
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 const slug = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
 /** One case on one engine: run it, grade it, and (when the answer is on the schema) judge it. */
 async function runCase(evalCase: EvalCase, engine: EngineId, index: number, trial: number, evaluation: Evaluation): Promise<CaseResult> {
-  const runDir = join(EVALS, ".runs", stamp, slug(engine), trial > 1 ? `${evalCase.id}-trial-${trial}` : evalCase.id);
+  const runDir = join(EVALS, ".runs", stamp, engineSlug(engine, effort).toLowerCase(), trial > 1 ? `${evalCase.id}-trial-${trial}` : evalCase.id);
   mkdirSync(runDir, { recursive: true });
   const worktree = prepareWorktree(evalCase.input, ROOT, runDir);
   const span = telemetry.run({ kind: "eval", pack, engine, client: "eval", sessionId: `eval-${pack}-${stamp}` });
   const started = Date.now();
   const run = await runPackOnce(
-    { name: `hardness-eval-${slug(pack)}-${slug(evalCase.id)}-${slug(engine)}-${stamp.slice(11, 19)}${trial > 1 ? `-t${trial}` : ""}`, image, runDir, worktree, input: caseInput(evalCase.input, engine), engine, labels: { luna: "eval" }, extraEnv: span.childEnv(), egressKind: "agent" },
-    { credentials, ...(egress ? { egress } : {}) },
+    { name: `hardness-eval-${slug(pack)}-${slug(evalCase.id)}-${slug(engine)}-${stamp.slice(11, 19)}${trial > 1 ? `-t${trial}` : ""}`, image, runDir, worktree, input: caseInput(evalCase.input, engine, effort), engine, labels: { luna: "eval" }, extraEnv: span.childEnv(), egressKind: sandboxOf(pack).egressKind, trust: sandboxOf(pack).trust },
+    { credentials, policies, ...(egress ? { egress } : {}) },
   ).catch((error: Error) => ({ output: null, error: error.message }) as const);
   const caseRun = { id: evalCase.id, output: run.output, error: run.error, wallMs: Date.now() - started };
   const { answer, schema } = gradeAnswer(pack, evalCase.expect, caseRun);
   let verdict: JudgeVerdict | null = null;
   if (judge && schema.pass) verdict = await judgeAnswer(evalCase, answer, judge, join(runDir, "judge"));
   else if (judge) verdict = { error: "not judged: no answer on the schema" };
-  const result = { ...caseResult(pack, evalCase.expect, caseRun, verdict), ...(trials > 1 ? { trial } : {}) };
+  const honoured = honourEffort(effort, run.output, caseResult(pack, evalCase.expect, caseRun, verdict));
+  if (honoured.ignored) effortIgnored = true;
+  const result = { ...honoured.result, ...(trials > 1 ? { trial } : {}) };
   await span.end({
     outcome: result.pass ? "pass" : "fail",
     engine,
@@ -142,8 +163,8 @@ async function runCase(evalCase: EvalCase, engine: EngineId, index: number, tria
 async function judgeAnswer(evalCase: EvalCase, answer: unknown, engine: EngineId, runDir: string): Promise<JudgeVerdict> {
   mkdirSync(join(runDir, "work"), { recursive: true });
   const run = await runPackOnce(
-    { name: `hardness-eval-judge-${slug(evalCase.id)}-${stamp.slice(11, 19)}-${Math.random().toString(36).slice(2, 6)}`, image, runDir, worktree: join(runDir, "work"), input: judgeInput(evalCase, answer, engine), engine, labels: { luna: "eval" }, egressKind: "agent" },
-    { credentials, ...(egress ? { egress } : {}) },
+    { name: `hardness-eval-judge-${slug(evalCase.id)}-${stamp.slice(11, 19)}-${Math.random().toString(36).slice(2, 6)}`, image, runDir, worktree: join(runDir, "work"), input: judgeInput(evalCase, answer, engine), engine, labels: { luna: "eval" }, egressKind: sandboxOf("eval_judge").egressKind, trust: sandboxOf("eval_judge").trust },
+    { credentials, policies, ...(egress ? { egress } : {}) },
   ).catch((error: Error) => ({ output: null, error: error.message }) as const);
   if (run.error !== null) return { error: `judge: ${run.error}` };
   if (!run.output.ok) return { error: `judge: ${outputError(run.output)}` };
@@ -152,20 +173,22 @@ async function judgeAnswer(evalCase: EvalCase, answer: unknown, engine: EngineId
 
 const cards: Scorecard[] = [];
 for (const engine of engines) {
-  const evaluation = await telemetry.evaluation({ name: `${engine} ${stamp.slice(0, 10)}`, groupName: pack, metadata: { pack, engine, judge, trials, cases: cases.map((c) => c.id) } });
+  const evaluation = await telemetry.evaluation({ name: `${engine} ${stamp.slice(0, 10)}`, groupName: pack, metadata: { pack, engine, ...(effort ? { effort } : {}), judge, trials, cases: cases.map((c) => c.id) } });
   const results: CaseResult[] = [];
   for (const [index, evalCase] of cases.entries()) for (let trial = 1; trial <= trials; trial++) results.push(await runCase(evalCase, engine, index * trials + trial - 1, trial, evaluation));
   await evaluation.finish();
   if (evaluation.id) console.log(`laminar: evaluation ${evaluation.id} (${engine} on ${pack})`);
-  const card = scorecard({ pack, engine, judge, at: new Date().toISOString(), ...(trials > 1 ? { trials } : {}) }, results);
+  const card = scorecard({ pack, engine, judge, at: new Date().toISOString(), ...(effort ? { effort } : {}), ...(trials > 1 ? { trials } : {}) }, results);
   cards.push(card);
-  writeFileSync(join(EVALS, ".runs", stamp, `${slug(engine)}-${pack}.json`), `${JSON.stringify(card, null, 2)}\n`);
+  writeFileSync(join(EVALS, ".runs", stamp, `${engineSlug(engine, effort).toLowerCase()}-${pack}.json`), `${JSON.stringify(card, null, 2)}\n`);
 }
 
 for (const card of cards) {
   console.log(`\n${formatScorecard(card)}`);
-  const path = baselinePath(EVALS, card.engine, pack);
-  if (values["save-baseline"]) {
+  const path = baselinePath(EVALS, card.engine, pack, card.effort);
+  if (values["save-baseline"] && effortIgnored) {
+    console.log(`  baseline NOT saved: ${IGNORED_EFFORT}`);
+  } else if (values["save-baseline"]) {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, `${JSON.stringify(card, null, 2)}\n`);
     console.log(`  baseline saved: ${path.slice(ROOT.length + 1)}`);
@@ -175,6 +198,10 @@ for (const card of cards) {
   } else {
     console.log("  no baseline yet: --save-baseline writes one");
   }
+}
+if (effortIgnored) {
+  console.log(`\n${IGNORED_EFFORT}`);
+  process.exitCode = 1;
 }
 if (cards.length === 2) console.log(`\n${formatDiff(diffScorecards(cards[1]!, cards[0]!))}`);
 await telemetry.flush();

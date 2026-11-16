@@ -3,8 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
+import { MachinePolicySchema } from "@hardness/contracts";
+
+import { validateLunaConfig } from "../domain/luna-config.ts";
+import { sandboxSizeOf } from "../domain/sandbox-bounds.ts";
 import { ConfigProofError, ConfigProofs, type ProofJob } from "./config-proofs.ts";
-import type { AppProof, ProofExec, ProofRig } from "./config-proof.ts";
+import { type AppProof, type ProofExec, type ProofRig, boundedProof, proofAppDeps } from "./config-proof.ts";
 
 /** A rig whose clone is a folder beside the repository, and whose app answers as told. */
 function fakeRig(app: AppProof = { ok: true, seconds: 4, refused: [] }) {
@@ -40,6 +44,34 @@ async function settled(proofs: ConfigProofs, id: string): Promise<ProofJob> {
   throw new Error("still running");
 }
 
+describe("boundedProof: the policy the proof's app runs on", () => {
+  it("caps a proposal that asks 128 CPUs, drops its denied host, and carries the bounds", () => {
+    const file = validateLunaConfig({ sandbox: { cpu: 128, memory_gb: 512, egress: { allow: ["pastebin.com", "ok.example.com"] } } });
+    const out = boundedProof(file, MachinePolicySchema.parse({ limits: { max_cpu: 4, max_memory_gb: 8 }, egress: { deny: ["pastebin.com"] } }));
+    expect(out.policy.factory.sandbox).toMatchObject({ cpu: 4, memory_gb: 8 });
+    expect(out.allow).toEqual(["ok.example.com"]);
+    expect(out.policy.bounds?.notes).toHaveLength(2);
+    expect(out.reasons.some((line) => line.includes('"pastebin.com" dropped'))).toBe(true);
+    expect(sandboxSizeOf(out.policy)).toMatchObject({ cpu: 4, memoryGb: 8 });
+  });
+});
+
+describe("proofAppDeps: the app the proof starts", () => {
+  it("runs on the bounded policy and the bounded egress list: a proposal asking 128 CPUs and a denied host gets neither", async () => {
+    const file = validateLunaConfig({ sandbox: { cpu: 128, egress: { allow: ["pastebin.com", "ok.example.com"] } } });
+    const base = { policies: { for: async () => { throw new Error("the repo's own policy is not the proof's"); } }, egress: { for: async () => ({ allow: ["github.com:443"], allowPrivate: [], proxyImage: "machine:dev" }) } };
+    const deps = proofAppDeps(base as never, file, MachinePolicySchema.parse({ limits: { max_cpu: 4 }, egress: { deny: ["pastebin.com"] } }));
+    expect(sandboxSizeOf(await deps.policies.for("/r")).cpu).toBe(4);
+    expect((await deps.egress!.for({ repoPath: "/r", kind: "check" })).allow).toEqual(["github.com:443", "ok.example.com"]);
+  });
+
+  it("keeps the proof's own list as it is without a machine policy", async () => {
+    const file = validateLunaConfig({ sandbox: { egress: { allow: ["pastebin.com"] } } });
+    const base = { policies: { for: async () => ({}) }, egress: { for: async () => ({ allow: [], allowPrivate: [], proxyImage: "m" }) } };
+    expect((await proofAppDeps(base as never, file, undefined).egress!.for({ repoPath: "/r", kind: "check" })).allow).toEqual(["pastebin.com"]);
+  });
+});
+
 describe("ConfigProofs: the setup skill's proof of a repository's own luna.yaml", () => {
   it("runs every check of the file once, with its services and egress list, and suggests the refused hosts as allow entries", async () => {
     const repo = repoWith(["checks:", "  - { name: unit, run: pnpm test }", "  - { name: lint, run: pnpm lint, cwd: web }", "services:", "  db: { image: postgres:16 }", "sandbox:", "  egress:", "    allow: [index.crates.io]"].join("\n"));
@@ -58,6 +90,15 @@ describe("ConfigProofs: the setup skill's proof of a repository's own luna.yaml"
     expect(closed).toEqual(clones);
     // No start command in the file: no app to prove.
     expect(job).toMatchObject({ proof: { app: null } });
+  });
+
+  it("holds the file's egress list within the machine's sandbox policy, and says what it dropped", async () => {
+    const repo = repoWith(["checks:", "  - { name: unit, run: pnpm test }", "sandbox:", "  egress:", "    allow: [pastebin.com, index.crates.io]"].join("\n"));
+    const exec = vi.fn<ProofExec>(async () => ({ code: 0, stdout: "ok", stderr: "" }));
+    const proofs = new ConfigProofs({ exec, rig: fakeRig().rig, gitIdentity: async () => null, machinePolicy: MachinePolicySchema.parse({ egress: { deny: ["pastebin.com"] } }) });
+    const job = await settled(proofs, (await proofs.start(repo)).id);
+    expect(exec.mock.calls[0]![2]).toMatchObject({ egressAllow: ["index.crates.io"] });
+    expect(job).toMatchObject({ proof: { bounds: ['sandbox.egress.allow: "pastebin.com" dropped, it matches egress.deny "pastebin.com" in the machine\'s sandbox policy'] } });
   });
 
   it("runs nothing for a file the machine cannot read, and says why", async () => {

@@ -266,7 +266,9 @@ fn task_of(app: &App) -> Option<&Task> {
 /// feature task (the preview: a note sends it back to Evidence); a review's verdict is not sent back.
 pub(crate) fn sendable_back(t: &Task) -> bool {
     match t.state.as_str() {
-        "awaiting_setup" | "awaiting_approval" | "awaiting_test_check" => true,
+        // A config proposal is approved or rejected: the machine refuses to send it back.
+        "awaiting_setup" => t.route != "config",
+        "awaiting_approval" | "awaiting_test_check" => true,
         // An escalated feature card sent back is planned again (`a` retries the stage that stopped, on the same plan).
         "escalated" => t.route == "feature",
         // Only while the machine waits on you: otherwise it is watching the PR, and a send-back has nothing to stop.
@@ -327,16 +329,22 @@ pub(crate) fn at_gate(t: &Task) -> bool {
         && (!matches!(t.state.as_str(), "awaiting_ship" | "reviewing_memory") || t.waiting_on_you)
 }
 
-/// Whether `task` waits at the plan stage's own gate (not triage's reply or archive): the only gate a plan is rejected at.
+/// Whether `task` is a config proposal waiting for its answer.
+pub(crate) fn config_proposal(task: &Task) -> bool {
+    task.state == "awaiting_setup" && task.route == "config"
+}
+
+/// Whether `task` waits at a gate that rejects: the plan stage's own (not triage's reply or archive), the release question, or a config proposal.
 pub(crate) fn rejectable(app: &App, task: &Task) -> bool {
-    (task.state == "awaiting_approval"
-        && app
-            .detail
-            .as_ref()
-            .filter(|d| d.task.id == task.id)
-            .and_then(|d| d.open_approval())
-            .and_then(|a| a.outcome())
-            .is_none_or(|o| matches!(o, "split" | "split_failed")))
+    config_proposal(task)
+        || (task.state == "awaiting_approval"
+            && app
+                .detail
+                .as_ref()
+                .filter(|d| d.task.id == task.id)
+                .and_then(|d| d.open_approval())
+                .and_then(|a| a.outcome())
+                .is_none_or(|o| matches!(o, "split" | "split_failed")))
         || open_ship_approval(app, task)
 }
 
@@ -768,6 +776,17 @@ const SHARED: &[Binding] = &[
     ),
     b(
         "N",
+        "reject the proposal, archive the card",
+        Group::Gate,
+        Scope::Board,
+        |app| match task_of(app) {
+            Some(t) if config_proposal(t) => Avail::On,
+            _ => Avail::Hidden,
+        },
+        80,
+    ),
+    b(
+        "N",
         "reject the release, archive the card",
         Group::Gate,
         Scope::Board,
@@ -795,6 +814,9 @@ const SHARED: &[Binding] = &[
             Some(t) if sendable_back_now(app, t) => Avail::On,
             Some(t) if open_ship_approval(app, t) => {
                 Avail::Off("the release question is approved or rejected")
+            }
+            Some(t) if config_proposal(t) => {
+                Avail::Off("a config proposal is approved or rejected, not sent back")
             }
             Some(_) => Avail::Off("only a setup, plan, tests or escalation go back"),
         },
@@ -1320,6 +1342,14 @@ const BOARD: &[Binding] = &[
         Scope::Board,
         |app| with_task(app, |_| Avail::On),
         70,
+    ),
+    b(
+        "m",
+        "ask the foreman about the open cards",
+        Group::App,
+        Scope::Board,
+        on,
+        45,
     ),
     b(":", "command palette", Group::App, Scope::Board, on, 30),
     b(
@@ -1926,6 +1956,14 @@ const INBOX: &[Binding] = &[
         Scope::Inbox,
         |app| with_task(app, |_| Avail::On),
         75,
+    ),
+    b(
+        "m",
+        "ask the foreman about the open cards",
+        Group::App,
+        Scope::Inbox,
+        on,
+        45,
     ),
     b("esc / I / q", "close", Group::Move, Scope::Inbox, on, 20),
     cmd(b("?", "keys", Group::App, Scope::Inbox, on, 100), "help"),
@@ -3630,6 +3668,36 @@ mod tests {
         let none = app_with(Vec::new());
         assert_eq!(find(&none, "a"), Avail::Off("no ticket selected"));
         assert_eq!(find(&none, "enter"), Avail::Off("no ticket selected"));
+    }
+
+    #[test]
+    fn a_config_proposal_is_approved_with_a_and_rejected_with_n_and_never_sent_back() {
+        let config = || {
+            let mut t = task("t1", "awaiting_setup", true, false, false);
+            t.route = "config".to_string();
+            app_with(vec![t])
+        };
+        let setup = app_with(vec![task("t1", "awaiting_setup", true, false, false)]);
+        let state = |app: &App, key: &str| {
+            bindings_for(app, Scope::Board)
+                .into_iter()
+                .filter(|(b, a)| b.keys == key && *a != Avail::Hidden)
+                .map(|(b, a)| (b.label, a))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            state(&config(), "N"),
+            [("reject the proposal, archive the card", Avail::On)]
+        );
+        assert!(state(&setup, "N").is_empty(), "a setup is not rejected");
+        assert!(crate::keys::rejectable(&config(), &config().tasks[0]));
+        assert!(!crate::keys::rejectable(&setup, &setup.tasks[0]));
+        assert!(!sendable_back(&config().tasks[0]), "the machine refuses it");
+        assert!(sendable_back(&setup.tasks[0]));
+        assert!(
+            state(&config(), "a").iter().any(|(_, a)| *a == Avail::On),
+            "a approves"
+        );
     }
 
     #[test]

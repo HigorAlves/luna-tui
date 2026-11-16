@@ -73,6 +73,8 @@ pub enum Incoming {
     PrsAllPolled(Result<PrSnapshot, ListError>),
     /// The answer to `R` in Slack, polled off the UI thread.
     SlackPolled(Result<SlackSnapshot, String>),
+    /// The foreman's answer to a question, fetched off the UI thread.
+    Foreman(Result<crate::foreman::Reply, String>),
 }
 
 #[derive(Clone)]
@@ -491,6 +493,23 @@ impl Machine {
     /// Ends the ticket as archived, with one of `ARCHIVE_REASONS`.
     pub fn archive(&self, id: &str, reason: &str) -> Result<Task, String> {
         self.post(&format!("/tasks/{id}/archive"), json!({ "reason": reason }))
+    }
+
+    /// Asks the foreman about the open cards; `history` is the last turns of the talk. It waits for a model run, so it uses the long timeout.
+    pub fn foreman(
+        &self,
+        question: &str,
+        history: &[crate::foreman::Turn],
+    ) -> Result<crate::foreman::Reply, String> {
+        let history: Vec<Value> = history
+            .iter()
+            .map(|t| json!({ "who": t.who, "text": t.text }))
+            .collect();
+        Self::typed(
+            self.slow
+                .post(self.url("/foreman"))
+                .send_json(json!({ "question": question, "history": history })),
+        )
     }
 
     /// Says whether the card's Evidence Pack was useful (`y` / `n`), with a short note for a no. The machine keeps it as ground truth; it labels no decision.

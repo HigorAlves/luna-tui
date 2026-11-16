@@ -182,6 +182,8 @@ export function prepareChild(o: ChildOptions, helper: Helper, message: string, n
 async function runChild(o: DelegationOptions, helper: Helper, message: string, n: number, childTurns: number): Promise<RunOutcome> {
   const pack = helperPack(o.pack, helper);
   const engine = resolveEngine(helper.engine);
+  // A helper runs at the parent's effort: the run's, else the pack's own (what helperPack copies).
+  const effort = o.input.effort ?? pack.effort;
   const out = join(o.paths.out, "children", String(n));
   mkdirSync(out, { recursive: true });
   const events: RunEvent[] = [];
@@ -203,11 +205,11 @@ async function runChild(o: DelegationOptions, helper: Helper, message: string, n
       if ("error" in prepared) run = refused(prepared.error);
       else {
         writeFileSync(join(out, "prompt.md"), prepared.prompt);
-        info = runInfo(runtime, engine, pack, prepared.template, o.paths.factoryRoot);
+        info = runInfo(runtime, engine, pack, prepared.template, o.paths.factoryRoot, undefined, effort);
         // A helper has its own pack: the parent's guard envelope, mask and facts are not its own, and it has no judge.
         const { economy: _parents, ...context } = o.input.context;
         const input: StageInput = { ...o.input, context, engine: helper.engine, limits: prepared.limits };
-        run = settle(await runtime.run({ pack, engine, input, prompt: prepared.prompt, paths: { ...o.paths, out, scratch }, luna, dry: false, emit, delegate: null }), pack);
+        run = settle(await runtime.run({ pack, engine, input, effort, prompt: prepared.prompt, paths: { ...o.paths, out, scratch }, luna, dry: false, emit, delegate: null }), pack);
       }
     } catch (e) {
       run = refused(`the helper's run failed: ${e instanceof Error ? e.message : String(e)}`);

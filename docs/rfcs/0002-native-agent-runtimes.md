@@ -243,7 +243,7 @@ eve ships `decide()` defaulting to Jev. Rejected: it routes through AI Gateway, 
 ## Risks & unknowns
 
 - **TypeSafe SDK surface.** An account is available; the SDK names above come from secondary sources, and the spike confirms them.
-- **eve is a release candidate** (`1.0.0-rc.1`). Pin it and keep it behind `Runtime`.
+- **eve is a release candidate** (`1.0.0-rc.1`). Pin it and keep it behind `Runtime`. *Note (2026-11-16): the runtime is now on eve 1.0.0, a final release.*
 - **No verified pre-tool hook in eve.** If the spike cannot block a call before it runs, eve's built-in `bash` and `write_file` are replaced with guarded tools; until then writable packs stay Claude-only.
 - **Codex auth in a container.** Refresh rewrites the auth file; concurrent stages must not share one copy.
 - **eve start-up per stage** needs measuring.
@@ -268,6 +268,8 @@ Run in a container built on `hardness-runner:dev` with the stage's own flags (re
 | Commands in `/work` without nested Docker | Yes | A custom `defineSandboxProvider` (~90 lines) with `workspaceRoot: "/work"`, running `bash -lc` children of the server |
 
 eve 1.0.0-rc.1 (Node 24+), ai 7.0.161. The server is healthy in under 0.7 s and a whole one-turn container exits in about 2 s warm. The image grows by ~700 MB on disk (~185 MB compressed), 381 MB of it the Codex CLI.
+
+*Note (2026-11-16): this spike ran on the release candidate. The runtime is now on eve 1.0.0, with `ai` 7.0.172.*
 
 What the eve runtime has to do because of them:
 

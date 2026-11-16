@@ -5,18 +5,20 @@ import { type ExecResult, exec as hostExec } from "../process/exec.ts";
 
 export const APP_ALIAS = "luna-app";
 
-export interface AppSpec extends Pick<SandboxExec, "image" | "worktree" | "limits" | "cacheVolume" | "cardNetwork" | "services" | "serviceEnv" | "user"> {
+export interface AppSpec extends Pick<SandboxExec, "image" | "worktree" | "limits" | "cacheVolume" | "cardNetwork" | "services" | "serviceEnv" | "serviceHosts" | "user" | "secretsDir"> {
   name: string;
+  /** The repository's container env; the app's own PORT and HOST win. */
+  env?: Record<string, string>;
   command: string;
   port: number;
-  /** Secret values by name: only the names are used here; the values go in the docker client's environment. */
+  /** Secret values by name: only the names are used here; the values are files in `secretsDir` (`makeSecretFolder`), started through luna-env. */
   secrets?: Record<string, string>;
 }
 
 /** `docker run -d` for the app. Pure. */
 export function appArgs(spec: AppSpec): string[] {
-  const { command, port, ...rest } = spec;
-  const args = sandboxExecArgs({ ...rest, argv: ["sh", "-c", command], env: { PORT: String(port), HOST: "0.0.0.0" } });
+  const { command, port, env, ...rest } = spec;
+  const args = sandboxExecArgs({ ...rest, argv: ["sh", "-c", command], env: { ...env, PORT: String(port), HOST: "0.0.0.0" } });
   // `run --rm --name N ...` becomes `run -d --name N --network-alias luna-app ...`: the app outlives the call and has a name to be reached by.
   const name = args.indexOf("--name");
   return ["run", "-d", ...args.slice(2, name + 2), "--network-alias", APP_ALIAS, ...args.slice(name + 2)];

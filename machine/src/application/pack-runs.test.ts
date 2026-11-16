@@ -150,9 +150,9 @@ describe("PackRuns", () => {
     expect(records).toEqual([{ pack: "chat_triage", engine: "codex:luna", model: "gpt-6-luna", client: "notch", ok: true, error: null, turns: 1, durationMs: 4200, costUsd: 0.0031, startedAt: NOW.toISOString(), endedAt: NOW.toISOString() }]);
     expect(JSON.stringify(records)).not.toContain("approve the rollout");
     // A runner that names its run record: the runtime, pinned model, SDK version and fingerprint ride along.
-    const run = { runtime: "eve", engine: "codex:luna", modelId: "gpt-6-luna-fast", sdk: { name: "eve", version: "1.0.0-rc.1" }, fingerprint: "e".repeat(64) };
+    const run = { runtime: "eve", engine: "codex:luna", modelId: "gpt-6-luna-fast", sdk: { name: "eve", version: "1.0.0" }, fingerprint: "e".repeat(64) };
     await runs(fakeSandbox(output({ run }))).run({ pack: "chat_triage", engine: "codex:luna", context: { chat } }, "notch");
-    expect(records[1]).toMatchObject({ runtime: "eve", modelId: "gpt-6-luna-fast", sdkVersion: "1.0.0-rc.1", fingerprint: run.fingerprint });
+    expect(records[1]).toMatchObject({ runtime: "eve", modelId: "gpt-6-luna-fast", sdkVersion: "1.0.0", fingerprint: run.fingerprint });
   });
 
   // The measured default of a decision pack moves when it is measured again: these tests read it instead of naming an engine.

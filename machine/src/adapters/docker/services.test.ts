@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { ExecResult } from "../process/exec.ts";
-import { ServiceNotReadyError, serviceArgs, serviceName, startServices } from "./services.ts";
+import { serviceHardeningOf } from "./docker.ts";
+import { ServiceNotReadyError, hostArgs, serviceArgs, serviceName, startServices } from "./services.ts";
 
 const postgres = {
   image: "postgres:16",
@@ -11,11 +12,12 @@ const postgres = {
 };
 
 /** A docker fake: records every call; `ready` answers the readiness probes in order. */
-function dockerFake(ready: number[] = [0]) {
+function dockerFake(ready: number[] = [0], addresses: Record<string, string> = {}) {
   const calls: string[][] = [];
   const exec = async (command: string, args: string[]): Promise<ExecResult> => {
     calls.push([command, ...args]);
     if (args[0] === "exec") return { code: ready.length > 1 ? ready.shift()! : ready[0]!, stdout: "", stderr: "" };
+    if (args[0] === "inspect") return { code: 0, stdout: `${addresses[args.at(-1)!] ?? "172.30.0.5"}\n`, stderr: "" };
     if (args[0] === "logs") return { code: 0, stdout: "", stderr: "database system is starting up\n" };
     return { code: 0, stdout: "", stderr: "" };
   };
@@ -25,10 +27,42 @@ function dockerFake(ready: number[] = [0]) {
 describe("serviceArgs", () => {
   it("runs the service detached on the run's network, reachable by its key, labelled like a stage container", () => {
     expect(serviceArgs("hardness-net-r1", "r1", "postgres", postgres)).toEqual([
-      "run", "-d", "--name", "r1-svc-postgres", "--label", "dev.hardness.stage=1", "--network", "hardness-net-r1", "--network-alias", "postgres",
+      "run", "-d", "--name", "r1-svc-postgres", "--label", "dev.hardness.stage=1",
+      // Official images start as root and drop to their own user, so the few capabilities that takes stay; the rest go.
+      "--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--cap-add", "CHOWN", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER", "--pids-limit", "512",
+      "--network", "hardness-net-r1", "--network-alias", "postgres",
       "-e", "POSTGRES_USER=app", "-e", "POSTGRES_PASSWORD=app", "postgres:16",
     ]);
     expect(serviceName("r1", "postgres")).toBe("r1-svc-postgres");
+  });
+});
+
+describe("serviceArgs hardening from the policy", () => {
+  it("takes the process limit from the policy, never above 512", () => {
+    const at = (args: string[]) => args[args.indexOf("--pids-limit") + 1];
+    expect(at(serviceArgs("n", "r1", "postgres", postgres, undefined, { pids: 200 }))).toBe("200");
+    expect(at(serviceArgs("n", "r1", "postgres", postgres, undefined, { pids: 4096 }))).toBe("512");
+    expect(at(serviceArgs("n", "r1", "postgres", postgres))).toBe("512");
+  });
+
+  it("adds the seccomp profile and the runtime the policy names", () => {
+    const args = serviceArgs("n", "r1", "postgres", postgres, undefined, { seccomp: "/etc/luna/s.json", runtime: "runsc" });
+    expect(args).toEqual(expect.arrayContaining(["--security-opt", "seccomp=/etc/luna/s.json", "--runtime", "runsc"]));
+    expect(serviceArgs("n", "r1", "postgres", postgres).join(" ")).not.toMatch(/seccomp|--runtime/);
+  });
+
+  it("caps each service at the bounded cpu and memory of the container it runs beside", () => {
+    const args = serviceArgs("n", "r1", "postgres", postgres, undefined, { cpu: 2, memoryGb: 4 });
+    expect(args[args.indexOf("--memory") + 1]).toBe("4g");
+    expect(args[args.indexOf("--cpus") + 1]).toBe("2");
+    expect(serviceArgs("n", "r1", "postgres", postgres).join(" ")).not.toMatch(/--memory|--cpus/);
+    expect(serviceHardeningOf({ cpu: 2, memoryGb: 4, pids: 200, cacheTrust: "trusted" })).toEqual({ cpu: 2, memoryGb: 4, pids: 200 });
+  });
+
+  it("passes the hardening to each service it starts", async () => {
+    const { calls, exec } = dockerFake();
+    await startServices("r1", { postgres }, { exec, harden: { runtime: "runsc" } });
+    expect(calls[1]).toEqual(["docker", ...serviceArgs("hardness-net-r1", "r1", "postgres", postgres, undefined, { runtime: "runsc" })]);
   });
 });
 
@@ -100,5 +134,57 @@ describe("startServices on a card network it is given", () => {
     const set = await startServices("r1", { postgres }, { exec, pollMs: 0 });
     await set.teardown();
     expect(calls.filter((c) => c[1] === "network").map((c) => c[2])).toEqual(["create", "rm"]);
+  });
+});
+
+describe("startServices hosts", () => {
+  it("reads each service's address on the network, as the alias and as the container name", async () => {
+    const { calls, exec } = dockerFake([0], { "r1-svc-postgres": "172.30.0.7", "r1-svc-redis": "172.30.0.8" });
+    const set = await startServices("r1", { postgres, redis: { image: "redis:7" } }, { exec, pollMs: 0 });
+    expect(set.hosts).toEqual([
+      { name: "postgres", address: "172.30.0.7" },
+      { name: "r1-svc-postgres", address: "172.30.0.7" },
+      { name: "redis", address: "172.30.0.8" },
+      { name: "r1-svc-redis", address: "172.30.0.8" },
+    ]);
+    expect(calls).toContainEqual(["docker", "inspect", "-f", '{{(index .NetworkSettings.Networks "hardness-net-r1").IPAddress}}', "r1-svc-postgres"]);
+  });
+
+  it("asks for the address on the card network when one is given", async () => {
+    const { calls, exec } = dockerFake();
+    await startServices("r1", { postgres }, { exec, network: { name: "hardness-card-r1", dns: "172.30.0.2" } });
+    expect(calls.find((c) => c[1] === "inspect")![3]).toContain('"hardness-card-r1"');
+  });
+
+  it("has none for a repo with no services", async () => {
+    const { exec } = dockerFake();
+    expect((await startServices("r1", {}, { exec })).hosts).toEqual([]);
+  });
+
+  it("refuses an address that is not an IPv4 literal, and tears the run down", async () => {
+    const { calls, exec } = dockerFake([0], { "r1-svc-postgres": "--privileged" });
+    await expect(startServices("r1", { postgres }, { exec })).rejects.toThrow(/address/);
+    expect(calls).toContainEqual(["docker", "rm", "-f", "r1-svc-postgres"]);
+  });
+
+  it("refuses a service name that could pass for an argument", async () => {
+    const { exec } = dockerFake();
+    await expect(startServices("r1", { "--privileged": { image: "x" } }, { exec })).rejects.toThrow(/name/);
+  });
+});
+
+describe("hostArgs", () => {
+  it("is one --add-host per name and address", () => {
+    expect(hostArgs([{ name: "postgres", address: "172.30.0.7" }])).toEqual(["--add-host", "postgres:172.30.0.7"]);
+    expect(hostArgs([])).toEqual([]);
+    expect(hostArgs(undefined)).toEqual([]);
+  });
+
+  it("refuses a bad name or address", () => {
+    expect(() => hostArgs([{ name: "--privileged", address: "172.30.0.7" }])).toThrow(/name/);
+    expect(() => hostArgs([{ name: "a:b", address: "172.30.0.7" }])).toThrow(/name/);
+    expect(() => hostArgs([{ name: "db", address: "172.30.0.7,evil" }])).toThrow(/address/);
+    expect(() => hostArgs([{ name: "db", address: "999.1.1.1" }])).toThrow(/address/);
+    expect(() => hostArgs([{ name: "db", address: "::1" }])).toThrow(/address/);
   });
 });

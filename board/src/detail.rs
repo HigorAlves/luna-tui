@@ -1741,6 +1741,56 @@ pub(crate) fn intake_gate_lines(detail: Option<&TaskDetail>) -> Vec<Line<'static
     lines
 }
 
+/// `from -> to` for a change's engine or effort; a dash when that field stays.
+fn change_cell(change: &serde_json::Value) -> String {
+    match (change["from"].as_str(), change["to"].as_str()) {
+        (Some(from), Some(to)) => format!("{} -> {}", plain(from), plain(to)),
+        _ => "-".to_string(),
+    }
+}
+
+/// A config proposal's `changes` as a table: pack, engine, effort and why. Empty when `changes` is not a non-empty list.
+fn changes_table(changes: &serde_json::Value) -> Vec<Line<'static>> {
+    let rows: Vec<[String; 4]> = changes
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|c| {
+            [
+                plain(c["pack"].as_str().unwrap_or("?")),
+                change_cell(&c["engine"]),
+                change_cell(&c["effort"]),
+                plain(c["why"].as_str().unwrap_or("")),
+            ]
+        })
+        .collect();
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    let header = [
+        "pack".to_string(),
+        "engine".into(),
+        "effort".into(),
+        "why".into(),
+    ];
+    let width = |i: usize| {
+        rows.iter()
+            .map(|r| r[i].chars().count())
+            .chain([header[i].chars().count()])
+            .max()
+            .unwrap_or(0)
+    };
+    let (w0, w1, w2) = (width(0), width(1), width(2));
+    let row = |r: &[String; 4]| format!("  {:<w0$}  {:<w1$}  {:<w2$}  {}", r[0], r[1], r[2], r[3]);
+    let mut lines = vec![
+        Line::default(),
+        proposal_heading("Proposed changes (a writes them to luna.yaml, N rejects)"),
+        Line::from(row(&header)).style(theme::label()),
+    ];
+    lines.extend(rows.iter().map(|r| Line::from(row(r))));
+    lines
+}
+
 /// The blocks a gate carries that no section of its own shows: its error and note, the proposed rules (memory), the proposed
 /// `luna.yaml` with its base image, proof and notes (setup), and the triage questions with the machine's suggested answers.
 pub(crate) fn gate_blocks(approval: &Approval, width: usize) -> Vec<Line<'static>> {
@@ -1769,9 +1819,17 @@ pub(crate) fn gate_blocks(approval: &Approval, width: usize) -> Vec<Line<'static
         lines.extend(rules.iter().map(|l| Line::from(format!("  {l}"))));
     }
     if let Some(config) = requested["config"].as_str() {
+        // A config proposal carries its `changes`; it is approved or rejected, never sent back.
+        let table = changes_table(&requested["changes"]);
+        let proposal = !table.is_empty();
+        lines.extend(table);
         lines.extend([
             Line::default(),
-            proposal_heading("Proposed luna.yaml (a writes it to the repo, r sends it back)"),
+            proposal_heading(if proposal {
+                "Proposed luna.yaml (a writes it to the repo, N rejects)"
+            } else {
+                "Proposed luna.yaml (a writes it to the repo, r sends it back)"
+            }),
         ]);
         lines.extend(plain(config).lines().map(|l| Line::from(format!("  {l}"))));
         // The base image, singled out of the long proposal: it runs the stage's process, and approving the setup does not approve it.
@@ -4271,6 +4329,40 @@ mod tests {
         assert!(
             scroll.get() < 10_000,
             "the offset is clamped to the content"
+        );
+    }
+
+    #[test]
+    fn a_config_proposal_shows_its_changes_as_a_table_above_the_luna_yaml() {
+        let (mut task, _) = fixture();
+        task.state = "awaiting_setup".to_string();
+        task.route = "config".to_string();
+        task.waiting_on_you = true;
+        let detail: TaskDetail = serde_json::from_str(&format!(
+            r#"{{"task":{TASK},"stageRuns":[],"approvals":[{{"kind":"awaiting_setup","requested":{{
+              "config":"engines:\n  plan: claude:opus\n",
+              "previous":"",
+              "changes":[
+                {{"pack":"plan","engine":{{"from":"claude:sonnet","to":"claude:opus"}},"effort":{{"from":"medium","to":"low"}},"why":"plan escalated 4 of 12 runs; claude:opus at low passed 0.83 vs 0.67"}},
+                {{"pack":"risk_score","engine":{{"from":"jev","to":"claude:haiku"}},"effort":null,"why":"calm"}}]}},"decision":null}}],"events":[]}}"#
+        ))
+        .unwrap();
+        let text = render(140, 50, &task, Some(&detail), Section::Gate, 0).join("\n");
+        assert!(text.contains("Proposed changes"), "{text}");
+        assert!(
+            text.contains("claude:sonnet -> claude:opus") && text.contains("medium -> low"),
+            "{text}"
+        );
+        assert!(
+            text.contains("plan escalated 4 of 12 runs"),
+            "the why is shown: {text}"
+        );
+        let table = text.find("Proposed changes").unwrap();
+        let file = text.find("Proposed luna.yaml").unwrap();
+        assert!(table < file, "the table sits above the file: {text}");
+        assert!(
+            !text.contains("r sends it back"),
+            "a config card is not sent back: {text}"
         );
     }
 

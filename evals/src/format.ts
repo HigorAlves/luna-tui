@@ -30,7 +30,7 @@ export function formatScorecard(card: Scorecard): string {
     ? [`  accuracy ${share(c.accuracy)} (${c.labelled} labelled of ${c.n}) · acted-on ${share(c.actedOnAccuracy)} · coverage ${share(c.coverage)} · Brier ${fixed(c.brier)} · ECE ${fixed(c.ece)} · mean confidence ${fixed(c.meanConfidence, 2)} · overconfident ${c.overconfident}${card.trials && card.trials > 1 ? ` · ${card.trials} trials` : ""}`]
     : [];
   return [
-    `${card.pack} on ${card.engine}${card.model ? ` (${card.model})` : ""} · ${judge}`,
+    `${card.pack} on ${card.engine}${card.effort ? ` at ${card.effort}` : ""}${card.model ? ` (${card.model})` : ""} · ${judge}`,
     ...card.cases.flatMap(caseLines),
     `  pass ${s.passed}/${s.cases} (${pct(s.passRate)}) · judge ${s.meanJudgeScore === null ? "n/a" : s.meanJudgeScore.toFixed(2)} · ${s.meanTurns.toFixed(1)} turns · ${secs(s.meanDurationMs)} mean · ${usd(s.costUsd)}${judgeCost}`,
     ...calibration,

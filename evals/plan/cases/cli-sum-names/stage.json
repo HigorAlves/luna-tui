@@ -1,0 +1,73 @@
+{
+  "schema": 3,
+  "stage": "plan",
+  "pack": "plan",
+  "attempt": 1,
+  "task": {
+    "id": "eval-cli-sum-names",
+    "title": "Repeated names overwrite their total",
+    "description": "When the same name appears on several input lines, tally prints only the last amount instead of the sum. Fix Run in main.go so repeated names add up.",
+    "criteria": [
+      "input \"alice 3\\nbob 1\\nalice 4\\n\" prints \"alice: 7\\nbob: 1\\n\"",
+      "`go test ./...` passes"
+    ],
+    "repoPath": "fixtures/golden-cli",
+    "branch": "task/eval-cli-sum-names",
+    "source": null,
+    "record": {
+      "source": "eval",
+      "kind": "bug",
+      "goal": "Repeated names in tally add up instead of the last amount overwriting.",
+      "size": "small",
+      "urgency": "normal",
+      "risk": "low",
+      "signals": {},
+      "qa": [],
+      "decision": "plan",
+      "reason": "the ticket asks for a change",
+      "at": "2026-11-16T00:00:00.000Z",
+      "model": "eval",
+      "typeOfWork": "backend"
+    }
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "plan": {
+      "record": {
+        "source": "eval",
+        "kind": "bug",
+        "goal": "Repeated names in tally add up instead of the last amount overwriting.",
+        "size": "small",
+        "urgency": "normal",
+        "risk": "low",
+        "signals": {},
+        "qa": [],
+        "decision": "plan",
+        "reason": "the ticket asks for a change",
+        "at": "2026-11-16T00:00:00.000Z",
+        "model": "eval",
+        "typeOfWork": "backend"
+      },
+      "brief": "",
+      "criteria": [
+        "input \"alice 3\\nbob 1\\nalice 4\\n\" prints \"alice: 7\\nbob: 1\\n\"",
+        "`go test ./...` passes"
+      ],
+      "assumptions": [],
+      "slices": [],
+      "risk": {
+        "level": "low"
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

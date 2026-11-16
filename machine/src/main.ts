@@ -16,7 +16,7 @@ import { machineSecrets } from "./bootstrap/machine-secrets.ts";
 import { useTruthSecrets } from "./application/ground-truth.ts";
 import { buildTelemetry, probeCollector } from "./bootstrap/telemetry.ts";
 import { buildPackRuns, buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
-import { loadConfig } from "./config.ts";
+import { loadConfig, sandboxPolicyNotes } from "./config.ts";
 import { createDataSource, poolSizeFor } from "./adapters/persistence/data-source.ts";
 import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
 import { pruneOldRuns, prunePackRuns, pruneTombstones, TOMBSTONE_RETENTION_DAYS } from "./adapters/persistence/prune.ts";
@@ -74,11 +74,14 @@ import { PgPackRunStore } from "./adapters/persistence/pack-run-store.ts";
 import { MINUTE_MS, Ticker } from "./application/ticker.ts";
 import { graphifyGraph } from "./adapters/graph/graphify.ts";
 import { imageId, imageLabel, runSandbox } from "./adapters/docker/docker.ts";
+import { removeRunNetwork } from "./adapters/docker/egress.ts";
+import { sweepRunSecrets } from "./adapters/docker/leftover-secrets.ts";
 import { LOCKFILES, type EnvRecord, envOf } from "./domain/env-hash.ts";
 import { lockfilesAt } from "./adapters/git/worktree.ts";
 import { GraphWatch } from "./application/graph-watch.ts";
-import { imageSpecOf } from "./domain/image-spec.ts";
+import { approveRepoBase } from "./application/approve-base.ts";
 import { repoHealthOf } from "./application/repo-health.ts";
+import { sandboxSizeOf } from "./domain/sandbox-bounds.ts";
 import { EngineBudgetWatch, engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "./application/engine-gates.ts";
 import { PgTaskStore } from "./adapters/persistence/task-store.ts";
 import { machineCredentials } from "./adapters/credentials/index.ts";
@@ -90,7 +93,7 @@ import { Backlog } from "./application/backlog.ts";
 import { PgTicketStore } from "./adapters/persistence/ticket-store.ts";
 import { GitHubTickets } from "./adapters/tickets/github-tickets.ts";
 import { JiraTickets } from "./adapters/tickets/jira-tickets.ts";
-import { TicketMachine, cardOnce } from "./application/ticket-machine.ts";
+import { TicketMachine, cardOnce, ticketSource } from "./application/ticket-machine.ts";
 import { TicketEvents } from "./application/ticket-events.ts";
 import { INTAKE_CLIENT } from "./application/classify.ts";
 import type { DedupAnswer } from "./application/intake-dedup.ts";
@@ -119,6 +122,7 @@ import { similarCards } from "./application/size-estimate.ts";
 import { shipRunner } from "./application/stages/ship.ts";
 import { StubStages } from "./application/stages/stubs.ts";
 import { verifyRunner } from "./application/stages/verify.ts";
+import { pgRepoSignals } from "./adapters/persistence/repo-signals.ts";
 
 const config = loadConfig();
 // Each card has a git directory of the machine's own here, never mounted into a container.
@@ -132,7 +136,8 @@ if (applied.length > 0) {
 }
 
 /** Every repo's luna.yaml (or older PIPELINE.md), read on demand; shared so a bad edit warns once. */
-const policies = new PolicyStore();
+for (const line of sandboxPolicyNotes(config.sandboxPolicy).warnings) console.warn(line);
+const policies = new PolicyStore({ machinePolicy: config.sandboxPolicy });
 /** Run traces: a local Laminar (`MACHINE_TRACES`, `LMNR_*`); the no-op without a key. Built before
  *  the pipeline so the first stage run after boot is traced. */
 const telemetry = await buildTelemetry(config.traces, { reachable: (traces) => probeCollector(traces, { timeoutMs: 1500 }) });
@@ -245,7 +250,7 @@ let graphImage: (repoPath: string, signal?: AbortSignal) => Promise<string> = as
 /** The fact proposer: the `fact_propose` pack, run through PackRuns once it exists (bound below). */
 const factProposer: { run: Propose | null } = { run: null };
 const economy = config.economy ? economyOver(economyStore(config.stateDir), (line) => console.warn(line), (repoPath) => finishedRunsOf(db, repoPath, config.stateDir), (repoPath) => defaultBranchFile(repoPath, [CONTEXT_FILE])) : noEconomy();
-const graph = graphifyGraph({ stateDir: config.stateDir, image: (repoPath, signal) => graphImage(repoPath, signal), imageId, graphifyVersion: () => imageLabel(config.runnerImage, "dev.hardness.graphify"), worktreesDir: config.worktreesDir, sandbox: runSandbox });
+const graph = graphifyGraph({ stateDir: config.stateDir, image: (repoPath, signal) => graphImage(repoPath, signal), imageId, graphifyVersion: () => imageLabel(config.runnerImage, "dev.hardness.graphify"), worktreesDir: config.worktreesDir, sandbox: runSandbox, limitsOf: async (repoPath) => sandboxSizeOf(await policies.for(repoPath), "trusted") });
 /** The graph watch, built below once the pipeline and the repo map exist; a stage with no graph asks it for a first build. */
 let graphWatch: GraphWatch | null = null;
 /** Each engine's credential as every part of the machine sees it: an engine on a runtime
@@ -260,7 +265,7 @@ const raiseAlert = (alert: BudgetAlert) => {
 const repoEngineBudgets = async (repo: string) => (await policies.for(repo)).engineBudgets;
 /** The monthly caps per engine: alerts as a run's cost crosses them, and each engine's standing for `GET /engines`. */
 const engineBudgets = new EngineBudgetWatch({ budgets: config.engineBudgets, repoBudgets: repoEngineBudgets, spend: engineSpend, onAlert: raiseAlert });
-const credentials = gatedCredentials(machineCredentials(), [
+const credentials = gatedCredentials(machineCredentials({ engineRelay: config.egress.relay }), [
   runtimeKillSwitch(config.disabledRuntimes),
   engineBudgetGate({ budgets: config.engineBudgets, repoBudgets: repoEngineBudgets, spend: engineSpend }),
 ]);
@@ -536,6 +541,8 @@ pipeline = new Pipeline(db, runnerFor, {
   budget: { taskUsd: config.taskBudgetUsd, dailyUsd: config.dailyBudgetUsd },
   restartPolicy: config.restartPolicy,
   closeDeps: { exec, worktreeRemove: false, watcher, github },
+  sweepRunSecrets: (keep) => sweepRunSecrets(config.stateDir, keep),
+  removeRunNetwork: (container) => removeRunNetwork(container),
   // A merged card's retro: the truth file, and the graph misses its Build Report also declared (never written into prompts or rules).
   retroOutputs: {
     stateDir: config.stateDir,
@@ -707,6 +714,7 @@ async function learningOf(taskId: string | undefined): Promise<{ repo: string | 
 /** Packs on demand (`POST /runs`): the stage image, each call with its own engine's credential;
  *  off only with MACHINE_AGENTS=off. Their cost counts toward the day's ceiling, which they obey. */
 const packRuns = buildPackRuns(config, {
+  policies,
   ...(config.egress.enabled && agentDeps?.egress ? { egress: agentDeps.egress } : {}),
   credentials,
   store: new PgPackRunStore(db),
@@ -770,7 +778,9 @@ const ticketMachine = new TicketMachine({
   store: new PgTicketStore(db),
   port: (tool) => (tool === "jira" ? new JiraTickets(jiraApi) : new GitHubTickets(github)),
   intakeLabel: config.githubPoll.label,
-  candidates: (ticket, repoPath) => pipeline.ticketCandidates(repoPath, ticket.tool === "github" ? { kind: "github", repo: ticket.key.split("#")[0]!, number: Number(ticket.key.split("#")[1]), url: ticket.permalink } : { kind: "jira", key: ticket.key, url: ticket.permalink, issueType: ticket.type }),
+  candidates: (ticket, repoPath) => pipeline.ticketCandidates(repoPath, ticketSource(ticket)),
+  association: (slug, number) => github.issueAssociation(slug, number),
+  record: (id, kind, payload) => pipeline.record(id, kind, payload),
   config: async (repoPath) => (await policies.for(repoPath)).factory,
   locate: async (repoPath, text) => (repoPath ? ((await graph.locate(repoPath, text))?.files ?? []).map((f: { path?: string } | string) => (typeof f === "string" ? f : (f.path ?? ""))).filter(Boolean) : []),
   createCard: (input, key) => cardOnce(pipeline, input, key),
@@ -807,18 +817,16 @@ const knownRepos = async (): Promise<string[]> => {
   for (const task of await pipeline.list()) if (task.repoPath && !isTerminal(task.state)) known.push(task.repoPath);
   return [...new Set(known)];
 };
-/** A person approves the exact base the repository's luna.yaml (on the user's checkout) names now; any other reference is refused. */
+/** A person approves the exact base the repository's luna.yaml (on the user's checkout) names now, or the exact key of the Dockerfile its devcontainer builds now; any other is refused. */
 const approveBase = async (repo: string, base: string): Promise<{ ok: true } | { ok: false; reason: string }> => {
   if (!agentDeps) return { ok: false, reason: "repository images are off on this machine" };
-  if (!(await knownRepos()).includes(repo)) return { ok: false, reason: "the machine does not know that repository" };
-  const spec = imageSpecOf((await policies.for(repo)).factory.sandbox.image);
-  if (spec.kind !== "repo" || spec.base !== base) return { ok: false, reason: "that is not the base in the repository's luna.yaml now" };
-  await agentDeps.approvals.approve(repo, base);
-  agentDeps.repoImages.approved(repo);
-  return { ok: true };
+  const deps = agentDeps;
+  return approveRepoBase({ knownRepos, policyOf: (r) => policies.for(r), sourceOf: (r) => deps.imageSource.for(r), approvals: deps.approvals, approved: (r) => deps.repoImages.approved(r) }, repo, base);
 };
 const app = createApp({
+  knownRepos,
   // The identity is read on each call, so a machine fixed in place turns healthy without a restart; the token and the stub reason are fixed at boot.
+  sandboxPolicy: config.sandboxPolicy,
   problems: async () => readinessProblems({ githubToken: config.githubToken, identity: await gitIdentity(process.cwd()), stubReason }),
   approveBase,
   ...(config.economy ? { economy: { port: economy, knownRepos, configOf: async (repo: string) => (await policies.for(repo)).factory.economy } } : {}),
@@ -827,8 +835,10 @@ const app = createApp({
       repos: [],
       knownRepos,
       policy: (repoPath) => policies.for(repoPath),
+      ...(agentDeps?.egress?.bounds ? { egressBounds: (repoPath: string) => agentDeps.egress!.bounds!(repoPath) } : {}),
+      ...(agentDeps ? { source: agentDeps.imageSource } : {}),
       machineImage: config.runnerImage,
-      images: { status: (repoPath) => agentDeps?.repoImages.status(repoPath) ?? null, pending: async (repoPath) => (await agentDeps?.repoImages.pending(repoPath)) ?? null },
+      images: { warnings: (repoPath) => agentDeps?.repoImages.warnings(repoPath) ?? [], status: (repoPath) => agentDeps?.repoImages.status(repoPath) ?? null, pending: async (repoPath) => (await agentDeps?.repoImages.pending(repoPath)) ?? null, pendingDockerfile: async (repoPath) => (await agentDeps?.repoImages.pendingDockerfile(repoPath)) ?? null },
       graph,
       watch: { health: (repoPath) => graphWatch?.health(repoPath) ?? { building: false, lastFailure: null } },
     }),
@@ -844,7 +854,9 @@ const app = createApp({
   slack: slackInbox,
   ...(jiraTasks ? { jira: jiraTasks } : {}),
   ...(packRuns ? { runs: packRuns } : {}),
-  ...(checksExec && proofRig ? { configProofs: new ConfigProofs({ exec: checksExec, rig: proofRig, gitIdentity }) } : {}),
+  ...(checksExec && proofRig ? { configProofs: new ConfigProofs({ exec: checksExec, rig: proofRig, gitIdentity, machinePolicy: config.sandboxPolicy }) } : {}),
+  // A repo's own runs and cost: its stage runs, the guard's stops and the ledger. Read-only, so it has its own view of the economy's files.
+  repoSignals: pgRepoSignals(db, economyStore(config.stateDir)),
   sla: (task) => slaClocks.for(task),
   slaAll: (tasks) => slaClocks.forAll(tasks),
   shipView: async (taskId) => shipViewOf(await loadCursor(config.stateDir, taskId)),

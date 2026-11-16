@@ -2,7 +2,7 @@
 // luna.yaml, else the pack's default. An engine the pack does not allow is never run, and one
 // whose credential this machine lacks gives way to the default; either way the reason says so,
 // for the task's log. Pure: the caller says which credentials are missing. See RFC 0002.
-import { type CredentialOwner, type EngineId, PACKS, type Pack, type PackId, type StageEngines, credentialOwner } from "@hardness/contracts";
+import { type CredentialOwner, type Effort, type EngineId, PACKS, type Pack, type PackId, type StageEfforts, type StageEngines, credentialOwner, effortProblem } from "@hardness/contracts";
 
 import { packStates } from "./packs.ts";
 
@@ -95,6 +95,43 @@ export function chooseEngine(opts: {
     return { engine, source, reason: reasons.join("; ") || null };
   }
   return { engine: fallback, source: "default", reason: reasons.join("; ") || null };
+}
+
+export interface EffortChoice {
+  effort: Effort;
+  /** Where the effort came from: the repo's luna.yaml, or the pack. */
+  source: "config" | "default";
+  /** Why an effort the repo asked for was passed over; null when nothing was. */
+  reason: string | null;
+}
+
+/** The effort a pack runs at on `engine`: the repo's luna.yaml `effort`, else the pack's own. An
+ *  effort the engine cannot serve (the engine may differ per task) gives way to the pack's, with why. */
+export function chooseEffort(opts: {
+  pack: Pick<Pack, "id" | "kind"> & { effort?: Effort };
+  /** The engine the stage runs on. */
+  engine: EngineId;
+  /** The repo's luna.yaml `effort`. */
+  config?: StageEfforts | null;
+}): EffortChoice {
+  const { pack } = opts;
+  const own = pack.effort ?? "low";
+  const asked = opts.config?.[pack.id];
+  if (asked === undefined) return { effort: own, source: "default", reason: null };
+  const problem = effortProblem(pack.id, opts.engine, asked);
+  if (problem) return { effort: own, source: "default", reason: `luna.yaml's effort ${asked} for ${pack.id}: ${problem}; ignored` };
+  return { effort: asked, source: "config", reason: null };
+}
+
+/** The first `<pack>: <problem>` among a repo's efforts, else null: a pack that takes no effort, or runs on its own, cannot be given one. The engine
+ *  is not checked here, it may differ per task; `chooseEffort` does that at run time. */
+export function effortsProblem(efforts: StageEfforts): string | null {
+  for (const pack of Object.keys(efforts) as PackId[]) {
+    if (PACKS[pack].kind === "decision") return `${pack}: ${pack} is a decision pack and takes no effort`;
+    // An on-demand pack never runs in a task, so nothing would apply the entry.
+    if (packStates(pack).length === 0) return `${pack}: runs on its own, not in a task`;
+  }
+  return null;
 }
 
 /** The engines a pack may move to after a usage limit, in its order: its `fallback` list less the

@@ -115,6 +115,8 @@ ENV LUNA_FACTORY_ROOT=/opt/luna/factory-src/factory
 # behind wrappers that point only those two at the bundled libraries; gh is a static binary. luna-stage is
 # the stage's entry: the factory on the layer's own Node, with the layer's tools first on PATH.
 COPY machine/runner/luna-stage /opt/luna/bin/luna-stage
+# luna-env: exports the files of /run/luna-secrets as variables, then runs the command (the machine hands a container its secrets as files, never as -e).
+COPY machine/runner/luna-env /opt/luna/bin/luna-env
 COPY machine/runner/layer-wrapper /opt/luna/bin/.wrapper
 # The egress proxy (machine/runner/egress/proxy.ts): the machine starts it as a second container of this image, the only door
 # out of a run's network. One file of erasable TypeScript on the layer's own Node; it is never run inside a stage container.

@@ -51,6 +51,8 @@ export async function prepareStageCredentials(credentials: Credentials, pack: Pa
   return {
     env: Object.assign({}, ...prepared.map((c) => c.env)),
     mounts: prepared.flatMap((c) => c.mounts),
+    // Only Claude relays, so at most one credential here has one.
+    ...(prepared.find((c) => c.relay) ? { relay: prepared.find((c) => c.relay)!.relay } : {}),
     release: () => Promise.all(prepared.map((c) => c.release())).then(() => {}),
   };
 }

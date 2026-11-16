@@ -37,6 +37,7 @@ import {
   PACKS,
   PackId,
   RunInput,
+  ProposalsInput,
   SetupRepoInput,
   ConfigCheckInput,
   SlackItemPatch,
@@ -53,8 +54,11 @@ import {
   UpdateTaskInput,
   type RepoHealth,
 } from "@hardness/contracts";
+import type { MachinePolicy } from "@hardness/contracts";
 import { EconomyApproveInput, type EconomyConfig, EconomyRepoInput, EconomyRestoreInput } from "@hardness/contracts";
-import { isAbsolute } from "node:path";
+import { ForemanAnswer, type ForemanSuggestion, ForemanContext, foremanActionProblem, isTerminal } from "@hardness/contracts";
+import { buildForemanBoard } from "../../domain/foreman.ts";
+import { basename, isAbsolute, resolve as resolvePath } from "node:path";
 import { type Context, Hono } from "hono";
 import type { Economy } from "../../application/economy.ts";
 import { economyMetrics } from "../../domain/economy/metrics.ts";
@@ -67,7 +71,7 @@ import { ZodError, type ZodType, z } from "zod";
 
 const SlotsInput = z.object({ max: z.number().int().min(1) });
 
-import { DEFAULT_PORT } from "../../config.ts";
+import { DEFAULT_PORT, sandboxPolicyNotes } from "../../config.ts";
 import { computeMetrics } from "../persistence/metrics-query.ts";
 import { PgTaskStore } from "../persistence/task-store.ts";
 import type { TaskRow } from "../../domain/task.ts";
@@ -77,9 +81,12 @@ import { EngineBudgetWatch } from "../../application/engine-gates.ts";
 import { type Credentials, machineCredentials } from "../credentials/index.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import { checkLunaConfigText } from "../../domain/luna-config.ts";
+import { proposalSkips, proposeConfig } from "../../domain/config-proposal.ts";
+import { PolicyParseError } from "../../domain/policy.ts";
+import { type RepoSignals, noRepoSignals } from "../../application/repo-signals.ts";
 import { type ConfigProofs, ConfigProofError } from "../../application/config-proofs.ts";
 import type { Watcher } from "../../application/ports.ts";
-import { ApproverRequiredError, CoverageGapsError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, MergeError, DedupAnswerError, UnknownRepositoryError, NoCasesToEditError, NoContextGateError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SplitAutoApprovalError, SplitChangedError, SplitNotValidError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, FindingNotFoundError, NoEvidenceError, NotReleaseOwnerError, WorktreeUnpushedError } from "../../application/pipeline.ts";
+import { ApproverRequiredError, ConfigRebuildError, CoverageGapsError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, MergeError, DedupAnswerError, UnknownRepositoryError, NoCasesToEditError, NoContextGateError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SplitAutoApprovalError, SplitChangedError, SplitNotValidError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, FindingNotFoundError, NoEvidenceError, NotReleaseOwnerError, WorktreeUnpushedError } from "../../application/pipeline.ts";
 import { taskStagesProblem } from "../../domain/engine-choice.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
@@ -151,16 +158,31 @@ export interface AppDeps {
   runs?: PackRunsPort;
   /** Proofs of a repository's own luna.yaml for the setup skill; without it (no sandbox) `POST /repos/config/prove` answers 503. */
   configProofs?: ConfigProofs;
+  /** The repo's own run signals for `POST /repos/proposals`; defaults to none, so no proposal is made until an adapter backs it. */
+  repoSignals?: RepoSignals;
+  /** Every checkout the machine knows, for `POST /repos/proposals`; without it no repo is known and the route answers 404 `unknown_repo`. */
+  knownRepos?: () => Promise<string[]>;
+  /** What time it is for `POST /repos/proposals` (its signal, decline and evidence windows); tests inject one. Defaults to the system clock. */
+  clock?: () => Date;
   /** What keeps the machine from doing its job (`readinessProblems`), read on each `GET /health`; absent, `/health` is always ok. */
   problems?: () => Promise<string[]> | string[];
+  /** The machine's sandbox policy in force (`sandbox.yaml`), shown on `GET /health`; absent, not shown. */
+  sandboxPolicy?: MachinePolicy;
 }
 
+/** `POST /foreman`: the question and the last turns of the talk. */
+const ForemanInput = z.object({ question: ForemanContext.shape.question, history: ForemanContext.shape.history.optional() });
+
 class BadRequest extends Error {}
+
+/** The window of a repo's own runs that a config proposal reads. */
+const SIGNAL_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** The client closed the request first (nginx's 499): nobody reads it, the log does. */
 const CLIENT_CLOSED = 499;
 
-const fail = (c: Context, status: 400 | 404 | 409 | 422 | 429 | 500 | 503 | typeof CLIENT_CLOSED, error: string, message: string, extra: Record<string, unknown> = {}) =>
+const fail = (c: Context, status: 400 | 404 | 409 | 422 | 429 | 500 | 502 | 503 | typeof CLIENT_CLOSED, error: string, message: string, extra: Record<string, unknown> = {}) =>
   c.json<ApiError>({ error, message, ...extra }, status as ContentfulStatusCode);
 
 /** `X-Luna-Client`: who calls `POST /runs` (`notch`), for its record. */
@@ -200,7 +222,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, problems: problemsOf }: AppDeps): Hono {
+export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], clock = () => new Date(), problems: problemsOf, sandboxPolicy }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -211,6 +233,7 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
   app.onError((error, c) => {
     if (error instanceof TaskNotFoundError) return fail(c, 404, "not_found", error.message);
     if (error instanceof TransitionError) return fail(c, 409, "invalid_transition", error.message);
+    if (error instanceof ConfigRebuildError) return fail(c, 409, "config_changed", error.message);
     if (error instanceof TaskBusyError) return fail(c, 409, "task_busy", error.message);
     if (error instanceof WorktreeUnpushedError) return fail(c, 409, "unpushed_commits", error.message);
     if (error instanceof IdempotencyConflictError) return c.json<ApiError>({ error: "idempotency_conflict", message: error.message, taskId: error.taskId }, 409);
@@ -287,8 +310,10 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
   // 503 with the problems when the machine cannot do its job (no GitHub token, no git identity, stub stages): the compose healthcheck and `up --wait` then fail visibly. The stage pool is still in the body.
   app.get("/health", async (c) => {
     const problems = (await problemsOf?.()) ?? [];
-    if (problems.length === 0) return c.json({ ok: true, slots: pipeline.slots });
-    return c.json({ ok: false, problems, slots: pipeline.slots }, 503);
+    const idle = sandboxPolicy ? sandboxPolicyNotes(sandboxPolicy).notInForce : [];
+    const policy = sandboxPolicy ? { sandboxPolicy, ...(idle.length > 0 ? { notInForce: idle } : {}) } : {};
+    if (problems.length === 0) return c.json({ ok: true, slots: pipeline.slots, ...policy });
+    return c.json({ ok: false, problems, slots: pipeline.slots, ...policy }, 503);
   });
 
   /** Every pack in the registry, with the task states it runs in. */
@@ -308,6 +333,49 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     if (!runs) return fail(c, 503, "agents_off", "this machine runs no packs: agents are off (MACHINE_AGENTS=off)");
     // The request's own signal: a client that leaves is dropped from the queue, or its container stopped.
     return c.json(await runs.run(input, client, c.req.raw.signal));
+  });
+
+  /** The foreman: one question on the open board, answered with a reply and actions the board can take. It only suggests; the board makes each call after a person's `y`. */
+  app.post("/foreman", async (c) => {
+    const { question, history } = await body(c, ForemanInput);
+    if (!runs) return fail(c, 503, "agents_off", "this machine runs no packs: agents are off (MACHINE_AGENTS=off)");
+    const open = (await pipeline.list()).filter((row) => !isTerminal(row.state));
+    const glances = await pipeline.glances(open.map((row) => row.id));
+    const gates = new Map([...glances].flatMap(([id, glance]) => (glance.gate ? [[id, glance.gate] as const] : [])));
+    const packs = Object.values(PACKS).filter((pack) => packInfo(pack).states.length > 0);
+    // Base images and Dockerfiles that wait for approval keep their own board flow; the foreman only names them.
+    const pending = ((await repoHealth?.().catch(() => [])) ?? []).flatMap((health) => [
+      ...(health.image.pendingBase ? [{ repo: basename(health.repo), kind: "base" as const, ref: health.image.pendingBase }] : []),
+      ...(health.image.pendingDockerfile ? [{ repo: basename(health.repo), kind: "dockerfile" as const, ref: health.image.pendingDockerfile.path }] : []),
+    ]);
+    const board = buildForemanBoard(open, gates, packs, new Date(), pending.slice(0, 50));
+    let answer: ForemanAnswer;
+    try {
+      const result = await runs.run({ pack: "foreman", context: { foreman: { question, history: history ?? [], board } } }, "board", c.req.raw.signal);
+      answer = ForemanAnswer.parse(result.answer);
+    } catch (error) {
+      if (error instanceof RunFailedError) return fail(c, 502, "foreman_failed", error.message);
+      if (error instanceof ZodError) return fail(c, 502, "foreman_failed", "the foreman gave no valid answer");
+      throw error;
+    }
+    const actions: ForemanSuggestion[] = [];
+    const dropped: Array<{ action: ForemanAnswer["actions"][number]; problem: string }> = [];
+    for (const action of answer.actions) {
+      const problem = foremanActionProblem(action, board);
+      if (problem !== null) {
+        dropped.push({ action, problem });
+        continue;
+      }
+      const approvalId = board.cards.find((card) => card.id === action.taskId)?.approvalId ?? null;
+      // `POST /tasks/:id/answers` keys an answer by the question's text; the model keyed it by the id the snapshot gave.
+      if (action.kind === "answer") {
+        const asked = board.cards.find((card) => card.id === action.taskId)?.questions ?? [];
+        actions.push({ ...action, answers: Object.fromEntries(Object.entries(action.answers).map(([id, text]) => [asked.find((q) => q.id === id)?.question ?? id, text])), approvalId });
+        continue;
+      }
+      actions.push({ ...action, approvalId });
+    }
+    return c.json({ reply: answer.reply, actions, dropped });
   });
 
   // "Stop picking up work" / "carry on" / "run N at once": the knobs for leaving and for debugging.
@@ -513,6 +581,32 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
   app.post("/repos/setup", async (c) => {
     const { repoPath } = await body(c, SetupRepoInput);
     return c.json(await serialize(await pipeline.setupRepo(repoPath)), 201);
+  });
+
+  // A config proposal: the scorecards come in the body, the repo's luna.yaml and its own run signals are read here, a fixed rule picks the
+  // changes (domain/config-proposal.ts), and a non-empty result waits at the setup gate as a `config` card.
+  app.post("/repos/proposals", async (c) => {
+    const { repo: given, candidates } = await body(c, ProposalsInput);
+    if (!isAbsolute(given)) throw new BadRequest("repo must be an absolute path");
+    // Approving the card writes luna.yaml into this path, so it is the normalised path of a repo the machine knows.
+    const repo = resolvePath(given);
+    if (!(await knownRepos()).some((known) => resolvePath(known) === repo)) return fail(c, 404, "unknown_repo", "the machine does not know that repository");
+    const at = clock();
+    try {
+      const [current, signals, declined] = await Promise.all([pipeline.configChoices(repo), repoSignals.forRepo(repo, new Date(at.getTime() - SIGNAL_DAYS * DAY_MS)), pipeline.declinedConfigChanges(repo, at)]);
+      const input = { current, candidates, signals, declined, now: at.toISOString() };
+      const changes = proposeConfig(input);
+      // A pack left out for mixed engines is named, so a person knows why it got no proposal.
+      const skipped = proposalSkips(input);
+      const extra = skipped.length > 0 ? { skipped } : {};
+      if (changes.length === 0) return c.json({ changes, taskId: null, ...extra });
+      const task = await serialize(await pipeline.proposeConfig(repo, changes));
+      bus.publish({ type: "task.updated", task, seq: task.seq });
+      return c.json({ changes, taskId: task.id, ...extra });
+    } catch (error) {
+      if (error instanceof PolicyParseError) return fail(c, 422, "invalid_config", error.message);
+      throw error;
+    }
   });
 
   // The setup skill's checks of a luna.yaml: `check` reads the text it is given (nothing runs, nothing is written); `prove` runs every check of the

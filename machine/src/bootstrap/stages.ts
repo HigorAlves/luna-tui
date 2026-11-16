@@ -2,7 +2,7 @@
 // credential and the runner image are available), the host-only runners that always run
 // for real, and the stub fallback.
 import { FACTORY_DEFAULTS } from "@hardness/contracts";
-import type { EvidencePack, ShipContext, TaskRoute, TaskState } from "@hardness/contracts";
+import type { EvidencePack, QuestionsContext, ShipContext, TaskRoute, TaskState } from "@hardness/contracts";
 
 import type { CoverageSummary, Ledger, RunSummary } from "@hardness/contracts";
 
@@ -42,16 +42,20 @@ import { dockerImages } from "../adapters/docker/image-build.ts";
 import { repoSlug } from "../adapters/graph/slug.ts";
 import { ensureGraphReady } from "../application/graph-ready.ts";
 import { type RepoImageEvent, repoImages as makeRepoImages } from "../application/repo-images.ts";
+import { type RepoImageSource, repoImageSource } from "../application/repo-image-source.ts";
 import { homedir } from "node:os";
 import { repoSecrets } from "../adapters/credentials/repo-secrets.ts";
 import { PACKAGE_MANAGER_CONFIG, configFilesChanged } from "../application/install.ts";
 import { InstallFailedError, type InstallInput, type InstallOutcome, ensureInstalled } from "../application/install.ts";
 import { removeNestedRepositories } from "../adapters/git/machine-repo.ts";
 import { ensureClone, isClone, removeClone } from "../adapters/git/clone.ts";
-import type { ProofRig } from "../application/config-proof.ts";
-import { policyOf } from "../domain/luna-config.ts";
+import { type ProofRig, proofAppDeps } from "../application/config-proof.ts";
+import { sandboxSizeOf } from "../domain/sandbox-bounds.ts";
+import { type Trust, trustOf } from "../domain/trust.ts";
+import { runtimeChecker } from "../adapters/docker/runtimes.ts";
+import { seccompChecker } from "../adapters/docker/seccomp.ts";
 import { randomUUID } from "node:crypto";
-import { DEFAULT_SANDBOX_SIZE, execInSandbox, imageExists, imageId, imageLabel, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
+import { execInSandbox, imageExists, imageId, imageLabel, removeLeftoverContainers, runSandbox, sandboxExecutor, setSecretsRoot } from "../adapters/docker/docker.ts";
 import { removeLeftoverApps } from "../adapters/docker/app.ts";
 import { openCardNetwork, openPlainNetwork, removeLeftoverNetworks } from "../adapters/docker/egress.ts";
 import { startServices } from "../adapters/docker/services.ts";
@@ -68,6 +72,7 @@ import { checkpointPush } from "../application/stages/checkpoint.ts";
 import { judgeRedCheck } from "../application/stages/build-watch.ts";
 import { runSweep } from "../application/stages/sweep.ts";
 import { noIdentityDetail } from "../application/env-broken.ts";
+import { rmSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { readdir } from "node:fs/promises";
 import { readRegularFile } from "../adapters/fs/bounded.ts";
@@ -93,7 +98,7 @@ export interface RealStagesResult {
   proofRig: ProofRig | null;
   /** What any pack run outside the pipeline needs (the Slack inbox's triage, Jira intake): the image,
    *  the credentials, the state dir, the worktrees dir and each repo's luna.yaml; null when agents are off or something is missing. */
-  agentDeps: { egress?: EgressPolicy; image: string; approvals: ApprovedBases; repoImages: ReturnType<typeof makeRepoImages>; imageEvents: ImageEventSink; repoImageOf: (repoPath: string, signal?: AbortSignal) => Promise<string>; credentials: Credentials; stateDir: string; worktreesDir: string; policies: PolicyStore } | null;
+  agentDeps: { egress?: EgressPolicy; image: string; approvals: ApprovedBases; repoImages: ReturnType<typeof makeRepoImages>; imageSource: RepoImageSource; imageEvents: ImageEventSink; repoImageOf: (repoPath: string, signal?: AbortSignal) => Promise<string>; credentials: Credentials; stateDir: string; worktreesDir: string; policies: PolicyStore } | null;
   /** What `Pipeline.tick` asks of an open release question (merged, withdrawn, kept); null when stages are stubs. */
   shipGateProbe: ShipGateProbe | null;
 }
@@ -198,9 +203,16 @@ export async function buildRealStages(
   // explicitly (`repoPath` in the exec options), never guess it from a folder.
   const imageEvents: ImageEventSink = { sink: (event) => console.warn(`repository image: ${JSON.stringify(event)}`) };
   const approvals = approvedBases(config.stateDir);
+  // luna.yaml's base, else the devcontainer's image, both read from the user's checkout; its `containerEnv` reaches the repo's own commands only.
+  const imageSource = repoImageSource({ policies, machinePolicy: config.sandboxPolicy });
+  const containerEnvOf = async (repoPath: string) => (await imageSource.for(repoPath)).containerEnv;
   const repoImages = makeRepoImages({
     machineImage: config.runnerImage,
-    imageOf: async (repoPath) => (await policies.for(repoPath)).factory.sandbox.image,
+    imageOf: async (repoPath) => {
+      const source = await imageSource.for(repoPath);
+      return { base: source.base, dockerfile: source.dockerfile };
+    },
+    toolchainsOf: async (repoPath) => (await policies.for(repoPath)).toolchains,
     slugOf: repoSlug,
     docker: dockerImages(),
     approvals,
@@ -208,23 +220,27 @@ export async function buildRealStages(
   });
   const egress = buildEgress(config, policies);
   const secrets = repoSecrets({ home: homedir() });
+  // The secret files of a check, a seed, a deploy and the app live under the state dir (the host daemon mounts them, also when the machine is a container); a killed machine leaves none behind.
+  setSecretsRoot(join(config.stateDir, "run-secrets"));
+  rmSync(join(config.stateDir, "run-secrets"), { recursive: true, force: true });
+  // ... the real token or a secret file a killed run left in its own folder goes too, but in recover(), which knows which runs still have a container.
   const sandboxChecks = sandboxExecutor({
     secrets,
     machine: config.runnerImage,
     imageOf: async (repoPath) => (await repoImages.ensure(repoPath)).image,
+    containerEnvOf,
     ...(egress ? { egress: (repoPath: string | undefined) => egress.for({ repoPath: repoPath ?? null, kind: "check" }) } : {}),
     // A check container reads the repository's own size, as a stage does (the limit carried from 11a).
-    limitsOf: async (repoPath) => {
-      const sandbox = repoPath ? (await policies.for(repoPath)).factory.sandbox : { cpu: DEFAULT_SANDBOX_SIZE.cpu, memory_gb: DEFAULT_SANDBOX_SIZE.memoryGb };
-      return { cpu: sandbox.cpu, memoryGb: sandbox.memory_gb };
+    limitsOf: async (repoPath, trust) => {
+      return sandboxSizeOf(await policies.for(repoPath ?? null), trust);
     },
   });
   // The machine installs from the lockfile before a stage that writes, and before a check on a card's workspace (Verify's fresh one included).
   const install = (input: InstallInput): Promise<InstallOutcome> =>
-    ensureInstalled({ stateDir: config.stateDir, policies, repoImages, imageId, lockfilesAt, nestedLockfilesAt, exec: execInSandbox, ...(egress ? { egress } : {}), removeNested: removeNestedRepositories, dirtyFiles, restoreFiles, configChanged: (i) => configFilesChanged({ cardBlobs: (w, c, names) => lockfilesAt(w, c, names), userBlobs: (r, c, names) => blobsAtRepo(r, c, names), baseOf: (w, r) => branchBase(w, r) }, i) }, input);
-  const installFor = async (options: { repoPath?: string; cwd?: string; signal?: AbortSignal }): Promise<void> => {
+    ensureInstalled({ stateDir: config.stateDir, policies, containerEnvOf, repoImages, imageId, lockfilesAt, nestedLockfilesAt, exec: execInSandbox, ...(egress ? { egress } : {}), removeNested: removeNestedRepositories, dirtyFiles, restoreFiles, configChanged: (i) => configFilesChanged({ cardBlobs: (w, c, names) => lockfilesAt(w, c, names), userBlobs: (r, c, names) => blobsAtRepo(r, c, names), baseOf: (w, r) => branchBase(w, r) }, i) }, input);
+  const installFor = async (options: { repoPath?: string; cwd?: string; trust?: Trust; signal?: AbortSignal }): Promise<void> => {
     if (options.repoPath && options.cwd && isClone(options.cwd)) {
-      const installed = await install({ taskId: "_checks", repoPath: options.repoPath, workspace: options.cwd, commit: await headCommit(options.cwd), ...(options.signal ? { signal: options.signal } : {}) });
+      const installed = await install({ taskId: "_checks", repoPath: options.repoPath, workspace: options.cwd, commit: await headCommit(options.cwd), ...(options.trust ? { trust: options.trust } : {}), ...(options.signal ? { signal: options.signal } : {}) });
       if (!installed.ok) throw new InstallFailedError(installed.detail);
     }
   };
@@ -251,6 +267,7 @@ export async function buildRealStages(
   const appDeps: AppDeps = {
     policies,
     imageFor: async (repoPath, taskId) => (await repoImages.ensure(repoPath, undefined, taskId)).image,
+    containerEnvOf,
     install,
     ...(egress ? { egress } : {}),
     secrets,
@@ -259,6 +276,8 @@ export async function buildRealStages(
     startServices,
     exec: execInSandbox,
     docker: (args, options) => exec("docker", args, options ?? {}),
+    checkRuntime: runtimeChecker(exec),
+    checkSeccomp: seccompChecker(exec),
   };
   // Where a luna.yaml is proven (the setup stage's proposal, `POST /repos/config/prove`): a throwaway clone made as a card's workspace is, never
   // the person's checkout (a check's install wrote Linux binaries into one), and the app started by the browser run's own `openApp`, on the
@@ -272,14 +291,9 @@ export async function buildRealStages(
     },
     app: async ({ repoPath, workspace, config: file, signal }) => {
       const started = Date.now();
-      const policy = policyOf(file);
-      const extra = file.sandbox?.egress?.allow ?? [];
       const blocked: string[] = [];
-      const proofDeps: AppDeps = {
-        ...appDeps,
-        policies: { for: async () => policy },
-        ...(egress ? { egress: { for: async (request) => { const run = await egress.for(request); return { ...run, allow: [...new Set([...run.allow, ...extra])] }; } } } : {}),
-      };
+      // The file may be a model's proposal: its sandbox is held within the machine's policy like a repo's.
+      const proofDeps: AppDeps = proofAppDeps(appDeps, file, config.sandboxPolicy);
       const opened = await openApp(proofDeps, {
         taskId: `proof-${randomUUID()}`,
         repoPath,
@@ -421,7 +435,7 @@ export async function buildRealStages(
               return { checks: policy.checks, services: policy.services, wholeSuiteMinutes: policy.factory.build.regression_full_suite_minutes };
             },
           },
-          { worktree: task.worktreePath, repoPath: task.repoPath, signal: context.signal, env: process.env, onBlocked: (_check, rows) => void Promise.all(blockedPayloads(rows, "check").map((payload) => context.emit?.("sandbox.egress_blocked", payload))).catch(() => {}) },
+          { worktree: task.worktreePath, repoPath: task.repoPath, trust: trustOf(task), signal: context.signal, env: process.env, onBlocked: (_check, rows) => void Promise.all(blockedPayloads(rows, "check").map((payload) => context.emit?.("sandbox.egress_blocked", payload))).catch(() => {}) },
         );
       },
       checkpoint: async (context, worktree, follows) => {
@@ -449,7 +463,8 @@ export async function buildRealStages(
         branch: currentBranch,
       },
     }),
-    ...(triageSignals && agents.triage ? { triage: withTriageSignals(agents.triage, triageSignals) } : {}),
+    // The shared object is bound late (main.ts sets its classifier once PackRuns exists), so the council is added to it, not to a copy.
+    ...(triageSignals && agents.triage ? { triage: withTriageSignals(agents.triage, Object.assign(triageSignals, { council: triageSignals.council ?? ((subContext: StageContext, questions: QuestionsContext) => runAgent(deps, subContext, "question_council", { questions })) })) } : {}),
     // The plan stage runs in test_design: the planner, the test designer, then three decisions, each pack a sub-run.
     test_design: planStage({
       runPack: (pack, subContext, extra) => runAgent(deps, subContext, pack, extra.plan ? { plan: extra.plan } : {}),
@@ -480,7 +495,7 @@ export async function buildRealStages(
       ...(graphs ? { graph: graphs.graph, graphReady } : {}),
     }),
     // Setup reads the repo checkout itself (no worktree yet) and proves what it proposes in the image.
-    setup: setupRunner({ runPack: (context) => runAgent(deps, context, "setup", { checkout: true }), exec: checksExec, rig: proofRig, stateDir: config.stateDir }),
+    setup: setupRunner({ runPack: (context) => runAgent(deps, context, "setup", { checkout: true }), exec: checksExec, rig: proofRig, machinePolicy: config.sandboxPolicy, stateDir: config.stateDir }),
     // ci_watch polls the PR's checks on the host and only calls its pack when one is red.
     ci_watch: ciWatchRunner({
       github,
@@ -538,7 +553,7 @@ export async function buildRealStages(
         }
       },
       privacy: async (texts, repoPath, taskId) => judgePrivacy(verifyDecisions?.decide ?? null, (await policies.for(repoPath)).decisions, texts, repoPath, { truth, taskId }),
-      ...(videoImage ? { scanImages: (dir: string, signal: AbortSignal) => scanImages({ sandbox: runSandbox, image: config.runnerVideoImage }, { id: dir.split("/").pop() ?? "shots", dir, signal }) } : {}),
+      ...(videoImage ? { scanImages: (dir: string, signal: AbortSignal) => scanImages({ sandbox: runSandbox, image: config.runnerVideoImage, limitsOf: async () => sandboxSizeOf(await policies.for(null), "untrusted") }, { id: dir.split("/").pop() ?? "shots", dir, signal }) } : {}),
       video: videoImage
         ? videoPipeline({
             sandbox: runSandbox,
@@ -549,6 +564,7 @@ export async function buildRealStages(
             decide: () => verifyDecisions?.decide ?? null,
             truth: truth ?? null,
             overrides: async (repoPath) => (await policies.for(repoPath)).decisions,
+            limitsOf: async (repoPath, trust) => sandboxSizeOf(await policies.for(repoPath), trust),
           })
         : null,
     }),
@@ -612,7 +628,7 @@ export async function buildRealStages(
   };
   const resolveConflicts: DeliverDeps["resolveConflicts"] = (context, input) =>
     mergeRound({ github, loop: reviewLoop, policies, evidence: { load: evidenceDeps.load, save: saveEvidence, publish: publishByPolicy, store: evidenceStore }, stateDir: config.stateDir }, context, input);
-  return { stubReason: null, real, resolveConflicts, verifyPack, checksExec, proofRig, shipGateProbe: shipGateProbe({ github, ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch } } : {}), policies, evidence: { load: evidenceDeps.load }, stateDir: config.stateDir }), agentDeps: { ...(egress ? { egress } : {}), image: config.runnerImage, approvals, repoImages, imageEvents, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
+  return { stubReason: null, real, resolveConflicts, verifyPack, checksExec, proofRig, shipGateProbe: shipGateProbe({ github, ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch } } : {}), policies, evidence: { load: evidenceDeps.load }, stateDir: config.stateDir }), agentDeps: { ...(egress ? { egress } : {}), image: config.runnerImage, approvals, repoImages, imageSource, imageEvents, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
 }
 
 /** Packs on demand (`POST /runs`): on whenever agents are, off (undefined, the route's 503) only

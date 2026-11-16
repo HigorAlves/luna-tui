@@ -50,6 +50,20 @@ function setup(exitCode = 0, extra: Partial<Parameters<typeof graphifyGraph>[0]>
   return { graph, repo, seen, checkouts, stateDir, checkout, setHead: (sha: string) => (head = sha) };
 }
 
+describe("graphifyGraph.build on the machine policy's size", () => {
+  it("runs the build on the limits the repo's bounded policy gives, and on none without them", async () => {
+    const size = { cpu: 1, memoryGb: 2, pids: 200, seccomp: "/etc/luna/s.json", cacheTrust: "trusted" as const };
+    const asked: string[] = [];
+    const sized = setup(0, { limitsOf: async (repoPath) => (asked.push(repoPath), size) });
+    await sized.graph.build(sized.repo);
+    expect(sized.seen[0]!.limits).toEqual(size);
+    expect(asked).toEqual([sized.repo]);
+    const plain = setup();
+    await plain.graph.build(plain.repo);
+    expect(plain.seen[0]!.limits).toBeUndefined();
+  });
+});
+
 describe("graphifyGraph.build", () => {
   it("builds from a clean read-only checkout in the runner image and makes it current", async () => {
     const { graph, repo, seen, checkout, stateDir } = setup();

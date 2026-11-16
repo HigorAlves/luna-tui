@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Calibration } from "./calibration.ts";
 import type { Scorecard } from "./grade.ts";
-import { buildDefaultsFile, loadBaselines, withOwnSummary, proposeDefaults, renderScorecard, wilson, PINNED } from "./scorecard.ts";
+import { buildDefaultsFile, loadAgentBaselines, loadBaselines, withOwnSummary, proposeDefaults, renderScorecard, wilson, PINNED } from "./scorecard.ts";
 
 /** A baseline: `cases` graded cases costing `costUsd` in all, calibration as given over the defaults below. */
 const card = (pack: string, engine: string, calibration: Partial<Calibration>, over: { costUsd?: number | null; at?: string } = {}): Scorecard =>
@@ -17,6 +17,55 @@ const card = (pack: string, engine: string, calibration: Partial<Calibration>, o
   }) as unknown as Scorecard;
 
 const current = { default: "jev", fallback: ["claude:haiku"] } as const;
+
+/** An agent pack's baseline: `cases` cases, 3 of 4 passing, $0.04 in all, 2 turns on average. */
+const agentCard = (pack: string, engine: string, over: Record<string, unknown> = {}): Scorecard =>
+  ({
+    schema: 1, pack, engine, model: "m", judge: "claude:opus", at: "2026-11-10T10:00:00.000Z",
+    summary: { cases: 4, passed: 3, passRate: 0.75, meanJudgeScore: 0.7, meanTurns: 2, meanDurationMs: 2000, costUsd: 0.04, judgeCostUsd: null },
+    cases: [],
+    ...over,
+  }) as unknown as Scorecard;
+
+const writeBaseline = (evals: string, folder: string, c: Scorecard) => {
+  mkdirSync(join(evals, "baselines", folder), { recursive: true });
+  writeFileSync(join(evals, "baselines", folder, `${c.pack}.json`), JSON.stringify(c));
+};
+
+describe("agent pack baselines", () => {
+  const evals = mkdtempSync(join(tmpdir(), "agent-scorecard-"));
+  writeBaseline(evals, "claude-haiku", agentCard("slack_triage", "claude:haiku"));
+  writeBaseline(evals, "claude-haiku@high", agentCard("plan", "claude:haiku", { summary: { cases: 2, passed: 2, passRate: 1, meanJudgeScore: 0.9, meanTurns: 4.5, meanDurationMs: 1, costUsd: null, judgeCostUsd: null } }));
+  writeBaseline(evals, "codex-luna", agentCard("plan", "codex:luna", { effort: "low" }));
+  writeBaseline(evals, "jev", card("risk_score", "jev", {}));
+
+  it("reads one row per agent baseline, its effort from the card, the folder suffix or the pack, and skips decision packs", () => {
+    const rows = loadAgentBaselines(evals);
+    expect(rows.map((r) => `${r.pack} ${r.engine} ${r.effort}`)).toEqual(["plan claude:haiku high", "plan codex:luna low", "slack_triage claude:haiku low"]);
+    expect(rows[0]).toEqual({ pack: "plan", engine: "claude:haiku", effort: "high", n: 2, passRate: 1, meanTurns: 4.5, costPerCase: null, at: "2026-11-10T10:00:00.000Z", model: "m" });
+    expect(rows[2]).toMatchObject({ n: 4, passRate: 0.75, costPerCase: 0.01 });
+    expect(loadAgentBaselines(join(evals, "nowhere"))).toEqual([]);
+  });
+
+  it("leaves the decision loader as it was", () => {
+    expect(loadBaselines(evals).map((c) => c.pack)).toEqual(["risk_score"]);
+  });
+
+  it("appends an Agent packs table, sorted by pack, engine and effort", () => {
+    const rows = loadAgentBaselines(evals);
+    const md = renderScorecard([], {}, new Date("2026-11-12T00:00:00Z"), [...rows].reverse());
+    expect(md).toContain([
+      "## Agent packs",
+      "",
+      "| pack | engine | effort | n | pass rate | mean turns | cost per case | measured at |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| plan | claude:haiku | high | 2 | 100% | 4.5 | n/a | 2026-11-10 |",
+      "| plan | codex:luna | low | 4 | 75% | 2.0 | $0.0100 | 2026-11-10 |",
+      "| slack_triage | claude:haiku | low | 4 | 75% | 2.0 | $0.0100 | 2026-11-10 |",
+    ].join("\n"));
+    expect(renderScorecard([], {}, new Date("2026-11-12T00:00:00Z"))).not.toContain("## Agent packs");
+  });
+});
 
 describe("proposeDefaults", () => {
   it("keeps the current default and says unmeasured when fewer than two engines were measured", () => {
@@ -112,6 +161,18 @@ describe("the scorecard", () => {
     expect(md).toContain("claude:haiku");
     expect(md).toMatch(/risk_score.*claude:haiku.*acted-on accuracy 0\.90/);
     expect(md).toContain("Generated 2026-11-12");
+  });
+
+  it("skips a decision card saved under an @<effort> folder, or one that carries an effort: a decision pack takes none, so it is no second card for the engine", () => {
+    const dir = mkdtempSync(join(tmpdir(), "evals-effort-"));
+    const put = (folder: string, c: Scorecard) => {
+      mkdirSync(join(dir, "baselines", folder), { recursive: true });
+      writeFileSync(join(dir, "baselines", folder, `${c.pack}.json`), JSON.stringify(c));
+    };
+    put("jev", card("risk_score", "jev", { actedOnAccuracy: 0.9 }));
+    put("jev@low", card("risk_score", "jev", { actedOnAccuracy: 0.5 }));
+    put("codex-luna", { ...card("risk_score", "codex:luna", {}), effort: "low" });
+    expect(loadBaselines(dir).map((c) => `${c.pack} ${c.engine}`)).toEqual(["risk_score jev"]);
   });
 
   it("recomputes a baseline's numbers from its own cases instead of trusting the summary the file carries", () => {

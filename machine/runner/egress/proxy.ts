@@ -14,6 +14,10 @@ import { createServer as createHttpServer, request as httpRequest } from "node:h
 import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node:http";
 import { connect as netConnect, createServer as createNetServer, isIP } from "node:net";
 import type { Server as NetServer, Socket } from "node:net";
+import { readFile } from "node:fs/promises";
+import { pipeline } from "node:stream";
+import { request as httpsRequest } from "node:https";
+import { connect as tlsConnect } from "node:tls";
 import { fileURLToPath } from "node:url";
 
 export type Via = "connect" | "http" | "dns";
@@ -147,6 +151,55 @@ function clean(text: string): string {
   return text.slice(0, MAX_NAME).replace(/[^\x21-\x7e]/g, "?");
 }
 
+/** The engine relay: plain HTTP in from the stage, TLS to `api.anthropic.com` out, the run's placeholder swapped for the real credential. */
+export interface RelayOptions {
+  /** Which header carries the credential: `authorization: Bearer` (a subscription token) or `x-api-key`. */
+  kind: "oauth" | "api-key";
+  /** What the stage holds in place of the credential. A request without it is refused. */
+  placeholder: string;
+  /** The real credential, read when a request arrives. Never logged. */
+  credential: () => Promise<string>;
+  /** Default true. False only in a test, where a plain server stands in for the API. */
+  tls?: boolean;
+  /** IPv4 addresses or CIDR ranges (the egress bridge's): a request that arrives on a local address inside one is refused, so the relay is served on the card network only. */
+  denyLocal?: readonly string[];
+}
+
+/** The text of the mounted meta file (`{"kind":…,"placeholder":…}`), or null when it is not that. */
+export function parseRelayMeta(text: string): { kind: "oauth" | "api-key"; placeholder: string } | null {
+  try {
+    const json = JSON.parse(text) as { kind?: unknown; placeholder?: unknown };
+    if ((json.kind !== "oauth" && json.kind !== "api-key") || typeof json.placeholder !== "string" || json.placeholder.length === 0) return null;
+    return { kind: json.kind, placeholder: json.placeholder };
+  } catch {
+    return null;
+  }
+}
+
+const v4Number = (address: string): number | null => {
+  const parts = address.split(".");
+  if (parts.length !== 4 || !parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255)) return null;
+  return parts.reduce((n, p) => n * 256 + Number(p), 0);
+};
+
+/** Whether `address` (IPv4, or IPv4-mapped IPv6) is inside one of `ranges` (an address or a CIDR). An address that is not IPv4 is "inside": the relay refuses what it cannot place. */
+export function inRanges(address: string | undefined, ranges: readonly string[]): boolean {
+  const n = address === undefined ? null : v4Number(address.replace(/^::ffff:/i, ""));
+  if (n === null) return true;
+  return ranges.some((range) => {
+    const [base, bits = "32"] = range.split("/");
+    const b = v4Number(base!);
+    const length = Number(bits);
+    if (b === null || !Number.isInteger(length) || length < 0 || length > 32) return false;
+    const size = 2 ** (32 - length);
+    return Math.floor(n / size) === Math.floor(b / size);
+  });
+}
+
+export const RELAY_HOST = "api.anthropic.com";
+/** The only paths the relay forwards, all POST: what the spike saw the Agent SDK send. Exact match (no `%`, no extra segment). */
+const RELAY_PATHS: ReadonlySet<string> = new Set(["/v1/messages", "/v1/messages/count_tokens"]);
+
 export interface ProxyOptions {
   allow: readonly string[];
   allowPrivate: readonly string[];
@@ -157,11 +210,13 @@ export interface ProxyOptions {
   /** A socket to an address and port the proxy has already checked. */
   connect: (port: number, address: string) => Socket;
   log: (line: string) => void;
+  /** Absent, no relay is served. */
+  relay?: RelayOptions;
 }
 
 export interface EgressProxy {
-  /** Binds the proxy on `port` and, when given, DNS refusal on `dnsPort` (UDP and TCP). Port 0 picks one. */
-  listen(port: number, dnsPort: number | null, host?: string): Promise<{ port: number; dnsPort: number | null }>;
+  /** Binds the proxy on `port` and, when given, DNS refusal on `dnsPort` (UDP and TCP) and the relay on `relayPort` (needs `relay`). Port 0 picks one. */
+  listen(port: number, dnsPort: number | null, host?: string, relayPort?: number | null): Promise<{ port: number; dnsPort: number | null; relayPort: number | null }>;
   close(): Promise<void>;
 }
 
@@ -385,6 +440,84 @@ export function createEgressProxy(options: ProxyOptions): EgressProxy {
     } else socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
   });
 
+  // ---- the relay: one listener, one upstream, one header swapped ----
+  const relayOptions = options.relay;
+  const relayRefuse = (res: ServerResponse, status: number, reason: string, method: string, path: string): void => {
+    say({ relay: { refused: reason, method, path: clean(path), status } });
+    res.writeHead(status, { Connection: "close", "Content-Length": "0" });
+    res.end();
+  };
+  function onRelayRequest(req: IncomingMessage, res: ServerResponse): void {
+    const relay = relayOptions!;
+    const method = req.method ?? "-";
+    const target = req.url ?? "";
+    // Served on the card network only: a request that came in on the egress bridge's side (a host that can route to it) is refused before anything else.
+    if (relay.denyLocal && relay.denyLocal.length > 0 && inRanges(req.socket.localAddress, relay.denyLocal)) return relayRefuse(res, 403, "local", method, target.split("?")[0]!);
+    // An allow list, not a prefix: only the two calls the SDK makes (any query string), exactly. A `%` anywhere in the path is refused, so no encoded
+    // dot or slash can reach the upstream. Each refusal logs its path: the relay smoke test shows whether the SDK needs another one.
+    const path = target.split("?")[0]!;
+    if (method !== "POST" || !RELAY_PATHS.has(path)) return relayRefuse(res, 403, "path", method, path);
+    const sent = relay.kind === "oauth" ? req.headers.authorization : req.headers["x-api-key"];
+    const wanted = relay.kind === "oauth" ? `Bearer ${relay.placeholder}` : relay.placeholder;
+    if (typeof sent !== "string" || sent !== wanted) return relayRefuse(res, 401, "placeholder", method, path);
+    const started = Date.now();
+    void (async () => {
+      let address: string;
+      let real: string;
+      try {
+        const addresses = await withTimeout(options.resolve(RELAY_HOST), RESOLVE_TIMEOUT_MS);
+        if (addresses.length === 0 || !addresses.every(isPublicV4)) return relayRefuse(res, 502, "address", method, path);
+        address = addresses[0]!;
+      } catch {
+        return relayRefuse(res, 502, "unresolved", method, path);
+      }
+      try {
+        real = await relay.credential();
+      } catch {
+        return relayRefuse(res, 502, "credential", method, path);
+      }
+      const headers: Record<string, string | string[]> = {};
+      for (const [key, value] of Object.entries(req.headers)) {
+        if (value !== undefined && !HOP.has(key) && key !== "authorization" && key !== "x-api-key" && key !== "cookie") headers[key] = value;
+      }
+      headers.host = RELAY_HOST;
+      if (relay.kind === "oauth") headers.authorization = `Bearer ${real}`;
+      else headers["x-api-key"] = real;
+      const connection = () => {
+        const raw = options.connect(443, address);
+        return relay.tls === false ? raw : tlsConnect({ socket: raw, servername: RELAY_HOST });
+      };
+      const make = relay.tls === false ? httpRequest : httpsRequest;
+      const upstream = make({ method: req.method, path: target, headers, createConnection: connection });
+      upstream.setTimeout(IDLE_TIMEOUT_MS, () => upstream.destroy());
+      res.on("close", () => upstream.destroy());
+      upstream.on("response", (response) => {
+        const out: Record<string, string | string[]> = {};
+        for (const [key, value] of Object.entries(response.headers)) if (value !== undefined && !HOP.has(key)) out[key] = value;
+        res.writeHead(response.statusCode ?? 502, out);
+        res.flushHeaders();
+        // pipeline, not pipe: when the upstream aborts or idles out, the client's response is destroyed too, so the SDK retries instead of waiting.
+        pipeline(response, res, (error) => {
+          const status = response.statusCode ?? 502;
+          const ms = Date.now() - started;
+          say({ relay: error || !response.complete ? { method, path: clean(path), status, ms, aborted: true } : { method, path: clean(path), status, ms } });
+        });
+      });
+      upstream.on("error", () => {
+        if (!res.headersSent) relayRefuse(res, 502, "upstream", method, path);
+        else res.destroy();
+      });
+      req.pipe(upstream);
+    })();
+  }
+  const relayServer: HttpServer | null = relayOptions
+    ? createHttpServer({ maxHeaderSize: MAX_HEAD_BYTES, headersTimeout: 10_000, requestTimeout: 0, keepAliveTimeout: 1 }, onRelayRequest)
+    : null;
+  if (relayServer) {
+    relayServer.maxConnections = MAX_CONNECTIONS;
+    relayServer.on("clientError", (_error: Error, socket: Socket) => socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"));
+  }
+
   const udp = createSocket("udp4");
   udp.on("message", (message, remote) => {
     const refusal = refusalFor(message);
@@ -423,19 +556,21 @@ export function createEgressProxy(options: ProxyOptions): EgressProxy {
     });
 
   return {
-    async listen(port, dnsPort, host = "0.0.0.0") {
+    async listen(port, dnsPort, host = "0.0.0.0", relayPort = null) {
       const bound = await listening(http, port, host);
-      if (dnsPort === null) return { port: bound, dnsPort: null };
+      const relayBound = relayServer && relayPort !== null ? await listening(relayServer, relayPort, host) : null;
+      if (dnsPort === null) return { port: bound, dnsPort: null, relayPort: relayBound };
       const tcpPort = await listening(dnsTcp, dnsPort, host);
       await new Promise<void>((resolve, reject) => {
         udp.once("error", reject);
         udp.bind(tcpPort, host, () => resolve());
       });
-      return { port: bound, dnsPort: tcpPort };
+      return { port: bound, dnsPort: tcpPort, relayPort: relayBound };
     },
     async close() {
       http.closeAllConnections();
-      await Promise.all([new Promise<void>((r) => http.close(() => r())), new Promise<void>((r) => dnsTcp.close(() => r())), new Promise<void>((r) => { try { udp.close(() => r()); } catch { r(); } })]);
+      relayServer?.closeAllConnections();
+      await Promise.all([new Promise<void>((r) => (relayServer?.listening ? relayServer.close(() => r()) : r())), new Promise<void>((r) => http.close(() => r())), new Promise<void>((r) => dnsTcp.close(() => r())), new Promise<void>((r) => { try { udp.close(() => r()); } catch { r(); } })]);
     },
   };
 }
@@ -449,6 +584,14 @@ export function systemResolve(): (name: string) => Promise<string[]> {
 /** IPv4 addresses of a name through getaddrinfo, which reads the hosts file: used only for the machine's own private entries. */
 export function systemLookup(): (name: string) => Promise<string[]> {
   return async (name) => (await dnsLookup(name, { family: 4, all: true })).map((entry) => entry.address);
+}
+
+/** What is wrong with a relay token file's text, named without the value; null when it is usable. */
+export function relayTokenProblem(text: string): string | null {
+  const token = text.trim();
+  if (token.length === 0) return "the token file is empty";
+  if (/[\r\n]/.test(token)) return "the token file holds a newline inside the token";
+  return null;
 }
 
 function listOf(value: string | undefined): string[] {
@@ -478,7 +621,29 @@ if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.
   };
   if (args.includes("--check")) process.exit(selfCheck() ? 0 : 1);
   const port = Number(value("--listen") ?? "3128");
+  // `--relay anthropic=<file> --relay-meta <file> --relay-listen 3129 --relay-deny-local <cidr>`: the credential, the placeholder and the kind are mounted files, never an argument or a variable (an argument shows in /proc/<pid>/cmdline).
+  const relayFile = /^anthropic=(\/.+)$/.exec(value("--relay") ?? "")?.[1];
+  const metaFile = value("--relay-meta");
+  const meta = metaFile ? parseRelayMeta(await readFile(metaFile, "utf8").catch(() => "")) : null;
+  if (value("--relay") !== undefined && (!relayFile || !meta)) {
+    process.stderr.write("egress proxy: --relay needs anthropic=<absolute file> and --relay-meta <file holding the kind and the placeholder>\n");
+    process.exit(1);
+  }
+  // The token file is checked once here, so a missing or empty one stops the proxy with a clear line instead of a 401 that looks like a revoked token. It is still read per request, so a rotated token works.
+  if (relayFile) {
+    const text = await readFile(relayFile, "utf8").catch(() => null);
+    const problem = text === null ? "the token file is missing or unreadable" : relayTokenProblem(text);
+    if (problem) {
+      process.stderr.write(`egress proxy: ${problem}\n`);
+      process.exit(1);
+    }
+  }
+  const denyLocal = listOf(value("--relay-deny-local"));
+  const relayPort = Number(value("--relay-listen") ?? "3129");
   const proxy = createEgressProxy({
+    ...(relayFile && meta
+      ? { relay: { kind: meta.kind, placeholder: meta.placeholder, denyLocal, credential: async () => (await readFile(relayFile, "utf8")).replace(/\s+/g, "") } }
+      : {}),
     allow: listOf(value("--allow")),
     allowPrivate: listOf(value("--allow-private")),
     resolve: systemResolve(),
@@ -486,8 +651,8 @@ if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.
     connect: (p, address) => netConnect(p, address),
     log: (line) => process.stdout.write(`${line}\n`),
   });
-  proxy.listen(port, 53).then(
-    () => process.stdout.write(`${JSON.stringify({ ready: { port } })}\n`),
+  proxy.listen(port, 53, "0.0.0.0", relayFile ? relayPort : null).then(
+    () => process.stdout.write(`${JSON.stringify({ ready: { port, ...(relayFile ? { relay: relayPort } : {}) } })}\n`),
     (error: unknown) => {
       process.stderr.write(`egress proxy: ${error instanceof Error ? error.message : String(error)}\n`);
       process.exit(1);

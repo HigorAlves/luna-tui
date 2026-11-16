@@ -8,12 +8,13 @@ import { z } from "zod";
 import { FACTORY_DEFAULTS } from "./config-v22.ts";
 import { decisionEngines } from "./decision-defaults.ts";
 import { type Access, type LunaTool, NO_ACCESS, access, readOnly } from "./access.ts";
-import type { EngineId } from "./engines.ts";
+import { type EngineId, resolveEngine } from "./engines.ts";
 import type { Effort, RuntimeId } from "./models.ts";
 import { AnswerScenario, AnswerStep } from "./plan.ts";
 import { DiffSummaryAnswer } from "./reports.ts";
 import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from "./questions.ts";
 import { type Bands, type KnockOutFlags, type SubScores, type Weights, knockOut, riskProduct, scorePriority } from "./scoring.ts";
+import { ForemanAnswer } from "./foreman.ts";
 import { FactProposal, ProjectContextSection } from "./economy.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
 import { SplitChild } from "./split.ts";
@@ -60,6 +61,10 @@ export const AgentRole = z.enum([
   "thread-writer",
   "code-fixer",
   "second-opinion",
+  // The foreman: answers a question about the board from a snapshot and suggests actions; no tools, no worktree.
+  "foreman",
+  // Settles triage's open questions from the code and the card; read-only.
+  "question-settler",
 ]);
 export type AgentRole = z.infer<typeof AgentRole>;
 
@@ -409,6 +414,16 @@ export type LoopRedirectAnswer = z.infer<typeof LoopRedirectAnswer>;
 export const ConversationReplyAnswer = z.object({ reply: z.string().max(1500), confidence: z.number().min(0).max(1) });
 export type ConversationReplyAnswer = z.infer<typeof ConversationReplyAnswer>;
 
+/** council_security and council_second: a short summary and findings from the member's own lane. No findings means nothing to add. */
+export const CouncilAnswer = z.object({ summary: z.string().max(300), findings: z.array(Finding).max(8) });
+export type CouncilAnswer = z.infer<typeof CouncilAnswer>;
+
+/** question_council: per question an answer or null (cannot settle it), a confidence and the places it read. */
+export const QuestionCouncilAnswer = z.object({
+  answers: z.array(z.object({ id: z.string(), answer: z.string().nullable(), confidence: z.number().min(0).max(1), evidence: z.array(z.string()).max(4) })),
+});
+export type QuestionCouncilAnswer = z.infer<typeof QuestionCouncilAnswer>;
+
 export const HelperAnswer = z.object({ answer: z.string(), findings: z.array(Finding).optional() });
 export type HelperAnswer = z.infer<typeof HelperAnswer>;
 
@@ -447,7 +462,12 @@ export interface AgentPack extends PackBase {
   effort: Effort;
   /** The prompt template under factory/prompts/. */
   template: string;
+  /** The hosts the stage may reach: `engine` its engines' (and the relay) only, `github` those and GitHub's (`gh`, issues, PRs), `full` also the repository's
+   *  hosts, registries, the QA targets and the machine's private entries. A pack that needs less than `full` says so; a missing value does not compile. */
+  network: PackNetwork;
 }
+
+export type PackNetwork = "engine" | "github" | "full";
 
 /** A pack that asks a decision model typed questions about its input: no role, tools or prompt. */
 export interface DecisionPack extends PackBase {
@@ -952,6 +972,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "high",
     answer: SetupAnswer,
     template: "setup.md",
+    network: "full",
   },
   triage: {
     id: "triage",
@@ -970,6 +991,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "high",
     answer: TriageAnswer,
     template: "triage.md",
+    network: "github",
   },
   test_design: {
     id: "test_design",
@@ -987,6 +1009,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: TestDesignAnswer,
     template: "test_design.md",
+    network: "github",
   },
   plan: {
     id: "plan",
@@ -1002,6 +1025,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "high",
     answer: PlanAnswer,
     template: "plan.md",
+    network: "github",
   },
   code_map: {
     id: "code_map",
@@ -1018,6 +1042,58 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: CodeMapAnswer,
     template: "code_map.md",
+    network: "engine",
+  },
+  // The plan council's security member: reviews a plan, not a diff; the machine runs it after plan_check on a High-risk or large card.
+  council_security: {
+    id: "council_security",
+    kind: "agent",
+    agent: "security-reviewer",
+    helpers: [],
+    skills: [],
+    access: access(READ_ONLY, { skills: false }),
+    writable: false,
+    maxTurns: 15,
+    timeoutMs: 6 * MINUTE,
+    engines: only("claude:opus"),
+    effort: "medium",
+    answer: CouncilAnswer,
+    template: "council_security.md",
+    network: "engine",
+  },
+  // The plan council's independent member, on another model.
+  council_second: {
+    id: "council_second",
+    kind: "agent",
+    agent: "second-opinion",
+    helpers: [],
+    skills: [],
+    access: access(READ_ONLY, { skills: false }),
+    writable: false,
+    maxTurns: 15,
+    timeoutMs: 6 * MINUTE,
+    engines: { default: "codex:sol", allowed: ["codex:sol", "claude:opus"], fallback: ["claude:opus"] },
+    effort: "medium",
+    answer: CouncilAnswer,
+    template: "council_second.md",
+    network: "engine",
+  },
+  // Triage's question council: settles open questions from the code before a person is asked. Read-only, no web, no gh.
+  question_council: {
+    id: "question_council",
+    kind: "agent",
+    agent: "question-settler",
+    helpers: [],
+    skills: ["code-discovery"],
+    access: access(READ_ONLY, { luna: ["card_search"] }),
+    writable: false,
+    maxTurns: 10,
+    timeoutMs: 4 * MINUTE,
+    engines: { default: "claude:sonnet", allowed: ["claude:sonnet", "codex:luna"], fallback: ["codex:luna"] },
+    effort: "medium",
+    answer: QuestionCouncilAnswer,
+    template: "question_council.md",
+    network: "engine",
   },
   plan_fast: {
     id: "plan_fast",
@@ -1033,6 +1109,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: PlanAnswer,
     template: "plan_fast.md",
+    network: "github",
   },
   test_design_fast: {
     id: "test_design_fast",
@@ -1048,6 +1125,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: TestDesignAnswer,
     template: "test_design_fast.md",
+    network: "github",
   },
   implementing: {
     id: "implementing",
@@ -1064,6 +1142,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: ImplementingAnswer,
     template: "implementing.md",
+    network: "full",
   },
   build_tests: {
     id: "build_tests",
@@ -1080,6 +1159,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: BuildTestsAnswer,
     template: "build_tests.md",
+    network: "full",
   },
   verifying: {
     id: "verifying",
@@ -1100,6 +1180,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "high",
     answer: VerifyingAnswer,
     template: "verifying.md",
+    network: "full",
   },
   e2e: {
     id: "e2e",
@@ -1116,6 +1197,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: E2eAnswer,
     template: "e2e.md",
+    network: "full",
   },
   evidence: {
     id: "evidence",
@@ -1131,6 +1213,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: EvidenceAnswer,
     template: "evidence.md",
+    network: "full",
   },
   // Evidence's video pipeline. They run in the evidence state (the machine's RUNS_IN) and sit after `evidence` so the state still picks that one.
   video_script: {
@@ -1148,6 +1231,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: VideoScriptAnswer,
     template: "video_script.md",
+    network: "engine",
   },
   recording: {
     id: "recording",
@@ -1163,6 +1247,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: RecordingAnswer,
     template: "recording.md",
+    network: "full",
   },
   video_qa: {
     id: "video_qa",
@@ -1180,6 +1265,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: VideoQaAnswer,
     template: "video_qa.md",
+    network: "engine",
   },
   video_fix: {
     id: "video_fix",
@@ -1196,6 +1282,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: VideoScriptAnswer,
     template: "video_fix.md",
+    network: "engine",
   },
   ci_watch: {
     id: "ci_watch",
@@ -1215,6 +1302,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: CiWatchAnswer,
     template: "ci_watch.md",
+    network: "github",
   },
   reviewing_memory: {
     id: "reviewing_memory",
@@ -1230,6 +1318,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "high",
     answer: ReviewingMemoryAnswer,
     template: "reviewing_memory.md",
+    network: "engine",
   },
   // Runs in the shipping state (the machine's RUNS_IN) and sits after reviewing_memory so the state still picks that one.
   pr_reply: {
@@ -1246,6 +1335,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: PrReplyAnswer,
     template: "pr_reply.md",
+    network: "engine",
   },
   // Drafts the decline to a ticket from the ticket and its assessment; runs on demand, never in a task state, and its text is only ever a draft. It reads hostile text, so it has no tools at all and one turn.
   ticket_reply: {
@@ -1262,6 +1352,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: TicketReplyAnswer,
     template: "ticket_reply.md",
+    network: "engine",
   },
   // Writes the note that redirects a run the loop guard found stuck, from the digest of its recent actions and the judge's cause as data; on demand, never in a task state. No tools at all and one turn.
   loop_redirect: {
@@ -1278,6 +1369,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: LoopRedirectAnswer,
     template: "loop_redirect.md",
+    network: "engine",
   },
   // Proposes the facts a repository's last runs ground, from their digests as data; on demand after every few closed cards, never in a task state. No tools at all and one turn.
   fact_propose: {
@@ -1294,6 +1386,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: FactProposal,
     template: "fact_propose.md",
+    network: "engine",
   },
   // Drafts the reply to a Slack thread from the card's state, its Evidence Pack and the docs as data; on demand, never in a task state, only ever a draft. It reads hostile text: no tools at all.
   conversation_reply: {
@@ -1310,6 +1403,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: ConversationReplyAnswer,
     template: "conversation_reply.md",
+    network: "engine",
   },
   // Proposes the children of a split from the origin as data; on demand, in the decomposition loop, never in a task state. It reads hostile text: no tools at all.
   decompose: {
@@ -1326,6 +1420,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: DecomposeAnswer,
     template: "decompose.md",
+    network: "engine",
   },
   reviewing: {
     id: "reviewing",
@@ -1342,6 +1437,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "high",
     answer: PrReviewAnswer,
     template: "reviewing.md",
+    network: "engine",
   },
   addressing: {
     id: "addressing",
@@ -1358,6 +1454,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: PrAddressAnswer,
     template: "addressing.md",
+    network: "full",
   },
   jira_intake: {
     id: "jira_intake",
@@ -1376,6 +1473,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: JiraIntakeAnswer,
     template: "jira_intake.md",
+    network: "engine",
   },
   slack_triage: {
     id: "slack_triage",
@@ -1393,6 +1491,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: SlackTriageAnswer,
     template: "slack_triage.md",
+    network: "engine",
   },
   eval_judge: {
     id: "eval_judge",
@@ -1410,6 +1509,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: EvalJudgeAnswer,
     template: "eval_judge.md",
+    network: "engine",
   },
   chat_triage: {
     id: "chat_triage",
@@ -1427,6 +1527,25 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: ChatTriageAnswer,
     template: "chat_triage.md",
+    network: "engine",
+  },
+  foreman: {
+    id: "foreman",
+    kind: "agent",
+    // Answers a question about the board from a snapshot (POST /foreman) and suggests actions the person confirms on the board.
+    // No tools at all: it reads card text, so it can reach nothing, and the board makes every call.
+    agent: "foreman",
+    helpers: [],
+    skills: [],
+    access: NO_ACCESS,
+    writable: false,
+    maxTurns: 2,
+    timeoutMs: 2 * MINUTE,
+    engines: { default: "claude:haiku", allowed: ["claude:haiku", "codex:luna"], fallback: ["codex:luna", "claude:haiku"] },
+    effort: "low",
+    answer: ForemanAnswer,
+    template: "foreman.md",
+    network: "engine",
   },
   triage_signals: {
     id: "triage_signals",
@@ -1574,6 +1693,15 @@ export function classificationLine(c: TaskClassification): string {
   return `${c.kind} · ${c.area ?? c.typeOfWork ?? "unknown"} · ${c.ready ? "ready" : "not ready"} · size ${levelOf(V1_SIZE, c.size)} · lowest confidence ${c.confidence.toFixed(2)} (${c.model})${extra}`;
 }
 
+/** Why `engine` cannot run `pack` at `effort`, or null: a decision pack takes no effort, and an
+ *  engine runs only the efforts its model supports. */
+export function effortProblem(pack: PackId, engine: EngineId, effort: Effort): string | null {
+  if (PACKS[pack].kind === "decision") return `${pack} is a decision pack and takes no effort`;
+  const supported = resolveEngine(engine).caps.effort;
+  if (supported.includes(effort)) return null;
+  return `${engine} does not support effort ${effort} (supports: ${supported.join(", ") || "none"})`;
+}
+
 /** A helper as the pack its child run is: the helper's role on its engine, the parent's access
  *  narrowed to reading, no helpers of its own (delegation has depth 1), no skills, the parent's
  *  effort, and the helper's reply as its answer. Its id stays the parent's: it has no pack of its own. */
@@ -1592,6 +1720,7 @@ export function helperPack(parent: AgentPack, helper: { role: AgentRole; engine:
     effort: parent.effort,
     answer: HelperAnswer,
     template: "helper.md",
+    network: parent.network,
   };
 }
 

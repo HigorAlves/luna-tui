@@ -226,13 +226,15 @@ function next(task: Snapshot, event: PipelineEvent): Move {
       break;
     case "start":
       // A feature on a repo with no luna.yaml yet runs the setup gate before its own entry.
-      if (state === "draft") return run(task.route === "feature" && event.setup ? "setup" : ENTRY[task.route], retries);
+      if (state === "draft" && task.route !== "config") return run(task.route === "feature" && event.setup ? "setup" : ENTRY[task.route], retries);
       break;
     case "merged":
       if (TERMINAL.has(state)) break;
       return done(retries);
     case "needs_context":
       if ((state === "draft" || state === "awaiting_setup") && task.route === "feature") return wait("awaiting_setup", retries);
+      // A config proposal is made already at the gate: no stage runs, the new luna.yaml is what waits.
+      if (state === "draft" && task.route === "config") return wait("awaiting_setup", retries);
       break;
     case "context_given":
       if (state === "awaiting_setup" && task.route === "feature") return run(event.setup ? "setup" : ENTRY[task.route], retries);
@@ -246,7 +248,7 @@ function next(task: Snapshot, event: PipelineEvent): Move {
     case "approved":
       return approved(task, event);
     case "sent_back":
-      if (state === "awaiting_setup") return run("setup", retries);
+      if (state === "awaiting_setup" && task.route !== "config") return run("setup", retries);
       // A review verdict sent back is dropped: the comment review already went out.
       if (task.route === "review" && state === "awaiting_ship") return done(retries);
       if (task.route !== "feature") break;
@@ -282,7 +284,8 @@ function gateStage(task: Snapshot): TaskState | null {
 }
 
 /** The first stage each route runs when a task starts. */
-const ENTRY: Record<TaskRoute, TaskState> = {
+/** A `config` route has none: its card is made at its gate and never starts a stage. */
+const ENTRY: Record<Exclude<TaskRoute, "config">, TaskState> = {
   feature: "triage",
   setup: "setup",
   ci_fix: "ci_watch",
@@ -299,7 +302,7 @@ function approved(task: Snapshot, event: PipelineEvent): Move {
     throw new TransitionError(task, event);
   }
   // The setup gate: a setup-only task is done; a feature goes on to its own entry.
-  if (state === "awaiting_setup") return task.route === "setup" ? done(retries) : run("triage", retries);
+  if (state === "awaiting_setup") return task.route === "setup" || task.route === "config" ? done(retries) : run("triage", retries);
   if (task.route !== "feature") throw new TransitionError(task, event);
   switch (state) {
     // The one approval, after the plan stage's scenarios; awaiting_test_check is the legacy gate.

@@ -5,7 +5,7 @@ import { APP_ALIAS, PROBE_SCRIPT, appArgs, probeArgs, removeLeftoverApps } from 
 
 const secret = ["app", "key", "k".repeat(10)].join("-");
 const card = { name: "hardness-card-x", dns: "172.30.0.2", containerArgs: (a: string[] = []) => ["--network", "hardness-card-x", "--dns", "172.30.0.2", "-e", `NO_PROXY=localhost,${a.join(",")}`], blocked: async () => [], teardown: async () => {} };
-const spec = { name: "hardness-abcd1234-app-1", image: "repo-image:1", worktree: "/ws/card", command: "npm run start", port: 3000, serviceEnv: { DATABASE_URL: "postgres://db/app" }, secrets: { APP_KEY: secret }, limits: { cpu: 6, memoryGb: 12 }, cacheVolume: "hardness-cache-repo", cardNetwork: card as never, services: { db: { image: "pg" } } };
+const spec = { name: "hardness-abcd1234-app-1", image: "repo-image:1", worktree: "/ws/card", command: "npm run start", port: 3000, serviceEnv: { DATABASE_URL: "postgres://db/app" }, secrets: { APP_KEY: secret }, secretsDir: "/run/s1", limits: { cpu: 6, memoryGb: 12 }, cacheVolume: "hardness-cache-repo", cardNetwork: card as never, services: { db: { image: "pg" } } };
 
 describe("appArgs", () => {
   const args = appArgs(spec);
@@ -25,10 +25,13 @@ describe("appArgs", () => {
 
   it("starts the command through sh, holds no credential variable, names its secret without the value, and the network gives it no proxy of the agent", () => {
     const at = args.indexOf("--entrypoint");
-    expect(args.slice(at, at + 5)).toEqual(["--entrypoint", "sh", "repo-image:1", "-c", "npm run start"]);
+    expect(args.slice(at, at + 6)).toEqual(["--entrypoint", "/opt/luna/bin/luna-env", "repo-image:1", "sh", "-c", "npm run start"]);
     for (const name of ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AI_GATEWAY_API_KEY", "TYPESAFE_API_KEY"]) expect(args.join(" ")).not.toContain(name);
-    expect(args).toEqual(expect.arrayContaining(["-e", "APP_KEY"]));
-    for (const a of args) expect(a).not.toContain(secret);
+    expect(args).toEqual(expect.arrayContaining(["-v", "/run/s1:/run/luna-secrets:ro"]));
+    for (const a of args) {
+      expect(a).not.toContain(secret);
+      expect(a).not.toBe("APP_KEY");
+    }
   });
 });
 

@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { AGENT_PACKS, ENGINES, EngineBudgets, EngineId, MODELS, type ModelEntry, PACKS, STRONGER, StageInput, credentialOwner, engineBudgetKeyProblem, helperPack, helpersOn, readOnly, resolveEngine, retired, stronger } from "./index.ts";
+import { AGENT_PACKS, ENGINES, EngineBudgets, EngineId, MODELS, type ModelEntry, PACKS, STRONGER, StageInput, credentialOwner, effortProblem, engineBudgetKeyProblem, helperPack, helpersOn, readOnly, resolveEngine, retired, stronger } from "./index.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 
@@ -204,3 +204,18 @@ describe("monthly caps per engine", () => {
   });
 });
 
+
+describe("effortProblem", () => {
+  it("accepts an effort the engine supports", () => {
+    expect(effortProblem("plan", "claude:opus", "high")).toBeNull();
+  });
+
+  // Every agent model supports every effort today, so the engine with none (a decision engine) is the case that lacks one.
+  it("names the engine and what it supports when it lacks the effort asked for", () => {
+    expect(effortProblem("plan", "jev", "low")).toBe("jev does not support effort low (supports: none)");
+  });
+
+  it("refuses an effort on a decision pack", () => {
+    expect(effortProblem("risk_score", "jev", "low")).toBe("risk_score is a decision pack and takes no effort");
+  });
+});

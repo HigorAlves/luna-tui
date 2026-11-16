@@ -2,10 +2,11 @@
 // run and each return from awaiting_answers) with the answers so far in the issue it reads. The reading replaces
 // the card's classification; a classifier that is absent, fails or answers nothing leaves the previous one and
 // says so, and triage goes on.
-import { type ClassifyOptions, type DecisionOverrides, FACTORY_DEFAULTS, type FactoryConfig, type IssueContext, type NeedsInputItem, RecordDraft, type TaskClassification, TriageOutcome, TriageRecord } from "@hardness/contracts";
+import { type ClassifyOptions, type DecisionOverrides, FACTORY_DEFAULTS, type FactoryConfig, type IssueContext, type NeedsInputItem, QuestionCouncilAnswer, type QuestionsContext, RecordDraft, type TaskClassification, TriageOutcome, TriageRecord } from "@hardness/contracts";
 
 import { type Located, fastLane, ownersCheck } from "../../domain/fast-lane.ts";
 import { goalRefOf } from "../../domain/goal-ref.ts";
+import { trustOf } from "../../domain/trust.ts";
 import { composeRecord, recordComplete } from "../../domain/triage-record.ts";
 import { askedQuestions, triageVerdicts } from "../../domain/triage-policy.ts";
 
@@ -21,7 +22,45 @@ export interface TriageSignalDeps {
   graph?: { locate(repoPath: string, text: string, options?: { staleCommits?: number }): Promise<Exclude<Located, "failed" | null> | null> };
   save: (id: string, patch: Partial<TaskRow>) => Promise<void>;
   log?: (line: string) => void;
+  /** The question council (the `question_council` pack as a sub-run): settles open questions from the code before the person is asked. Absent: the person is asked, as before. */
+  council?: ((context: StageContext, questions: QuestionsContext) => Promise<StageResult>) | undefined;
 }
+
+/** A question the council settled: its answer, how sure it was and the places it read. */
+interface Settled {
+  question: string;
+  answer: string;
+  confidence: number;
+  evidence: string[];
+  /** The machine's field this question was (`kind`, `size`, `risk`); absent for the agent's own questions. */
+  field?: string;
+}
+
+/** Results of an entry that ran again after the council settled something: the stage is over for the entry that asked. */
+const finished = new WeakSet<StageResult>();
+
+/** Urgency and archive are never the council's: they always reach the person. */
+const COUNCIL_FIELDS = new Set(["kind", "size", "risk"]);
+/** The name a field has in a repo's `policy.decisions.triage_signals`. */
+const QUESTION_OF: Record<string, string> = { kind: "kind", size: "size", risk: "risk_prelim" };
+/** The council reads at most this many questions in one run. */
+const MAX_COUNCIL_QUESTIONS = 6;
+
+const settledOf = (a: StageContext["approvals"][number]): Settled[] => {
+  const list = (a.requested as { settledByCouncil?: unknown } | undefined)?.settledByCouncil;
+  return a.decision === "answered" && Array.isArray(list) ? (list as Settled[]) : [];
+};
+
+/** What the council settled at the gates so far, by question. */
+const councilAnswersOf = (approvals: StageContext["approvals"]): Map<string, Settled> => new Map(approvals.flatMap(settledOf).map((s) => [s.question, s]));
+
+/** An answered gate carries what the council settled beside what the person answered: both are read as the person's answers are. The person's own answer to a question wins. */
+const withCouncilAnswers = (approvals: StageContext["approvals"]): StageContext["approvals"] =>
+  approvals.map((a) => {
+    const settled = settledOf(a);
+    if (settled.length === 0) return a;
+    return { ...a, response: { ...a.response, answers: { ...Object.fromEntries(settled.map((s) => [s.question, s.answer])), ...((a.response?.answers ?? {}) as Record<string, unknown>) } } };
+  });
 
 const MAX_ANSWERS = 20;
 
@@ -51,10 +90,16 @@ function answersOf(approvals: StageContext["approvals"]): NonNullable<IssueConte
 function recordOf(context: StageContext, result: StageResult, task: TaskRow, decision: TriageOutcome, ownersNotChecked?: string): Partial<TriageRecord> | null {
   const draft = RecordDraft.safeParse(result.detail?.record);
   if (!draft.success) return null;
+  const council = councilAnswersOf(context.approvals);
   const qa = context.approvals.flatMap((a) => {
     if (a.decision !== "answered") return [];
     const answers = (a.response?.answers ?? {}) as Record<string, unknown>;
-    return Object.entries(answers).map(([question, answer]) => ({ question, answer: typeof answer === "string" ? answer : null }));
+    return Object.entries(answers).map(([question, answer]) => {
+      const text = typeof answer === "string" ? answer : null;
+      const by = council.get(question);
+      // The council's mark stays only while the answer is the council's: a person who answered the same question owns it.
+      return by && by.answer === text ? { question, answer: text, by: "council" as const, evidence: by.evidence, ...(by.field ? { field: by.field } : {}) } : { question, answer: text };
+    });
   });
   return composeRecord({
     draft: draft.data,
@@ -73,7 +118,9 @@ function recordOf(context: StageContext, result: StageResult, task: TaskRow, dec
 
 export function withTriageSignals(triage: StageRunner, deps: TriageSignalDeps): StageRunner {
   const log = deps.log ?? ((line: string) => console.warn(line));
-  return async (context) => {
+  /** One entry to the stage. The council runs at most once in it: what it settles is read as answers, and the entry runs again with them. */
+  const entry = async (raw: StageContext, council: { ran: boolean; settled: Settled[]; carry: Array<{ question: NeedsInputItem; asked: { field: string; guess: string; confidence: number } }> }): Promise<StageResult> => {
+    const context: StageContext = { ...raw, approvals: withCouncilAnswers(raw.approvals) };
     const { task } = context;
     const rounds = roundsOf(context.approvals);
     let classification: TaskClassification | null = null;
@@ -94,7 +141,9 @@ export function withTriageSignals(triage: StageRunner, deps: TriageSignalDeps): 
     }
     const caps = (repo?.factory ?? FACTORY_DEFAULTS).triage;
     /** Questions for the person: at most `max_questions` a round, and past `max_rounds` a person is asked to take over instead. */
-    const ask = (questions: NeedsInputItem[], asked?: Array<{ field: string; guess: string; confidence: number }>, from?: StageResult): StageResult => {
+    const ask = async (questions: NeedsInputItem[], asked?: Array<{ field: string; guess: string; confidence: number }>, from?: StageResult): Promise<StageResult> => {
+      const again = await consult(questions, asked);
+      if (again) return again;
       if (rounds >= caps.max_rounds) {
         const open = questions.map((q) => q.question).join("; ");
         return { ...(from ?? {}), outcome: "escalated", needsInput: undefined, detail: { ...from?.detail, reason: `triage still needs answers after ${rounds} rounds of questions: ${open}`, escalation: "other" } };
@@ -104,8 +153,57 @@ export function withTriageSignals(triage: StageRunner, deps: TriageSignalDeps): 
         ...(from ?? {}),
         outcome: "needs_input",
         needsInput: kept,
-        detail: { ...(from?.detail ?? { summary: `${questions.length} signal${questions.length === 1 ? " is" : "s are"} under the confidence bar: ${asked?.map((a) => a.field).join(", ")}` }), askedBy: "triage", questionsBy: asked ? "machine" : "agent", ...(asked ? { asked: asked.slice(0, caps.max_questions) } : {}) },
+        detail: { ...(from?.detail ?? { summary: `${questions.length} signal${questions.length === 1 ? " is" : "s are"} under the confidence bar: ${asked?.map((a) => a.field).join(", ")}` }), askedBy: "triage", questionsBy: asked ? "machine" : "agent", ...(asked ? { asked: asked.slice(0, caps.max_questions) } : {}), ...(council.settled.length > 0 ? { settledByCouncil: council.settled } : {}) },
       };
+    };
+    /** The council reads every open question first, before the cap and before the person. What it settles at or over the bar becomes answers
+     *  and the entry runs again (null); a council that fails, or settles nothing, leaves every question to the person. */
+    const consult = async (questions: NeedsInputItem[], asked?: Array<{ field: string; guess: string; confidence: number }>): Promise<StageResult | null> => {
+      const councilCaps = caps.council ?? FACTORY_DEFAULTS.triage.council;
+      if (council.ran || !deps.council || !councilCaps.enabled) return null;
+      // A stranger's card is not read by the council: its questions are the person's.
+      if (trustOf(task) === "untrusted") {
+        council.ran = true;
+        await context.note?.("this card is untrusted, so the question council did not run; every question goes to you").catch(() => {});
+        return null;
+      }
+      const open = questions
+        .map((q, i) => ({ id: `q${i + 1}`, question: q.question, recommended: q.recommended, field: asked?.[i]?.field ?? null, guess: asked?.[i]?.guess ?? null, confidence: asked?.[i]?.confidence ?? null }))
+        .filter((q) => q.field === null || COUNCIL_FIELDS.has(q.field))
+        .slice(0, MAX_COUNCIL_QUESTIONS);
+      if (open.length === 0) return null;
+      council.ran = true;
+      const failed = async (why: string): Promise<null> => {
+        log(`question council for task ${task.id}: ${why}`);
+        await context.note?.(`the question council gave no answer (${why}); every question goes to you`).catch(() => {});
+        return null;
+      };
+      let ran: StageResult;
+      try {
+        ran = await deps.council({ ...context, runId: `${context.runId}-questions`, started: undefined, resume: undefined, engine: undefined }, { questions: open, card: { title: task.title, description: task.description }, answers: answersOf(context.approvals) });
+      } catch (error) {
+        return failed(error instanceof Error ? error.message : String(error));
+      }
+      const parsed = QuestionCouncilAnswer.safeParse({ answers: ran.detail?.answers });
+      if (ran.outcome !== "pass" || !parsed.success) return failed(ran.outcome !== "pass" ? String(ran.detail?.error ?? ran.detail?.reason ?? ran.outcome).slice(0, 200) : "its answer was not valid");
+      const settled: Settled[] = open.flatMap((q) => {
+        const given = parsed.data.answers.find((a) => a.id === q.id);
+        if (!given || given.answer === null || given.answer.trim() === "") return [];
+        // A machine question has its field's own bar (the repo's per-question bar first); the agent's questions have the council's.
+        const own = q.field === null ? undefined : (repo?.decisions?.triage_signals?.[QUESTION_OF[q.field]!]?.proceed ?? caps.confidence[q.field as keyof typeof caps.confidence]);
+        return given.confidence >= (own ?? councilCaps.bar) ? [{ question: q.question.slice(0, MAX_ANSWER_CHARS), answer: given.answer.slice(0, MAX_ANSWER_CHARS), confidence: given.confidence, evidence: given.evidence, ...(q.field === null ? {} : { field: q.field }) }] : [];
+      });
+      if (settled.length === 0) return null;
+      council.settled.push(...settled);
+      // The machine's questions the council left open: if the re-run's classifier gives no reading, these are still the person's.
+      const done = new Set(settled.map((s) => s.question));
+      council.carry = questions.flatMap((q, i) => (asked?.[i] && !done.has(q.question.slice(0, MAX_ANSWER_CHARS)) ? [{ question: q, asked: asked[i]! }] : []));
+      const now = new Date();
+      const answered = { id: "question-council", taskId: task.id, kind: "awaiting_answers", requested: { settledByCouncil: settled }, decision: "answered", reason: null, response: { answers: {} }, createdAt: now, decidedAt: now } as unknown as StageContext["approvals"][number];
+      const rerun = await entry({ ...raw, approvals: [...raw.approvals, answered] }, council);
+      // The entry that ran again has finished the stage: the caller that asked must return this result as it is.
+      finished.add(rerun);
+      return rerun;
     };
     const enriched = classification ? { ...context, task: { ...task, classification } } : context;
     // A field under its flag bar is the person's to settle, not the agent's: the stage stops and asks, and the signals
@@ -113,7 +211,10 @@ export function withTriageSignals(triage: StageRunner, deps: TriageSignalDeps): 
     if (classification) {
       const verdicts = triageVerdicts(classification, (repo?.factory ?? FACTORY_DEFAULTS).triage, { ...(repo?.decisions?.triage_signals ? { overrides: repo.decisions.triage_signals } : {}) });
       const asked = askedQuestions(verdicts).sort((x, y) => x.confidence - y.confidence);
-      if (asked.length > 0) return ask(asked.map(({ question, recommended }) => ({ question, recommended })), asked.map(({ field, guess, confidence }) => ({ field, guess, confidence })));
+      if (asked.length > 0) return await ask(asked.map(({ question, recommended }) => ({ question, recommended })), asked.map(({ field, guess, confidence }) => ({ field, guess, confidence })));
+    } else if (council.carry.length > 0) {
+      // The council settled some questions and this reading failed: the ones it left open are not dropped.
+      return await ask(council.carry.map((c) => c.question), council.carry.map((c) => c.asked));
     }
     /** The decision: the agent's own for a reply or an archive; otherwise `fast_lane` only when the machine's rule says so, else `plan`. */
     const laneOf = async (ctx: StageContext, res: StageResult): Promise<{ decision: TriageOutcome; note?: string | undefined; ownersNotChecked?: string | undefined }> => {
@@ -135,9 +236,10 @@ export function withTriageSignals(triage: StageRunner, deps: TriageSignalDeps): 
     /** One run of the agent, its questions held to the bounds. */
     const runAgent = async (ctx: StageContext): Promise<StageResult> => {
       const agent = await triage(ctx);
-      return agent.outcome === "needs_input" && agent.needsInput?.length ? ask(agent.needsInput, undefined, agent) : agent;
+      return agent.outcome === "needs_input" && agent.needsInput?.length ? await ask(agent.needsInput, undefined, agent) : agent;
     };
     let result = await runAgent(enriched);
+    if (finished.has(result)) return result;
     let finalContext = enriched;
     if (result.outcome === "pass") {
       // The machine composes the record and checks it: an incomplete one sends the agent round once with what is missing, then a person decides.
@@ -148,6 +250,7 @@ export function withTriageSignals(triage: StageRunner, deps: TriageSignalDeps): 
         const guidance = { id: "triage-record", taskId: task.id, kind: "triage", requested: {}, decision: "sent_back", reason: `The record you wrote is incomplete: ${check.missing.join(", ")}. Write the summary (at most 120 words), the goal sentence, the decision and the reason in full.`, response: null, createdAt: new Date(), decidedAt: new Date() } as unknown as StageContext["approvals"][number];
         finalContext = { ...enriched, approvals: [...enriched.approvals, guidance] };
         result = await runAgent(finalContext);
+        if (finished.has(result)) return result;
         if (result.outcome === "pass") {
           const again = await laneOf(finalContext, result);
           lane.decision = again.decision;
@@ -174,4 +277,5 @@ export function withTriageSignals(triage: StageRunner, deps: TriageSignalDeps): 
     }
     return result;
   };
+  return (context) => entry(context, { ran: false, settled: [], carry: [] });
 }

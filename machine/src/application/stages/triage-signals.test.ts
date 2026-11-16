@@ -5,7 +5,7 @@ import type { TaskRow } from "../../domain/task.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { withTriageSignals } from "./triage-signals.ts";
 
-const task = (over: Partial<TaskRow> = {}): TaskRow => ({ id: "t1", title: "Which Postgres?", description: "Is 14 fine?", criteria: [], repoPath: "/repo", source: { kind: "github", repo: "o/n", number: 7, url: "https://github.com/o/n/issues/7" }, classification: null, ...over }) as unknown as TaskRow;
+const task = (over: Partial<TaskRow> = {}): TaskRow => ({ id: "t1", title: "Which Postgres?", description: "Is 14 fine?", criteria: [], repoPath: "/repo", source: { kind: "github", repo: "o/n", number: 7, url: "https://github.com/o/n/issues/7", authorAssociation: "MEMBER" }, classification: null, ...over }) as unknown as TaskRow;
 const context = (over: Partial<StageContext> = {}): StageContext => ({ task: task(), stage: "triage", attempt: 1, runId: "r1", approvals: [], signal: new AbortController().signal, ...over });
 const classification = {
   kind: "bug", ready: true, size: 1, sizeBucket: "S", typeOfWork: "backend", priority: "P2", riskPrelim: "low", subScores: { who: 2, what: 2, impact: 2, time: 1, demand: 1 },
@@ -332,5 +332,176 @@ describe("withTriageSignals's source labels", () => {
     await runner(context({ task: jira }));
     await runner(context({ task: task({ source: null }) }));
     expect(seen.map((i) => i.labels)).toEqual([["security", "bug"], ["security"], []]);
+  });
+});
+
+describe("withTriageSignals and the question council", () => {
+  const sub = { answer: 1, confidence: 0.9 };
+  const reading = (signals: NonNullable<TaskRow["classification"]>["signals"]) => ({
+    ...classification, kind: "bug", kindConfidence: 0.9, sizeBucket: "S" as const, priority: "P2" as const, riskPrelim: "low" as const, confidence: 0.5,
+    signals: { kind: { answer: "bug", confidence: 0.9 }, size: { answer: "S", confidence: 0.8 }, who: sub, what: sub, impact: sub, time: sub, demand: sub, risk_prelim: { answer: "low", confidence: 0.9 }, archive: { answer: false, confidence: 0.95 }, ...signals },
+  });
+  const kindOpen = reading({ kind: { answer: "bug", confidence: 0.5 } });
+  const kindAndRiskOpen = reading({ kind: { answer: "bug", confidence: 0.5 }, risk_prelim: { answer: "low", confidence: 0.4 } });
+  const settled = reading({});
+  const KIND = "Is this a bug or a feature? The model read it as a bug, 0.50";
+  const RISK = "How risky is the change: low, medium or high? The model read it as low, 0.40";
+  type Asked = Parameters<NonNullable<Parameters<typeof withTriageSignals>[1]["council"]>>[1];
+  /** A council that answers the questions whose text it has an answer for; every other question gets `null`. */
+  const councilOf = (answers: Record<string, { answer: string | null; confidence: number; evidence?: string[] }>, seen: Asked[] = []) => async (_context: StageContext, asked: Asked): Promise<StageResult> => {
+    seen.push(asked);
+    return { outcome: "pass", detail: { answers: asked.questions.map((q) => ({ id: q.id, answer: null, confidence: 0, evidence: [], ...answers[q.question] })) } };
+  };
+  /** The signals read the answers so far: with any, the reading is settled; without, it is `open`. */
+  const classifyBy = (open: typeof kindOpen) => async (issue: { answers?: unknown[] | undefined }) => (issue.answers?.length ? settled : open);
+
+  it("settles every question from the code: the person is not asked, and the signals and the agent run again with the answers", async () => {
+    const issues: Array<{ answers?: unknown[] | undefined }> = [];
+    const decisions: unknown[] = [];
+    const saved: Array<{ record?: unknown }> = [];
+    const inner: StageRunner = async (c) => {
+      decisions.push(c.approvals.filter((a) => a.decision === "answered").map((a) => a.response));
+      return agentPass();
+    };
+    const classify = async (issue: { answers?: unknown[] | undefined }) => (issues.push(issue), classifyBy(kindOpen)(issue));
+    const council = councilOf({ [KIND]: { answer: "bug", confidence: 0.92, evidence: ["src/app.ts:12"] } });
+    const result = await withTriageSignals(inner, { classify: classify as never, council, save: async (_id, patch) => void saved.push(patch as never) })(context());
+    expect(result.outcome).toBe("pass");
+    expect(issues.map((i) => i.answers ?? [])).toEqual([[], [{ question: KIND, answer: "bug" }]]);
+    expect(decisions).toEqual([[expect.objectContaining({ answers: { [KIND]: "bug" } })]]);
+    const record = TriageRecord.parse(saved.find((p) => p.record)!.record);
+    expect(record.qa).toEqual([{ question: KIND, answer: "bug", by: "council", field: "kind", evidence: ["src/app.ts:12"] }]);
+  });
+
+  it("asks only what is left, and tells the person what the council settled so they can overrule it", async () => {
+    const seen: Asked[] = [];
+    const council = councilOf({ [KIND]: { answer: "bug", confidence: 0.9, evidence: ["a.ts:1", "b.ts:2"] } }, seen);
+    // After the answer the kind is sure, the risk is still open.
+    const classify = async (issue: { answers?: unknown[] | undefined }) => (issue.answers?.length ? reading({ risk_prelim: { answer: "low", confidence: 0.4 } }) : kindAndRiskOpen);
+    const result = await withTriageSignals(async () => agentPass(), { classify: classify as never, council, save: async () => {} })(context());
+    expect(seen).toHaveLength(1);
+    expect(result.outcome).toBe("needs_input");
+    expect(result.needsInput).toEqual([{ question: RISK, recommended: "low" }]);
+    expect(result.detail).toMatchObject({ askedBy: "triage", settledByCouncil: [{ question: KIND, answer: "bug", confidence: 0.9, evidence: ["a.ts:1", "b.ts:2"] }] });
+  });
+
+  it("runs the council once per entry, with every open question, the machine's carrying field, guess and confidence", async () => {
+    const seen: Asked[] = [];
+    const result = await withTriageSignals(async () => agentPass(), { classify: async () => kindAndRiskOpen, council: councilOf({}, seen), save: async () => {} })(context());
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.questions).toEqual([
+      { id: "q1", question: RISK, recommended: "low", field: "risk", guess: "low", confidence: 0.4 },
+      { id: "q2", question: KIND, recommended: "bug", field: "kind", guess: "bug", confidence: 0.5 },
+    ]);
+    expect(seen[0]!.card).toEqual({ title: "Which Postgres?", description: "Is 14 fine?" });
+    expect(result.needsInput).toHaveLength(2);
+    expect(result.detail?.settledByCouncil).toBeUndefined();
+  });
+
+  it("sends the agent's own questions with nulls, and runs the agent again with what the council settled", async () => {
+    const seen: Asked[] = [];
+    let runs = 0;
+    const inner: StageRunner = async (c) =>
+      ++runs === 1 ? { outcome: "needs_input", needsInput: [{ question: "Which db?", recommended: null }], detail: { summary: "s" } } : (expect(c.approvals.some((a) => (a.response?.answers as Record<string, string> | undefined)?.["Which db?"] === "sqlite")).toBe(true), agentPass());
+    const result = await withTriageSignals(inner, { classify: async () => settled, council: councilOf({ "Which db?": { answer: "sqlite", confidence: 0.85, evidence: ["db.ts:3"] } }, seen), save: async () => {} })(context());
+    expect(seen[0]!.questions).toEqual([{ id: "q1", question: "Which db?", recommended: null, field: null, guess: null, confidence: null }]);
+    expect(runs).toBe(2);
+    expect(result.outcome).toBe("pass");
+  });
+
+  it("never sends an urgency or an archive question: they always reach the person", async () => {
+    const seen: Asked[] = [];
+    const open = reading({ kind: { answer: "bug", confidence: 0.5 }, who: { answer: 1, confidence: 0.3 }, archive: { answer: true, confidence: 0.5 } });
+    const result = await withTriageSignals(async () => agentPass(), { classify: async () => open, council: councilOf({}, seen), save: async () => {} })(context());
+    expect(seen[0]!.questions.map((q) => q.field)).toEqual(["kind"]);
+    expect(result.needsInput?.map((q) => q.question)).toEqual(expect.arrayContaining([expect.stringContaining("urgent"), expect.stringContaining("archived")]));
+    const onlyPerson = await withTriageSignals(async () => agentPass(), { classify: async () => reading({ who: { answer: 1, confidence: 0.3 } }), council: councilOf({}, seen), save: async () => {} })(context());
+    expect(seen).toHaveLength(1);
+    expect(onlyPerson.outcome).toBe("needs_input");
+  });
+
+  it("asks the machine's questions the council did not settle when the re-run's classifier fails: urgency still reaches the person", async () => {
+    const open = reading({ kind: { answer: "bug", confidence: 0.5 }, who: { answer: 1, confidence: 0.3 } });
+    let calls = 0;
+    const classify = async () => {
+      if (++calls > 1) throw new Error("classifier down");
+      return open;
+    };
+    const council = councilOf({ [KIND]: { answer: "bug", confidence: 0.95, evidence: ["a.ts:1"] } });
+    const result = await withTriageSignals(async () => agentPass(), { classify: classify as never, council, save: async () => {} })(context());
+    expect(calls).toBe(2);
+    expect(result.outcome).toBe("needs_input");
+    expect(result.needsInput?.map((q) => q.question)).toEqual([expect.stringContaining("urgent")]);
+    expect(result.detail).toMatchObject({ settledByCouncil: [{ question: KIND }] });
+  });
+
+  it("asks the person when the answer is under the bar: the field's own bar for a machine question, the council's for the agent's", async () => {
+    const answer = { [KIND]: { answer: "bug", confidence: 0.7, evidence: ["a:1"] }, "Which db?": { answer: "sqlite", confidence: 0.7, evidence: ["a:1"] } };
+    const under = await withTriageSignals(async () => agentPass(), { classify: async () => kindOpen, council: councilOf(answer), save: async () => {} })(context());
+    expect(under.outcome).toBe("needs_input");
+    // The repo sets the kind's own bar to 0.6: 0.7 settles it. The council's bar stays 0.8 for an agent question.
+    const policy = async () => ({ factory: FACTORY_DEFAULTS, decisions: { triage_signals: { kind: { proceed: 0.6 } } } });
+    const own = await withTriageSignals(async () => agentPass(), { classify: classifyBy(kindOpen) as never, policy, council: councilOf(answer), save: async () => {} })(context());
+    expect(own.outcome).toBe("pass");
+    const asks: StageRunner = async () => ({ outcome: "needs_input", needsInput: [{ question: "Which db?", recommended: null }], detail: { summary: "s" } });
+    const agent = await withTriageSignals(asks, { classify: null, policy, council: councilOf(answer), save: async () => {} })(context());
+    expect(agent.outcome).toBe("needs_input");
+    const bar = async () => ({ factory: { ...FACTORY_DEFAULTS, triage: { ...FACTORY_DEFAULTS.triage, council: { enabled: true, bar: 0.6 } } } });
+    const lowered = await withTriageSignals(async (c) => (c.approvals.length ? agentPass() : asks(c)), { classify: async () => settled, policy: bar, council: councilOf(answer), save: async () => {} })(context());
+    expect(lowered.outcome).toBe("pass");
+  });
+
+  it("asks the person every question, with a note, when the council fails, times out or answers badly", async () => {
+    const notes: string[] = [];
+    const note = async (text: string) => void notes.push(text);
+    const run = (council: NonNullable<Parameters<typeof withTriageSignals>[1]["council"]>) => withTriageSignals(async () => agentPass(), { classify: async () => kindAndRiskOpen, council, save: async () => {} })(context({ note }));
+    for (const council of [async () => Promise.reject(new Error("engine down")), async () => ({ outcome: "fail" as const, detail: { error: "timeout" } }), async () => ({ outcome: "pass" as const, detail: { answers: "nope" } })]) {
+      const result = await run(council);
+      expect(result.outcome).toBe("needs_input");
+      expect(result.needsInput).toHaveLength(2);
+      expect(result.detail?.settledByCouncil).toBeUndefined();
+    }
+    expect(notes).toHaveLength(3);
+    expect(notes[0]).toContain("engine down");
+  });
+
+  it("never runs the council for an untrusted card: every question goes to the person, with a note", async () => {
+    const seen: Asked[] = [];
+    const notes: string[] = [];
+    const note = async (text: string) => void notes.push(text);
+    const stranger = { ...task(), source: { kind: "github", repo: "o/r", number: 4, url: "u", authorAssociation: "NONE" } } as unknown as TaskRow;
+    const council = councilOf({ [KIND]: { answer: "bug", confidence: 1, evidence: ["a:1"] } }, seen);
+    const result = await withTriageSignals(async () => agentPass(), { classify: async () => kindOpen, council, save: async () => {} })(context({ task: stranger, note }));
+    expect(seen).toEqual([]);
+    expect(result.outcome).toBe("needs_input");
+    expect(result.needsInput).toEqual([{ question: KIND, recommended: "bug" }]);
+    expect(notes.join(" ")).toContain("untrusted");
+  });
+
+  it("does today's thing when the council is off in the repo's config or has no runner", async () => {
+    const seen: Asked[] = [];
+    const off = async () => ({ factory: { ...FACTORY_DEFAULTS, triage: { ...FACTORY_DEFAULTS.triage, council: { enabled: false, bar: 0.8 } } } });
+    const result = await withTriageSignals(async () => agentPass(), { classify: async () => kindOpen, policy: off, council: councilOf({ [KIND]: { answer: "bug", confidence: 1, evidence: ["a:1"] } }, seen), save: async () => {} })(context());
+    expect(seen).toEqual([]);
+    expect(result.needsInput).toEqual([{ question: KIND, recommended: "bug" }]);
+    expect((await withTriageSignals(async () => agentPass(), { classify: async () => kindOpen, save: async () => {} })(context())).outcome).toBe("needs_input");
+  });
+
+  it("keeps the council's answers on the next entry: they are read as the person's are, and the record marks who answered", async () => {
+    const gate = { kind: "awaiting_answers", decision: "answered", response: { answers: { [RISK]: "medium" } }, requested: { askedBy: "triage", settledByCouncil: [{ question: KIND, answer: "bug", confidence: 0.9, evidence: ["a.ts:1"] }] } };
+    const issues: Array<{ answers?: unknown[] | undefined }> = [];
+    const saved: Array<{ record?: unknown }> = [];
+    const result = await withTriageSignals(async () => agentPass(), { classify: (async (issue: { answers?: unknown[] }) => (issues.push(issue), settled)) as never, council: councilOf({}), save: async (_id, patch) => void saved.push(patch as never) })(context({ approvals: [gate] as never }));
+    expect(result.outcome).toBe("pass");
+    expect(issues[0]!.answers).toEqual([{ question: KIND, answer: "bug" }, { question: RISK, answer: "medium" }]);
+    const record = TriageRecord.parse(saved.find((p) => p.record)!.record);
+    expect(record.qa).toEqual([{ question: KIND, answer: "bug", by: "council", evidence: ["a.ts:1"] }, { question: RISK, answer: "medium" }]);
+  });
+
+  it("does not count the council's settling as a round of questions to the person", async () => {
+    const full = Array.from({ length: 2 }, () => ({ kind: "awaiting_answers", decision: "answered", response: { answers: { q: "a" } }, requested: { askedBy: "triage" } })) as never;
+    // Two rounds are spent: the council settles the one question that is open, so there is nothing to escalate.
+    const result = await withTriageSignals(async () => agentPass(), { classify: classifyBy(kindOpen) as never, council: councilOf({ [KIND]: { answer: "bug", confidence: 0.9, evidence: ["a:1"] } }), save: async () => {} })(context({ approvals: full }));
+    expect(result.outcome).toBe("pass");
   });
 });

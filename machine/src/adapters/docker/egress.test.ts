@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ExecResult } from "../process/exec.ts";
-import { EgressUnsupportedError, cardNetworkArgs, egressBridgeArgs, ensureEgressBridge, openCardNetwork, proxyArgs, findCardNetwork, removeLeftoverNetworks } from "./egress.ts";
+import { EgressUnsupportedError, cardNetworkArgs, egressBridgeArgs, ensureEgressBridge, openCardNetwork, proxyArgs, findCardNetwork, removeLeftoverNetworks, removeRunNetwork } from "./egress.ts";
 
 const IMAGE = "machine-image:dev";
 const ok = (stdout = ""): ExecResult => ({ code: 0, stdout, stderr: "" });
@@ -17,6 +17,7 @@ function dockerFake(answers: Array<(args: string[]) => ExecResult | undefined> =
       if (r) return r;
     }
     const key = args.slice(0, 2).join(" ");
+    if (key === "network inspect" && args.some((a) => a.includes("Subnet"))) return ok("172.18.0.0/16\n");
     if (key === "network inspect" && args.includes("hardness-egress")) return ok("[]");
     if (args[0] === "version") return ok("29.9.2\n");
     if (key === "network inspect") return ok("true|isolated|invalid IP");
@@ -50,6 +51,50 @@ describe("the network commands", () => {
     await expect(ensureEgressBridge(raced.exec, "hardness-egress")).resolves.toBeUndefined();
     const broken = dockerFake([(a) => (a[1] === "inspect" ? fail("No such network") : a[1] === "create" ? fail("Cannot connect to the Docker daemon") : undefined)]);
     await expect(ensureEgressBridge(broken.exec, "hardness-egress")).rejects.toThrow(/Docker daemon/);
+  });
+});
+
+describe("the engine relay", () => {
+  const relay = { kind: "oauth" as const, placeholder: "sk-ant-oat01-luna-relay-abc", file: "/state/runs/r1/relay/anthropic", metaFile: "/state/runs/r1/relay/meta.json" };
+
+  it("starts the proxy with the credential and the placeholder as read-only file mounts, never as a value, and with the bridge's subnet to refuse", () => {
+    const args = proxyArgs({ run: "r1", image: IMAGE, bridge: "hardness-egress", allow: [], allowPrivate: [], relay, relayDenyLocal: "172.18.0.0/16" });
+    expect(args).toContain("/state/runs/r1/relay/anthropic:/run/relay/anthropic:ro");
+    expect(args[args.indexOf("/state/runs/r1/relay/anthropic:/run/relay/anthropic:ro") - 1]).toBe("-v");
+    expect(args).toContain("/state/runs/r1/relay/meta.json:/run/relay/meta.json:ro");
+    const tail = args.slice(args.indexOf("--relay"));
+    expect(tail).toEqual(["--relay", "anthropic=/run/relay/anthropic", "--relay-meta", "/run/relay/meta.json", "--relay-listen", "3129", "--relay-deny-local", "172.18.0.0/16"]);
+    expect(args.join(" ")).not.toContain(relay.placeholder);
+    expect(args).not.toContain("--relay-placeholder");
+    expect(args).not.toContain("-e");
+    expect(proxyArgs({ run: "r1", image: IMAGE, bridge: "b", allow: [], allowPrivate: [] })).not.toContain("--relay");
+  });
+
+  it("starts a proxy for a run whose list is empty but that has a relay, and points a container at it, with its address in NO_PROXY", async () => {
+    const { calls, exec } = dockerFake();
+    const net = await openCardNetwork("r1", { allow: [], allowPrivate: [], relay }, { exec, proxyImage: IMAGE, pollMs: 0 });
+    expect(calls.some((c) => c[1] === "run")).toBe(true);
+    const args = net.containerArgs(["luna-app"]);
+    const env = Object.fromEntries(args.filter((_, i) => args[i - 1] === "-e").map((e) => [e.slice(0, e.indexOf("=")), e.slice(e.indexOf("=") + 1)] as [string, string]));
+    expect(env.ANTHROPIC_BASE_URL).toBe("http://172.30.0.2:3129");
+    for (const name of ["NO_PROXY", "no_proxy"]) expect(env[name]).toBe("localhost,127.0.0.1,::1,luna-app,172.30.0.2");
+    expect(args.join(" ")).not.toContain(relay.file);
+  });
+
+  it("reads the egress bridge's subnet before the proxy starts and hands it to the relay to refuse; no subnet, no proxy", async () => {
+    const withSubnet = dockerFake([(a) => (a[0] === "network" && a[1] === "inspect" && a.includes("hardness-egress") && a.some((x) => x.includes("Subnet")) ? ok("172.18.0.0/16 \n") : undefined)]);
+    await openCardNetwork("r1", { allow: [], allowPrivate: [], relay }, { exec: withSubnet.exec, proxyImage: IMAGE, pollMs: 0 });
+    const run = withSubnet.calls.find((c) => c[1] === "run")!;
+    expect(run.slice(run.indexOf("--relay-deny-local"))).toEqual(["--relay-deny-local", "172.18.0.0/16"]);
+    const none = dockerFake([(a) => (a[0] === "network" && a[1] === "inspect" && a.some((x) => x.includes("Subnet")) ? ok("\n") : undefined)]);
+    await expect(openCardNetwork("r1", { allow: [], allowPrivate: [], relay }, { exec: none.exec, proxyImage: IMAGE, pollMs: 0 })).rejects.toThrow(/subnet/);
+    expect(none.calls.some((c) => c[1] === "run")).toBe(false);
+  });
+
+  it("sets no base URL when there is no relay", async () => {
+    const { exec } = dockerFake();
+    const net = await openCardNetwork("r1", { allow: ["github.com:443"], allowPrivate: [] }, { exec, proxyImage: IMAGE, pollMs: 0 });
+    expect(net.containerArgs().join(" ")).not.toContain("ANTHROPIC_BASE_URL");
   });
 });
 
@@ -247,10 +292,6 @@ describe("findCardNetwork", () => {
     expect(calls.at(-1)).toEqual(["docker", "network", "rm", "hardness-card-r1"]);
   });
 
-  it("is null when there is no such network", async () => {
-    const { exec } = dockerFake([(a) => (a[0] === "network" && a[1] === "inspect" ? fail("No such network") : undefined)]);
-    expect(await findCardNetwork("r1", exec)).toBeNull();
-  });
 
   it("has no proxy to read or remove when there is none", async () => {
     const { calls, exec } = dockerFake([(a) => (a[0] === "inspect" && a.includes("hardness-egress-r1") ? fail("No such container") : undefined)]);
@@ -258,5 +299,31 @@ describe("findCardNetwork", () => {
     expect(await net!.blocked()).toEqual([]);
     await net!.teardown();
     expect(calls.filter((c) => c[1] === "rm")).toEqual([]);
+  });
+});
+
+describe("removeRunNetwork", () => {
+  it("removes a run's proxy and its card network by the run's container name, and is safe when they are gone", async () => {
+    const { calls, exec } = dockerFake([(a) => (a[0] === "rm" || (a[0] === "network" && a[1] === "rm") ? fail("No such") : undefined)]);
+    await removeRunNetwork("hardness-abcd1234-council-security-1", exec);
+    expect(calls).toEqual([
+      ["docker", "rm", "-f", "hardness-egress-hardness-abcd1234-council-security-1"],
+      ["docker", "network", "rm", "hardness-card-hardness-abcd1234-council-security-1"],
+    ]);
+  });
+});
+
+describe("findCardNetwork when only the proxy is left", () => {
+  it("still finds the proxy, so it is removed at the run's end", async () => {
+    const { calls, exec } = dockerFake([(a) => (a[0] === "network" && a[1] === "inspect" ? fail("No such network") : undefined)]);
+    const net = await findCardNetwork("r1", exec);
+    expect(net).not.toBeNull();
+    await net!.teardown();
+    expect(calls).toContainEqual(["docker", "rm", "-f", "hardness-egress-r1"]);
+  });
+
+  it("is null when neither the network nor the proxy is there", async () => {
+    const { exec } = dockerFake([(a) => (a[0] === "network" && a[1] === "inspect" ? fail("No such network") : a[0] === "inspect" ? fail("No such container") : undefined)]);
+    expect(await findCardNetwork("r1", exec)).toBeNull();
   });
 });

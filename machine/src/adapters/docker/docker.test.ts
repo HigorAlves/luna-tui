@@ -1,11 +1,17 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ExecResult } from "../process/exec.ts";
-import { CACHE_ENV, SecretsMissingError, type RunDeps, cacheVolumeFor, hostUser, execInSandbox, runSandbox, sandboxArgs, sandboxExecArgs, sandboxExecutor, type SandboxRun } from "./docker.ts";
+import { RuntimeUnavailableError } from "./runtimes.ts";
+import { CACHE_ENV, SecretsMissingError, type RunDeps, cacheVolumeFor, hostUser, execInSandbox, runSandbox, sandboxArgs, sandboxExecArgs, sandboxExecutor, secretNameProblem, writeSecretFiles, type SandboxRun } from "./docker.ts";
+import { appArgs } from "./app.ts";
 import { EgressUnsupportedError } from "./egress.ts";
+
+/** A unit test never asks the real daemon: the seccomp and runtime start checks pass here, and the tests that test them pass their own. */
+const NO_DAEMON = { checkSeccomp: async () => {}, checkRuntime: async () => {} } as Partial<RunDeps>;
 
 function run(over: Partial<SandboxRun> = {}): SandboxRun {
   return {
@@ -24,6 +30,11 @@ function run(over: Partial<SandboxRun> = {}): SandboxRun {
 }
 
 describe("sandboxArgs", () => {
+  it("drops every capability and gives the container its own IPC namespace", () => {
+    const args = sandboxArgs(run(), "/in", "/out");
+    expect(args.join(" ")).toContain("--cap-drop ALL --ipc private");
+  });
+
   it("runs under Docker's init, so a killed process group is reaped and not left as a zombie that still looks alive", () => {
     const args = sandboxArgs(run(), "/in", "/out");
     expect(args).toContain("--init");
@@ -53,6 +64,14 @@ describe("sandboxArgs", () => {
     expect(args).toEqual(expect.arrayContaining(["-v", "/state/tasks/t1/session:/session", "-e", "CLAUDE_CONFIG_DIR=/session"]));
     expect(args).not.toContain("CLAUDE_CONFIG_DIR=/tmp/claude");
     expect(sandboxArgs(run(), "/in", "/out")).toContain("CLAUDE_CONFIG_DIR=/tmp/claude");
+  });
+
+  it("adds the owner's seccomp profile to a stage, an exec and an app container only when the size names one", () => {
+    const flag = ["--security-opt", "seccomp=/etc/luna/seccomp.json"];
+    expect(sandboxArgs(run({ limits: { cpu: 2, memoryGb: 4, seccomp: "/etc/luna/seccomp.json" } }), "/i", "/o")).toEqual(expect.arrayContaining(flag));
+    expect(sandboxExecArgs({ name: "x", image: "img:1", worktree: "/wt", argv: ["ls"], limits: { cpu: 2, memoryGb: 4, seccomp: "/etc/luna/seccomp.json" } })).toEqual(expect.arrayContaining(flag));
+    expect(sandboxArgs(run(), "/i", "/o").join(" ")).not.toContain("seccomp");
+    expect(sandboxExecArgs({ name: "x", image: "img:1", worktree: "/wt", argv: ["ls"] }).join(" ")).not.toContain("seccomp");
   });
 
   it("tells Claude Code to send no telemetry or error reports, which the egress list would refuse and log as noise", () => {
@@ -157,22 +176,37 @@ describe("sandboxArgs", () => {
     expect(cacheVolumeFor("/r/My App.v2/")).toBe("hardness-cache-my-app-v2");
   });
 
+  it("splits the cache volume by trust: an untrusted card gets its own", () => {
+    expect(cacheVolumeFor("/r/luna-tui", "untrusted")).toBe("hardness-cache-luna-tui-untrusted");
+    expect(cacheVolumeFor("/r/luna-tui", "trusted")).toBe("hardness-cache-luna-tui");
+  });
+
+  it("takes the process limit from the size, and adds --runtime only when it names one", () => {
+    const flags = (args: string[]) => args.join(" ");
+    expect(flags(sandboxArgs(run({ limits: { cpu: 2, memoryGb: 4, pids: 256 } }), "/i", "/o"))).toContain("--pids-limit 256");
+    expect(flags(sandboxExecArgs({ name: "c", image: "i", worktree: "/wt", argv: ["x"], limits: { cpu: 2, memoryGb: 4, pids: 2048 } }))).toContain("--pids-limit 2048");
+    expect(sandboxArgs(run(), "/i", "/o")).not.toContain("--runtime");
+    expect(sandboxArgs(run({ limits: { cpu: 2, memoryGb: 4, runtime: "runsc" } }), "/i", "/o")).toEqual(expect.arrayContaining(["--runtime", "runsc"]));
+    expect(sandboxExecArgs({ name: "c", image: "i", worktree: "/wt", argv: ["x"], limits: { cpu: 2, memoryGb: 4, runtime: "runsc" } })).toEqual(expect.arrayContaining(["--runtime", "runsc"]));
+  });
+
   it("joins the run's service network and gets what the services export, so the code finds its database by hostname", () => {
     const args = sandboxArgs(run({ network: "hardness-net-r1", serviceEnv: { DATABASE_URL: "postgres://app@postgres:5432/app" } }), "/i", "/o");
     expect(args).toEqual(expect.arrayContaining(["--network", "hardness-net-r1", "-e", "DATABASE_URL=postgres://app@postgres:5432/app"]));
     expect(sandboxArgs(run(), "/i", "/o")).not.toContain("--network");
   });
 
-  it("passes the credential by name, never its value", () => {
+  it("gives the credential as a file in the run's secrets folder, never as -e and never its value", () => {
     const args = sandboxArgs(run(), "/i", "/o");
-    expect(args).toContain("ANTHROPIC_API_KEY");
+    expect(args).not.toContain("ANTHROPIC_API_KEY");
     expect(args.join(" ")).not.toContain("sk-secret-value");
+    expect(args).toEqual(expect.arrayContaining(["-v", "/state/runs/r1/secrets:/run/luna-secrets:ro"]));
   });
 
   it("mounts the engine's credential files where its runtime reads them: the Codex login's per-run copy, writable", () => {
     const codex = { env: { CODEX_HOME: "/tmp/.codex" }, mounts: [{ host: "/state/runs/r1/codex", container: "/tmp/.codex", readOnly: false }] };
     const args = sandboxArgs(run({ credential: codex }), "/i", "/o");
-    expect(args).toEqual(expect.arrayContaining(["-e", "CODEX_HOME", "-v", "/state/runs/r1/codex:/tmp/.codex"]));
+    expect(args).toEqual(expect.arrayContaining(["-v", "/state/runs/r1/codex:/tmp/.codex"]));
     expect(args).not.toContain("ANTHROPIC_API_KEY");
     const readOnly = sandboxArgs(run({ credential: { env: {}, mounts: [{ host: "/h", container: "/c", readOnly: true }] } }), "/i", "/o");
     expect(readOnly).toEqual(expect.arrayContaining(["-v", "/h:/c:ro"]));
@@ -180,6 +214,11 @@ describe("sandboxArgs", () => {
 });
 
 describe("sandboxExecArgs", () => {
+  it("drops every capability and gives the command its own IPC namespace", () => {
+    const args = sandboxExecArgs({ name: "c1", image: "img:1", worktree: "/wt", argv: ["true"] });
+    expect(args.join(" ")).toContain("--cap-drop ALL --ipc private");
+  });
+
   it("runs a project's checks under Docker's init too: its suite kills process groups (exec.test.ts) and needs them reaped", () => {
     const checks = sandboxExecArgs({ name: "chk0", image: "img:1", worktree: "/wt", argv: ["pnpm", "test"] } as never);
     expect(checks).toContain("--init");
@@ -264,7 +303,7 @@ describe("extra mounts and an entrypoint override", () => {
   });
 
   it("overrides the entrypoint and passes the rest as the command after the image", () => {
-    const args = sandboxArgs(run({ entrypoint: ["python3", "/graph-tools/build.py", "--input", "/work", "--out", "/graph"] }), "/i", "/o");
+    const args = sandboxArgs(run({ credential: { env: {}, mounts: [] }, entrypoint: ["python3", "/graph-tools/build.py", "--input", "/work", "--out", "/graph"] }), "/i", "/o");
     const at = args.indexOf("--entrypoint");
     expect(at).toBeGreaterThan(0);
     expect(args[at + 1]).toBe("python3");
@@ -291,11 +330,23 @@ describe("sandboxExecutor's image", () => {
   const fake = (async (r: { image: string }) => (seen.push(r.image), { code: 0, stdout: "", stderr: "" })) as never;
   it("is the one the repository resolves to, given explicitly, never guessed from the folder", async () => {
     seen.length = 0;
-    const exec = sandboxExecutor({ machine: "machine:dev", imageOf: async (repo) => `img-of-${repo}` }, fake);
+    const exec = sandboxExecutor({ machine: "machine:dev", imageOf: async (repo) => `img-of-${repo}` }, fake, NO_DAEMON);
     await exec("true", [], { cwd: "/wt/same-name/task-1", repoPath: "/a/shop" });
     await exec("true", [], { cwd: "/wt/same-name/task-2", repoPath: "/b/shop" });
     await exec("true", [], { cwd: "/wt/same-name/task-3" });
     expect(seen).toEqual(["img-of-/a/shop", "img-of-/b/shop", "machine:dev"]);
+  });
+});
+
+describe("sandboxExecutor's container env", () => {
+  it("gives a check the repository's container env, under the HARDNESS_ variables the caller passes", async () => {
+    const envs: Array<Record<string, string>> = [];
+    const fake = (async (r: { env: Record<string, string> }) => (envs.push(r.env), { code: 0, stdout: "", stderr: "" })) as never;
+    const exec = sandboxExecutor({ machine: "m", imageOf: async () => "img", containerEnvOf: async (repo) => (repo === "/a/shop" ? { CI: "1", HARDNESS_X: "from-repo" } : ({} as Record<string, string>)) }, fake, NO_DAEMON);
+    await exec("true", [], { cwd: "/wt/shop/task-1", repoPath: "/a/shop", env: { HARDNESS_X: "from-caller" } });
+    await exec("true", [], { cwd: "/wt/other/task-1", repoPath: "/b/other" });
+    expect(envs[0]).toEqual({ CI: "1", HARDNESS_X: "from-caller" });
+    expect(envs[1]).toEqual({});
   });
 });
 
@@ -305,12 +356,23 @@ describe("sandboxExecutor's list and size", () => {
     const fake = (async (r: { egress?: unknown; limits?: unknown }) => (runs.push(r), { code: 0, stdout: "", stderr: "" })) as never;
     const asked: Array<string | undefined> = [];
     const spec = { allow: ["github.com:443"], allowPrivate: [], proxyImage: "machine:dev" };
-    const exec = sandboxExecutor({ machine: "machine:dev", imageOf: async () => "img", egress: async (repo) => (asked.push(repo), spec), limitsOf: async (repo) => (repo ? { cpu: 6, memoryGb: 12 } : { cpu: 2, memoryGb: 4 }) }, fake);
+    const exec = sandboxExecutor({ machine: "machine:dev", imageOf: async () => "img", egress: async (repo) => (asked.push(repo), spec), limitsOf: async (repo) => (repo ? { cpu: 6, memoryGb: 12 } : { cpu: 2, memoryGb: 4 }) }, fake, NO_DAEMON);
     await exec("true", [], { cwd: "/wt/a/task-1", repoPath: "/a/shop" });
     await exec("true", [], { cwd: "/wt/a/task-2" });
     expect(asked).toEqual(["/a/shop", undefined]);
     expect(runs[0]).toMatchObject({ egress: spec, limits: { cpu: 6, memoryGb: 12 } });
     expect(runs[1]).toMatchObject({ limits: { cpu: 2, memoryGb: 4 } });
+  });
+
+  it("names a check's cache volume from the repository, as the stages do (not from the card folder's parent), split by the card's trust", async () => {
+    const runs: Array<{ cacheVolume?: string; limits?: unknown }> = [];
+    const fake = (async (r: { cacheVolume?: string }) => (runs.push(r), { code: 0, stdout: "", stderr: "" })) as never;
+    const limitsOf = async (_repo: string | undefined, trust?: "trusted" | "untrusted") => ({ cpu: 2, memoryGb: 4, cacheTrust: trust ?? ("trusted" as const), ...(trust === "untrusted" ? { runtime: "runsc" } : {}) });
+    const exec = sandboxExecutor({ machine: "machine:dev", imageOf: async () => "img", limitsOf }, fake, NO_DAEMON);
+    await exec("true", [], { cwd: "/wt/other-name/task-1", repoPath: "/a/shop" });
+    await exec("true", [], { cwd: "/wt/other-name/task-1", repoPath: "/a/shop", trust: "untrusted" });
+    expect(runs.map((r) => r.cacheVolume)).toEqual(["hardness-cache-shop", "hardness-cache-shop-untrusted"]);
+    expect(runs[1]!.limits).toMatchObject({ runtime: "runsc" });
   });
 });
 
@@ -373,11 +435,30 @@ describe("sandboxExecutor's session: the services start once for a pass of check
     const given = {
       openCardNetwork: async () => (events.push("open network"), card as never),
       startServices: async (_name: string, _services: unknown, options?: { network?: { name: string } }) => (events.push(`start services on ${options?.network?.name}`), { network: "net-s", env: { DATABASE_URL: "postgres://postgres/t" }, teardown: async () => void events.push("teardown services") }),
+      ...NO_DAEMON,
     } as unknown as Partial<RunDeps>;
     const fake = (async (r: Record<string, unknown>) => (runs.push(r), { code: 0, stdout: "", stderr: "" })) as never;
     const exec = sandboxExecutor({ machine: "machine:dev", imageOf: async () => "img", egress: async () => spec }, fake, given);
     return { exec, events, runs, refuse: (rows: ReturnType<typeof row>[]) => void (refused = rows) };
   }
+
+  it("asks the daemon for seccomp and the size's runtime before it opens a network or starts a service, and opens nothing when one is missing", async () => {
+    const events: string[] = [];
+    const card = { name: "net-s", dns: "d", containerArgs: () => [], blocked: async () => [], teardown: async () => {} };
+    const given = {
+      checkSeccomp: async () => void events.push("seccomp"),
+      checkRuntime: async (runtime: string) => void events.push(`runtime ${runtime}`),
+      openCardNetwork: async () => (events.push("open network"), card as never),
+      startServices: async () => (events.push("start services"), { network: "net-s", env: {}, teardown: async () => {} }),
+    } as unknown as Partial<RunDeps>;
+    const fake = (async () => ({ code: 0, stdout: "", stderr: "" })) as never;
+    const make = (over: Partial<RunDeps> = {}) => sandboxExecutor({ machine: "m", imageOf: async () => "img", egress: async () => spec, limitsOf: async () => ({ cpu: 1, memoryGb: 1, runtime: "runsc" }) }, fake, { ...given, ...over });
+    await make().session!({ cwd: "/wt", services: { postgres: { image: "postgres:16" } } });
+    expect(events).toEqual(["seccomp", "runtime runsc", "open network", "start services"]);
+    events.length = 0;
+    await expect(make({ checkSeccomp: async () => { throw new Error("no seccomp"); } }).session!({ cwd: "/wt", services: {} })).rejects.toThrow("no seccomp");
+    expect(events).toEqual([]);
+  });
 
   it("opens the card network and starts the services once, however many checks run, and removes them on close", async () => {
     const { exec, events, runs } = setup();
@@ -408,7 +489,7 @@ describe("sandboxExecutor's session: the services start once for a pass of check
   it("removes the network when the services do not come up, and passes the error on", async () => {
     const events: string[] = [];
     const card = { name: "n", dns: "1.1.1.1", containerArgs: () => [], blocked: async () => [], teardown: async () => void events.push("teardown network") };
-    const given = { openCardNetwork: async () => card as never, startServices: async () => { throw new Error("postgres never became ready"); } } as unknown as Partial<RunDeps>;
+    const given = { ...NO_DAEMON, openCardNetwork: async () => card as never, startServices: async () => { throw new Error("postgres never became ready"); } } as unknown as Partial<RunDeps>;
     const exec = sandboxExecutor({ machine: "m", imageOf: async () => "img", egress: async () => spec }, (async () => ({ code: 0, stdout: "", stderr: "" })) as never, given);
     await expect(exec.session!({ cwd: "/wt/a/task-1", services: { postgres: { image: "postgres:16" } } })).rejects.toThrow("never became ready");
     expect(events).toEqual(["teardown network"]);
@@ -427,7 +508,7 @@ describe("runSandbox and execInSandbox on a run's own network", () => {
   const ok = (stdout = ""): ExecResult => ({ code: 0, stdout, stderr: "" });
 
   /** Fake deps: every step lands in `events`, in order. */
-  function fakes(over: { failRun?: boolean; open?: () => Promise<never> } = {}) {
+  function fakes(over: { failRun?: boolean; open?: (name: string, spec: unknown) => Promise<never> } = {}) {
     const events: string[] = [];
     const calls: string[][] = [];
     const network = (label: string) => ({
@@ -452,10 +533,11 @@ describe("runSandbox and execInSandbox on a run's own network", () => {
       },
       startServices: async (_name, _services, options) => {
         events.push(`services on ${options?.network?.name ?? "none"}`);
-        return { network: options?.network?.name ?? null, env: {}, teardown: async () => void events.push("teardown services") };
+        return { network: options?.network?.name ?? null, env: {}, hosts: [], teardown: async () => void events.push("teardown services") };
       },
       openCardNetwork: over.open ?? (async (name: string) => (events.push(`open ${name}`), network("own") as never)),
       findCardNetwork: async (name: string) => (events.push(`find ${name}`), network("found") as never),
+      checkSeccomp: async () => {},
     };
     return { deps, events, calls, network };
   }
@@ -467,6 +549,16 @@ describe("runSandbox and execInSandbox on a run's own network", () => {
     expect(result.blocked).toEqual(rows);
     const started = calls.find((c) => c[0] === "run")!;
     expect(started).toEqual(expect.arrayContaining(["--network", "net-own", "--dns", "172.30.0.2"]));
+  });
+
+  it("hands the credential's relay to the proxy and puts only the placeholder in the container's secret files", async () => {
+    const seen: unknown[] = [];
+    const { deps, calls } = fakes({ open: async (name: string, spec: unknown) => (seen.push(spec), { name: `net-${name}`, dns: "172.30.0.2", containerArgs: () => ["--network", "n"], blocked: async () => [], teardown: async () => {} } as never) });
+    const relay = { kind: "oauth" as const, placeholder: "sk-ant-oat01-luna-relay-ph", file: "/state/r/relay/anthropic", metaFile: "/state/r/relay/meta.json" };
+    const base = run({ runDir: tmp(), egress: { allow: [], allowPrivate: [], proxyImage: "machine:dev" } });
+    await runSandbox({ ...base, credential: { env: { CLAUDE_CODE_OAUTH_TOKEN: relay.placeholder }, mounts: [], relay } }, deps);
+    expect(seen).toEqual([{ allow: [], allowPrivate: [], proxyImage: "machine:dev", relay }]);
+    expect(calls.find((c) => c[0] === "run")!.join(" ")).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
   });
 
   it("execInSandbox with the services already up starts none and removes none: the seed runs against the app's own database", async () => {
@@ -539,28 +631,152 @@ describe("corepack in every container", () => {
   });
 });
 
-describe("secrets reach a container by name only", () => {
+describe("a daemon with no seccomp filter", () => {
+  const broken = async () => {
+    const { SeccompUnavailableError } = await import("./seccomp.ts");
+    throw new SeccompUnavailableError("the daemon reports no seccomp profile");
+  };
+  function fakesFor() {
+    const calls: string[][] = [];
+    const deps: Partial<RunDeps> = {
+      exec: async (_c, args) => (calls.push(args), { code: 0, stdout: "", stderr: "" }),
+      execOrThrow: async (_c, args) => (calls.push(args), ""),
+    };
+    return { deps, calls };
+  }
+  it("runs no stage: the check refuses before any container or network is made", async () => {
+    const { deps, calls } = fakesFor();
+    await expect(runSandbox(run({ runDir: "/nonexistent" }), { ...deps, checkSeccomp: broken })).rejects.toThrow(/seccomp/);
+    expect(calls).toEqual([]);
+  });
+  it("runs no check command either", async () => {
+    const { deps, calls } = fakesFor();
+    await expect(execInSandbox({ name: "c1", image: "img:1", worktree: "/wt", argv: ["true"] }, {}, { ...deps, checkSeccomp: broken })).rejects.toThrow(/seccomp/);
+    expect(calls).toEqual([]);
+  });
+  it("refuses a stage or a check that names a runtime the daemon lacks, before any container is made", async () => {
+    const { deps, calls } = fakesFor();
+    const asked: string[] = [];
+    const missing = async (runtime: string) => {
+      asked.push(runtime);
+      throw new RuntimeUnavailableError(`no ${runtime}`);
+    };
+    const limits = { cpu: 2, memoryGb: 4, runtime: "runsc" };
+    await expect(runSandbox(run({ runDir: "/nonexistent", limits }), { ...deps, checkSeccomp: async () => {}, checkRuntime: missing })).rejects.toThrow(RuntimeUnavailableError);
+    await expect(execInSandbox({ name: "c1", image: "img:1", worktree: "/wt", argv: ["true"], limits }, {}, { ...deps, checkSeccomp: async () => {}, checkRuntime: missing })).rejects.toThrow(/no runsc/);
+    expect(asked).toEqual(["runsc", "runsc"]);
+    expect(calls).toEqual([]);
+  });
+  it("asks nothing about the runtime of a run that names none", async () => {
+    const { deps } = fakesFor();
+    const checkRuntime = async () => {
+      throw new Error("must not be asked");
+    };
+    await expect(runSandbox(run({ runDir: "/nonexistent" }), { ...deps, checkSeccomp: async () => {}, checkRuntime })).rejects.not.toThrow(/must not be asked/);
+  });
+});
+
+describe("secrets reach a container as files, never in its configuration", () => {
   const secret = ["sec", "ret", "y".repeat(10)].join("-");
-  it("are `-e NAME` with no value in the argument list of a stage and of a check", () => {
-    const stage = sandboxArgs(run({ secrets: { QA_PASSWORD: secret } }), "/in", "/out");
-    const check = sandboxExecArgs({ name: "c", image: "img", worktree: "/wt", argv: ["true"], secrets: { DB_URL: secret } } as never);
-    expect(stage).toEqual(expect.arrayContaining(["-e", "QA_PASSWORD"]));
-    expect(check).toEqual(expect.arrayContaining(["-e", "DB_URL"]));
-    for (const args of [stage, check]) for (const a of args) expect(a).not.toContain(secret);
+  it("a stage mounts the run's secrets folder read-only and starts through luna-env; no secret name or value is an argument", () => {
+    const stage = sandboxArgs(run({ secrets: { QA_PASSWORD: secret }, entrypoint: ["node", "tool.js"] }), "/in", "/out");
+    expect(stage).toEqual(expect.arrayContaining(["-v", "/state/runs/r1/secrets:/run/luna-secrets:ro"]));
+    expect(stage.slice(stage.indexOf("--entrypoint"))).toEqual(["--entrypoint", "/opt/luna/bin/luna-env", "img:1", "node", "tool.js"]);
+    for (const a of stage) {
+      expect(a).not.toContain(secret);
+      expect(a).not.toBe("QA_PASSWORD");
+      expect(a).not.toBe("ANTHROPIC_API_KEY");
+    }
   });
 
-  it("go only into the environment of the docker client, for a stage and a check", async () => {
+  it("a stage with the image's own entrypoint (luna-stage) adds no entrypoint: luna-stage calls luna-env itself", () => {
+    expect(sandboxArgs(run({ secrets: { QA_PASSWORD: secret } }), "/in", "/out")).not.toContain("--entrypoint");
+  });
+
+  it("a stage with no secret at all mounts no folder", () => {
+    const args = sandboxArgs(run({ credential: { env: {}, mounts: [] } }), "/in", "/out");
+    expect(args.join(" ")).not.toContain("/run/luna-secrets");
+  });
+
+  it("the Laminar project key of a full trace is a secret; the rest of the trace context stays a plain variable", () => {
+    const args = sandboxArgs(run({ credential: { env: {}, mounts: [] }, extraEnv: { LMNR_PROJECT_API_KEY: secret, LMNR_BASE_URL: "http://lmnr", LMNR_HTTP_PORT: "8000" } }), "/in", "/out");
+    expect(args.join(" ")).not.toContain(secret);
+    expect(args).not.toContain("LMNR_PROJECT_API_KEY");
+    expect(args.join(" ")).not.toContain("LMNR_PROJECT_API_KEY=");
+    expect(args).toEqual(expect.arrayContaining(["-e", "LMNR_BASE_URL=http://lmnr", "-e", "LMNR_HTTP_PORT=8000"]));
+    expect(args).toEqual(expect.arrayContaining(["-v", "/state/runs/r1/secrets:/run/luna-secrets:ro"]));
+  });
+
+  it("a check mounts its secrets folder and runs its command through luna-env", () => {
+    const check = sandboxExecArgs({ name: "c", image: "img", worktree: "/wt", argv: ["pnpm", "test"], secrets: { DB_URL: secret }, secretsDir: "/tmp/s1" });
+    expect(check).toEqual(expect.arrayContaining(["-v", "/tmp/s1:/run/luna-secrets:ro"]));
+    expect(check.slice(check.indexOf("--entrypoint"))).toEqual(["--entrypoint", "/opt/luna/bin/luna-env", "img", "pnpm", "test"]);
+    for (const a of check) {
+      expect(a).not.toContain(secret);
+      expect(a).not.toBe("DB_URL");
+    }
+  });
+
+  it("a check without secrets keeps its plain entrypoint", () => {
+    const check = sandboxExecArgs({ name: "c", image: "img", worktree: "/wt", argv: ["pnpm", "test"] });
+    expect(check.slice(check.indexOf("--entrypoint"))).toEqual(["--entrypoint", "pnpm", "img", "test"]);
+  });
+
+  it("a check with secrets and no folder is refused, so a value can never fall back to -e", () => {
+    expect(() => sandboxExecArgs({ name: "c", image: "img", worktree: "/wt", argv: ["true"], secrets: { DB_URL: secret } })).toThrow(/secretsDir/);
+  });
+
+  it("a stage's files are written 0644 in a 0755 folder under a 0700 run folder (the container's user reads them whatever its uid), and removed once the run ends; the docker client's environment has no value", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "docker-secret-"));
     const seen: Array<NodeJS.ProcessEnv | undefined> = [];
+    const onDisk: Array<{ parentMode: number; dirMode: number; fileMode: number; value: string }> = [];
     const deps = {
-      exec: async (_c: string, args: string[], options?: { env?: NodeJS.ProcessEnv }) => (args[0] === "run" && seen.push(options?.env), args[0] === "wait" ? { code: 0, stdout: "0", stderr: "" } : { code: 0, stdout: "", stderr: "" }),
-      execOrThrow: async (_c: string, args: string[], options?: { env?: NodeJS.ProcessEnv }) => (seen.push(options?.env), ""),
+      exec: async (_c: string, args: string[]) => (args[0] === "wait" ? { code: 0, stdout: "0", stderr: "" } : { code: 0, stdout: "", stderr: "" }),
+      execOrThrow: async (_c: string, _args: string[], options?: { env?: NodeJS.ProcessEnv }) => {
+        seen.push(options?.env);
+        const folder = join(dir, "secrets");
+        onDisk.push({ parentMode: statSync(dir).mode & 0o777, dirMode: statSync(folder).mode & 0o777, fileMode: statSync(join(folder, "QA_PASSWORD")).mode & 0o777, value: readFileSync(join(folder, "QA_PASSWORD"), "utf8") });
+        expect(readFileSync(join(folder, "ANTHROPIC_API_KEY"), "utf8")).toBe("sk-secret-value");
+        return "";
+      },
       startServices: async () => ({ network: null, env: {}, teardown: async () => {} }),
     } as unknown as Partial<RunDeps>;
-    await execInSandbox({ name: "c", image: "img", worktree: "/wt", argv: ["true"], secrets: { DB_URL: secret } }, {}, deps);
-    const dir = mkdtempSync(join(tmpdir(), "docker-secret-"));
-    await runSandbox(run({ runDir: dir, secrets: { QA_PASSWORD: secret } }), deps);
+    await runSandbox(run({ runDir: dir, secrets: { QA_PASSWORD: secret } }), { ...deps, checkSeccomp: async () => {} });
+    expect(onDisk).toEqual([{ parentMode: 0o700, dirMode: 0o755, fileMode: 0o644, value: secret }]);
+    expect(seen[0]?.QA_PASSWORD).toBeUndefined();
+    expect(seen[0]?.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(existsSync(join(dir, "secrets"))).toBe(false);
     rmSync(dir, { recursive: true, force: true });
-    expect(seen.map((e) => e?.DB_URL ?? e?.QA_PASSWORD)).toEqual([secret, secret]);
+  });
+
+  it("a check's files are written the same way, in a folder of their own, and removed after the command", async () => {
+    let folder = "";
+    const modes: number[] = [];
+    const deps = {
+      exec: async (_c: string, args: string[], options?: { env?: NodeJS.ProcessEnv }) => {
+        if (args[0] === "run") {
+          folder = args[args.indexOf("-v") + 1]!.split(":")[0]!;
+          for (let i = 0; i < args.length; i++) if (args[i] === "-v" && args[i + 1]!.endsWith(":/run/luna-secrets:ro")) folder = args[i + 1]!.split(":")[0]!;
+          modes.push(statSync(dirname(folder)).mode & 0o777, statSync(folder).mode & 0o777, statSync(join(folder, "DB_URL")).mode & 0o777);
+          expect(readFileSync(join(folder, "DB_URL"), "utf8")).toBe(secret);
+          expect(options?.env?.DB_URL).toBeUndefined();
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      startServices: async () => ({ network: null, env: {}, teardown: async () => {} }),
+      checkSeccomp: async () => {},
+    } as unknown as Partial<RunDeps>;
+    await execInSandbox({ name: "c", image: "img", worktree: "/wt", argv: ["true"], secrets: { DB_URL: secret } }, {}, deps);
+    expect(modes).toEqual([0o700, 0o755, 0o644]);
+    expect(existsSync(folder)).toBe(false);
+  });
+
+  it("refuses a secret whose name is not a variable name, before anything is written", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "docker-secret-"));
+    const deps = { exec: async () => ({ code: 0, stdout: "", stderr: "" }), execOrThrow: async () => "", startServices: async () => ({ network: null, env: {}, teardown: async () => {} }), checkSeccomp: async () => {} } as unknown as Partial<RunDeps>;
+    await expect(runSandbox(run({ runDir: dir, secrets: { "bad-name": secret } }), deps)).rejects.toThrow(/bad-name/);
+    expect(readdirSync(dir)).not.toContain("secrets");
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 
@@ -570,7 +786,7 @@ describe("sandboxExecutor's secrets", () => {
     const fake = (async (r: { secrets?: Record<string, string> }) => (runs.push(r), { code: 0, stdout: "", stderr: "" })) as never;
     const loads: Array<[string, string[]]> = [];
     const store = { folder: (repo: string) => `/secrets/${repo}`, load: async (repo: string, names: string[]) => (loads.push([repo, names]), names.includes("GONE_ONE") ? { values: {}, missing: [{ name: "GONE_ONE", reason: "absent" }] } : { values: Object.fromEntries(names.map((n) => [n, "v".repeat(10)])), missing: [] }) };
-    const exec = sandboxExecutor({ machine: "m", imageOf: async () => "img", secrets: store }, fake);
+    const exec = sandboxExecutor({ machine: "m", imageOf: async () => "img", secrets: store }, fake, NO_DAEMON);
     await exec("true", [], { cwd: "/wt/a/t1", repoPath: "/a/shop", secrets: ["DB_URL"] });
     await exec("true", [], { cwd: "/wt/a/t1", repoPath: "/a/shop" });
     expect(loads).toEqual([["/a/shop", ["DB_URL"]]]);
@@ -587,7 +803,7 @@ describe("sandboxExecutor's secrets", () => {
 describe("a secret's value in what a run returns", () => {
   const secret = ["red", "act", "w".repeat(10)].join("-");
   it("is replaced in a check's stdout and stderr before they are returned", async () => {
-    const deps = { exec: async (_c: string, args: string[]) => (args[0] === "run" ? { code: 0, stdout: `ok ${secret}`, stderr: `err ${Buffer.from(secret).toString("base64")}` } : { code: 0, stdout: "", stderr: "" }), startServices: async () => ({ network: null, env: {}, teardown: async () => {} }) } as unknown as Partial<RunDeps>;
+    const deps = { ...NO_DAEMON, exec: async (_c: string, args: string[]) => (args[0] === "run" ? { code: 0, stdout: `ok ${secret}`, stderr: `err ${Buffer.from(secret).toString("base64")}` } : { code: 0, stdout: "", stderr: "" }), startServices: async () => ({ network: null, env: {}, teardown: async () => {} }) } as unknown as Partial<RunDeps>;
     const out = await execInSandbox({ name: "c", image: "img", worktree: "/wt", argv: ["true"], secrets: { DB_URL: secret } }, {}, deps);
     expect(out.stdout).toBe("ok [secret:DB_URL]");
     expect(out.stderr).toBe("err [secret:DB_URL]");
@@ -596,6 +812,7 @@ describe("a secret's value in what a run returns", () => {
   it("is replaced in the transcript before transcript.log is written, and in the refused hosts", async () => {
     const dir = mkdtempSync(join(tmpdir(), "docker-transcript-"));
     const deps = {
+      ...NO_DAEMON,
       exec: async (_c: string, args: string[]) => (args[0] === "logs" ? { code: 0, stdout: `the agent printed ${secret}`, stderr: "" } : args[0] === "wait" ? { code: 0, stdout: "0", stderr: "" } : { code: 0, stdout: "", stderr: "" }),
       execOrThrow: async () => "",
       startServices: async () => ({ network: null, env: {}, teardown: async () => {} }),
@@ -615,6 +832,7 @@ describe("values kept only to be redacted", () => {
     const envs: Array<NodeJS.ProcessEnv | undefined> = [];
     const mixed = `${secret.toUpperCase()}.example.com`.toLowerCase();
     const deps = {
+      ...NO_DAEMON,
       exec: async (_c: string, args: string[]) => (args[0] === "logs" ? { code: 0, stdout: `printed ${secret}`, stderr: "" } : args[0] === "wait" ? { code: 0, stdout: "0", stderr: "" } : { code: 0, stdout: "", stderr: "" }),
       execOrThrow: async (_c: string, _a: string[], options?: { env?: NodeJS.ProcessEnv }) => (envs.push(options?.env), ""),
       startServices: async () => ({ network: null, env: {}, teardown: async () => {} }),
@@ -628,5 +846,57 @@ describe("values kept only to be redacted", () => {
     expect(readFileSync(result.transcriptPath, "utf8")).toBe("printed [secret:APP_KEY]");
     expect(result.blocked![0]!.host).toBe("[secret:APP_KEY].example.com");
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("secret names", () => {
+  it("refuses a name that would change how a process loads or where its traffic goes, and keeps an ordinary one", () => {
+    for (const bad of ["NODE_OPTIONS", "NODE_PATH", "LD_PRELOAD", "LD_ANYTHING", "DYLD_INSERT_LIBRARIES", "BASH_ENV", "ENV", "PATH", "HOME", "HTTPS_PROXY", "http_proxy", "NO_PROXY", "ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "LUNA_EFFORT", "HARDNESS_TASK", "my-secret"]) expect(secretNameProblem(bad), bad).not.toBeNull();
+    for (const ok of ["DB_URL", "API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_HOME", "LMNR_PROJECT_API_KEY"]) expect(secretNameProblem(ok), ok).toBeNull();
+  });
+
+  it("makes the folder around the secrets private again when it was left open, and refuses a symlinked one", async () => {
+    const parent = mkdtempSync(join(tmpdir(), "secret-parent-"));
+    chmodSync(parent, 0o755);
+    await writeSecretFiles(join(parent, "s"), { DB_URL: "x" });
+    expect(statSync(parent).mode & 0o777).toBe(0o700);
+    expect(statSync(join(parent, "s")).mode & 0o777).toBe(0o755);
+    expect(statSync(join(parent, "s", "DB_URL")).mode & 0o777).toBe(0o644);
+    const link = join(mkdtempSync(join(tmpdir(), "secret-link-")), "l");
+    symlinkSync(parent, link);
+    await expect(writeSecretFiles(join(link, "s"), { DB_URL: "x" })).rejects.toThrow(/not a private folder/);
+  });
+
+  it("writes no file when one name is reserved", async () => {
+    const dir = join(mkdtempSync(join(tmpdir(), "secret-names-")), "s");
+    await expect(writeSecretFiles(dir, { DB_URL: "x", NODE_OPTIONS: "--require=/tmp/evil.js" })).rejects.toThrow(/NODE_OPTIONS/);
+    expect(existsSync(join(dir, "DB_URL"))).toBe(false);
+  });
+});
+
+describe("service hosts reach every container that joins the services", () => {
+  const hosts = [{ name: "postgres", address: "172.30.0.7" }, { name: "r1-svc-postgres", address: "172.30.0.7" }];
+  const pairs = (args: string[]) => args.flatMap((a, i) => (a === "--add-host" ? [args[i + 1]] : []));
+  it("adds --add-host to the stage container, on a plain network and on a card network", () => {
+    expect(pairs(sandboxArgs(run({ network: "net", serviceHosts: hosts }), "/i", "/o"))).toEqual(["postgres:172.30.0.7", "r1-svc-postgres:172.30.0.7"]);
+    const card = { name: "c", dns: "172.30.0.2", containerArgs: () => ["--network", "c", "--dns", "172.30.0.2"], teardown: async () => {}, blocked: async () => [] };
+    expect(pairs(sandboxArgs(run({ cardNetwork: card as never, network: "c", serviceHosts: hosts }), "/i", "/o"))).toEqual(["postgres:172.30.0.7", "r1-svc-postgres:172.30.0.7"]);
+  });
+
+  it("adds them to the check container", () => {
+    expect(pairs(sandboxExecArgs({ name: "c", image: "i", worktree: "/wt", argv: ["true"], network: "net", serviceHosts: hosts }))).toEqual(["postgres:172.30.0.7", "r1-svc-postgres:172.30.0.7"]);
+  });
+
+  it("adds them to the app container", () => {
+    expect(pairs(appArgs({ name: "a", image: "i", worktree: "/wt", command: "x", port: 3000, network: "net", serviceHosts: hosts } as never))).toEqual(["postgres:172.30.0.7", "r1-svc-postgres:172.30.0.7"]);
+  });
+
+  it("adds none without services", () => {
+    expect(sandboxArgs(run(), "/i", "/o")).not.toContain("--add-host");
+    expect(sandboxExecArgs({ name: "c", image: "i", worktree: "/wt", argv: ["true"] })).not.toContain("--add-host");
+  });
+
+  it("refuses a bad host rather than build the argument", () => {
+    expect(() => sandboxExecArgs({ name: "c", image: "i", worktree: "/wt", argv: ["true"], network: "net", serviceHosts: [{ name: "db", address: "1.2.3.4 --privileged" }] })).toThrow(/address/);
   });
 });

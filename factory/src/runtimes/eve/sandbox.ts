@@ -20,7 +20,7 @@ function scriptEnv(extra: Readonly<Record<string, string>>): Record<string, stri
   return { ...commandEnv("bash", { home: process.env.LUNA_EVE_SCRATCH || "/nonexistent" }), ...SANDBOX_AGENT_ENV, ...extra };
 }
 
-function connect(root: string): SandboxConnection {
+export function connect(root: string): SandboxConnection {
   return {
     workspaceRoot: root,
     async spawn({ command, env, workingDirectory, signal, stdin }) {

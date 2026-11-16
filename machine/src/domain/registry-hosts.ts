@@ -44,6 +44,12 @@ function hostOfUrl(candidate: string): string | null {
 
 /** Each ecosystem's own hosts for a lockfile that is present (at the root, or by name in `nested`), plus the hosts of the `https://` URLs its text names on a line with `resolved`, `url`, `tarball`, `remote` or `source`; at most 20, sorted. */
 export function registryHostsOf(lockfiles: readonly LockfileText[], nested: readonly string[] = []): string[] {
+  const { own, named } = registryHostsSplit(lockfiles, nested);
+  return [...own, ...named].sort();
+}
+
+/** `registryHostsOf` in two lists: the ecosystems' own hosts (the machine's) and the hosts the lockfiles' text names (the repo's), the second cut so both stay within 20. */
+export function registryHostsSplit(lockfiles: readonly LockfileText[], nested: readonly string[] = []): { own: string[]; named: string[] } {
   const own = new Set<string>();
   const named = new Set<string>();
   // A lockfile in a subfolder (`board/Cargo.lock`) adds its ecosystem's own hosts and nothing it names: a vendored or planted lockfile deep in
@@ -63,9 +69,11 @@ export function registryHostsOf(lockfiles: readonly LockfileText[], nested: read
     }
   }
   const all = new Set(own);
+  const kept: string[] = [];
   for (const host of [...named].sort()) {
     if (all.size >= MAX_REGISTRY_HOSTS) break;
+    if (!all.has(host)) kept.push(host);
     all.add(host);
   }
-  return [...all].sort();
+  return { own: [...own].sort(), named: kept };
 }

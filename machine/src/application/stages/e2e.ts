@@ -7,6 +7,7 @@ import { branchBase, diffNameStatus, headCommit } from "../../adapters/git/workt
 import type { DecisionOverrides } from "@hardness/contracts";
 
 import type { Policy } from "../../domain/policy.ts";
+import { trustOf } from "../../domain/trust.ts";
 import { type ManifestRow, boundedArtifacts, manifestRows } from "../../domain/e2e-manifest.ts";
 import { approvedScenarios } from "../../domain/stage-input.ts";
 import { type ScenarioRow, scenarioFindings } from "../../domain/send-back.ts";
@@ -216,6 +217,7 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
           commit: await (deps.headCommit ?? headCommit)(worktree),
           branch: context.task.branch ?? "",
           attempt: context.attempt * 10 + runs++,
+          trust: trustOf(context.task),
           signal: context.signal,
           onBlocked: (step, rows) => void Promise.all(blockedPayloads(rows, step).map((payload) => context.emit?.("sandbox.egress_blocked", payload))).catch(() => {}),
         });
@@ -234,6 +236,7 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
           workspace: worktree,
           commit: await (deps.headCommit ?? headCommit)(worktree),
           attempt: context.attempt * 10 + runs++,
+          trust: trustOf(context.task),
           signal: context.signal,
           onBlocked: (step, rows) => void Promise.all(blockedPayloads(rows, step).map((payload) => context.emit?.("sandbox.egress_blocked", payload))).catch(() => {}),
         });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { type PrNode, canPush, fromGraphQl, needsMe, splitOf } from "./pull-request.ts";
+import { type PrNode, canPush, fromGraphQl, needsMe, prFields, splitOf } from "./pull-request.ts";
 
 const checkRun = (name: string, status: string, conclusion: string | null) => ({
   __typename: "CheckRun",
@@ -41,6 +41,12 @@ const red = [checkRun("build", "COMPLETED", "SUCCESS"), checkRun("lint", "COMPLE
 const running = [checkRun("build", "IN_PROGRESS", null)];
 
 describe("fromGraphQl", () => {
+  it("keeps GitHub's author association of the PR, and none when the node has none", () => {
+    expect(facts({ authorAssociation: "FIRST_TIME_CONTRIBUTOR" }).authorAssociation).toBe("FIRST_TIME_CONTRIBUTOR");
+    expect(facts({}).authorAssociation).toBeUndefined();
+    expect(prFields({ requests: 1, threads: 1, contexts: 1 })).toContain("authorAssociation");
+  });
+
   it("counts CheckRuns and StatusContexts alike and keeps the failed ones", () => {
     const pr = facts({ contexts: [checkRun("build", "COMPLETED", "SUCCESS"), statusContext("lint", "FAILURE"), checkRun("e2e", "QUEUED", null)] });
     expect(pr.checks).toEqual({

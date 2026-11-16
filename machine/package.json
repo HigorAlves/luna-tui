@@ -9,6 +9,7 @@
     "./telemetry": "./src/bootstrap/telemetry.ts",
     "./egress": "./src/bootstrap/egress.ts",
     "./config": "./src/config.ts",
+    "./egress-kind": "./src/domain/egress-kind.ts",
     "./policy": "./src/application/policy.ts",
     "./decisions": "./src/bootstrap/decisions.ts"
   },
@@ -25,6 +26,7 @@
     "runner-video:build": "bash runner/build.sh --video",
     "runner-video:smoke": "bash runner-video/smoke.sh",
     "smoke:sandbox": "tsx scripts/smoke-sandbox.mjs",
+    "relay:smoke": "tsx runner/egress/relay-smoke.ts",
     "golden": "node scripts/golden-task.mjs",
     "gates": "tsx scripts/github-gates.mjs",
     "golden:concurrency": "node scripts/golden-concurrency.mjs",

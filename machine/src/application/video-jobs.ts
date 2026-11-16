@@ -8,7 +8,7 @@ import { z } from "zod";
 
 import { FINDING_KINDS, type FindingKind } from "../../runner-video/tools/lib/findings.ts";
 import { readRegularFile } from "../adapters/fs/bounded.ts";
-import type { SandboxResult, SandboxRun } from "../adapters/docker/docker.ts";
+import type { SandboxResult, SandboxRun, SandboxSize } from "../adapters/docker/docker.ts";
 
 export type VideoTool = "narrate" | "cards" | "compose" | "measure" | "frames";
 
@@ -21,6 +21,8 @@ export interface VideoToolRun {
   args: string[];
   timeoutMs: number;
   signal: AbortSignal;
+  /** The machine sandbox policy's size for the container (runtime, process limit, seccomp, cpu, memory); absent, docker's defaults. */
+  limits?: SandboxSize;
 }
 
 export interface VideoToolResult {
@@ -48,6 +50,7 @@ export async function runVideoTool(sandbox: (run: SandboxRun) => Promise<Sandbox
     entrypoint: ["node", `/video-tools/tools/${run.tool}.ts`, ...run.args],
     // Rendering and measuring need no network at all.
     networkNone: true,
+    ...(run.limits ? { limits: run.limits } : {}),
     signal: run.signal,
   });
   return {
@@ -74,8 +77,9 @@ export async function readFrames(dir: string): Promise<FramesRead | null> {
 }
 
 /** Reads the text of the image files directly in `dir` with the frames tool (the folder is the job: it is mounted at /work). Null when the tool could not run. */
-export async function scanImages(deps: { sandbox: (run: SandboxRun) => Promise<SandboxResult>; image: string }, run: { id: string; dir: string; signal: AbortSignal }): Promise<{ file: string; text: string; kinds?: FindingKind[]; truncated?: true }[] | null> {
-  const done = await runVideoTool(deps.sandbox, { image: deps.image, id: run.id, jobDir: run.dir, tool: "frames", args: ["--images", "/work", "--out", "/work/qa"], timeoutMs: 15 * 60_000, signal: run.signal });
+export async function scanImages(deps: { sandbox: (run: SandboxRun) => Promise<SandboxResult>; image: string; limitsOf?: () => Promise<SandboxSize> }, run: { id: string; dir: string; signal: AbortSignal }): Promise<{ file: string; text: string; kinds?: FindingKind[]; truncated?: true }[] | null> {
+  const limits = await deps.limitsOf?.();
+  const done = await runVideoTool(deps.sandbox, { image: deps.image, id: run.id, jobDir: run.dir, tool: "frames", args: ["--images", "/work", "--out", "/work/qa"], timeoutMs: 15 * 60_000, signal: run.signal, ...(limits ? { limits } : {}) });
   if (!done.ok) return null;
   const frames = await readFrames(run.dir);
   return frames ? frames.flatMap((f) => (f.file !== undefined ? [{ file: f.file, text: f.text, ...(f.kinds ? { kinds: f.kinds } : {}), ...(f.truncated ? { truncated: true as const } : {}) }] : [])) : null;

@@ -36,4 +36,77 @@ describe("a repository's image and graph health", () => {
     });
     expect(row!.graph).toMatchObject({ building: true, lastFailure: "the graph build failed (exit code 1)" });
   });
+
+  it("shows the devcontainer's image as the base, what it did not apply, and why the policy refused it", async () => {
+    const [dev, plain] = await repoHealthOf({
+      repos: ["/a/dev", "/a/plain"],
+      policy: async () => ({ graph: true, factory: { sandbox: { image: { base: null } } } }),
+      source: { for: async (r) => (r === "/a/dev" ? { base: "node:22", origin: "devcontainer" as const, containerEnv: {}, notes: ["devcontainer.json features: not applied: they need the devcontainers CLI"], bounds: ["devcontainer.json image refused"], dockerfile: null } : { base: null, origin: null, containerEnv: {}, notes: [], bounds: [], dockerfile: null }) },
+      machineImage: "hardness-runner:dev",
+      images: { pending: async () => null, status: () => null },
+      graph: { stampOf: async () => null },
+      watch: { health: () => ({ building: false, lastFailure: null }) },
+    });
+    expect(dev!.image.base).toBe("node:22");
+    expect(dev!.notes).toEqual(["devcontainer.json features: not applied: they need the devcontainers CLI"]);
+    expect(dev!.bounds).toEqual(["devcontainer.json image refused"]);
+    expect(plain).not.toHaveProperty("notes");
+  });
+
+  it("offers a Dockerfile that waits for approval, and says when it changed since an approval", async () => {
+    const key = `dockerfile=sha256:${"e".repeat(64)}`;
+    const rows = await repoHealthOf({
+      repos: ["/a/new", "/a/changed", "/a/none"],
+      policy: async () => ({ graph: true }),
+      machineImage: "hardness-runner:dev",
+      images: { pending: async () => null, status: () => null, pendingDockerfile: async (r) => (r === "/a/none" ? null : { path: ".devcontainer/Dockerfile", key, changed: r === "/a/changed" }) },
+      graph: { stampOf: async () => null },
+      watch: { health: () => ({ building: false, lastFailure: null }) },
+    });
+    const [fresh, changed, none] = rows;
+    expect(fresh!.image.pendingDockerfile).toEqual({ path: ".devcontainer/Dockerfile", key, changed: false });
+    expect(fresh!.notes).toEqual(["Dockerfile .devcontainer/Dockerfile awaits approval"]);
+    expect(changed!.image.pendingDockerfile).toMatchObject({ changed: true });
+    expect(changed!.notes).toEqual(["Dockerfile .devcontainer/Dockerfile changed since approval"]);
+    expect(none!.image).not.toHaveProperty("pendingDockerfile");
+    expect(none).not.toHaveProperty("notes");
+  });
+
+  it("shows the image's toolchain warnings as notes", async () => {
+    const [row] = await repoHealthOf({
+      repos: ["/a/shop"],
+      policy: async () => ({ graph: true }),
+      machineImage: "hardness-runner:dev",
+      images: { pending: async () => null, status: () => null, warnings: () => ["toolchains node: the image has 22.3, luna.yaml wants 24"] },
+      graph: { stampOf: async () => null },
+      watch: { health: () => ({ building: false, lastFailure: null }) },
+    });
+    expect(row!.notes).toEqual(["toolchains node: the image has 22.3, luna.yaml wants 24"]);
+  });
+
+  it("shows what the machine's sandbox policy dropped from the repo's luna.yaml, only when it dropped something", async () => {
+    const [bounded, plain] = await repoHealthOf({
+      repos: ["/a/bounded", "/a/plain"],
+      policy: async (r) => ({ graph: true, ...(r === "/a/bounded" ? { bounds: { notes: ["sandbox.cpu 16 is capped at 4"], egress: ['sandbox.egress.allow: "x.pastebin.com" dropped'], image: ['sandbox.image.base "node:22" is refused'], seccomp: null } } : { bounds: { notes: [], egress: [], image: [], seccomp: null } }) }),
+      machineImage: "hardness-runner:dev",
+      images: { pending: async () => null, status: () => null },
+      graph: { stampOf: async () => null },
+      watch: { health: () => ({ building: false, lastFailure: null }) },
+    });
+    expect(bounded!.bounds).toEqual(['sandbox.image.base "node:22" is refused', 'sandbox.egress.allow: "x.pastebin.com" dropped']);
+    expect(plain).not.toHaveProperty("bounds");
+  });
+
+  it("adds what the policy dropped from the lockfile, QA and deploy hosts", async () => {
+    const [row] = await repoHealthOf({
+      repos: ["/a/r"],
+      policy: async () => ({ graph: true, bounds: { notes: [], egress: ['sandbox.egress.allow: "x.pastebin.com" dropped'], image: [], seccomp: null } }),
+      egressBounds: async () => ['lockfile: "cdn.pastebin.com" dropped, it matches egress.deny "*.pastebin.com"'],
+      machineImage: "hardness-runner:dev",
+      images: { pending: async () => null, status: () => null },
+      graph: { stampOf: async () => null },
+      watch: { health: () => ({ building: false, lastFailure: null }) },
+    });
+    expect(row!.bounds).toEqual(['sandbox.egress.allow: "x.pastebin.com" dropped', 'lockfile: "cdn.pastebin.com" dropped, it matches egress.deny "*.pastebin.com"']);
+  });
 });

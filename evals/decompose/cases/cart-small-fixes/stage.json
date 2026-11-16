@@ -1,0 +1,68 @@
+{
+  "schema": 3,
+  "stage": "decompose",
+  "pack": "decompose",
+  "attempt": 1,
+  "task": {
+    "id": "eval-cart-small-fixes",
+    "title": "Two small fixes in the cart",
+    "description": "",
+    "criteria": [],
+    "repoPath": "fixtures/golden-task",
+    "branch": "task/eval-cart-small-fixes",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "split": {
+      "origin": {
+        "title": "Two small fixes in the cart",
+        "text": "formatPrice prints one decimal for round amounts. Separately, the cart has no test for an empty list. About 25 lines in all.",
+        "criteria": [
+          {
+            "id": "C1",
+            "text": "formatPrice(100) returns \"$1.00\""
+          },
+          {
+            "id": "C2",
+            "text": "formatPrice(1234) returns \"$12.34\""
+          },
+          {
+            "id": "C3",
+            "text": "cartTotal([]) returns 0 and a test pins it"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "src/cart.js",
+          "role": "code"
+        },
+        {
+          "path": "test/cart.test.js",
+          "role": "test"
+        }
+      ],
+      "limit": {
+        "target": [
+          100,
+          400
+        ],
+        "hard": 800,
+        "maxChildren": 4
+      },
+      "children": [],
+      "round": 1
+    }
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

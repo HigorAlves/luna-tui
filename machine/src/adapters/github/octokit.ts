@@ -50,6 +50,7 @@ export interface OctokitLike {
     checks: { listForRef(params: Record<string, unknown>): Promise<{ data: { check_runs: Array<{ name: string; status: string; conclusion: string | null; html_url: string | null }> } }> };
     issues: {
       listForRepo: unknown;
+      get(params: Record<string, unknown>): Promise<{ data: { author_association?: string | null } }>;
       createComment(params: Record<string, unknown>): Promise<unknown>;
       create(params: Record<string, unknown>): Promise<{ data: { number: number; html_url: string } }>;
       listComments: unknown;
@@ -566,7 +567,7 @@ export class OctokitGitHub implements GitHub {
   async listReadyIssues(slug: string, label: string): Promise<GhIssue[]> {
     const { owner, repo } = repoRef(slug);
     const rows = await call(`listing ${slug} issues labelled ${label}`, () =>
-      this.octokit.paginate<{ number: number; title: string; body: string | null; html_url: string; labels?: Array<string | { name?: string }>; user?: { login?: string } | null; pull_request?: unknown }>(
+      this.octokit.paginate<{ number: number; title: string; body: string | null; html_url: string; labels?: Array<string | { name?: string }>; user?: { login?: string } | null; author_association?: string | null; pull_request?: unknown }>(
         this.octokit.rest.issues.listForRepo,
         { owner, repo, labels: label, state: "open", per_page: 50 },
       ),
@@ -574,7 +575,13 @@ export class OctokitGitHub implements GitHub {
     // The issues API lists PRs too; intake wants issues.
     return rows
       .filter((i) => !i.pull_request)
-      .map((i) => ({ number: i.number, title: i.title, body: i.body ?? null, url: i.html_url, labels: (i.labels ?? []).map((l) => (typeof l === "string" ? l : (l.name ?? ""))).filter(Boolean), ...(i.user?.login ? { author: i.user.login } : {}) }));
+      .map((i) => ({ number: i.number, title: i.title, body: i.body ?? null, url: i.html_url, labels: (i.labels ?? []).map((l) => (typeof l === "string" ? l : (l.name ?? ""))).filter(Boolean), ...(i.user?.login ? { author: i.user.login } : {}), ...(i.author_association ? { authorAssociation: i.author_association } : {}) }));
+  }
+
+  async issueAssociation(slug: string, number: number): Promise<string | null> {
+    const { owner, repo } = repoRef(slug);
+    const { data } = await call(`reading ${slug}#${number}`, () => this.octokit.rest.issues.get({ owner, repo, issue_number: number }));
+    return data.author_association ? data.author_association : null;
   }
 
   async commentOnIssue(slug: string, number: number, body: string): Promise<void> {

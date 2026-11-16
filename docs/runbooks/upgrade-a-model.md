@@ -51,6 +51,12 @@ pnpm --filter @hardness/machine smoke:sandbox             # evidence and a dry-r
 
 The conformance table (`factory/src/runtimes/conformance/table.ts`) is the bar. Every runtime runs the same scenarios against a fake of its own transport. That PR changes no model.
 
+Then check the release-age gate of pnpm:
+
+- pnpm refuses a version that is younger than its release-age gate. A pin that new needs an entry in `minimumReleaseAgeExclude` in `pnpm-workspace.yaml`. Add `name@exact-version`. A platform package of the SDK needs its own entry.
+- Run `pnpm install --frozen-lockfile`. It prints "Lockfile passes supply-chain policies" when every pin is old enough or listed.
+- Remove the entries of versions that the repository no longer pins. A stale entry hides nothing and misleads the next reader.
+
 ## 4. Replay
 
 - Build the stage image from your branch. The evals run in that image.

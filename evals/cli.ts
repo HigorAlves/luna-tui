@@ -12,9 +12,10 @@
 //   pnpm eval preflight                                       what a baseline run needs, checked without a model call; exits 1 when a check fails
 //   pnpm eval calibrate --pack <p> [--since <date>] [--target 0.9] [--with-outcome] [--out <file>]   proposes the confidence bars from ground truth, with the evidence; changes nothing
 //   pnpm eval calibrate --weights [--machine triage|ticket|conversation] [--out <file>]   proposes the priority weights and bands from the priority files; changes nothing
-//   pnpm eval baseline-plan [--engines a,b,c]                 prints the baseline commands and runs none
+//   pnpm eval baseline-plan [--engines a,b,c] [--efforts a,b] prints the baseline commands and runs none; --efforts adds the agent packs
 //   pnpm eval prune-runs [--older-than 30]                    removes run folders under evals/.runs older than that many days
-//   pnpm eval scorecard                       evals/scorecard.md over every decision baseline
+//   pnpm eval propose --repo <abs path> [--machine <url>] [--dry-run]   posts the scorecards to the machine, which drafts a luna.yaml proposal card for the repo
+//   pnpm eval scorecard                    evals/scorecard.md over every decision baseline
 //   pnpm eval defaults [--write] [--except <pack>...]              the default per slot by the scorecard's rule; --write updates contracts/src/decision-defaults.json
 import { DECISION_DEFAULTS, PACKS, PackId, decisionEngines } from "@hardness/contracts";
 import { machineCredentials } from "@hardness/machine/credentials";
@@ -22,23 +23,25 @@ import { imageExists } from "@hardness/machine/docker";
 import { DecisionLog, machineStateDir } from "@hardness/machine/decisions";
 import { buildTelemetry, tracesFromEnv } from "@hardness/machine/telemetry";
 import { collectorGate } from "./src/collector.ts";
-import { writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
+import { type DefaultsEntry, proposalCandidates } from "./src/candidates.ts";
 import { decisionPack } from "./src/labels.ts";
 import { baselineHashes, changedLines, readLedger, writeLedger } from "./src/baseline-ledger.ts";
 import { labelFor, nextToLabel, renderNext, setLabel } from "./src/label.ts";
 import { runHarvest, runLabelPush, runPull, runPush } from "./src/loop.ts";
-import { baselinePlan } from "./src/baseline-plan.ts";
+import { agentPacksWithCases, baselinePlan, parseEfforts } from "./src/baseline-plan.ts";
 import { renderBars } from "./src/propose.ts";
 import { pruneRuns } from "./src/prune-runs.ts";
 import { writeReport } from "./src/report-out.ts";
 import { proposeWeights, readPriorityFiles, renderWeights } from "./src/weights.ts";
 import { casesTable, decisionPackIds, preflight } from "./src/preflight.ts";
 import { folderMegabytes, priorityHints, printable, recordsReport, stripUnsafe } from "./src/records.ts";
-import { type Proposal, PINNED, buildDefaultsFile, loadBaselines, proposeDefaults, renderScorecard } from "./src/scorecard.ts";
+import { type Proposal, PINNED, buildDefaultsFile, loadAgentBaselines, loadBaselines, proposeDefaults, renderScorecard } from "./src/scorecard.ts";
 
 const EVALS = dirname(fileURLToPath(import.meta.url));
 const DEFAULTS_FILE = resolve(EVALS, "..", "contracts", "src", "decision-defaults.json");
@@ -52,6 +55,13 @@ function fail(message: string): never {
 const decisionOf = (raw: string | undefined): PackId => {
   const pack = PackId.safeParse(raw).data;
   if (!pack || !decisionPack(pack)) fail("--pack must be a decision pack");
+  return pack;
+};
+
+/** A pack whose cases `cases` lists: a decision pack, or an agent pack. */
+const casePackOf = (raw: string | undefined): PackId => {
+  const pack = PackId.safeParse(raw).data;
+  if (!pack || PACKS[pack].kind === "script") fail("--pack must be a decision or an agent pack");
   return pack;
 };
 
@@ -121,8 +131,15 @@ if (command === "harvest") {
   const saved = writeReport(values.out, lines);
   if (saved) console.log(`report written to ${saved}`);
 } else if (command === "baseline-plan") {
-  const { values } = parseArgs({ args: process.argv.slice(3), options: { engines: { type: "string" } } });
-  for (const line of baselinePlan(values.engines ? { engines: values.engines.split(",").map((e) => e.trim()).filter(Boolean) } : {})) console.log(line);
+  const { values } = parseArgs({ args: process.argv.slice(3), options: { engines: { type: "string" }, efforts: { type: "string" } } });
+  let efforts: ReturnType<typeof parseEfforts> | undefined;
+  try {
+    efforts = values.efforts ? parseEfforts(values.efforts) : undefined;
+  } catch (error) {
+    fail((error as Error).message);
+  }
+  const plan = baselinePlan({ ...(values.engines ? { engines: values.engines.split(",").map((e) => e.trim()).filter(Boolean) } : {}), ...(efforts ? { efforts, agentPacks: agentPacksWithCases(EVALS) } : {}) });
+  for (const line of plan) console.log(line);
 } else if (command === "prune-runs") {
   const { values } = parseArgs({ args: process.argv.slice(3), options: { "older-than": { type: "string", default: "30" } } });
   const days = Number(values["older-than"]);
@@ -131,7 +148,7 @@ if (command === "harvest") {
   console.log(`removed ${out.removed.length} run folder(s) older than ${days} days${out.skipped.length > 0 ? `; left alone (not a stamped folder, or a link): ${out.skipped.join(", ")}` : ""}`);
 } else if (command === "cases") {
   const { values } = parseArgs({ args: process.argv.slice(3), options: { pack: { type: "string" } } });
-  for (const pack of values.pack ? [decisionOf(values.pack)] : decisionPackIds()) {
+  for (const pack of values.pack ? [casePackOf(values.pack)] : decisionPackIds()) {
     console.log(`\n${stripUnsafe(pack)}`);
     for (const row of casesTable(EVALS, pack)) console.log(stripUnsafe(`  ${row}`));
   }
@@ -178,6 +195,24 @@ if (command === "harvest") {
       console.log(`labelled ${pack} ${values.record} (person_cli)`);
     }
   }
+} else if (command === "propose") {
+  const { values } = parseArgs({ args: process.argv.slice(3), options: { repo: { type: "string" }, machine: { type: "string" }, "dry-run": { type: "boolean", default: false } } });
+  if (!values.repo || !isAbsolute(values.repo)) fail("--repo must be an absolute path");
+  const body = { repo: values.repo, candidates: proposalCandidates(loadAgentBaselines(EVALS), DECISION_DEFAULTS as Record<string, DefaultsEntry>) };
+  const url = (values.machine ?? process.env.MACHINE_URL ?? process.env.HARDNESS_MACHINE_URL ?? "http://127.0.0.1:4317").replace(/\/+$/, "");
+  if (values["dry-run"]) {
+    console.log(`POST ${url}/repos/proposals\n${JSON.stringify(body, null, 2)}`);
+  } else {
+    const tokenFile = join(homedir(), ".config", "hardness", "machine-api-token");
+    const token = process.env.MACHINE_API_TOKEN?.trim() || (existsSync(tokenFile) ? readFileSync(tokenFile, "utf8").trim() : "");
+    const res = await fetch(`${url}/repos/proposals`, { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) }).catch((error: unknown) => fail(`the machine at ${url} did not answer: ${error instanceof Error ? error.message : String(error)}`));
+    const text = await res.text();
+    if (!res.ok) fail(`the machine answered ${res.status}: ${stripUnsafe(text).slice(0, 300)}`);
+    const out = JSON.parse(text) as { changes: { pack: string; engine: { from: string; to: string } | null; effort: { from: string; to: string } | null; why: string }[]; taskId: string | null };
+    if (out.changes.length === 0) console.log("no change proposed: the evidence does not call for one");
+    for (const c of out.changes) console.log(stripUnsafe(`${c.pack}: ${[c.engine && `engine ${c.engine.from} -> ${c.engine.to}`, c.effort && `effort ${c.effort.from} -> ${c.effort.to}`].filter(Boolean).join(", ")}; ${c.why}`));
+    if (out.taskId) console.log(`card ${out.taskId}: approve or reject it on the board`);
+  }
 } else if (command === "scorecard" || command === "defaults") {
   const { values } = parseArgs({ args: process.argv.slice(3), options: { write: { type: "boolean", default: false }, except: { type: "string", multiple: true, default: [] } } });
   const cards = loadBaselines(EVALS);
@@ -186,7 +221,7 @@ if (command === "harvest") {
   const proposals = Object.fromEntries(
     Object.values(PACKS).filter((p) => p.kind === "decision").map((p) => [p.id, proposeDefaults(p.id, cards, { default: current(p.id).default, fallback: current(p.id).fallback })]),
   ) as Partial<Record<PackId, Proposal>>;
-  const text = renderScorecard(cards, proposals, new Date());
+  const text = renderScorecard(cards, proposals, new Date(), loadAgentBaselines(EVALS));
   if (command === "scorecard") {
     writeFileSync(join(EVALS, "scorecard.md"), text);
     console.log(`evals/scorecard.md written: ${cards.length} baseline(s)`);

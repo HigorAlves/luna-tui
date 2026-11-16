@@ -42,7 +42,8 @@ describe("agentFiles", () => {
     const agent = files["agent/agent.ts"]!;
     expect(agent).toContain('import { stageModel } from "../../../src/runtimes/eve/agent/model.ts"');
     expect(agent).toContain("model: stageModel()");
-    expect(agent).toContain('reasoning: "high"');
+    // The run's effort, set in the server's environment, over the pack's own.
+    expect(agent).toContain('process.env.LUNA_EFFORT ?? "high"');
     expect(agent).toContain("defaultTools: false");
     expect(agent).toMatch(/limits: \{ sessionUsage: /);
     // The budget follows the turns the run was given, as the runner's call cap and the dry run do.
@@ -94,7 +95,8 @@ describe("agentFiles", () => {
     expect(agent).toContain('description: "Drafts the reply to a person');
     expect(agent).toContain('model: engineModel("codex:luna")');
     expect(agent).toContain('import { engineModel } from "../../../../../src/runtimes/eve/agent/model.ts"');
-    expect(agent).toContain('reasoning: "high"');
+    // The helper runs at the parent run's effort (the server's LUNA_EFFORT), else the pack's own.
+    expect(agent).toContain('reasoning: (process.env.LUNA_EFFORT ?? "high")');
     expect(agent).toMatch(/defaultTools: false,\n {2}tool: false,/);
     expect(agent).not.toMatch(/gpt-|claude-/);
     expect(files[`${dir}/instructions.md`]).toContain(readFileSync(join(FACTORY_ROOT, "roles", "reply-drafter", "role.md"), "utf8").split("---\n")[2]!.slice(0, 60));

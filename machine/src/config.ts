@@ -1,9 +1,11 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { type EngineBudgets, RUNNING, type RuntimeId, type TaskState, engineBudgetKeyProblem, hostPatternProblem, normalizeHostPattern } from "@hardness/contracts";
+import { parse as parseYaml } from "yaml";
+
+import { type EngineBudgets, type MachinePolicy, MachinePolicySchema, RUNNING, type RuntimeId, type TaskState, engineBudgetKeyProblem, hostPatternProblem, machinePolicyProblem, normalizeHostPattern } from "@hardness/contracts";
 
 import type { TracesMode } from "./application/telemetry.ts";
 import { isLoopback } from "./adapters/http/access.ts";
@@ -20,7 +22,7 @@ export interface Config {
   /** Run Triage and Implementer as real agents. Off: every stage is a stub. */
   agents: boolean;
   /** The sandbox's network (`MACHINE_EGRESS`, on by default): off, every run joins an ordinary bridge as before the allow-list. `engineHosts` (`MACHINE_EGRESS_ENGINE_HOSTS`) are host patterns added to every agent's engine hosts. The owner's switches: never read from `luna.yaml`. */
-  egress: { enabled: boolean; engineHosts: string[] };
+  egress: { enabled: boolean; engineHosts: string[]; /** `MACHINE_ENGINE_RELAY` (on by default; always off with egress off): the Claude credential stays in the egress proxy, and a stage holds a placeholder. */ relay: boolean };
   /** Tasks that can be driving a stage at once, across every repo. The rest queue. */
   maxConcurrentTasks: number;
   /** Running tasks one repo may hold at once, so it cannot take every slot; null means no cap. */
@@ -89,6 +91,8 @@ export interface Config {
   restartPolicy: RestartPolicy;
   /** Run traces to a local Laminar (`MACHINE_TRACES`, `LMNR_*`); `{ mode: "off" }` without a key. */
   traces: TracesConfig;
+  /** What the owner lets any repository's sandbox ask for (`MACHINE_SANDBOX_POLICY`, default `~/.config/hardness/sandbox.yaml`); the defaults when the file is absent. A repo's luna.yaml stays within it. */
+  sandboxPolicy: MachinePolicy;
 }
 
 export interface SlackInboxConfig {
@@ -281,7 +285,60 @@ function egressFrom(env: NodeJS.ProcessEnv): Config["egress"] {
     const problem = hostPatternProblem(entry);
     if (problem) throw new Error(`MACHINE_EGRESS_ENGINE_HOSTS: ${problem}`);
   }
-  return { enabled: raw !== "off", engineHosts };
+  const relay = env.MACHINE_ENGINE_RELAY?.trim();
+  if (relay !== undefined && relay !== "" && relay !== "on" && relay !== "off") throw new Error(`MACHINE_ENGINE_RELAY must be on or off, got "${relay}"`);
+  return { enabled: raw !== "off", engineHosts, relay: raw !== "off" && relay !== "off" };
+}
+
+/** The sandbox policy file's name in `~/.config/hardness`. */
+export const SANDBOX_POLICY_FILE = "sandbox.yaml";
+
+/** The machine sandbox policy: the file `MACHINE_SANDBOX_POLICY` names, else `~/.config/hardness/sandbox.yaml`. Absent: the defaults. Unreadable or invalid: an error naming the file and the key. */
+export function sandboxPolicyFrom(env: NodeJS.ProcessEnv, home: string): MachinePolicy {
+  const file = env.MACHINE_SANDBOX_POLICY?.trim() || join(home, ".config", "hardness", SANDBOX_POLICY_FILE);
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return MachinePolicySchema.parse({});
+    throw new Error(`MACHINE_SANDBOX_POLICY ${file} cannot be read: ${(error as Error).message}`);
+  }
+  let raw: unknown;
+  try {
+    raw = parseYaml(text) ?? {};
+  } catch (error) {
+    throw new Error(`MACHINE_SANDBOX_POLICY ${file} is not valid YAML: ${(error as Error).message}`);
+  }
+  const parsed = MachinePolicySchema.safeParse(raw);
+  if (!parsed.success) throw new Error(`MACHINE_SANDBOX_POLICY ${file}: ${machinePolicyProblem(raw)}`);
+  if (parsed.data.seccomp !== "default") checkSeccompProfile(parsed.data.seccomp, file);
+  return parsed.data;
+}
+
+/** The policy keys that are set but do nothing, and a startup warning for each. Today only `bash_sandbox: on`: the nested Bash sandbox was not built (RFC 0009). */
+export function sandboxPolicyNotes(policy: MachinePolicy): { notInForce: string[]; warnings: string[] } {
+  if (policy.bash_sandbox !== "on") return { notInForce: [], warnings: [] };
+  return { notInForce: ["bash_sandbox"], warnings: ["sandbox policy: bash_sandbox is on, but the nested Bash sandbox was not built (RFC 0009), so it has no effect"] };
+}
+
+/** The policy's seccomp profile must exist, be a readable regular file and parse as JSON: else the machine would start and then fail every stage. Throws, naming the key and the path. */
+function checkSeccompProfile(profile: string, policyFile: string): void {
+  const where = `MACHINE_SANDBOX_POLICY ${policyFile}: seccomp ${profile}`;
+  let text: string;
+  try {
+    if (!statSync(profile).isFile()) throw Object.assign(new Error("not a regular file"), { code: "NOTFILE" });
+    text = readFileSync(profile, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "NOTFILE") throw new Error(`${where} is not a regular file`);
+    if (code === "ENOENT") throw new Error(`${where} does not exist`);
+    throw new Error(`${where} cannot be read: ${(error as Error).message}`);
+  }
+  try {
+    JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${where} is not valid JSON: ${(error as Error).message}`);
+  }
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -460,6 +517,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     engineBudgets: engineBudgets(env),
     restartPolicy,
     traces: tracesConfig(env, home),
+    sandboxPolicy: sandboxPolicyFrom(env, home),
   };
 }
 

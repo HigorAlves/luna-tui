@@ -27,6 +27,21 @@ import { lunaServer } from "./luna.ts";
 
 const env = process.env;
 
+// What the SDK's native binary (0.3.311, claude 2.1.311) does with these two, read from its bundle:
+// - CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 removes credentials from the environment of what the agent
+//   spawns (Bash, hooks, MCP stdio servers). It strips ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN,
+//   ANTHROPIC_CUSTOM_HEADERS, CLAUDE_CODE_OAUTH_TOKEN (and its SESSIONS/REFRESH variants), the Foundry,
+//   AWS and Azure keys, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, GOOGLE_APPLICATION_CREDENTIALS, and
+//   many CI and registry tokens (NODE_AUTH_TOKEN, HF_TOKEN, VAULT_TOKEN, ACTIONS_*, SLACK_WEBHOOK_URL...).
+//   It also unsets credential-file pointers (KUBECONFIG, NETRC, DOCKER_CONFIG, SSH_AUTH_SOCK, XDG_*,
+//   CLAUDE_CONFIG_DIR...) and rewrites registry URLs that carry a password.
+//   It does NOT strip OPENAI_API_KEY, CODEX_HOME, AI_GATEWAY_API_KEY or TYPESAFE_API_KEY: those never
+//   reach a Claude stage (the machine passes only the engine's credential).
+//   Side effect: with it set the SDK forces the permission mode to "default" (and warns), so
+//   `dontAsk` is not honoured; allowedTools stays the explicit allow-list.
+// - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 turns off telemetry, updates and other background calls.
+const SDK_ENV = { CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" } as const;
+
 /** The SDK's `query()`, or a stand-in with its signature (the conformance table's scripted fake). */
 export type Transport = (params: { prompt: string; options?: Options }) => Query;
 
@@ -104,7 +119,7 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
     // The folders a stage reads or writes beside /work: without them the SDK refuses a shell read of /in/stage.json that the guard's roots allow.
     additionalDirectories: [paths.input, paths.out, paths.scratch],
     agent: pack.agent,
-    agents: agentDefinitions(pack, join(paths.factoryRoot, "roles"), engine.modelId),
+    agents: agentDefinitions(pack, join(paths.factoryRoot, "roles"), engine.modelId, ctx.effort ?? pack.effort),
     systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: [FACTORY_RULES, ...commandsLine(pack.access.commands)].join("\n") },
     plugins: [{ type: "local" as const, path: join(paths.factoryRoot, "plugin") }],
     // With skills masked the SDK offers only the rest (it hides the others from the model and rejects their calls); with no mask the key is absent.
@@ -124,14 +139,15 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
     },
     // The pinned ID, never an alias: the model does not change under the stage between runs.
     model: engine.modelId,
-    effort: pack.effort,
+    effort: ctx.effort ?? pack.effort,
     // The scratch folder is the model's TMPDIR: the one place outside /work and /out it may write.
-    env: { ...env, LUNA_FACTORY: "1", TMPDIR: paths.scratch },
+    env: { ...env, ...SDK_ENV, LUNA_FACTORY: "1", TMPDIR: paths.scratch },
   };
 
   if (dry) {
     const { mcpServers: _m, hooks, env: _e, agents, ...printable } = options;
-    return dryRun(ctx, JSON.stringify({ ...printable, agents: Object.keys(agents), hooks: Object.keys(hooks), mcpServers: ["luna"] }, null, 2));
+    // The env is not printed (it holds the credential); only what this file sets.
+    return dryRun(ctx, JSON.stringify({ ...printable, env: SDK_ENV, agents: Object.keys(agents), hooks: Object.keys(hooks), mcpServers: ["luna"] }, null, 2));
   }
 
   return drive(ctx, transport, prompt, options, calls, end);

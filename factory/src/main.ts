@@ -10,7 +10,7 @@
 // A helper on another runtime runs as a child of the stage (core/delegate.ts), into /out/children/<n>/.
 // This file reads the input, renders the prompt and writes the result; the run itself is the
 // runtime's (src/runtimes/).
-import { PACKS, type RunEvent, type RunInfo, resolveEngine } from "@hardness/contracts";
+import { PACKS, type RunEvent, type RunInfo, effortProblem, resolveEngine } from "@hardness/contracts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -122,13 +122,18 @@ async function runStage(): Promise<RunOutcome> {
   const engine = resolveEngine(input!.engine ?? pack.engines.default);
   const runtime = RUNTIMES[engine.runtime];
   if (!runtime) return { ...EMPTY_RUN, error: `engine ${engine.id} runs on ${engine.runtime}, which is not available in this factory yet` };
-  info = runInfo(runtime, engine, pack, template, FACTORY_ROOT, input!.context.economy?.mask);
+  // The run's effort, else the pack's own. Only one the input names is checked here: a pack's own
+  // is held to its engines by contracts/src/engines.test.ts.
+  const effort = input!.effort ?? (pack.kind === "agent" ? pack.effort : "low");
+  const problem = input!.effort ? effortProblem(pack.id, engine.id, input!.effort) : null;
+  if (problem) return { ...EMPTY_RUN, error: `invalid stage input: ${problem}` };
+  info = runInfo(runtime, engine, pack, template, FACTORY_ROOT, input!.context.economy?.mask, effort);
   const paths = { factoryRoot: FACTORY_ROOT, work: WORK, out: OUT, input: dirname(IN), scratch };
   // A helper the runtime does not run itself is a child run through `delegate`; the parent's turns
   // so far are its calls so far, which is never fewer.
   const turnsUsed = () => events.filter((e) => e.kind === "tool_call").length;
   const delegating = delegationFor(runtime.id, { pack, input: input!, paths, runtimes: RUNTIMES, emit, print: out, startedAt, turnsUsed });
-  const run = await runtime.run({ pack, engine, input: input!, prompt, paths, luna: withDelegate(luna, delegating), dry: DRY, emit, delegate: delegating?.tool ?? null, telemetry, judge: pack.kind === "agent" ? mailboxJudge(join(OUT, "checks")) : null });
+  const run = await runtime.run({ pack, engine, input: input!, effort, prompt, paths, luna: withDelegate(luna, delegating), dry: DRY, emit, delegate: delegating?.tool ?? null, telemetry, judge: pack.kind === "agent" ? mailboxJudge(join(OUT, "checks")) : null });
   // A dry run answers nothing unless the test seam gave it an answer; that one is settled.
   return withChildren(DRY && run.structured === null ? run : settle(run, pack), delegating);
 }

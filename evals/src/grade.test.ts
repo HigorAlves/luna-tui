@@ -129,6 +129,15 @@ describe("diffScorecards", () => {
     expect(diffScorecards(scorecard(meta("claude:haiku", "t0"), [result("a", true)]), next).costUsd).toBeNull();
   });
 
+  it("heads the scorecard with the effort when one was set", () => {
+    const plain = scorecard(meta("codex:luna", "t1"), [result("a", true)]);
+    expect(plain).not.toHaveProperty("effort");
+    expect(formatScorecard(plain).split("\n")[0]).toBe("slack_triage on codex:luna (m) · judge claude:opus");
+    const high = scorecard({ ...meta("codex:luna", "t1"), effort: "high" }, [result("a", true)]);
+    expect(high.effort).toBe("high");
+    expect(formatScorecard(high).split("\n")[0]).toBe("slack_triage on codex:luna at high (m) · judge claude:opus");
+  });
+
   it("prints the scorecard and the diff", () => {
     const card = scorecard(meta("codex:luna", "t1"), [
       result("a", true, { costUsd: 0.03, judge: { score: 0.8, pass: true, reasons: [], costUsd: 0.1 } }),

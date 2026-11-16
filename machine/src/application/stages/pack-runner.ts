@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
+import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -33,15 +33,18 @@ import {
 } from "../../adapters/git/worktree.ts";
 import { CredentialWaitError, type CredentialMount, type Credentials, NoCredentialError } from "../../adapters/credentials/index.ts";
 import { type SandboxResult, type SandboxRun, SecretsMissingError, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
-import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
 import { type EgressPolicy, blockedPayloads } from "../egress-policy.ts";
 import type { InstallInput, InstallOutcome } from "../install.ts";
 import type { SecretStore } from "../secrets.ts";
 import { redactDeep, secretRedactor } from "../../domain/redact-secrets.ts";
+import { egressKindOf } from "../../domain/egress-kind.ts";
 import { redactFiles } from "../../adapters/fs/redact-files.ts";
 import { saveKept } from "../kept-sandboxes.ts";
 import { LOCKFILES, envOf } from "../../domain/env-hash.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
+import { sandboxSizeOf } from "../../domain/sandbox-bounds.ts";
+import { trustOf, untrustedNote } from "../../domain/trust.ts";
+import { envBrokenDetail } from "../env-broken.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
 import { lockedFilesRemoved, lockedFilesTouched } from "../../domain/locked-files.ts";
@@ -58,7 +61,7 @@ import { type CardHit, sourceKindOf } from "../../domain/card-search.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { prepareStageCredentials } from "./stage-credentials.ts";
 import { PACK_LIMITS, approvedScenarios, buildStageInput } from "../../domain/stage-input.ts";
-import { reviewerEngine } from "../../domain/engine-choice.ts";
+import { chooseEffort, reviewerEngine } from "../../domain/engine-choice.ts";
 import { pickEngine } from "../engine.ts";
 import type { Economy } from "../economy.ts";
 import type { Graph } from "../graph.ts";
@@ -162,6 +165,8 @@ export interface AgentExtra {
   checkout?: boolean;
   /** The plan stage's packs: the plan under review (the test designer reads it as its plan; a second round carries the gaps or the review). */
   plan?: PlanContext;
+  /** question_council: the open triage questions, the card and the answers so far. */
+  questions?: QuestionsContext;
   /** verifying: the files the code graph says depend on what the change touched. */
   blastRadius?: string[];
   /** verifying: the coverage of the change's added lines. */
@@ -290,6 +295,9 @@ async function foldRun(deps: AgentDeps, context: StageContext, pack: PackId, res
   }
 }
 
+/** The cards whose untrusted run has been said on the task, so it is said once. */
+const untrustedNoted = new Set<string>();
+
 async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}, chosen: { image?: string } = {}, ran: { container: boolean } = { container: false }): Promise<StageResult> {
   const { task } = context;
   if (!task.repoPath) {
@@ -298,6 +306,15 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const limits = PACK_LIMITS[pack];
   if (extra.checkout && limits.writable) throw new Error(`${pack} is writable; a checkout run must be read-only`);
   const policy = await (deps.policies ?? sharedPolicies).for(task.repoPath);
+  // What the machine's sandbox policy lowered of the repository's cpu and memory: said on the task, so the cap is never silent.
+  for (const line of policy.bounds?.notes ?? []) await context.note?.(line).catch(() => {});
+  // A GitHub card from outside the repository's own people: its own cache volume and the policy's runtime for it. Said once on the task.
+  const trust = trustOf(task);
+  const size = sandboxSizeOf(policy, trust);
+  if (trust === "untrusted" && !untrustedNoted.has(task.id)) {
+    untrustedNoted.add(task.id);
+    await context.note?.(untrustedNote(size)).catch(() => {});
+  }
   // The repository's own image, built from the base its luna.yaml names; a build that fails is an environment problem with the reason.
   let stageImage = extra.image ?? deps.image;
   if (deps.repoImages && !extra.checkout && !extra.image) {
@@ -387,8 +404,15 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     const other = reviewerEngine(PACKS.verifying, implementer, (e) => ready.has(e));
     if (other) choice = { engine: other.engine, reason: other.reason };
   }
-  const engineEvents = choice.reason ? [{ at: new Date().toISOString(), kind: "engine", payload: { pack, engine: choice.engine, reason: choice.reason } }] : [];
+  // The repo's effort for the pack, when the engine that runs can serve it; else the pack's own, with why.
+  const effortChoice = chooseEffort({ pack: PACKS[pack], engine: choice.engine, config: policy.effort });
+  const engineEvents = [
+    ...(choice.reason ? [{ at: new Date().toISOString(), kind: "engine", payload: { pack, engine: choice.engine, reason: choice.reason } }] : []),
+    ...(effortChoice.reason ? [{ at: new Date().toISOString(), kind: "engine", payload: { pack, engine: choice.engine, reason: effortChoice.reason } }] : []),
+  ];
   if (!resume) await context.started?.({ container, inputCommit, engine: choice.engine });
+  // A council member's or the question council's container is no stage's (its `started` is withheld), but a restart must still find it.
+  if (!resume && (pack === "council_security" || pack === "council_second" || pack === "question_council")) await context.subStarted?.({ container });
   // An engine asked for that gave way to the default is said on the task as it starts, not only in the run's events.
   if (choice.note) await context.note?.(choice.note).catch(() => {});
 
@@ -416,7 +440,9 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     stage: context.stage,
     pack,
     ...(extra.plan ? { plan: extra.plan } : {}),
+    ...(extra.questions ? { questions: extra.questions } : {}),
     engine: choice.engine,
+    ...(effortChoice.source === "config" ? { effort: effortChoice.effort } : {}),
     attempt: context.attempt,
     approvals: context.approvals,
     priorFindings: pack === "implementing" ? (context.priorFindings ?? []) : [],
@@ -467,6 +493,18 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     if (!(error instanceof NoCredentialError || error instanceof CredentialWaitError)) throw error;
     return { outcome: "fail", detail: { error: error.message }, ...(engineEvents.length ? { events: engineEvents } : {}) };
   }
+  // From here to the container's end the credential is released whatever throws: the real token (`<runDir>/relay/anthropic`) or a secret file is never left for the prune.
+  const releaseOnce = credential.release.bind(credential);
+  let released: Promise<void> | null = null;
+  credential = { ...credential, release: () => (released ??= Promise.resolve(releaseOnce()).then(() => {})) };
+  const guard = async <T>(step: () => Promise<T>): Promise<T> => {
+    try {
+      return await step();
+    } catch (error) {
+      await credential.release().catch(() => {});
+      throw error;
+    }
+  };
   // What the run commits comes back as bundles in /out/bundles, read like a fetch from an untrusted server: the host never reads the agent's own repository.
   const importer = extra.checkout
     ? null
@@ -492,7 +530,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   let pushing: Promise<void> = Promise.resolve();
   // Where the scope is measured from (see the comment below), moved past default-branch history the branch merged since (`scopeStartOf`).
   const scopeFrom = input.plan != null ? (extra.scopeBase ?? context.firstInputCommit ?? (context.attempt === 1 ? inputCommit : null)) : inputCommit;
-  const scopeStart = scopeFrom && input.plan != null && task.repoPath && pack === "implementing" && !extra.checkout ? await scopeStartOf(workspace.path, task.repoPath, scopeFrom) : scopeFrom;
+  const scopeStart = scopeFrom && input.plan != null && task.repoPath && pack === "implementing" && !extra.checkout ? await guard(() => scopeStartOf(workspace.path, task.repoPath!, scopeFrom)) : scopeFrom;
   // The machine's side of the checks the implementer asks for: a red slice and the change's scope.
   const checks =
     pack === "implementing" && !extra.checkout
@@ -521,7 +559,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       : null;
   // Triage's board search: the same mailbox, answered over this task's own repository only.
   const cardSearch =
-    pack === "triage" && deps.cards
+    (pack === "triage" || pack === "question_council") && deps.cards
       ? cardSearchAnswers({ outDir: join(runDir, "out"), search: (query) => deps.cards!.search({ repoPath: task.repoPath, selfId: task.id, selfSource: sourceKindOf(task), query }) })
       : null;
   // The loop guard's question: any agent pack that runs shell commands has a guard to ask it (the machine's economy input says `judge: true` for the same packs).
@@ -585,14 +623,16 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     });
   };
   // The agent starts with a git repository of its own in the folder, made by the machine from the card's: the one the host never reads.
-  if (!extra.checkout && !resume) await refreshScratch(workspace.path, workspace.branch);
+  if (!extra.checkout && !resume) await guard(() => refreshScratch(workspace.path, workspace.branch));
   // The machine installs the card's dependencies from its lockfile, no credential in that container: the agent then works with them.
   if (deps.install && limits.writable && !extra.checkout && !resume) {
     let installed: InstallOutcome;
     try {
-      installed = await deps.install({ taskId: task.id, repoPath: task.repoPath, workspace: workspace.path, commit: inputCommit, signal: context.signal });
+      installed = await deps.install({ taskId: task.id, repoPath: task.repoPath, workspace: workspace.path, commit: inputCommit, trust, signal: context.signal });
     } catch (error) {
       credential.release();
+      const broken = envBrokenDetail(error);
+      if (broken) return { outcome: "escalated", detail: broken };
       throw error;
     }
     for (const payload of blockedPayloads(installed.blocked, "install")) await Promise.resolve(context.emit?.("sandbox.egress_blocked", payload)).catch(() => {});
@@ -609,7 +649,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   if (deps.secrets && (pack === "e2e" || pack === "recording")) {
     const names = [...new Set((pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : e2eTarget ? [e2eTarget] : []).flatMap((t) => (t.credential?.startsWith("env:") ? [t.credential.slice(4)] : [])))];
     if (names.length > 0) {
-      const loaded = await deps.secrets.load(task.repoPath, names);
+      const loaded = await guard(() => deps.secrets!.load(task.repoPath!, names));
       if (loaded.missing.length > 0) {
         credential.release();
         return { outcome: "escalated", detail: new SecretsMissingError(loaded.missing, deps.secrets.folder(task.repoPath)).detail };
@@ -622,8 +662,9 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const found = PACKS[pack];
   const owners = [credentialOwner(choice.engine), ...(found.kind === "decision" ? [] : helpersOn(found, resolveEngine(choice.engine).runtime).map((h) => credentialOwner(h.engine)))];
   const egress = deps.egress
-    ? await deps.egress.for({ repoPath: task.repoPath, kind: "agent", owners: [...new Set(owners)], targets: pack === "e2e" || pack === "recording" ? targetHosts(input.context.qaTargets ?? []) : [] })
+    ? await guard(() => deps.egress!.for({ repoPath: task.repoPath, kind: egressKindOf(found), owners: [...new Set(owners)], ...(credential.relay ? { relayed: ["claude" as const] } : {}), targets: found.kind !== "decision" && found.network === "full" && (pack === "e2e" || pack === "recording") ? targetHosts(input.context.qaTargets ?? []) : [] }))
     : undefined;
+  const identity = limits.writable ? await guard(() => gitIdentity(task.repoPath!)) : null;
   let sandbox: SandboxResult;
   try {
   sandbox = await (deps.sandbox ?? runSandbox)({
@@ -636,20 +677,20 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     attach: Boolean(resume),
     // The verifier never sees the card's shared agent session: it reviews from the plan, the scenarios and the Build Report, not the implementer's trail.
     ...(pack === "verifying" ? {} : { sessionMount }),
-    cacheVolume: cacheVolumeFor(task.repoPath),
+    cacheVolume: cacheVolumeFor(task.repoPath, size.cacheTrust),
     image: pack === "e2e" ? deps.qaImage : pack === "recording" ? (deps.videoImage ?? deps.qaImage) : stageImage,
     runDir,
     worktree: workspace.path,
     writable: limits.writable,
     gitDir,
-    limits: { cpu: policy.factory.sandbox.cpu, memoryGb: policy.factory.sandbox.memory_gb },
-    gitIdentity: limits.writable ? await gitIdentity(task.repoPath) : null,
+    limits: size,
+    gitIdentity: identity,
     // The repo's services run beside every stage that runs its code; a read-only stage only reads.
     services: limits.writable ? policy.services : {},
     input: input as unknown as Record<string, unknown>,
     // The input's budget, which implementing scales with the plan's slice count.
     timeoutMs: input.limits.timeoutMs,
-    credential: { env: credential.env, mounts: credential.mounts },
+    credential: { env: credential.env, mounts: credential.mounts, ...(credential.relay ? { relay: credential.relay } : {}) },
     labels: { "dev.hardness.task": task.id },
     mounts: [
       ...(graphContext && graphDir ? [{ host: graphDir, container: GRAPH_MOUNT, readOnly: true }] : []),
@@ -674,8 +715,9 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   });
     ran.container = true;
   } catch (error) {
-    if (!(error instanceof EgressUnsupportedError)) throw error;
-    return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "network", reason: error.message, options: ["install Docker Engine 28.0 or newer, or set MACHINE_EGRESS=off on the machine to run without the allow-list, then resume"] } };
+    const broken = envBrokenDetail(error);
+    if (!broken) throw error;
+    return { outcome: "escalated", detail: broken };
   }
   // A run that had secrets: what its tools wrote into the files it left is cleaned before anything reads the packet, and every string of
   // what is ingested below is cleaned where it is made.
@@ -744,6 +786,13 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     );
   }
   const { output } = ingested;
+  // A runner image built before `StageInput.effort` strips the key and runs at the pack's own effort: nothing else would say so.
+  // Not on a re-attached run: its container started with the input of before the restart, while this one is rebuilt from today's luna.yaml.
+  if (!resume && input.effort && output.run?.effort !== input.effort) {
+    const reason = `${pack} was asked to run at ${input.effort} effort and ${output.run?.effort ? `ran at ${output.run.effort}` : "reported none"}: the runner image may be older than this build (pnpm images)`;
+    engineEvents.push({ at: new Date().toISOString(), kind: "engine", payload: { pack, engine: choice.engine, reason } });
+    await context.note?.(reason).catch(() => {});
+  }
   const mapped = toStageResult(ingested);
   if (pushes.attempted) mapped.detail = { ...mapped.detail, pushes };
   const merged = (result: StageResult): StageResult => ({
@@ -996,6 +1045,14 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
         ...(answer?.kind === "needs_full_plan" ? { needsFullPlan: true } : {}),
       },
     });
+  }
+  if (pack === "council_security" || pack === "council_second") {
+    const answer = answerOf(output.answer);
+    return merged({ ...mapped, detail: { ...mapped.detail, summary: typeof answer?.summary === "string" ? answer.summary : output.summary, findings: Array.isArray(answer?.findings) ? answer.findings : [] } });
+  }
+  if (pack === "question_council") {
+    const answer = answerOf(output.answer);
+    return merged({ ...mapped, detail: { ...mapped.detail, summary: output.summary, answers: Array.isArray(answer?.answers) ? answer.answers : [] } });
   }
   if (pack === "code_map") {
     const answer = answerOf(output.answer);

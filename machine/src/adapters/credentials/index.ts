@@ -8,7 +8,7 @@ import type { Availability, CredentialLoader, CredentialOptions, PrepareWait, Ru
 import { jevCredentials } from "./jev.ts";
 import { openaiCredentials } from "./openai.ts";
 
-export type { Availability, CredentialLoader, CredentialMount, CredentialOptions, PrepareWait, RunCredential } from "./credential.ts";
+export type { Availability, CredentialLoader, CredentialMount, CredentialOptions, EngineRelay, PrepareWait, RunCredential } from "./credential.ts";
 export { CredentialWaitError, NoCredentialError, noCredential } from "./credential.ts";
 export { removeStaleCodexTemps } from "./codex.ts";
 

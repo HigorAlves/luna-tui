@@ -355,6 +355,24 @@ pub fn questions_app() -> App {
     )
 }
 
+/// A card at the triage questions where the council settled one question from the code and left one for the person.
+pub fn council_questions_app() -> App {
+    let task = task_json(
+        "eeeeeeee6666",
+        "Fix the invoice rounding",
+        "awaiting_answers",
+        "Triage",
+        json!({"waitingOnYou": true}),
+    );
+    open_card(
+        task,
+        json!({"approvals": [{"id": "q2", "kind": "awaiting_answers", "decision": null, "createdAt": "2026-10-22T10:00:00Z", "requested": {
+            "questions": [{"question": "Which currency does the report use?", "recommended": "the account currency"}],
+            "settledByCouncil": [{"question": "Round half up or half to even?", "answer": "half to even", "confidence": 0.91, "evidence": ["src/round.rs:12", "docs/money.md:4"]}]
+        }}]}),
+    )
+}
+
 /// The release question for a high-risk card: the checklist as it was when asked.
 pub fn release_question_app() -> App {
     let task = task_json(

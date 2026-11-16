@@ -109,18 +109,34 @@ pub fn draw(frame: &mut Frame, app: &App) {
     {
         render_floor(frame, body, floor);
         frame.render_widget(footer_line(app, footer.width), footer);
-        if let Mode::ConfirmBase { repo, base } = &app.mode {
+        if let Mode::ConfirmBase {
+            repo,
+            base,
+            dockerfile,
+        } = &app.mode
+        {
             let repo = crate::model::plain(repo, 200);
-            render_confirm_details(
-                frame,
-                " Approve base image ",
-                &format!("approve the base image of {repo}?"),
-                &[
-                    format!("image {}", crate::model::plain(base, 200)),
-                    "It runs with the stage's credential.".to_string(),
-                ],
-                PEACH,
-            );
+            let (title, heading, details) = match dockerfile {
+                Some(line) => (
+                    " Approve Dockerfile build ",
+                    format!("approve the Dockerfile build of {repo}?"),
+                    vec![
+                        crate::model::plain(line, 200),
+                        "builds with network access".to_string(),
+                        "No secrets or credentials reach it; every other container keeps default-deny egress."
+                            .to_string(),
+                    ],
+                ),
+                None => (
+                    " Approve base image ",
+                    format!("approve the base image of {repo}?"),
+                    vec![
+                        format!("image {}", crate::model::plain(base, 200)),
+                        "It runs with the stage's credential.".to_string(),
+                    ],
+                ),
+            };
+            render_confirm_details(frame, title, &heading, &details, PEACH);
         }
         if matches!(app.mode, Mode::Help { .. }) {
             render_help(frame, app);
@@ -448,6 +464,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 );
             }
         }
+        Mode::Foreman(state) => render_foreman(frame, app, state),
         Mode::ConfirmApprove(held) => {
             if let Some(task) = app.task(&held.id) {
                 render_approve(frame, &held.question, task);
@@ -914,6 +931,17 @@ fn footer_line(app: &App, width: u16) -> Line<'static> {
         | Mode::ConfirmAbort(_)
         | Mode::ConfirmWorktree(_)
         | Mode::ConfirmQuit => hint(&[("y", "yes"), ("n", "no")]),
+        Mode::Foreman(state) => match state.phase {
+            crate::foreman::Phase::Typing => hint(&[("enter", "ask"), ("esc", "back")]),
+            crate::foreman::Phase::Waiting => hint(&[("esc", "close")]),
+            crate::foreman::Phase::Walk => hint(&[
+                ("j/k", "move"),
+                ("y", "run this one"),
+                ("s", "skip"),
+                ("i", "ask more"),
+                ("esc", "close"),
+            ]),
+        },
         Mode::ConfirmApprove(_) => hint(&[("y/enter", "approve"), ("n/esc", "cancel")]),
         Mode::CoveragePicker(_) => hint(&[
             ("space", "tick"),
@@ -2215,6 +2243,109 @@ fn render_prompt(
                 .right_aligned(),
         );
     frame.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
+}
+
+/// The foreman's popup: the talk's last reply, then one row per suggested action with where it stands.
+pub(crate) fn render_foreman(frame: &mut Frame, app: &App, state: &crate::foreman::State) {
+    use crate::foreman::{Phase, Status};
+    let area = centered(
+        frame.area(),
+        frame.area().width * 9 / 10,
+        frame.area().height * 8 / 10,
+    );
+    frame.render_widget(Clear, area);
+    let width = (area.width as usize).saturating_sub(6);
+    let mut lines: Vec<Line> = Vec::new();
+    match state.phase {
+        Phase::Typing => {
+            if !state.reply.is_empty() {
+                lines.push(Line::from(Span::from(crate::text::sanitize(
+                    &state.reply,
+                    false,
+                ))));
+                lines.push(Line::default());
+            }
+            lines.push(Line::from(vec![
+                Span::from(" ask: ").fg(c(ACCENT)).bold(),
+                Span::from(format!("{}▏", state.input)),
+            ]));
+        }
+        Phase::Waiting => lines.push(Line::from(
+            Span::from("The foreman is reading the board…").fg(c(SUBTEXT0)),
+        )),
+        Phase::Walk => {
+            lines.push(Line::from(Span::from(crate::text::sanitize(
+                &state.reply,
+                false,
+            ))));
+            lines.push(Line::default());
+            if state.rows.is_empty() {
+                lines.push(Line::from(Span::from("No action to take.").fg(c(SUBTEXT0))));
+            }
+            for (at, row) in state.rows.iter().enumerate() {
+                let (mark, color) = match &row.status {
+                    Status::Pending => ("[ ]", SUBTEXT0),
+                    Status::Done => ("[done]", GREEN),
+                    Status::Skipped => ("[skipped]", SUBTEXT0),
+                    Status::Stale => ("[stale: ask again]", YELLOW),
+                    Status::Failed(_) => ("[failed]", RED),
+                };
+                let text = crate::foreman::row_text(&row.action, app.task(&row.action.task_id));
+                let mut line = Line::from(vec![
+                    Span::from(if at == state.cursor { "▶ " } else { "  " }),
+                    Span::from(format!("{mark} ")).fg(c(color)),
+                    Span::from(truncate(&text, width.saturating_sub(14))),
+                ]);
+                if at == state.cursor {
+                    line = line.bold();
+                }
+                lines.push(line);
+                if at == state.cursor {
+                    let gate = app
+                        .task(&row.action.task_id)
+                        .and_then(|t| app.approval_gate(t));
+                    for text in
+                        crate::foreman::payload_lines(&row.action, gate.as_ref().map(|g| g.kind))
+                    {
+                        lines.push(Line::from(
+                            Span::from(format!(
+                                "      {}",
+                                truncate(&text, width.saturating_sub(8))
+                            ))
+                            .fg(c(SUBTEXT0)),
+                        ));
+                    }
+                }
+                if let Status::Failed(why) = &row.status {
+                    lines.push(Line::from(
+                        Span::from(format!("      {}", truncate(why, width.saturating_sub(8))))
+                            .fg(c(RED)),
+                    ));
+                }
+            }
+            if state.dropped > 0 {
+                lines.push(Line::default());
+                lines.push(Line::from(
+                    Span::from(format!(
+                        "{} suggestion(s) the board could not take were dropped.",
+                        state.dropped
+                    ))
+                    .fg(c(SUBTEXT0)),
+                ));
+            }
+        }
+    }
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(" Foreman ").fg(c(ACCENT)).bold());
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false }),
+        area,
+    );
 }
 
 fn render_confirm_box(frame: &mut Frame, heading: &str, title: &str, note: &str, accent: Color) {
@@ -5172,6 +5303,33 @@ mod tests {
                     && l.contains("A approves")),
             "{text}"
         );
+    }
+
+    #[test]
+    fn floor_shows_a_dockerfile_waiting_for_approval_with_its_short_sha_and_that_its_build_has_network()
+     {
+        for (changed, said) in [
+            (false, "Dockerfile waiting for you"),
+            (true, "Dockerfile changed since you approved"),
+        ] {
+            let mut state = floor();
+            state.repos = repos();
+            state.health = serde_json::from_str(&format!(
+                r#"[{{"repo":"/r/alpha","image":{{"inUse":"hardness-runner:dev","base":null,"builtAt":null,"lastFailure":null,"pendingBase":null,
+                     "pendingDockerfile":{{"path":".devcontainer/Dockerfile","key":"dockerfile=sha256:{}","changed":{changed}}}}},
+                     "graph":{{"on":false,"commit":null,"behind":null,"graphify":null,"builtAt":null,"building":false,"lastFailure":null}}}}]"#,
+                "ab".repeat(32)
+            ))
+            .unwrap();
+            let text = render(160, 40, &state);
+            assert!(
+                text.lines().any(|l| l.contains(said)
+                    && l.contains(".devcontainer/Dockerfile sha256:abababababab")
+                    && l.contains("A approves")
+                    && l.contains("network")),
+                "{text}"
+            );
+        }
     }
 
     #[test]

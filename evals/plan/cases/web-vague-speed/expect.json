@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "outcome": "needs_input",
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "kind",
+      "value": "questions"
+    },
+    {
+      "kind": "count",
+      "path": "questions",
+      "min": 1,
+      "max": 3
+    },
+    {
+      "kind": "avoids",
+      "words": [
+        ".golden",
+        "patches/"
+      ]
+    }
+  ],
+  "rubric": "The ticket gives no measurable goal: no page is named as slow, no number, no measured step. No reasonable default exists, so a good answer asks, with at most three questions, each with a recommended answer (what is slow and how slowness shows, what target counts as faster, what may change). It does not guess a plan of micro-optimisations, and it does not invent a metric. A done plan with steps is a real error here; so is a question with no recommended answer."
+}

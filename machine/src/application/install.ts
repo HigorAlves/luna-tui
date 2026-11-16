@@ -11,6 +11,8 @@ import type { BlockedRow } from "../adapters/docker/egress.ts";
 import type { ExecResult } from "../adapters/process/exec.ts";
 import { LOCKFILES } from "../domain/env-hash.ts";
 import { safe } from "../domain/evidence-markdown.ts";
+import { sandboxSizeOf } from "../domain/sandbox-bounds.ts";
+import type { Trust } from "../domain/trust.ts";
 import { type InstallStep, argvIn, installKey, installPlanOf, nestedPlansOf } from "../domain/install-plan.ts";
 import type { EgressPolicy } from "./egress-policy.ts";
 import type { PolicyStore } from "./policy.ts";
@@ -21,6 +23,8 @@ const TAIL_LINES = 40;
 export interface InstallDeps {
   stateDir: string;
   policies: Pick<PolicyStore, "for">;
+  /** The repository's devcontainer `containerEnv`, for the install's own container. */
+  containerEnvOf?(repoPath: string): Promise<Record<string, string>>;
   repoImages: { ensure(repoPath: string, signal?: AbortSignal, taskId?: string): Promise<{ image: string }> };
   imageId(image: string): Promise<string>;
   lockfilesAt(path: string, commit: string, names: readonly string[]): Promise<Record<string, string>>;
@@ -43,6 +47,8 @@ export interface InstallInput {
   repoPath: string;
   workspace: string;
   commit: string;
+  /** The card's trust (`trustOf`): its runtime, process limit and cache volume. */
+  trust?: Trust;
   signal?: AbortSignal;
 }
 
@@ -119,6 +125,8 @@ export async function ensureInstalled(deps: InstallDeps, input: InstallInput): P
   const spec = deps.egress ? await deps.egress.for({ repoPath: input.repoPath, kind: "install" }) : undefined;
   const blocked: BlockedRow[] = [];
   const ran: string[] = [];
+  const containerEnv = (await deps.containerEnvOf?.(input.repoPath)) ?? {};
+  const limits = sandboxSizeOf(policy, input.trust);
   for (const step of steps) {
     // No `secrets`, no credential, no /in, /out, /session or /graph: the spec has nothing of the run's.
     const result = await deps.exec(
@@ -126,10 +134,10 @@ export async function ensureInstalled(deps: InstallDeps, input: InstallInput): P
         name: `hardness-install-${randomUUID().slice(0, 8)}`,
         image,
         worktree: input.workspace,
-        limits: { cpu: policy.factory.sandbox.cpu, memoryGb: policy.factory.sandbox.memory_gb },
+        limits,
         argv: argvIn(step),
-        env: step.env,
-        cacheVolume: cacheVolumeFor(input.repoPath),
+        env: { ...containerEnv, ...step.env },
+        cacheVolume: cacheVolumeFor(input.repoPath, limits.cacheTrust),
         ...(spec ? { egress: spec } : {}),
       },
       { ...(input.signal ? { signal: input.signal } : {}), timeoutMs: STEP_TIMEOUT_MS },

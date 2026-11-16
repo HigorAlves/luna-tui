@@ -126,6 +126,41 @@ const chatText = (chat: StageInput["context"]["chat"]) => {
   };
 };
 
+/** The board, as the foreman reads it: the question and turns as text, one line per card (all of it a person's or a model's, so quoted as data), and each pack's allowed engines (the machine's own). */
+const foremanText = (foreman: StageInput["context"]["foreman"]) => {
+  if (!foreman) return { now: NONE, question: NONE, history: NONE, cards: NONE, truncated: NONE, pending: NONE, packs: NONE };
+  const cards = foreman.board.cards.map((card) => {
+    const engines = Object.entries(card.engines).map(([pack, engine]) => `${pack}=${engine}`);
+    const head = [
+      card.id,
+      card.repo,
+      card.state,
+      card.column,
+      card.gate ? `gate ${card.gate}${card.gateSummary ? ` (${card.gateSummary})` : ""}` : null,
+      card.escalation ? `escalated: ${card.escalation}` : null,
+      card.flagged && card.flagged.length > 0 ? `flagged: ${card.flagged.join(", ")}` : null,
+      card.council ? (card.council.open > 0 ? `council: ${card.council.open} finding${card.council.open === 1 ? "" : "s"} open` : card.council.passed ? "council: passed" : "council: did not pass") : null,
+      card.settledByCouncil ? `${card.settledByCouncil} question${card.settledByCouncil === 1 ? "" : "s"} settled by the council` : null,
+      card.trust === "untrusted" ? "untrusted" : null,
+      engines.length > 0 ? `engines ${engines.join(", ")}` : null,
+      card.title,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    const questions = card.questions.map((q) => `   question ${q.id}: ${q.question} (${q.recommended === null ? "no recommendation" : `recommended: ${q.recommended}`})`);
+    return [head, ...questions].join("\n");
+  });
+  return {
+    now: foreman.board.now,
+    question: foreman.question,
+    history: foreman.history.length > 0 ? foreman.history.map((turn) => `${turn.who}: ${turn.text}`).join("\n") : NONE,
+    cards: cards.length > 0 ? cards.join("\n") : NONE,
+    truncated: String(foreman.board.truncated ?? 0),
+    pending: foreman.board.pending && foreman.board.pending.length > 0 ? foreman.board.pending.map((p) => `${p.repo}: ${p.kind === "base" ? "base image" : "Dockerfile"} ${p.ref} awaits approval`).join("\n") : NONE,
+    packs: foreman.board.packs.length > 0 ? foreman.board.packs.map((pack) => `${pack.id}: ${pack.allowed.join(", ")}`).join("\n") : NONE,
+  };
+};
+
 /** The issue, as jira_intake reads it: one header line, the description, the comments, the repo. */
 const jiraText = (jira: StageInput["context"]["jira"]) => {
   if (!jira) return { issue: NONE, description: NONE, comments: NONE, repoPath: NONE, classification: NONE };
@@ -252,6 +287,33 @@ function mapText(map: NonNullable<StageInput["context"]["plan"]>["map"]): string
     ...(map.stale ? [`Stale: the graph is ${map.behind ?? "many"} commits behind the default branch; treat the map as a lead`] : []),
     ...(map.note ? [`Note: ${map.note}`] : []),
   ].join("\n");
+}
+
+/** The council packs' view: the plan under review, its criteria, the round and the transcript so far. */
+function councilText(council: NonNullable<StageInput["context"]["plan"]>["council"]): string {
+  if (!council) return NONE;
+  const turn = (t: { member: string; round: number; summary: string; findings: StageInput["priorFindings"] }) =>
+    [`- ${t.member}, round ${t.round}: ${t.summary}`, ...t.findings.map((f) => `    - ${f.severity}: ${f.title}: ${f.body}`)].join("\n");
+  return [
+    `Round: ${council.round}`,
+    `Plan:\n${council.plan}`,
+    `Criteria:\n${council.criteria.map((c) => `- ${c}`).join("\n") || "- (none)"}`,
+    `Earlier turns:\n${council.transcript.length ? council.transcript.map(turn).join("\n") : "(none)"}`,
+  ].join("\n");
+}
+
+/** The question council's view: one line per open question, the card, and the answers so far. All of it is foreign text, quoted as data. */
+function questionsText(questions: StageInput["context"]["questions"]): { list: string; card: string; answers: string } {
+  if (!questions) return { list: NONE, card: NONE, answers: NONE };
+  const list = questions.questions.map((q) => {
+    const notes = [q.recommended === null ? "no recommendation" : `recommended: ${q.recommended}`, q.field !== null ? `the machine read ${q.field} as ${q.guess ?? "nothing"}${q.confidence === null ? "" : ` at ${q.confidence}`}` : null].filter(Boolean);
+    return `${q.id}: ${q.question} (${notes.join("; ")})`;
+  });
+  return {
+    list: list.join("\n"),
+    card: `${questions.card.title}\n${questions.card.description}`.trim() || NONE,
+    answers: questions.answers.length > 0 ? questions.answers.map((a) => `${a.question} -> ${a.answer}`).join("\n") : NONE,
+  };
 }
 
 /** What the machine's lexical match of the goal against the graph found: the code mapper confirms it. */
@@ -424,6 +486,8 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
   const jira = jiraText(input.context.jira);
   const judged = evalText(input.context.eval);
   const chat = chatText(input.context.chat);
+  const foreman = foremanText(input.context.foreman);
+  const questions = questionsText(input.context.questions);
   const video = videoText(input.context.video);
   const subs: Record<string, string> = {
     "{{task.title}}": txt(input.task.title),
@@ -438,6 +502,10 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.propose}}": proposeText(input.context.propose),
     "{{context.factCandidates}}": candidatesText(input.context.factCandidates),
     ...(input.context.conversation ? conversationText(input.context.conversation) : Object.fromEntries(Object.keys(CONVERSATION_VARIABLES).map((name) => [`{{context.conversation.${name}}}`, NONE]))),
+    "{{context.plan.council}}": councilText(input.context.plan?.council),
+    "{{context.questions.list}}": questions.list,
+    "{{context.questions.card}}": questions.card,
+    "{{context.questions.answers}}": questions.answers,
     "{{context.plan.map}}": mapText(input.context.plan?.map),
     "{{context.plan.shortlist}}": shortlistText(input.context.plan?.shortlist),
     "{{context.plan.replan}}": replanText(input.context.plan?.replan),
@@ -525,6 +593,13 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.chat.me}}": chat.me,
     "{{context.chat.rules}}": chat.rules,
     "{{context.chat.items}}": chat.items,
+    "{{context.foreman.now}}": foreman.now,
+    "{{context.foreman.question}}": foreman.question,
+    "{{context.foreman.history}}": foreman.history,
+    "{{context.foreman.cards}}": foreman.cards,
+    "{{context.foreman.truncated}}": foreman.truncated,
+    "{{context.foreman.pending}}": foreman.pending,
+    "{{context.foreman.packs}}": foreman.packs,
     "{{context.jira.issue}}": jira.issue,
     "{{context.jira.description}}": jira.description,
     "{{context.jira.comments}}": jira.comments,

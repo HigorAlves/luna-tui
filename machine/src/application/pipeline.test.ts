@@ -1200,6 +1200,23 @@ describe("the triage record: a correction and its ground truth", () => {
     return { p, id: task.id, learned };
   };
 
+  it("writes no ground truth for what the question council settled, and marks the record's answer as the council's", async () => {
+    const learned: unknown[] = [];
+    const truth = new DecisionTruth({ setTruth: async (...a) => (learned.push(a), true), read: async () => null }, { told: async () => {} });
+    stubs.plan("triage", { outcome: "pass", detail: { outcome: "plan", summary: "A bug.", record: { goal: "Fix it", reason: "r" } } });
+    const open = { ...classification, signals: { ...signals, kind: { answer: "bug", confidence: 0.5 } } } as never;
+    const council = async (_c: unknown, q: { questions: Array<{ id: string }> }): Promise<StageResult> => ({ outcome: "pass", detail: { answers: q.questions.map((x) => ({ id: x.id, answer: "bug", confidence: 0.95, evidence: ["src/a.ts:1"] })) } });
+    const saving = (stage: TaskState) =>
+      stage === "triage" ? withTriageSignals(stubs.runnerFor(stage), { classify: async (issue) => (issue.answers?.length ? classification : open), council, save: (id, patch) => new PgTaskStore(db).updateTask(id, patch) }) : stubs.runnerFor(stage);
+    const p = new Pipeline(db, saving, { inline: true, policies: previewOn, hasConfig: () => true, truth });
+    const task = await p.createTask({ title: "Login page", classification });
+    await p.start(task.id);
+    const row = await p.get(task.id);
+    expect(row.state).toBe("awaiting_approval");
+    expect(row.record?.qa).toEqual([{ question: expect.stringContaining("bug or a feature"), answer: "bug", by: "council", field: "kind", evidence: ["src/a.ts:1"] }]);
+    expect(learned).toEqual([]);
+  });
+
   it("keeps a priority edit where a calibration can find it, with the machine's level, the person's and the sub-scores; and not for a repository that keeps no truth", async () => {
     const written: Array<Record<string, unknown>> = [];
     for (const keeps of [true, false]) {
@@ -1308,6 +1325,16 @@ describe("the triage record: a correction and its ground truth", () => {
     await second.p.decide(second.id, "approved", undefined, undefined, { approver: "ana" });
     const withEdit = second.learned.filter((l) => l.source === "plan_approved").at(-1)!;
     expect(withEdit.label).toMatchObject({ kind: { choice: "chore" }, size: { choice: "S" } });
+  });
+
+  it("leaves out a field the council settled: a person who approved the plan did not read it as theirs", async () => {
+    const { p, id, learned } = await setup();
+    const task = await p.get(id);
+    await new PgTaskStore(db).updateTask(id, { record: { ...task.record!, qa: [{ question: "What kind of change is this?", answer: "bug", by: "council", field: "kind", evidence: ["src/app.ts:12"] }] } });
+    await p.decide(id, "approved", undefined, undefined, { approver: "ana" });
+    const confirmed = learned.find((l) => l.source === "plan_approved" && l.pack === "triage_signals")!;
+    expect(confirmed.label).not.toHaveProperty("kind");
+    expect(confirmed.label).toMatchObject({ size: { choice: "S" }, risk_prelim: { choice: "medium" } });
   });
 
   it("writes the outcome's truth when a reply or an archive gate is approved or sent back", async () => {
@@ -3196,7 +3223,7 @@ describe("timer-approved plans", () => {
   });
 
   it("never approves a re-planned gate or a gate with any flag, however confident its verdicts", async () => {
-    for (const over of [{ replan: { raised_by: "verifying", reason: "wrong" } }, { flagged: ["plan outside map"] }, { flagged: ["map stale"], replan: undefined }]) {
+    for (const over of [{ replan: { raised_by: "verifying", reason: "wrong" } }, { flagged: ["plan outside map"] }, { flagged: ["map stale"], replan: undefined }, { flagged: ["triage.council"] }]) {
       stubs.reset();
       pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: policies(10) });
       stubs.plan("test_design", confident(over));
@@ -3207,6 +3234,18 @@ describe("timer-approved plans", () => {
       expect((await pipeline.get(task.id)).state, JSON.stringify(over)).toBe("awaiting_approval");
       expect((await pipeline.events(task.id)).map((e) => e.kind)).not.toContain("plan.auto_approved");
     }
+  });
+
+  it("never approves an untrusted card's plan, however low its risk or good its council", async () => {
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: policies(10) });
+    stubs.plan("test_design", confident());
+    const source = { kind: "github", repo: "o/r", number: 9, url: "https://github.com/o/r/issues/9", authorAssociation: "NONE" } as const;
+    const task = await pipeline.createTask({ title: "t", repoPath: "/r/a", source });
+    await pipeline.start(task.id);
+    await db.query("update approvals set created_at = now() - interval '11 minutes'");
+    await pipeline.tick();
+    expect((await pipeline.get(task.id)).state).toBe("awaiting_approval");
+    expect((await pipeline.events(task.id)).map((e) => e.kind)).not.toContain("plan.auto_approved");
   });
 
   it("never approves a reply or an archive gate, whatever else it carries", async () => {
@@ -3234,6 +3273,55 @@ describe("timer-approved plans", () => {
     expect((await pipeline.get(notch.id)).state).toBe("awaiting_approval");
     expect((await pipeline.events(notch.id)).map((e) => e.kind)).not.toContain("plan.auto_approved");
     expect((await pipeline.get(tui.id)).state).toBe("awaiting_ship");
+  });
+
+  describe("a passed plan council", () => {
+    const council = (passed: boolean) => ({ passed, rounds: 1, transcript: [{ member: "security", round: 1, summary: "nothing to add", findings: [] }] });
+    const high = (over: Record<string, unknown> = {}) => confident({ risk: { level: "high", scores: {} }, council: council(true), ...over });
+    const councilPolicy = (countsAsPass = true, approversHigh = 1) => ({
+      for: async () => ({ ...PREVIEW_ON, autoApprovePlanMinutes: 10, factory: { ...PREVIEW_ON.factory, plan: { ...PREVIEW_ON.factory.plan, approvers: { ...PREVIEW_ON.factory.plan.approvers, high: approversHigh }, council: { ...PREVIEW_ON.factory.plan.council, counts_as_pass: countsAsPass } } } }),
+    });
+    const stateAfterWaiting = async (result: StageResult, countsAsPass = true, approversHigh = 1) => {
+      await db.query("truncate tasks cascade");
+      stubs.reset();
+      pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: councilPolicy(countsAsPass, approversHigh) });
+      stubs.plan("test_design", result);
+      const task = await pipeline.createTask({ title: "t", repoPath: "/r/a" });
+      await pipeline.start(task.id);
+      await db.query("update approvals set created_at = now() - interval '11 minutes'");
+      await pipeline.tick();
+      return { task, state: (await pipeline.get(task.id)).state };
+    };
+
+    it("approves a high-risk plan the council passed, and says why", async () => {
+      const { task, state } = await stateAfterWaiting(high());
+      expect(state).toBe("awaiting_ship");
+      expect((await pipeline.approvals(task.id))[0]).toMatchObject({ decision: "approved", reason: "auto-approved after 10 min: the council passed and every check proceeded" });
+    });
+
+    it("approves a medium-risk plan the council passed", async () => {
+      expect((await stateAfterWaiting(high({ risk: { level: "medium", scores: {} } }))).state).toBe("awaiting_ship");
+    });
+
+    it("keeps a high-risk plan waiting when the council did not pass, left no council, or counts_as_pass is off", async () => {
+      expect((await stateAfterWaiting(high({ council: council(false) }))).state).toBe("awaiting_approval");
+      expect((await stateAfterWaiting(high({ council: undefined }))).state).toBe("awaiting_approval");
+      expect((await stateAfterWaiting(high(), false)).state).toBe("awaiting_approval");
+    });
+
+    it("leaves a high-risk plan to people when the repo asks for two approvers, and logs nothing", async () => {
+      const { task, state } = await stateAfterWaiting(high(), true, 2);
+      expect(state).toBe("awaiting_approval");
+      expect((await pipeline.events(task.id)).map((e) => e.kind)).not.toContain("plan.auto_approved");
+    });
+
+    it("approves the same plan when the repo asks for one approver", async () => {
+      expect((await stateAfterWaiting(high(), true, 1)).state).toBe("awaiting_ship");
+    });
+
+    it("keeps a plan the council passed waiting when it carries a flag", async () => {
+      expect((await stateAfterWaiting(high({ flagged: ["plan outside map"] }))).state).toBe("awaiting_approval");
+    });
   });
 
   it("keeps waiting when a check did not proceed, risk is not low, the plan stage asked questions, or the policy is off", async () => {
@@ -3574,14 +3662,14 @@ describe("the engine a stage run started on", () => {
 describe("the run record a stage run ended with", () => {
   it("stores the runtime, the pinned model, the SDK version and the fingerprint, and shows them with the run", async () => {
     const task = await newTask();
-    const info = { runtime: "eve", engine: "codex:sol", modelId: "gpt-5.6-terra", sdk: { name: "eve", version: "1.0.0-rc.1" }, fingerprint: "f".repeat(64) };
+    const info = { runtime: "eve", engine: "codex:sol", modelId: "gpt-5.6-terra", sdk: { name: "eve", version: "1.0.0" }, fingerprint: "f".repeat(64) };
     const runnerFor = (stage: TaskState): StageRunner =>
       stage === "triage" ? async (context) => ({ ...(await stubs.runnerFor(stage)(context)), run: { info } }) : stubs.runnerFor(stage);
     const p = new Pipeline(db, runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
     await p.start(task.id);
     const [run] = await p.stageRuns(task.id);
-    expect(run).toMatchObject({ runtime: "eve", modelId: "gpt-5.6-terra", sdkVersion: "1.0.0-rc.1", fingerprint: info.fingerprint });
-    expect(toStageRun(run!)).toMatchObject({ runtime: "eve", modelId: "gpt-5.6-terra", sdkVersion: "1.0.0-rc.1", fingerprint: info.fingerprint });
+    expect(run).toMatchObject({ runtime: "eve", modelId: "gpt-5.6-terra", sdkVersion: "1.0.0", fingerprint: info.fingerprint });
+    expect(toStageRun(run!)).toMatchObject({ runtime: "eve", modelId: "gpt-5.6-terra", sdkVersion: "1.0.0", fingerprint: info.fingerprint });
   });
 
   it("is null on a run whose result named none", async () => {
@@ -3626,10 +3714,104 @@ describe("re-attaching to a container after a restart", () => {
     expect((await restarted.events(task.id)).map((e) => e.kind)).toContain("stage.reattached");
   });
 
+  it("sweeps the leftover run secrets before it re-attaches, keeping the run whose container is still running", async () => {
+    const live = await newTask();
+    const gone = await newTask();
+    await running(live.id, "hardness-c1");
+    await running(gone.id, "hardness-c2");
+    const events: string[] = [];
+    let kept: ReadonlySet<string> | undefined;
+    const runnerFor = (stage: TaskState): StageRunner =>
+      stage === "implementing"
+        ? async (context) => {
+            events.push("run");
+            return { outcome: "pass", run: { containerId: context.resume?.container } };
+          }
+        : stubs.runnerFor(stage);
+    const restarted = new Pipeline(db, runnerFor, {
+      inline: true,
+      policies: previewOn,
+      hasConfig: () => true,
+      containerRunning: async (name) => name === "hardness-c1",
+      removeContainer: async () => {},
+      sweepRunSecrets: async (keep) => {
+        events.push("sweep");
+        kept = keep;
+      },
+    });
+    await restarted.recover();
+    const liveRun = (await restarted.stageRuns(live.id)).find((r) => r.containerId === "hardness-c1")!;
+    const goneRun = (await restarted.stageRuns(gone.id)).find((r) => r.containerId === "hardness-c2")!;
+    expect(events[0]).toBe("sweep");
+    expect(events.filter((e) => e === "sweep")).toHaveLength(1);
+    expect([...kept!]).toEqual([liveRun.id]);
+    expect(kept!.has(goneRun.id)).toBe(false);
+  });
+
+  it("goes on with recovery when the sweep throws", async () => {
+    const task = await newTask();
+    await running(task.id, "hardness-c1");
+    const restarted = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, containerRunning: async () => false, removeContainer: async () => {}, sweepRunSecrets: async () => { throw new Error("EACCES"); } });
+    expect(await restarted.recover()).toBe(1);
+  });
+
+  it("records a council sub-run's container as an event of its stage run", async () => {
+    const task = await newTask();
+    const runnerFor = (stage: TaskState): StageRunner =>
+      stage === "triage"
+        ? async (context) => {
+            await context.subStarted?.({ container: "hardness-abcd1234-council-security-1" });
+            return { outcome: "pass" };
+          }
+        : stubs.runnerFor(stage);
+    pipeline = new Pipeline(db, runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
+    await pipeline.start(task.id);
+    const [run] = await pipeline.stageRuns(task.id);
+    const row = (await pipeline.events(task.id)).find((e) => e.kind === "stage.sub_container");
+    expect(row).toMatchObject({ stageRunId: run!.id, payload: { container: "hardness-abcd1234-council-security-1" } });
+  });
+
+  const subContainer = (taskId: string, container: string) =>
+    db.query(`insert into events (task_id, stage_run_id, kind, payload) select $1, id, 'stage.sub_container', $2::jsonb from stage_runs where task_id = $1 and status = 'running'`, [taskId, JSON.stringify({ container })]);
+
+  it("removes the council containers and proxies a stage left running, whether it re-attaches to the stage or escalates it", async () => {
+    const live = await newTask();
+    const gone = await newTask();
+    await running(live.id, "hardness-c1");
+    await running(gone.id, "hardness-c2");
+    await subContainer(live.id, "hardness-sub-live");
+    await subContainer(gone.id, "hardness-sub-gone");
+    const removed: string[] = [];
+    const networks: string[] = [];
+    const restarted = new Pipeline(db, stubs.runnerFor, {
+      inline: true,
+      policies: previewOn,
+      hasConfig: () => true,
+      containerRunning: async (name) => name === "hardness-c1",
+      removeContainer: async (name) => void removed.push(name),
+      removeRunNetwork: async (name) => void networks.push(name),
+    });
+    await restarted.recover();
+    // The re-attached stage's own container stays; the dead one's goes with its proxy, and both stages' sub-runs.
+    expect(removed.sort()).toEqual(["hardness-c2", "hardness-sub-gone", "hardness-sub-live"]);
+    expect(networks.sort()).toEqual(["hardness-c2", "hardness-sub-gone", "hardness-sub-live"]);
+  });
+
+  it("removes only names the machine itself gave a container, never one a stage container wrote into its events", async () => {
+    const task = await newTask();
+    await running(task.id, "hardness-c1");
+    await subContainer(task.id, "postgres-prod");
+    await subContainer(task.id, "hardness-ok");
+    const removed: string[] = [];
+    const restarted = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, containerRunning: async () => false, removeContainer: async (name) => void removed.push(name), removeRunNetwork: async () => {} });
+    await restarted.recover();
+    expect(removed.sort()).toEqual(["hardness-c1", "hardness-ok"]);
+  });
+
   it("still escalates when the container is gone", async () => {
     const task = await newTask();
     await running(task.id, "hardness-c1");
-    const restarted = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, containerRunning: async () => false });
+    const restarted = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, containerRunning: async () => false, removeContainer: async () => {} });
     expect(await restarted.recover()).toBe(1);
     expect(await restarted.get(task.id)).toMatchObject({ state: "escalated", resumeTo: "implementing" });
     expect((await restarted.stageRuns(task.id))[0]).toMatchObject({ status: "aborted" });

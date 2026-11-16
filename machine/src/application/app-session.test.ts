@@ -1,5 +1,7 @@
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
+import { SeccompUnavailableError } from "../adapters/docker/seccomp.ts";
 import type { ExecResult } from "../adapters/process/exec.ts";
 import { parseLunaConfig } from "../domain/luna-config.ts";
 import { type AppDeps, e2eModeOf, openApp, openPreview } from "./app-session.ts";
@@ -13,7 +15,9 @@ function setup(over: { seedExit?: number; probes?: number[]; running?: string; l
   const events: string[] = [];
   const dockerCalls: string[][] = [];
   const dockerEnvs: Array<NodeJS.ProcessEnv | undefined> = [];
-  const seedRuns: Array<{ secrets?: Record<string, string>; argv: string[]; servicesUp?: boolean }> = [];
+  /** The secret files the app container would have found at /run/luna-secrets when `docker run` was called, and where. */
+  const appSecrets: { dir?: string; files?: Record<string, string> } = {};
+  const seedRuns: Array<{ secrets?: Record<string, string>; argv: string[]; servicesUp?: boolean; env?: Record<string, string> }> = [];
   const blocked: Array<[string, unknown]> = [];
   const probes = [...(over.probes ?? [0])];
   const rowsNow: Array<{ host: string; port: number; via: "connect" | "http" | "dns"; reason: string; count: number }> = [];
@@ -22,16 +26,25 @@ function setup(over: { seedExit?: number; probes?: number[]; running?: string; l
   const deps: AppDeps = {
     policies: { for: async () => parseLunaConfig(over.text ?? yaml()) },
     imageFor: async () => "repo-image:1",
+    containerEnvOf: async () => ({ CI: "1" }),
     install: async () => (events.push("install"), over.installOk === false ? { ok: false, detail: { escalation: "env_broken", step: "install" }, blocked: [] } : { ok: true, ran: [], notes: [], blocked: [] }),
-    egress: { for: async (r) => (events.push(`egress ${r.kind}`), { allow: ["github.com:443"], allowPrivate: [], proxyImage: "machine:dev" }) },
+    egress: { for: async (r) => (events.push(`egress ${r.kind}`), { allow: ["github.com:443"], allowPrivate: [], proxyImage: "machine:dev" }), bounds: async () => [] },
     secrets: { folder: () => "/secrets/repo", load: async (_r, names) => ({ values: Object.fromEntries(names.filter((n) => !(over.missing ?? []).includes(n)).map((n) => [n, n === "APP_KEY" ? secretA : secretB])), missing: (over.missing ?? []).filter((m) => names.includes(m)).map((name) => ({ name, reason: "there is no such file" })) }) },
     openCardNetwork: async (run) => (events.push(`network ${run}`), card as never),
     openPlainNetwork: async (run) => (events.push(`plain network ${run}`), card as never),
-    startServices: async (run, _s, options) => (events.push(`services on ${options?.network?.name}`), { network: options?.network?.name ?? null, env: { DATABASE_URL: "postgres://db/app" }, teardown: async () => void events.push("teardown services") }),
-    exec: async (run) => (events.push("seed"), seedRuns.push({ ...(run.secrets ? { secrets: run.secrets } : {}), argv: run.argv, ...(run.servicesUp ? { servicesUp: true } : {}) }), rowsNow.push({ host: "seed.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }), { code: over.seedExit ?? 0, stdout: `seeding ${secretB}\n`, stderr: "" }),
+    startServices: async (run, _s, options) => (events.push(`services on ${options?.network?.name}`), { network: options?.network?.name ?? null, env: { DATABASE_URL: "postgres://db/app" }, hosts: [{ name: "db", address: "172.30.0.7" }], teardown: async () => void events.push("teardown services") }),
+    exec: async (run) => (events.push("seed"), seedRuns.push({ env: run.env, ...(run.secrets ? { secrets: run.secrets } : {}), argv: run.argv, ...(run.servicesUp ? { servicesUp: true } : {}) }), rowsNow.push({ host: "seed.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }), { code: over.seedExit ?? 0, stdout: `seeding ${secretB}\n`, stderr: "" }),
     docker: async (args, options) => {
       dockerCalls.push(args);
       dockerEnvs.push(options?.env);
+      if (args[0] === "run") {
+        const mount = args.find((a) => a.endsWith(":/run/luna-secrets:ro"));
+        if (mount) {
+          const dir = mount.split(":")[0]!;
+          appSecrets.dir = dir;
+          appSecrets.files = Object.fromEntries(readdirSync(dir).map((name) => [name, readFileSync(`${dir}/${name}`, "utf8")]));
+        }
+      }
       if (args[0] === "run") return (events.push("app"), rowsNow.push({ host: "app.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }), { code: 0, stdout: "id", stderr: "" } as ExecResult);
       if (args[0] === "exec") return { code: probes.length > 1 ? probes.shift()! : probes[0]!, stdout: "", stderr: "" };
       if (args[0] === "inspect") return { code: 0, stdout: over.running ?? "true", stderr: "" };
@@ -42,7 +55,7 @@ function setup(over: { seedExit?: number; probes?: number[]; running?: string; l
     sleep: async () => void (t += 1000),
     now: () => t,
   };
-  return { deps, events, dockerCalls, dockerEnvs, seedRuns, blocked, onBlocked: (step: string, rows: unknown) => void blocked.push([step, rows]) };
+  return { deps, events, dockerCalls, dockerEnvs, appSecrets, seedRuns, blocked, onBlocked: (step: string, rows: unknown) => void blocked.push([step, rows]) };
 }
 
 describe("e2eModeOf", () => {
@@ -52,6 +65,25 @@ describe("e2eModeOf", () => {
     expect(p("verify:\n  e2e:\n    start:\n      command: x\nqa_targets:\n  - name: s\n    url: https://s.example.com\n")).toBe("start");
     expect(p("qa_targets:\n  - name: s\n    url: https://s.example.com\n")).toBe("target");
     expect(p("")).toBe("agent");
+  });
+});
+
+describe("openApp start checks", () => {
+  it("asks the daemon for seccomp before the services and the app container start, and stops with an env_broken escalation when it has none", async () => {
+    const ok = setup();
+    ok.deps.checkSeccomp = async () => void ok.events.push("seccomp");
+    await openApp(ok.deps, { ...input, onBlocked: ok.onBlocked });
+    expect(ok.events.indexOf("seccomp")).toBeGreaterThan(-1);
+    expect(ok.events.indexOf("seccomp")).toBeLessThan(ok.events.findIndex((e) => e.startsWith("services on")));
+
+    const broken = setup();
+    broken.deps.checkSeccomp = async () => {
+      throw new SeccompUnavailableError("the daemon has no seccomp filter");
+    };
+    const out = await openApp(broken.deps, { ...input, onBlocked: broken.onBlocked });
+    expect(out).toMatchObject({ ok: false, detail: { escalation: "env_broken", step: "seccomp" } });
+    expect(broken.events.some((e) => e.startsWith("services on") || e === "app")).toBe(false);
+    expect(broken.events).toContain("teardown network");
   });
 });
 
@@ -88,14 +120,33 @@ describe("openApp", () => {
     expect(s.events).toContain("plain network abcd1234-app-2");
   });
 
-  it("gives the app only its own secrets, by name on the command line and by value in the docker client's environment", async () => {
+  it("gives the app only its own secrets, as files it finds at /run/luna-secrets: never an argument, never the docker client's environment; the files are gone once the app is closed", async () => {
     const s = setup();
-    await openApp(s.deps, { ...input, onBlocked: s.onBlocked });
+    const opened = await openApp(s.deps, { ...input, onBlocked: s.onBlocked });
     const run = s.dockerCalls.findIndex((c) => c[0] === "run");
-    expect(s.dockerCalls[run]!).toEqual(expect.arrayContaining(["-e", "APP_KEY", "--network-alias", "luna-app"]));
+    expect(s.dockerCalls[run]!).toEqual(expect.arrayContaining(["--network-alias", "luna-app"]));
+    expect(s.dockerCalls[run]!).not.toContain("APP_KEY");
     expect(s.dockerCalls[run]!.join(" ")).not.toContain("SEED_KEY");
     for (const a of s.dockerCalls.flat()) for (const v of [secretA, secretB]) expect(a).not.toContain(v);
-    expect(s.dockerEnvs[run]!.APP_KEY).toBe(secretA);
+    expect(s.dockerEnvs[run]?.APP_KEY).toBeUndefined();
+    expect(s.appSecrets.files).toEqual({ APP_KEY: secretA });
+    expect(existsSync(s.appSecrets.dir!)).toBe(true);
+    if (opened.ok) await opened.close();
+    expect(existsSync(s.appSecrets.dir!)).toBe(false);
+  });
+
+  it("removes the app's secret files when the app fails to start", async () => {
+    const s = setup({ probes: [1] });
+    const out = await openApp(s.deps, { ...input, onBlocked: s.onBlocked });
+    expect(out.ok).toBe(false);
+    expect(existsSync(s.appSecrets.dir!)).toBe(false);
+  });
+
+  it("gives the seed and the app the repository's container env", async () => {
+    const s = setup();
+    await openApp(s.deps, { ...input, onBlocked: s.onBlocked });
+    expect(s.seedRuns[0]!.env).toMatchObject({ CI: "1", DATABASE_URL: "postgres://db/app" });
+    expect(s.dockerCalls.find((c) => c[0] === "run")!.join(" ")).toContain("-e CI=1");
   });
 
   it("probes from inside the container every second until the configured path answers, and gives up after ready_timeout_s", async () => {
@@ -170,7 +221,7 @@ describe("openPreview", () => {
     const runs: Array<{ argv: string[]; secrets?: Record<string, string>; egress?: unknown }> = [];
     const health = [...(over.health ?? [0])];
     const requests: Array<{ kind: string }> = [];
-    s.deps.egress = { for: async (r) => (requests.push(r as never), { allow: ["github.com:443"], allowPrivate: [], proxyImage: "machine:dev" }) };
+    s.deps.egress = { for: async (r) => (requests.push(r as never), { allow: ["github.com:443", ...(r.deploy ?? [])], allowPrivate: [], proxyImage: "machine:dev" }), bounds: async () => [] };
     let spec: { allow: string[] } | undefined;
     s.deps.openCardNetwork = async (_run, sp) => ((spec = sp as never), s.events.push("network"), { name: "net", dns: "d", containerArgs: () => [], blocked: async () => [], teardown: async () => void s.events.push("teardown network") } as never);
     s.deps.exec = async (run) => {
@@ -200,10 +251,18 @@ describe("openPreview", () => {
     expect(p.runs[0]).toMatchObject({ argv: ["sh", "-c", "./deploy.sh"], secrets: { APP_KEY: secretA } });
     expect(p.spec()!.allow).toEqual(expect.arrayContaining(["github.com:443", "task-fix-it.preview.example.com:443"]));
     expect(p.requests[0]!.kind).toBe("check");
+    expect(p.requests[0]).toMatchObject({ deploy: ["task-fix-it.preview.example.com:443"] });
     const probes = p.runs.filter((r) => r.argv[0] !== "sh");
     expect(probes).toHaveLength(2);
     expect(probes[0]!.argv.slice(0, 2)).toEqual(["/opt/luna/bin/node", "-e"]);
     expect(probes[0]!.argv.slice(-2)).toEqual(["https://task-fix-it.preview.example.com", "/up"]);
+  });
+
+  it("opens the network on the list the egress policy returned: a preview host it dropped stays closed", async () => {
+    const p = previewSetup({ health: [0] });
+    p.deps.egress = { for: async () => ({ allow: ["github.com:443"], allowPrivate: [], proxyImage: "machine:dev" }), bounds: async () => [] };
+    await openPreview(p.deps, pinput);
+    expect(p.spec()!.allow).toEqual(["github.com:443"]);
   });
 
   it("takes the URL only from the pattern: a deploy command that prints another URL changes nothing", async () => {

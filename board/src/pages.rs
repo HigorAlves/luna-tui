@@ -11,7 +11,10 @@ use crate::{
         origin_lines, plain, pr_for, pr_url, record_group, run_error, ship_risk_is_high,
         slice_progress,
     },
-    model::{Approval, PullRequest, Task, TaskDetail, criteria_summary, questions_of},
+    model::{
+        Approval, PullRequest, Task, TaskDetail, criteria_summary, questions_of,
+        settled_by_council_of,
+    },
     reference::{Page, RefGroup},
     text::{self, ellipsis, truncate_middle},
     theme,
@@ -175,6 +178,11 @@ fn machine_flags(approval: &Approval, rows: &[(String, String)]) -> Vec<String> 
             }
             // The stale map has its own sentence above; a plan outside the map is what the plan check's issue says in full.
             "map stale" if stale => {}
+            // `council.<member>`: that member's findings were left open after the last round.
+            _ if name.starts_with("council.") => all.push(Flag::said(format!(
+                "council: {} has findings open",
+                &name["council.".len()..]
+            ))),
             "plan outside map" if issues.iter().any(|i| i.contains("code map")) => {}
             _ => all.push(Flag::said(name)),
         }
@@ -198,6 +206,12 @@ fn machine_flags(approval: &Approval, rows: &[(String, String)]) -> Vec<String> 
         .filter_map(Value::as_str)
         .filter_map(|f| f.strip_prefix("triage."))
     {
+        if field == "council" {
+            all.push(Flag::said(
+                "questions answered by the council, not a person · read them below".to_string(),
+            ));
+            continue;
+        }
         all.push(Flag::said(format!(
             "triage {} flagged · T corrects the record",
             plain(field)
@@ -228,6 +242,76 @@ fn machine_flags(approval: &Approval, rows: &[(String, String)]) -> Vec<String> 
         });
         if !(twice || by_id || by_check || by_head) {
             out.push(flag.text.clone());
+        }
+    }
+    out
+}
+
+/// The council's section of the Review page: `Council: passed` or `Council: N finding(s) open`, then one line per turn (member, round,
+/// summary) with its findings indented under it. Empty when the plan had no council. The open findings are those of each member's last turn.
+fn council_section(r: &Value, width: usize) -> Vec<Line<'static>> {
+    let council = &r["council"];
+    let Some(turns) = council["transcript"].as_array() else {
+        return Vec::new();
+    };
+    let open: usize = ["security", "second"]
+        .iter()
+        .filter_map(|m| turns.iter().rfind(|t| t["member"].as_str() == Some(m)))
+        .map(|t| t["findings"].as_array().map_or(0, Vec::len))
+        .sum();
+    let silent = turns.iter().any(|t| {
+        t["summary"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("did not answer"))
+    });
+    let head = if council["passed"].as_bool() == Some(true) {
+        "Council: passed".to_string()
+    } else if silent {
+        "Council: a member did not answer".to_string()
+    } else {
+        format!("Council: {open} finding(s) open")
+    };
+    let mut out = vec![title(&head)];
+    for t in turns {
+        let said = format!(
+            "{} · round {} · {}",
+            t["member"].as_str().unwrap_or("?"),
+            t["round"].as_u64().unwrap_or(0),
+            t["summary"].as_str().unwrap_or("")
+        );
+        out.extend(hanging(vec![Span::raw("  ")], &said, width));
+        for f in t["findings"].as_array().into_iter().flatten() {
+            if let Some(name) = f["title"].as_str() {
+                out.extend(hanging(vec![Span::raw("    ")], name, width));
+            }
+        }
+    }
+    out
+}
+
+/// What the question council answered before this plan was written: question, answer, confidence when it is kept, and the places it read.
+fn settled_section(approval: &Approval, width: usize) -> Vec<Line<'static>> {
+    let settled = settled_by_council_of(approval);
+    if settled.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![title("Settled by the council")];
+    for (question, answer, confidence, evidence) in settled {
+        let said = if confidence > 0.0 {
+            format!("{question} {answer} ({confidence:.2})")
+        } else {
+            format!("{question} {answer}")
+        };
+        out.extend(hanging(
+            vec![Span::raw("  "), Span::styled("- ", theme::label())],
+            &said,
+            width,
+        ));
+        if !evidence.is_empty() {
+            out.push(Line::from(Span::styled(
+                format!("    evidence: {}", plain(&evidence.join(", "))),
+                theme::dim(),
+            )));
         }
     }
     out
@@ -591,6 +675,20 @@ pub(crate) fn review_page(
         for note in &notes {
             main.extend(hanging(vec![Span::raw("  · ")], note, width));
         }
+    }
+    let settled = settled_section(approval, width);
+    if !settled.is_empty() {
+        if !main.is_empty() {
+            main.push(Line::default());
+        }
+        main.extend(settled);
+    }
+    let council = council_section(r, width);
+    if !council.is_empty() {
+        if !main.is_empty() {
+            main.push(Line::default());
+        }
+        main.extend(council);
     }
     // What this gate is really asking when it is not the plan itself: a split, a reply, an archive.
     let ask = gate_main_facts(approval);
@@ -1464,6 +1562,24 @@ pub(crate) fn gate_page(
         &gate_question(task, detail).unwrap_or_else(|| task.status_label()),
     )];
     if let Some(approval) = detail.and_then(TaskDetail::open_approval) {
+        let settled = settled_by_council_of(approval);
+        if !settled.is_empty() {
+            main.push(Line::default());
+            main.push(title("Settled by the council (T to overrule)"));
+            for (question, answer, confidence, evidence) in settled {
+                main.extend(hanging(
+                    vec![Span::raw("  "), Span::styled("- ", theme::label())],
+                    &format!("{question} {answer} ({confidence:.2})"),
+                    width,
+                ));
+                if !evidence.is_empty() {
+                    main.push(Line::from(Span::styled(
+                        format!("    evidence: {}", plain(&evidence.join(", "))),
+                        theme::dim(),
+                    )));
+                }
+            }
+        }
         for (i, (question, suggested)) in questions_of(approval).into_iter().enumerate() {
             main.push(Line::default());
             main.extend(hanging(
@@ -1979,6 +2095,112 @@ mod approver_tests {
         assert!(screen.contains("Approvals  1 of 2 given (ana)"), "{screen}");
     }
 
+    fn with_council(council: Option<serde_json::Value>, flagged: &[&str]) -> String {
+        let mut app = plan_gate_app();
+        app.detail_section = Section::Review;
+        let gate = app
+            .detail
+            .as_mut()
+            .unwrap()
+            .approvals
+            .iter_mut()
+            .find(|a| a.requested["lane"].is_string())
+            .unwrap();
+        gate.requested["flagged"] = serde_json::json!(flagged);
+        if let Some(c) = council {
+            gate.requested["council"] = c;
+        }
+        render(&mut app, 180, 60)
+    }
+
+    #[test]
+    fn a_passed_council_is_one_line_and_each_turn_is_listed() {
+        let council = serde_json::json!({"passed": true, "rounds": 1, "transcript": [
+            {"member": "security", "round": 1, "summary": "nothing to add", "findings": []},
+            {"member": "second", "round": 1, "summary": "the plan holds", "findings": []},
+        ]});
+        let screen = with_council(Some(council), &[]);
+        assert!(screen.contains("Council: passed"), "{screen}");
+        assert!(
+            screen.contains("security · round 1 · nothing to add"),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("second · round 1 · the plan holds"),
+            "{screen}"
+        );
+    }
+
+    #[test]
+    fn findings_left_open_are_counted_indented_and_flagged_by_member() {
+        let council = serde_json::json!({"passed": false, "rounds": 2, "transcript": [
+            {"member": "security", "round": 1, "summary": "a gap", "findings": [
+                {"path": "a.ts", "line": 1, "severity": "high", "title": "No auth on the export", "body": "b", "confidence": 0.9}]},
+            {"member": "second", "round": 1, "summary": "two gaps", "findings": [
+                {"path": "b.ts", "line": 2, "severity": "low", "title": "Slice 2 cannot work", "body": "b", "confidence": 0.8}]},
+            {"member": "security", "round": 2, "summary": "still open", "findings": [
+                {"path": "a.ts", "line": 1, "severity": "high", "title": "No auth on the export", "body": "b", "confidence": 0.9}]},
+            {"member": "second", "round": 2, "summary": "settled", "findings": []},
+        ]});
+        let screen = with_council(Some(council), &["council.security"]);
+        assert!(screen.contains("Council: 1 finding(s) open"), "{screen}");
+        assert!(
+            screen.contains("security · round 2 · still open"),
+            "{screen}"
+        );
+        assert!(screen.contains("    No auth on the export"), "{screen}");
+        assert!(
+            screen.contains("⚑ council: security has findings open"),
+            "{screen}"
+        );
+    }
+
+    #[test]
+    fn a_member_that_did_not_answer_is_said_instead_of_a_zero_count() {
+        let council = serde_json::json!({"passed": false, "rounds": 2, "transcript": [
+            {"member": "security", "round": 1, "summary": "a gap", "findings": []},
+            {"member": "security", "round": 2, "summary": "did not answer: engine down", "findings": []},
+        ]});
+        let screen = with_council(Some(council), &["council.security"]);
+        assert!(
+            screen.contains("Council: a member did not answer"),
+            "{screen}"
+        );
+        assert!(!screen.contains("0 finding(s) open"), "{screen}");
+    }
+
+    #[test]
+    fn the_plan_review_lists_what_the_council_settled_before_the_person_approves() {
+        let mut app = plan_gate_app();
+        app.detail_section = Section::Review;
+        let gate = app
+            .detail
+            .as_mut()
+            .unwrap()
+            .approvals
+            .iter_mut()
+            .find(|a| a.requested["lane"].is_string())
+            .unwrap();
+        gate.requested["flagged"] = serde_json::json!(["triage.council"]);
+        gate.requested["settledByCouncil"] = serde_json::json!([{"question": "Round half up or half to even?", "answer": "half to even", "evidence": ["src/round.rs:12"]}]);
+        let screen = render(&mut app, 180, 60);
+        for needle in [
+            "Settled by the council",
+            "Round half up or half to even? half to even",
+            "evidence: src/round.rs:12",
+        ] {
+            assert!(screen.contains(needle), "{needle}: {screen}");
+        }
+        assert!(screen.contains("answered by the council, not a person"), "{screen}");
+        assert!(!screen.contains("triage council flagged"), "{screen}");
+    }
+
+    #[test]
+    fn a_plan_with_no_council_has_no_council_section() {
+        let screen = with_council(None, &[]);
+        assert!(!screen.contains("Council"), "{screen}");
+    }
+
     #[test]
     fn a_flagged_check_with_no_reason_is_named_and_a_plan_with_no_flags_has_no_flag_block() {
         let mut app = plan_gate_app();
@@ -2029,8 +2251,8 @@ mod first_page_tests {
     use crate::{
         detail::Section,
         testkit::{
-            escalated_app, plan_gate_app, questions_app, release_question_app, render,
-            running_build_app, ship_stage_app,
+            council_questions_app, escalated_app, plan_gate_app, questions_app,
+            release_question_app, render, running_build_app, ship_stage_app,
         },
     };
 
@@ -2273,6 +2495,23 @@ mod first_page_tests {
             "{}",
             rail_of(&screen)
         );
+    }
+
+    #[test]
+    fn the_questions_page_lists_what_the_council_settled_above_the_open_questions() {
+        let mut app = council_questions_app();
+        let main = main_pane(&render(&mut app, 180, 50));
+        in_order(
+            &main,
+            &[
+                "Settled by the council",
+                "Round half up or half to even? half to even (0.91)",
+                "evidence: src/round.rs:12, docs/money.md:4",
+                "1. Which currency does the report use?",
+            ],
+        );
+        let plain = main_pane(&render(&mut questions_app(), 180, 50));
+        assert!(!plain.contains("Settled by the council"));
     }
 
     #[test]

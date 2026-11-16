@@ -10,6 +10,11 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   // The plan stage opens with the code map, read from the repo's graph.
   code_map: ["test_design"],
   test_design_fast: ["test_design"],
+  // The plan council runs after plan_check, inside the plan stage.
+  council_security: ["test_design"],
+  council_second: ["test_design"],
+  // The question council runs inside triage, before a person is asked.
+  question_council: ["triage"],
   // Build's tests step runs inside the implementing stage, before the implementer.
   build_tests: ["implementing"],
   // The inboxes' packs and the decision pack callers run on demand: no task, so no task state.
@@ -65,6 +70,8 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   pr_reply: ["awaiting_ship"],
   eval_judge: [],
   chat_triage: [],
+  // The foreman, run on demand by POST /foreman.
+  foreman: [],
 };
 
 /** The task states in which the pipeline runs the pack. */
@@ -75,6 +82,17 @@ export function packStates(id: PackId): TaskState[] {
 /** The pack the pipeline runs in a task state, or null for a stage that runs none (delivering). */
 export function packForState(state: TaskState): PackId | null {
   return (Object.keys(PACKS) as PackId[]).find((id) => packStates(id).includes(state)) ?? null;
+}
+
+/** Packs that advise a stage and never decide its outcome: a council reads the work, and the stage's own pack decides. */
+const COUNCIL_PACKS: readonly PackId[] = ["council_security", "council_second", "question_council"];
+
+/** The agent pack a task state's stage runs and escalations can be told apart for: the one agent pack that runs in the state, else null.
+ *  Councils and decision packs are left out of the count: they never decide the stage's outcome (triage has `question_council` inside it).
+ *  A state that several deciding agent packs run in (test_design: the planner, the test designer, the code map) records one stage run for all of them. */
+export function soleAgentPackForState(state: TaskState): PackId | null {
+  const agents = (Object.keys(PACKS) as PackId[]).filter((id) => PACKS[id].kind !== "decision" && !COUNCIL_PACKS.includes(id) && packStates(id).includes(state));
+  return agents.length === 1 ? agents[0]! : null;
 }
 
 export function packInfo(pack: Pack): PackInfo {

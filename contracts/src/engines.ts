@@ -1,6 +1,6 @@
 // Engines: the names packs, luna.yaml and the boards use for "what runs this". An engine is a
 // catalog model (./models.ts) plus how it is paid for; its runtime is the catalog entry's.
-// Effort is not here: it is about the job, so the pack sets it. See RFC 0002.
+// Effort is not here: the pack sets it, and a run or a repo may override it (`effortProblem`, ./packs.ts). See RFC 0002.
 import { z } from "zod";
 
 import { MODELS, type ModelEntry, type ModelKey, type RuntimeId } from "./models.ts";

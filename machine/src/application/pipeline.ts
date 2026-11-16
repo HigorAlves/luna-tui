@@ -3,6 +3,7 @@
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
 import { looksLikeTestPath } from "../domain/locked-files.ts";
+import { trustOf } from "../domain/trust.ts";
 import { z } from "zod";
 
 import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, TERMINAL, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, SplitChild, coverageOf, criteriaOf, sizeLimits, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type CardSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, maxRisk, reviseCriteria, stepOf, stepsOfAnswer, stronger, RUN_OR_GATE } from "@hardness/contracts";
@@ -30,8 +31,9 @@ import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } 
 import { containerRunning, removeContainer } from "../adapters/docker/docker.ts";
 import type { Credentials } from "../adapters/credentials/index.ts";
 import { type RunSpan, type Telemetry, noTelemetry } from "./telemetry.ts";
-import { type DecisionTruth, escalationResumedTruth, findingTruth, planTruth, sizeTruth, triageConfirmTruth, triageEditTruth, triageOutcomeTruth, worthLearningTruth } from "./decision-truth.ts";
+import { type DecisionTruth, QUESTIONS_OF, escalationResumedTruth, findingTruth, planTruth, sizeTruth, triageConfirmTruth, triageEditTruth, triageOutcomeTruth, worthLearningTruth } from "./decision-truth.ts";
 import { fallbackCandidates } from "../domain/engine-choice.ts";
+import { type ConfigChange, DECLINE_DAYS, type ProposalInput, choicesOf, editedByHand, renderProposal } from "../domain/config-proposal.ts";
 import type { EngineBudgetWatch } from "./engine-gates.ts";
 import { pickEngine } from "./engine.ts";
 import type { TaskUsage } from "./task-store.ts";
@@ -44,11 +46,11 @@ import { buildProgressOf, buildReportOf, prFactsOf, verifyReportOf } from "./rep
 import { stageFactRows } from "./stage-facts.ts";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join, normalize } from "node:path";
 
-import type { Policy } from "../domain/policy.ts";
-import { CONFIG_FILE, PolicyStore } from "./policy.ts";
+import { PolicyParseError, type Policy } from "../domain/policy.ts";
+import { CONFIG_FILE, POLICY_FILE, PolicyStore } from "./policy.ts";
 
 import type { CommitFact, PriorityTruthEntry } from "./ground-truth.ts";
 import { budgetRowsOf, buildBudget, rateLimitWaitMs } from "../domain/build-budget.ts";
@@ -166,6 +168,14 @@ export class UnknownRepositoryError extends Error {
   }
 }
 
+/** A config proposal cannot be approved: the repo's luna.yaml changed since the card was made, and the changes do not apply to the new text. */
+export class ConfigRebuildError extends Error {
+  constructor(detail: string) {
+    super(`luna.yaml changed since this proposal was made and the changes no longer apply to it (${detail}): fix the file or reject the card`);
+    this.name = "ConfigRebuildError";
+  }
+}
+
 /** The states before Build: a card here has no workspace and no PR, so merging it loses nothing. */
 const BEFORE_BUILD: ReadonlySet<TaskState> = new Set<TaskState>(["draft", "setup", "awaiting_setup", "triage", "awaiting_answers", "test_design", "awaiting_approval", "awaiting_test_check"]);
 
@@ -253,6 +263,10 @@ export interface PipelineOptions {
   maxPerStage?: Record<string, number>;
   /** Whether a stage container is still running at boot; tests pass a fake. */
   containerRunning?: (name: string) => Promise<boolean>;
+  /** Removes the leftover relay and secrets folders of runs a killed machine left, except the runs in `keep` (their container still runs); recover() awaits it before it re-attaches. Tests pass a fake. */
+  sweepRunSecrets?: (keep: ReadonlySet<string>) => Promise<unknown>;
+  /** Removes the proxy and the card network of a run by its container's name, once recover() removed that container; main wires the docker one, tests pass a fake (none by default). */
+  removeRunNetwork?: (container: string) => Promise<void>;
   /** Stops and removes a container recover() decided not to re-attach to; tests pass a fake. */
   removeContainer?: (name: string) => Promise<void>;
   /** Undoes one commit in a worktree; tests pass a fake. */
@@ -454,6 +468,8 @@ export class Pipeline {
   private readonly maxPerStage: Record<string, number>;
   private readonly containerRunning: (name: string) => Promise<boolean>;
   private readonly removeContainer: (name: string) => Promise<void>;
+  private readonly removeRunNetwork: ((container: string) => Promise<void>) | undefined;
+  private readonly sweepRunSecrets: ((keep: ReadonlySet<string>) => Promise<unknown>) | undefined;
   /** The stage each loop is driving right now, for the per-stage caps. */
   private readonly stages = new Map<string, TaskState>();
   /** Loops polling GitHub (ci_watch, and shipping while its monitor waits for a merge): they hold no slot, so the pool is free for work that computes. */
@@ -519,6 +535,8 @@ export class Pipeline {
     this.maxPerStage = options.maxPerStage ?? {};
     this.containerRunning = options.containerRunning ?? containerRunning;
     this.removeContainer = options.removeContainer ?? removeContainer;
+    this.sweepRunSecrets = options.sweepRunSecrets;
+    this.removeRunNetwork = options.removeRunNetwork;
     this.revertCommit = options.revertCommit ?? revertCommit;
     this.diffStat = options.diffStat ?? branchDiffStat;
     this.closeDeps = options.closeDeps;
@@ -763,6 +781,90 @@ export class Pipeline {
     return this.dispatch(task.id, { type: "start", setup: true });
   }
 
+  /** A config proposal for `repoPath`: a card on the `config` route, made already at the setup gate with the new luna.yaml, the one it replaces
+   *  and the changes. No stage runs. Approving writes the file (as the setup gate does) and closes the card; rejecting archives it, and the
+   *  changes stay on it for `declinedConfigChanges`. A repo has one open proposal: a second replaces what the first asked. A file that would
+   *  not load throws, and nothing is made. */
+  async proposeConfig(repoPath: string, changes: ConfigChange[]): Promise<TaskRow> {
+    // One at a time per repo: the open-card check reads and then creates, so two calls at once would make two cards.
+    const before = this.proposing.get(repoPath) ?? Promise.resolve();
+    const run = before.then(() => this.proposeConfigNow(repoPath, changes));
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.proposing.set(repoPath, tail);
+    try {
+      return await run;
+    } finally {
+      if (this.proposing.get(repoPath) === tail) this.proposing.delete(repoPath);
+    }
+  }
+
+  private readonly proposing = new Map<string, Promise<void>>();
+
+  private async proposeConfigNow(repoPath: string, changes: ConfigChange[]): Promise<TaskRow> {
+    const previous = await this.currentConfigText(repoPath);
+    await this.refuseLegacyPolicy(repoPath, previous);
+    const config = renderProposal(previous, changes);
+    const requested = { config, previous, changes };
+    const title = `Config proposal: ${changes.length} ${changes.length === 1 ? "change" : "changes"}`;
+    const open = (await this.store.listTasks()).find((t) => t.route === "config" && t.state === "awaiting_setup" && t.repoPath === repoPath);
+    if (open) {
+      await this.store.withTaskLock(open.id, async (task, tx) => {
+        const gate = await tx.findOpenApproval(task.id);
+        if (task.state !== "awaiting_setup" || !gate) throw new TaskMovedError(task.id, task.state, ["awaiting_setup"]);
+        await tx.updateApprovalRequested(gate, requested);
+        await tx.updateTask(task.id, { title });
+      });
+      await this.log(open.id, "config.proposal_replaced", { changes: changes.length });
+      return this.get(open.id);
+    }
+    const task = await this.createTask({ title, description: `Change the engines and efforts in ${join(repoPath, CONFIG_FILE)}: ${changes.map((c) => c.pack).join(", ")}.`, repoPath, route: "config" });
+    return this.dispatch(task.id, { type: "needs_context" }, { detail: requested });
+  }
+
+  /** The changes a person rejected for this repo in the 30 days before `now`, one entry per field, for the proposal rule to leave out. */
+  async declinedConfigChanges(repoPath: string, now: Date): Promise<Array<{ pack: PackId; field: "engine" | "effort"; to: string; at: string }>> {
+    const since = now.getTime() - DECLINE_DAYS * DAY_MS;
+    const out: Array<{ pack: PackId; field: "engine" | "effort"; to: string; at: string }> = [];
+    for (const task of await this.store.listTasks()) {
+      if (task.route !== "config" || task.state !== "archived" || task.repoPath !== repoPath) continue;
+      const gate = (await this.approvals(task.id)).find((a) => a.decision === "rejected" && a.decidedAt !== null);
+      if (!gate?.decidedAt || gate.decidedAt.getTime() < since || gate.decidedAt.getTime() > now.getTime()) continue;
+      const changes = Array.isArray(gate.requested.changes) ? (gate.requested.changes as ConfigChange[]) : [];
+      const at = gate.decidedAt.toISOString();
+      for (const change of changes) {
+        if (change.engine) out.push({ pack: change.pack, field: "engine", to: change.engine.to, at });
+        if (change.effort) out.push({ pack: change.pack, field: "effort", to: change.effort.to, at });
+      }
+    }
+    return out;
+  }
+
+  /** The engines and efforts the repo's luna.yaml sets today, for the proposal rule. */
+  async configChoices(repoPath: string): Promise<ProposalInput["current"]> {
+    const text = await this.currentConfigText(repoPath);
+    await this.refuseLegacyPolicy(repoPath, text);
+    return choicesOf(text);
+  }
+
+  /** A repo with a PIPELINE.md and no luna.yaml: writing a luna.yaml would make the machine stop reading PIPELINE.md, so the proposal is refused. */
+  private async refuseLegacyPolicy(repoPath: string, configText: string): Promise<void> {
+    if (configText !== "" || existsSync(join(repoPath, CONFIG_FILE)) || !existsSync(join(repoPath, POLICY_FILE))) return;
+    throw new PolicyParseError(`${repoPath} sets its policy in ${POLICY_FILE} and has no ${CONFIG_FILE}: a new ${CONFIG_FILE} would override ${POLICY_FILE}. Move its keys to ${CONFIG_FILE} first`);
+  }
+
+  /** The repo's luna.yaml as text; an empty string when it has none. */
+  private async currentConfigText(repoPath: string): Promise<string> {
+    try {
+      return await readFile(join(repoPath, CONFIG_FILE), "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+      throw error;
+    }
+  }
+
   /** Stage slots: how many tasks may drive a stage at once, how many do right now, whether the
    *  machine is draining (finishing what runs, claiming nothing new), and which credentials'
    *  usage windows hold their queued work, until when. */
@@ -828,7 +930,7 @@ export class Pipeline {
     for (const run of runs) {
       out.get(run.taskId)!.lastRun = { stage: run.stage, engine: run.engine, outcome: run.outcome ?? run.status, summary: runSummary(run.finished), at: run.endedAt.toISOString() };
     }
-    for (const gate of gates) out.get(gate.taskId)!.gate = { state: gate.kind, requested: gate.requested };
+    for (const gate of gates) out.get(gate.taskId)!.gate = { id: gate.id, state: gate.kind, requested: gate.requested };
     return out;
   }
 
@@ -1906,7 +2008,7 @@ export class Pipeline {
 
   /** A rejection: the plan gate's alone (an open plan, not triage's outcome and not a later gate). The card is archived with reason `rejected`, the comment kept. */
   private async reject(task: TaskRow, reason: string | undefined, auto: boolean): Promise<TaskRow> {
-    const gateKind = task.state === "awaiting_approval" || (task.state === "awaiting_ship" && task.route !== "review") ? task.state : null;
+    const gateKind = task.state === "awaiting_approval" || (task.state === "awaiting_ship" && task.route !== "review") || (task.state === "awaiting_setup" && task.route === "config") ? task.state : null;
     const open = gateKind ? (await this.approvals(task.id)).find((a) => a.kind === gateKind && a.decision === null) : undefined;
     // The plan gate, or the watch's release question; the preview gate and every other gate are not rejectable.
     if (!open || auto || (open.requested.outcome !== undefined && !isSplitOutcome(open.requested.outcome)) || (gateKind === "awaiting_ship" && open.requested.gate !== "ship_approval")) throw new RejectNotAllowedError(task.id, task.state);
@@ -1936,6 +2038,9 @@ export class Pipeline {
       const task = await this.get(taskId);
       const recordId = task.classification?.recordId;
       const edited = new Set((task.record?.editedFields ?? []).flatMap((f) => (f === "kind" ? ["kind"] : f === "typeOfWork" ? ["type_of_work"] : f === "size" ? ["size"] : f === "riskPrelim" ? ["risk_prelim"] : [])));
+      // A field the council settled is not a person's reading either, even when it re-read above its bar: only what a person saw and let stand confirms.
+      const settledByCouncil = (task.record?.qa ?? []).flatMap((q) => (q.by === "council" && q.field ? ((QUESTIONS_OF as Record<string, string[]>)[q.field] ?? []) : []));
+      const skipped = new Set([...edited, ...settledByCouncil]);
       const edits = task.record ? triageEditTruth(task.record) : {};
       if (gate.kind === "awaiting_approval" && recordId && (requested.outcome === "conversation" || requested.outcome === "archive")) {
         await truth.learned({ pack: "triage_signals", recordId, label: { ...edits, ...triageOutcomeTruth(requested.outcome, decision) }, kind: "person", source: decision === "sent_back" ? "triage_sent_back" : "triage_outcome_approved", taskId });
@@ -1943,7 +2048,7 @@ export class Pipeline {
         // An approval that left the signals alone confirms the ones the machine acted on; a correction stands in for its own question.
         const policy = await this.policyFor(task.repoPath);
         const verdicts = triageVerdicts(task.classification, policy.factory.triage, { ...(policy.decisions.triage_signals ? { overrides: policy.decisions.triage_signals } : {}) });
-        await truth.learned({ pack: "triage_signals", recordId, label: { ...triageConfirmTruth(task.classification, verdicts, edited), ...edits }, kind: "person", source: "plan_approved", taskId });
+        await truth.learned({ pack: "triage_signals", recordId, label: { ...triageConfirmTruth(task.classification, verdicts, skipped), ...edits }, kind: "person", source: "plan_approved", taskId });
       }
       if (gate.kind === "awaiting_approval" && isSplitOutcome(requested.outcome)) {
         // A split approved as proposed confirms split_check; sent back, rejected or kept whole contradicts it.
@@ -2333,14 +2438,19 @@ export class Pipeline {
     }
   }
 
-  /** A plan that has waited the repo's `auto_approve_plan_minutes` is approved by itself when
-   *  triage reported high confidence and low risk and asked nothing. Anything less waits for you,
-   *  and a notch task always does: the machine never moves a notch card into Approved (RFC 0004). */
+  /** A plan that has waited the repo's `auto_approve_plan_minutes` is approved by itself when it is low risk, every check
+   *  proceeded, nothing was asked, it carries no flag (council-settled answers are one) and needs one approver at most; a medium
+   *  or high risk plan whose council passed counts as well, when the repo lets a passed council count (`plan.council.counts_as_pass`).
+   *  Anything less waits for you. An untrusted card always does, and a notch task always does: the machine never moves a notch
+   *  card into Approved (RFC 0004). */
   private async autoApprovePlans(): Promise<void> {
     for (const task of await this.store.findStuckTasks(new Set<TaskState>(["awaiting_approval"]))) {
       // A Luna Notch task's plan is the notch's to approve (its AutoApproval calls /decision).
       if (task.source?.kind === "notch") continue;
-      const { autoApprovePlanMinutes: minutes } = await this.policies.for(task.repoPath);
+      // An untrusted card's plan waits for a person: text from a stranger is never approved by a clock, whatever its risk or council.
+      if (trustOf(task) === "untrusted") continue;
+      const policy = await this.policies.for(task.repoPath);
+      const minutes = policy.autoApprovePlanMinutes;
       if (minutes === null) continue;
       const open = (await this.store.listApprovals(task.id)).find((a) => a.kind === "awaiting_approval" && a.decision === null);
       if (!open) continue;
@@ -2351,11 +2461,16 @@ export class Pipeline {
       // Low risk, every check a clear yes, and nothing asked: the plan stage's own findings are the bar.
       // A plan that came back with evidence, or that carries any flag, is a person's to read: the clock never approves it.
       if (open.requested.replan !== undefined || (Array.isArray(open.requested.flagged) && open.requested.flagged.length > 0)) continue;
-      const { risk, verdicts, questions } = open.requested as { risk?: { level?: unknown }; verdicts?: Record<string, unknown>; questions?: unknown };
+      const { risk, verdicts, questions, council } = open.requested as { risk?: { level?: unknown }; verdicts?: Record<string, unknown>; questions?: unknown; council?: { passed?: unknown } };
+      // A council that answered and left nothing open stands in for the low-risk bar; every other bar stays.
+      const councilPassed = council?.passed === true && (policy.factory?.plan.council.counts_as_pass ?? FACTORY_DEFAULTS.plan.council.counts_as_pass);
+      const riskOk = risk?.level === "low" || (councilPassed && (risk?.level === "medium" || risk?.level === "high"));
       const checks = Object.values(verdicts ?? {});
-      if (risk?.level !== "low" || checks.length === 0 || checks.some((verdict) => verdict !== "proceed") || (Array.isArray(questions) && questions.length > 0)) continue;
+      if (!riskOk || checks.length === 0 || checks.some((verdict) => verdict !== "proceed") || (Array.isArray(questions) && questions.length > 0)) continue;
       if (Date.now() - open.createdAt.getTime() < minutes * 60_000) continue;
-      const reason = `auto-approved after ${minutes} min: low risk and every check proceeded`;
+      // A repo that asks for more than one approver asked for people: the clock is no named approver.
+      if ((await this.planRuleOf(task, open.requested)).rule.needed > 1) continue;
+      const reason = risk?.level === "low" ? `auto-approved after ${minutes} min: low risk and every check proceeded` : `auto-approved after ${minutes} min: the council passed and every check proceeded`;
       await this.log(task.id, "plan.auto_approved", { reason });
       await this.decide(task.id, "approved", reason, undefined, { auto: true }).catch((error: unknown) =>
         console.error(`could not auto-approve the plan of task ${task.id}`, error),
@@ -2387,7 +2502,12 @@ export class Pipeline {
       const run = (await this.store.listStageRuns(task.id)).findLast((r) => r.status === "running" && r.stage === task.state);
       if (run?.containerId && (await this.containerRunning(run.containerId))) resumable.set(task.id, run);
     }
+    // The council containers a stage started (and their proxies) are no stage's to re-attach to: the host side that waited on them is gone.
+    const subs = await this.subContainersOf(stuck.filter((t) => !t.queued));
     await this.store.markRunningStageRunsAborted([...resumable.values()].map((r) => r.id));
+    // The leftover real-token and secret folders go before anything re-attaches, and never those of a run whose container is still running: its proxy still mounts them.
+    await this.sweepRunSecrets?.(new Set([...resumable.values()].map((r) => r.id))).catch((error: unknown) => console.error("could not sweep the leftover run secrets", error));
+    for (const name of subs) await this.removeRun(name);
     let escalated = 0;
     for (const task of stuck) {
       const run = resumable.get(task.id);
@@ -2415,7 +2535,7 @@ export class Pipeline {
         if (this.inline) await loop;
       } else {
         const dead = (await this.store.listStageRuns(task.id)).findLast((r) => r.stage === task.state && r.containerId);
-        if (dead?.containerId) await this.removeContainer(dead.containerId).catch(() => {});
+        if (dead?.containerId) await this.removeRun(dead.containerId);
         await this.apply(task.id, { type: "abort" }, { detail: { note: "the machine restarted mid-stage" } });
         escalated++;
       }
@@ -2423,6 +2543,25 @@ export class Pipeline {
     await this.relatch();
     await this.rearmPaused();
     return escalated;
+  }
+
+  /** The names of the sub-run containers (council members, the question council) the running stage runs of these tasks recorded. Only names the machine itself gives a container count: the events table also holds what a stage container wrote. */
+  private async subContainersOf(tasks: TaskRow[]): Promise<string[]> {
+    const names = new Set<string>();
+    for (const task of tasks) {
+      const running = new Set((await this.store.listStageRuns(task.id)).filter((r) => r.status === "running").map((r) => r.id));
+      for (const event of await this.store.listEvents(task.id)) {
+        const container = event.payload.container;
+        if (event.kind === "stage.sub_container" && event.stageRunId && running.has(event.stageRunId) && typeof container === "string" && /^hardness-[A-Za-z0-9_.-]{1,200}$/.test(container)) names.add(container);
+      }
+    }
+    return [...names];
+  }
+
+  /** A container recover() will not re-attach to, with its proxy and card network; what is already gone is not an error. */
+  private async removeRun(container: string): Promise<void> {
+    await this.removeContainer(container).catch(() => {});
+    await this.removeRunNetwork?.(container).catch(() => {});
   }
 
   /** Resume timers live in memory, so a restart during a usage window would otherwise park
@@ -2526,8 +2665,24 @@ export class Pipeline {
   /** The luna.yaml the open setup gate proposes, into the checkout, logged. */
   private async writeApprovedConfig(task: TaskRow): Promise<void> {
     const open = (await this.approvals(task.id)).find((a) => a.kind === "awaiting_setup" && a.decision === null);
-    const text = open?.requested.config;
-    if (!task.repoPath || typeof text !== "string") throw new Error("no proposed luna.yaml to write");
+    const proposed = open?.requested.config;
+    if (!task.repoPath || typeof proposed !== "string") throw new Error("no proposed luna.yaml to write");
+    let text: string = proposed;
+    // A config proposal was built over the file as it was; a file edited since is rebuilt, so the edit is not lost.
+    if (task.route === "config" && typeof open?.requested.previous === "string") {
+      const current = await this.currentConfigText(task.repoPath);
+      if (current !== open.requested.previous) {
+        try {
+          const changes = Array.isArray(open.requested.changes) ? (open.requested.changes as ConfigChange[]) : [];
+          // A person who changed a field the card changes made a choice: the card does not overwrite it.
+          const edited = editedByHand(open.requested.previous, current, changes);
+          if (edited) throw new Error(`${edited} was edited`);
+          text = renderProposal(current, changes);
+        } catch (error) {
+          throw new ConfigRebuildError(error instanceof Error ? error.message : String(error));
+        }
+      }
+    }
     await this.writeConfig(task.repoPath, text);
     await this.log(task.id, "config.written", { path: join(task.repoPath, CONFIG_FILE), bytes: text.length });
   }
@@ -3394,6 +3549,7 @@ export class Pipeline {
           span.event("started", { container: facts.container, engine: facts.engine ?? null });
           return this.store.markStageRunStarted(runId, { containerId: facts.container, inputCommit: facts.inputCommit, ...(facts.engine ? { engine: facts.engine } : {}) });
         },
+        subStarted: (facts) => this.log(id, "stage.sub_container", { container: facts.container }, runId),
         note: (text) => this.log(id, "stage.note", { stage, note: text }, runId),
         emit: async (kind, payload) => {
           // Checked at run time too: the type is no guard against a caller that casts.

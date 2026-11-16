@@ -9,7 +9,7 @@ import type { SlackSnapshot } from "./slack.ts";
 import type { JiraLink, TaskSla } from "./jira.ts";
 import type { AgentPack, AgentRole, Pack } from "./packs.ts";
 import { type CredentialOwner, EngineId } from "./engines.ts";
-import type { ModelEntry, RuntimeId } from "./models.ts";
+import { EffortId, type ModelEntry, type RuntimeId } from "./models.ts";
 import { type CardFields, CardEntryFields } from "./card.ts";
 import type { CardEventName } from "./card-events.ts";
 import type { TaskReports } from "./reports.ts";
@@ -88,6 +88,26 @@ export type EconomyImported = z.infer<typeof EconomyImported>;
 /** `POST /repos/setup`: have the setup pack propose a luna.yaml for the checkout at `repoPath`. */
 export const SetupRepoInput = z.object({ repoPath: z.string().trim().min(1) });
 export type SetupRepoInput = z.infer<typeof SetupRepoInput>;
+
+/** One scorecard row for `POST /repos/proposals`: an engine at an effort (null for a decision pack) over `n` cases. `quality` is the pass rate (agent pack) or the acted-on accuracy (decision pack). */
+export const ProposalCandidate = z.object({
+  engine: EngineId,
+  effort: EffortId.nullable(),
+  n: z.number().int().min(0),
+  quality: z.number().min(0).max(1),
+  costPerCase: z.number().min(0),
+  at: z.string().min(1),
+  /** The model ID the scorecard measured (its `model`). The machine refuses a row whose model is not the engine's current catalog model. A decision scorecard keeps none. */
+  model: z.string().min(1).nullable().optional(),
+});
+export type ProposalCandidate = z.infer<typeof ProposalCandidate>;
+
+/** `POST /repos/proposals`: the scorecards for a repo; the machine adds the repo's own run signals and its luna.yaml. The machine's own clock sets the windows. */
+export const ProposalsInput = z.object({
+  repo: z.string().trim().min(1),
+  candidates: z.partialRecord(PackId, z.array(ProposalCandidate)),
+});
+export type ProposalsInput = z.infer<typeof ProposalsInput>;
 
 /** A luna.yaml's text to check (`POST /repos/config/check`): at most 256 KiB, as the machine reads the file. */
 export const ConfigCheckInput = z.object({ text: z.string().max(256 * 1024) });
@@ -338,6 +358,8 @@ export interface TaskLastRun {
 
 /** The open approval a task waits at. */
 export interface TaskGate {
+  /** The approval's id. */
+  id?: string;
   state: TaskState;
   requested: Record<string, unknown>;
 }
@@ -597,14 +619,20 @@ export interface RepoHealth {
   image: {
     /** The image its stages run in: the machine's, or its own. */
     inUse: string;
-    /** The base `sandbox.image.base` names; null when the repository runs on the machine's image. */
+    /** The base `sandbox.image.base` names, else the devcontainer's `image`; null when the repository runs on the machine's image. */
     base: string | null;
     /** When its own image was built by this machine; null when unknown or not its own. */
     builtAt: string | null;
     lastFailure: string | null;
     /** A base the repository's luna.yaml names that no person approved yet (flattened, capped); it runs on the machine's image until `POST /repos/base/approve`. */
     pendingBase: string | null;
+    /** A Dockerfile the repository's devcontainer.json builds from that no person approved (this exact content): `path` is repo-relative, `key` is what `POST /repos/base/approve` takes as `base` (`dockerfile=sha256:<hex>`), `changed` is true when an earlier Dockerfile was approved. Its build runs with network access. Absent when none waits. */
+    pendingDockerfile?: { path: string; key: string; changed: boolean };
   };
+  /** What the machine's sandbox policy dropped or refused from this repository's luna.yaml (egress hosts, the base image), one sentence each; absent when nothing was. */
+  bounds?: string[];
+  /** What the repository's devcontainer.json asks that the machine does not apply ("... not applied: <why>"), and image warnings (a toolchain the image lacks); absent when none. Never blocks a run. */
+  notes?: string[];
   graph: {
     /** `policy.graph` is on. */
     on: boolean;

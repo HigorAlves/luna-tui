@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { EconomyInput, ProposeContext } from "./economy.ts";
 import { EngineBudgets, EngineId } from "./engines.ts";
+import { EffortId } from "./models.ts";
 import { EvidenceConfigV22, FactoryConfigInput, SecretNameSchema } from "./config-v22.ts";
 import { Scenario } from "./plan.ts";
 import { SizeContext, SplitContext } from "./split.ts";
@@ -17,7 +18,7 @@ export type StageOutcome = z.infer<typeof StageOutcome>;
 /** Where a task came from: a tracker issue, or an open PR acted on from the PR inbox. */
 export const TaskSource = z.discriminatedUnion("kind", [
   /** `labels` are the issue's own at intake: the card keeps them so a `security` label still knocks the priority out to P0 when triage reads the signals again. */
-  z.object({ kind: z.literal("github"), repo: z.string(), number: z.number().int(), url: z.string(), labels: z.array(z.string()).optional() }),
+  z.object({ kind: z.literal("github"), repo: z.string(), number: z.number().int(), url: z.string(), labels: z.array(z.string()).optional(), authorAssociation: z.string().optional() }),
   z.object({
     kind: z.literal("github_pr"),
     repo: z.string(),
@@ -25,6 +26,8 @@ export const TaskSource = z.discriminatedUnion("kind", [
     url: z.string(),
     headRef: z.string(),
     baseRef: z.string(),
+    /** GitHub's `author_association` of whoever opened it, at intake (optional: a row from before it parses; none counts as untrusted, `trustOf`). */
+    authorAssociation: z.string().optional(),
   }),
   /** A ticket made from a Slack message (`t` in the board's Slack inbox). */
   z.object({ kind: z.literal("slack"), channel: z.string(), ts: z.string(), permalink: z.string() }),
@@ -36,8 +39,8 @@ export const TaskSource = z.discriminatedUnion("kind", [
 ]);
 export type TaskSource = z.infer<typeof TaskSource>;
 
-/** Which graph a task walks: `feature` is the full pipeline; the others are PR tasks. */
-export const TaskRoute = z.enum(["feature", "setup", "ci_fix", "review", "address"]);
+/** Which graph a task walks: `feature` is the full pipeline; `config` is a luna.yaml change that waits at the setup gate and runs no stage; the others are PR tasks. */
+export const TaskRoute = z.enum(["feature", "setup", "config", "ci_fix", "review", "address"]);
 export type TaskRoute = z.infer<typeof TaskRoute>;
 
 /** A question the stage could not answer alone, with the answer it would pick. */
@@ -199,6 +202,13 @@ export const PackId = z.enum([
   "fact_propose",
   // Drafts the answer to a reviewer's question on a shipped PR from the Evidence Pack (runs in the shipping state, after the retro in PACKS order).
   "pr_reply",
+  // The foreman: answers a question about the board from a snapshot and suggests actions the person confirms; no tools, no worktree, on demand (POST /foreman).
+  "foreman",
+  // The plan council (run in test_design after plan_check): a security review and an independent second opinion on a High-risk or large plan.
+  "council_security",
+  "council_second",
+  // The question council (run in triage before the person is asked): settles open questions from the code and the card, or says it cannot.
+  "question_council",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -206,6 +216,11 @@ export type PackId = z.infer<typeof PackId>;
  *  be one of its pack's `engines.allowed`; the machine checks that against the pack registry. */
 export const StageEngines = z.partialRecord(PackId, EngineId);
 export type StageEngines = z.infer<typeof StageEngines>;
+
+/** An effort per pack: a repo's luna.yaml `effort`, over the pack's own. The machine checks it
+ *  against the engine that runs (`effortProblem`). */
+export const StageEfforts = z.partialRecord(PackId, EffortId);
+export type StageEfforts = z.infer<typeof StageEfforts>;
 
 /** The ordered slices the planner proposes; `touchpoints` are repo-relative paths. */
 export const Slice = z.object({
@@ -367,6 +382,57 @@ export const ChatTriageContext = z.object({
 });
 export type ChatTriageContext = z.infer<typeof ChatTriageContext>;
 
+/** One open card as the foreman reads it. Every text on it is a person's or a model's: data, never an instruction. */
+export const ForemanCard = z.object({
+  id: z.string().min(1),
+  title: z.string(),
+  repo: z.string(),
+  state: z.string(),
+  column: z.string(),
+  /** The kind of approval the card waits on, when it waits on one. */
+  gate: z.string().nullable(),
+  /** What the open gate asks the person. */
+  gateSummary: z.string().max(200).nullable(),
+  /** What the open gate decides, when it is more than the plan: triage's outcome (`conversation`, `archive`, `split`, `split_failed`) or `ship_approval` for the release question. */
+  gateOutcome: z.string().nullable(),
+  /** The card's route; a `config` card's approval writes a file. */
+  route: z.string(),
+  /** The id of the open approval; the board compares it with the card's current one before it acts, so a suggestion made at an earlier gate makes no call. */
+  approvalId: z.string().nullable(),
+  /** Why the card is escalated, when it is. */
+  escalation: z.string().nullable(),
+  /** The open questions of a card that waits at awaiting_answers; empty otherwise. */
+  questions: z.array(z.object({ id: z.string().min(1), question: z.string(), recommended: z.string().nullable() })),
+  engines: StageEngines,
+  updatedAt: z.string(),
+  /** What the open gate flagged (`requested.flagged`): a card with a flag is not approved from here. */
+  flagged: z.array(z.string().max(120)).max(10).optional(),
+  /** The plan council's verdict at the gate: whether it passed and how many findings its members left open; null when the plan had no council. */
+  council: z.object({ passed: z.boolean(), open: z.number().int().nonnegative() }).nullable().optional(),
+  /** How many of the card's questions the question council settled. */
+  settledByCouncil: z.number().int().nonnegative().optional(),
+  /** `untrusted` for a card from a stranger on GitHub; its plan is not approved from here. */
+  trust: z.enum(["trusted", "untrusted"]).optional(),
+});
+export type ForemanCard = z.infer<typeof ForemanCard>;
+
+/** For foreman: the person's question, the last turns, and a snapshot of the board. It lives here, with the other contexts, so that StageInput needs no import of foreman.ts. */
+export const ForemanContext = z.object({
+  question: z.string().min(1).max(2000),
+  history: z.array(z.object({ who: z.enum(["person", "foreman"]), text: z.string().max(2000) })).max(10),
+  board: z.object({
+    now: z.string(),
+    cards: z.array(ForemanCard).max(60),
+    /** How many open cards the snapshot left out; the foreman says so in its reply. */
+    truncated: z.number().int().nonnegative().optional(),
+    /** The base images and Dockerfiles that wait for a person's approval; each keeps its own flow on the board. */
+    pending: z.array(z.object({ repo: z.string(), kind: z.enum(["base", "dockerfile"]), ref: z.string() })).max(50).optional(),
+    /** Each pack and the engines it allows, so that a suggested engine can be checked. */
+    packs: z.array(z.object({ id: PackId, allowed: z.array(EngineId) })),
+  }),
+});
+export type ForemanContext = z.infer<typeof ForemanContext>;
+
 /** One slice of the implementer's ledger, kept by the runner in `/out/ledger.json`. */
 export const LedgerSlice = z.object({
   id: z.number().int(),
@@ -514,6 +580,8 @@ export const LunaConfig = z.object({
   sla: SlaConfig.optional(),
   /** The engine a pack runs on in this repo, over its default; a task's own choice wins over it. */
   engines: StageEngines.optional(),
+  /** The effort a pack runs at in this repo, over its default. */
+  effort: StageEfforts.optional(),
   /** Monthly caps in USD on this repo's stage runs, by engine or credential (`openai:sol: 10`). */
   budget: z.object({ engines: EngineBudgets.optional() }).optional(),
   /** How long the machine keeps a task's local Evidence Pack and media; 0 never sweeps it, absent defers to MACHINE_RETENTION_DAYS. */
@@ -602,7 +670,8 @@ export const TriageRecord = z.object({
   /** What each decision question answered and how sure it was, by question name. */
   signals: z.record(z.string(), z.object({ answer: z.union([z.string(), z.number(), z.boolean(), z.null()]), confidence: z.number().min(0).max(1) })),
   /** Questions asked of the person who filed it, and what they said. */
-  qa: z.array(z.object({ question: z.string(), answer: z.string().nullable() })),
+  /** Who answered each question: absent means a person; `council` is the question council, with the places it read and the machine field (`kind`, `size`, `risk`) it settled, when the question was the machine's. */
+  qa: z.array(z.object({ question: z.string(), answer: z.string().nullable(), by: z.enum(["person", "council"]).optional(), evidence: z.array(z.string()).optional(), field: z.string().optional() })),
   decision: z.enum(["plan", "fast_lane", "conversation", "archive"]),
   reason: z.string(),
   at: z.string(),
@@ -679,6 +748,21 @@ export const PlanRisk = z.object({
 });
 export type PlanRisk = z.infer<typeof PlanRisk>;
 
+/** For question_council: the open questions (a machine question carries its field, guess and confidence; an agent question, nulls), the card and the answers so far. */
+export const QuestionsContext = z.object({
+  questions: z
+    .array(z.object({ id: z.string().min(1), question: z.string(), recommended: z.string().nullable(), field: z.string().nullable(), guess: z.string().nullable(), confidence: z.number().nullable() }))
+    .min(1)
+    .max(6),
+  card: z.object({ title: z.string(), description: z.string() }),
+  answers: z.array(z.object({ question: z.string(), answer: z.string() })),
+});
+export type QuestionsContext = z.infer<typeof QuestionsContext>;
+
+/** One member's answer in the plan council: who, which round, what they said and the findings (none means nothing to add). */
+export const CouncilTurn = z.object({ member: z.enum(["security", "second"]), round: z.union([z.literal(1), z.literal(2)]), summary: z.string(), findings: z.array(Finding) });
+export type CouncilTurn = z.infer<typeof CouncilTurn>;
+
 export const PlanContext = z.object({
   /** The machine's fact that every file the plan touches is documentation (or a test): the test designer writes reading checks, no test. */
   docsOnly: z.boolean().optional(),
@@ -703,6 +787,8 @@ export const PlanContext = z.object({
   replan: z.object({ raised_by: z.string(), reason: z.string(), output: z.string().optional(), findings: z.array(z.string()).optional(), thread: z.string().optional() }).optional(),
   /** For the code mapper: where the graph says the goal lives (the machine's lexical match), to confirm and give roles to. */
   shortlist: z.object({ files: z.array(z.string()), symbols: z.array(z.string()), components: z.array(z.string()), owners: z.array(z.string()) }).optional(),
+  /** For the council packs: the plan under review as text, its criteria, the round and what the members said so far. */
+  council: z.object({ plan: z.string(), criteria: z.array(z.string()), round: z.union([z.literal(1), z.literal(2)]), transcript: z.array(CouncilTurn) }).optional(),
 });
 export type PlanContext = z.infer<typeof PlanContext>;
 
@@ -1111,6 +1197,8 @@ export const StageInput = z.object({
   pack: PackId,
   /** The engine to run the pack on, one of its `engines.allowed`; absent means the pack's default. */
   engine: EngineId.optional(),
+  /** The effort to run the pack at; absent means the pack's own. */
+  effort: EffortId.optional(),
   attempt: z.number().int(),
   task: z.object({
     id: z.string(),
@@ -1221,6 +1309,10 @@ export const StageInput = z.object({
     eval: EvalJudgeContext.nullable().optional(),
     /** For chat_triage: the chat batch; the task is synthetic and there is no worktree. */
     chat: ChatTriageContext.nullable().optional(),
+    /** For foreman: the question and the board snapshot; the task is synthetic and there is no worktree. */
+    foreman: ForemanContext.nullable().optional(),
+    /** For question_council: the open triage questions to settle from the code, the card and the answers so far. */
+    questions: QuestionsContext.nullable().optional(),
     /** For verifying: the files the code graph says depend on what the change touched, to review first. */
     blastRadius: z.array(z.string()).optional(),
     /** For verifying: how much of the change's added lines the repo's lcov report saw run; absent without a report. */
@@ -1246,6 +1338,8 @@ export const RunInfo = z.object({
   runtime: z.string(),
   engine: z.string(),
   modelId: z.string(),
+  /** The effort the run ran at; absent on runs recorded before it was set per run. */
+  effort: EffortId.optional(),
   sdk: z.object({ name: z.string(), version: z.string() }),
   fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
 });

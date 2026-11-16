@@ -4,6 +4,7 @@
 // nothing in a stage container can change it. See docs/architecture.md "A sandbox's network".
 import { z } from "zod";
 
+import type { EngineRelay } from "../credentials/credential.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { type ExecResult, exec as hostExec } from "../process/exec.ts";
 
@@ -12,6 +13,12 @@ const STAGE_LABEL = "dev.hardness.stage=1";
 export const EGRESS_BRIDGE = "hardness-egress";
 const ISOLATED = "com.docker.network.bridge.gateway_mode_ipv4";
 export const PROXY_PORT = 3128;
+/** The engine relay's port on the proxy: plain HTTP, for the stage's `ANTHROPIC_BASE_URL`. */
+export const RELAY_PORT = 3129;
+/** Where the proxy finds the real credential: the one file, mounted alone and read-only. */
+const RELAY_FILE = "/run/relay/anthropic";
+/** ... and the second file, holding the placeholder and the kind: neither is ever an argument. */
+const RELAY_META_FILE = "/run/relay/meta.json";
 const PROXY_PROGRAM = "/opt/luna/bin/node";
 const PROXY_FILE = "/opt/luna/egress/proxy.ts";
 const LOG_TAIL = 2000;
@@ -51,15 +58,21 @@ export interface ProxyOptions {
   bridge: string;
   allow: readonly string[];
   allowPrivate: readonly string[];
+  /** The Claude credential's relay: its file is mounted, its placeholder and kind are arguments. The credential itself is never an argument or a variable. */
+  relay?: EngineRelay;
+  /** The egress bridge's subnet (CIDR): the relay refuses a request that arrives on it, so only the card network is served. Needed with `relay`. */
+  relayDenyLocal?: string;
 }
 
-/** `docker run` for a run's proxy. Pure: no mount and no variable, the list is its command line. */
+/** `docker run` for a run's proxy. Pure: no variable; the list is its command line, and the only mount is the relay's credential file. */
 export function proxyArgs(options: ProxyOptions): string[] {
   const args = ["run", "-d", "--name", proxyName(options.run), "--label", STAGE_LABEL, "--network", options.bridge];
   args.push("--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "128", "--memory", "256m", "--cpus", "0.5", "--user", "65534:65534");
   args.push("--sysctl", "net.ipv4.ip_unprivileged_port_start=0");
   if (options.allowPrivate.some((entry) => entry.startsWith("host.docker.internal:"))) args.push("--add-host", "host.docker.internal:host-gateway");
+  if (options.relay) args.push("-v", `${options.relay.file}:${RELAY_FILE}:ro`, "-v", `${options.relay.metaFile}:${RELAY_META_FILE}:ro`);
   args.push("--entrypoint", PROXY_PROGRAM, options.image, PROXY_FILE, "--listen", String(PROXY_PORT), "--allow", [...options.allow].sort().join(","), "--allow-private", [...options.allowPrivate].sort().join(","));
+  if (options.relay) args.push("--relay", `anthropic=${RELAY_FILE}`, "--relay-meta", RELAY_META_FILE, "--relay-listen", String(RELAY_PORT), ...(options.relayDenyLocal ? ["--relay-deny-local", options.relayDenyLocal] : []));
   return args;
 }
 
@@ -128,12 +141,12 @@ export interface OpenOptions {
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Makes a run's card network and, when its list has an entry, the proxy on it. Throws `EgressUnsupportedError` when the daemon cannot make the isolated network. */
-export async function openCardNetwork(runName: string, spec: { allow: readonly string[]; allowPrivate: readonly string[] }, options: OpenOptions): Promise<CardNetwork> {
+export async function openCardNetwork(runName: string, spec: { allow: readonly string[]; allowPrivate: readonly string[]; relay?: EngineRelay }, options: OpenOptions): Promise<CardNetwork> {
   const exec = options.exec ?? hostExec;
   const bridge = options.bridge ?? EGRESS_BRIDGE;
   const network = cardNetworkName(runName);
   const proxy = proxyName(runName);
-  const hasProxy = spec.allow.length + spec.allowPrivate.length > 0;
+  const hasProxy = spec.allow.length + spec.allowPrivate.length > 0 || spec.relay !== undefined;
   let torn = false;
   const teardown = async (): Promise<void> => {
     if (torn) return;
@@ -163,7 +176,14 @@ export async function openCardNetwork(runName: string, spec: { allow: readonly s
     let address = "127.0.0.1";
     if (hasProxy) {
       await ensureEgressBridge(exec, bridge);
-      const started = await exec("docker", proxyArgs({ run: runName, image: options.proxyImage, bridge, allow: spec.allow, allowPrivate: spec.allowPrivate }));
+      // The relay is served on the card network only: the bridge's subnet, which a host can route to, is refused by the proxy (known before it starts, unlike its address).
+      let relayDenyLocal: string | undefined;
+      if (spec.relay) {
+        const subnets = await exec("docker", ["network", "inspect", "--format", "{{range .IPAM.Config}}{{.Subnet}} {{end}}", bridge]);
+        relayDenyLocal = subnets.stdout.trim().split(/\s+/).filter((s) => /^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(s)).join(",");
+        if (subnets.code !== 0 || !relayDenyLocal) throw new Error(`the egress bridge ${bridge} has no IPv4 subnet to refuse the relay on`);
+      }
+      const started = await exec("docker", proxyArgs({ run: runName, image: options.proxyImage, bridge, allow: spec.allow, allowPrivate: spec.allowPrivate, ...(spec.relay ? { relay: spec.relay, ...(relayDenyLocal ? { relayDenyLocal } : {}) } : {}) }));
       if (started.code !== 0) throw new Error(`egress proxy ${proxy} did not start: ${started.stderr.trim()}`);
       const joined = await exec("docker", ["network", "connect", network, proxy]);
       if (joined.code !== 0) throw new Error(`egress proxy ${proxy} could not join ${network}: ${joined.stderr.trim()}`);
@@ -180,12 +200,14 @@ export async function openCardNetwork(runName: string, spec: { allow: readonly s
       containerArgs(aliases = []) {
         const args = ["--network", network, "--dns", address];
         if (!hasProxy) return args;
-        const noProxy = ["localhost", "127.0.0.1", "::1", ...aliases].join(",");
+        // The SDK sends a plain-HTTP base URL through HTTP_PROXY when it is set, so the relay's address must be exempt.
+        const noProxy = ["localhost", "127.0.0.1", "::1", ...aliases, ...(spec.relay ? [address] : [])].join(",");
         const env: Array<[string, string]> = [
           ...["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "YARN_HTTP_PROXY", "YARN_HTTPS_PROXY"].map((name): [string, string] => [name, proxyUrl]),
           ["NO_PROXY", noProxy],
           ["no_proxy", noProxy],
           ["NODE_USE_ENV_PROXY", "1"],
+          ...(spec.relay ? [["ANTHROPIC_BASE_URL", `http://${address}:${RELAY_PORT}`] as [string, string]] : []),
         ];
         return [...args, ...env.flatMap(([name, value]) => ["-e", `${name}=${value}`])];
       },
@@ -222,12 +244,14 @@ export async function openPlainNetwork(runName: string, options: { exec?: Docker
   };
 }
 
-/** A re-attached run's network and proxy, found by name (a restart found the container still running); null when the network is gone. The handle reads and removes them; it cannot put a container on the network. */
+/** A re-attached run's network and proxy, found by name (a restart found the container still running); null when both are gone. The handle reads and removes them; it cannot put a container on the network. */
 export async function findCardNetwork(runName: string, exec: DockerExec = hostExec): Promise<CardNetwork | null> {
   const network = cardNetworkName(runName);
   const proxy = proxyName(runName);
-  if ((await exec("docker", ["network", "inspect", network])).code !== 0) return null;
+  const hasNetwork = (await exec("docker", ["network", "inspect", network])).code === 0;
   const hasProxy = (await exec("docker", ["inspect", "-f", "{{.State.Running}}", proxy])).code === 0;
+  // A proxy whose network is gone is still found, so that it (and the real-token file it mounts) is removed when the run ends.
+  if (!hasNetwork && !hasProxy) return null;
   let torn = false;
   return {
     name: network,
@@ -260,6 +284,12 @@ async function waitReady(exec: DockerExec, proxy: string, options: OpenOptions):
     if (running.stdout.trim() !== "true" || Date.now() >= deadline) throw new Error(`egress proxy ${proxy} did not come up: ${safe(text).slice(0, 400) || "no output"}`);
     await wait(options.pollMs ?? 200);
   }
+}
+
+/** Removes one run's proxy and card network by the run's container name; nothing happens for what is already gone. */
+export async function removeRunNetwork(runName: string, exec: DockerExec = hostExec): Promise<void> {
+  await exec("docker", ["rm", "-f", proxyName(runName)]);
+  await exec("docker", ["network", "rm", cardNetworkName(runName)]);
 }
 
 /** Removes proxies whose run's container is gone, then every network labelled as a stage's that no container uses. Returns how many networks went. */

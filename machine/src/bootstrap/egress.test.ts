@@ -8,14 +8,14 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("buildEgress", () => {
   it("is the machine's list of hosts for a run, with the engine hosts the owner added", async () => {
-    const egress = buildEgress({ egress: { enabled: true, engineHosts: ["gateway.example.net"] }, runnerImage: "img", traces: { mode: "off" } }, new PolicyStore({ warn: () => {} }))!;
+    const egress = buildEgress({ egress: { enabled: true, engineHosts: ["gateway.example.net"], relay: false }, runnerImage: "img", traces: { mode: "off" } }, new PolicyStore({ warn: () => {} }))!;
     const spec = await egress.for({ repoPath: null, kind: "agent", owners: ["claude"] });
     expect(spec).toMatchObject({ proxyImage: "img", allow: expect.arrayContaining(["api.anthropic.com:443", "gateway.example.net:443", "github.com:443"]) });
   });
 
   it("is nothing with MACHINE_EGRESS=off, said once", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    expect(buildEgress({ egress: { enabled: false, engineHosts: [] }, runnerImage: "img", traces: { mode: "off" } }, new PolicyStore())).toBeUndefined();
+    expect(buildEgress({ egress: { enabled: false, engineHosts: [], relay: false }, runnerImage: "img", traces: { mode: "off" } }, new PolicyStore())).toBeUndefined();
     expect(warn).toHaveBeenCalledTimes(1);
   });
 

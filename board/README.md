@@ -99,7 +99,7 @@ generates the tables below. A test fails when they drift from the registry.
 | `T` | correct the triage record |
 | `p` | post these questions at the source |
 | `A` | memory review: approve, skip the rules |
-| `N` | reject the plan, with a comment; reject the split, with a comment; reject the release, archive the card |
+| `N` | reject the plan, with a comment; reject the split, with a comment; reject the proposal, archive the card; reject the release, archive the card |
 | `u` | open to excuse untestable criteria |
 | `r` | send back with a reason |
 | `x` then `S` | ship: approve and open the PR |
@@ -177,6 +177,7 @@ generates the tables below. A test fails when they drift from the registry.
 | `x` then `-` | one slot fewer |
 | `n` | new ticket, then edit it in place |
 | `x` | actions menu for the ticket |
+| `m` | ask the foreman about the open cards |
 | `:` | command palette |
 | `esc` | clear the filter and the marks |
 | `?` | keys |
@@ -264,7 +265,7 @@ These are the popup's keys. `?` inside it lists them with the ticket's state.
 | `T` | correct the triage record |
 | `p` | post these questions at the source |
 | `A` | memory review: approve, skip the rules |
-| `N` | reject the plan, with a comment; reject the split, with a comment; reject the release, archive the card |
+| `N` | reject the plan, with a comment; reject the split, with a comment; reject the proposal, archive the card; reject the release, archive the card |
 | `u` | approve, excusing untestable criteria |
 | `r` | send back with a reason |
 | `S` | ship: approve and open the PR |
@@ -641,6 +642,27 @@ What the ticket shows:
 
 <!-- keys:end -->
 
+On the Floor, `A` approves a waiting base image or a devcontainer Dockerfile for the repo in focus. A Dockerfile shows as "Dockerfile <path> sha256:<12>" and "builds with network access". Read the Dockerfile before you press `A`. An edit of the file asks for a new approval.
+
+## The foreman
+
+`m` opens the foreman's popup. The foreman is an agent that reads the open cards and answers one question. It only suggests. The board runs each action after you confirm it. The popup handles its own keys, outside the key registry, so `pnpm board:keys` does not list them.
+
+- Type a question, then press `enter`. `esc` closes the popup, or returns to the rows when a reply is on screen.
+- `j` and `k` move between the suggested actions.
+- `y` runs the selected row. The board makes the machine call and shows the result on the row.
+- `s` skips the row.
+- `i` asks a follow-up question.
+- `esc` or `q` closes the popup.
+
+A row is stale when its card moved to another gate after the question. A stale row is not runnable, and `y` sends nothing. Ask again to get a new suggestion. The machine also drops suggestions that it cannot run safely. The popup shows how many it dropped.
+
+## Config cards and plan review
+
+A config card (route `config`, from `pnpm eval propose`) shows a table of the proposed changes above the new `luna.yaml`. Each row has the pack, the engine, the effort and why. `a` writes the file. `N` rejects the card.
+
+The plan review page has a council section when the plan had a council. It says `Council: passed` or how many findings are open, then one line per member and round. When the question council settled triage questions, the plan gate lists those answers apart from the open questions. `T` overrules a council-settled answer. The timer never approves a plan that carries such an answer.
+
 ## Inbox and Digest
 
 `I` opens the Inbox. It shows every ticket that waits on you, split by why (Approve, Answer, Retry, …).
@@ -655,7 +677,7 @@ What the ticket shows:
 | `a` | start; approve the setup; answer triage's questions; approve the plan; approve the split; archive the ticket; post the reply and close the ticket; approve the tests; ship: publish, watch the PR; ship: approve the release; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
 | `T` | correct the triage record |
 | `p` | post these questions at the source |
-| `N` | reject the plan, with a comment; reject the split, with a comment; reject the release, archive the card |
+| `N` | reject the plan, with a comment; reject the split, with a comment; reject the proposal, archive the card; reject the release, archive the card |
 | `u` | approve, excusing untestable criteria |
 | `r` | send back with a reason |
 | `S` | ship: approve and open the PR |
@@ -695,6 +717,7 @@ What the ticket shows:
 
 | Key | Does |
 |---|---|
+| `m` | ask the foreman about the open cards |
 | `?` | keys |
 
 <!-- keys:end -->

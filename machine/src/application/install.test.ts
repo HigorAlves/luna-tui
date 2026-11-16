@@ -41,6 +41,23 @@ function setup(over: { changed?: string[]; lockfiles?: Record<string, string>; e
   return { deps, runs, asked, restored, state, input };
 }
 
+describe("ensureInstalled for an untrusted card", () => {
+  it("installs into the card's own cache volume under the policy's runtime for it", async () => {
+    const { deps, runs, input } = setup();
+    const base = deps.policies;
+    const bounds = { notes: [], egress: [], image: [], seccomp: null, runtime: { default: "runc" as const, untrusted: "runsc" as const }, maxPids: 400, splitCache: true };
+    deps.policies = { for: async (repo) => ({ ...(await base.for(repo)), bounds }) };
+    await ensureInstalled(deps, { ...input, trust: "untrusted" });
+    expect(runs[0]!.cacheVolume).toBe("hardness-cache-repo-untrusted");
+    expect(runs[0]!.limits).toMatchObject({ runtime: "runsc", pids: 400 });
+    const again = setup();
+    again.deps.policies = deps.policies;
+    await ensureInstalled(again.deps, again.input);
+    expect(again.runs[0]!.cacheVolume).toBe("hardness-cache-repo");
+    expect(again.runs[0]!.limits).not.toHaveProperty("runtime");
+  });
+});
+
 describe("ensureInstalled", () => {
   it("runs each step in the repository's image over the work folder, with the cache, the repository's size and the install list", async () => {
     const { deps, runs, asked, input } = setup();
@@ -52,6 +69,12 @@ describe("ensureInstalled", () => {
     expect(asked).toContainEqual({ repoPath: "/user/repo", kind: "install" });
     // the lockfiles are read from the card's repository at the commit, never the folder
     expect(asked).toContainEqual({ path: "/ws/repo/card-1", commit: input.commit });
+  });
+
+  it("gives the install the repository's container env, under the step's own", async () => {
+    const { deps, runs, input } = setup();
+    await ensureInstalled({ ...deps, containerEnvOf: async (repo) => (repo === "/user/repo" ? { CI: "1", COREPACK_ENABLE_STRICT: "0" } : ({} as Record<string, string>)) }, input);
+    expect(runs[0]!.env).toMatchObject({ CI: "1", COREPACK_ENABLE_STRICT: "0" });
   });
 
   it("holds no credential, no secret and no mount of the run's input or output in its container", async () => {

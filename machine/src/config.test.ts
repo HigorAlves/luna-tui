@@ -1,7 +1,8 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { DEFAULT_MACHINE_POLICY } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -10,6 +11,7 @@ import {
   DEFAULT_PORT,
   DEFAULT_RETENTION_DAYS,
   loadConfig,
+  sandboxPolicyNotes,
   tracesConfig,
 } from "./config.ts";
 
@@ -21,7 +23,7 @@ describe("loadConfig", () => {
       host: "127.0.0.1",
       apiToken: null,
       agents: true,
-      egress: { enabled: true, engineHosts: [] },
+      egress: { enabled: true, engineHosts: [], relay: true },
       maxConcurrentTasks: DEFAULT_MAX_CONCURRENT_TASKS,
       runnerImage: "hardness-runner:dev",
       runnerQaImage: "hardness-runner-qa:dev",
@@ -54,6 +56,7 @@ describe("loadConfig", () => {
       slackInbox: { enabled: true, userToken: null, appToken: null, intervalMs: 60_000, markRead: false, rulesPath: expect.stringMatching(/\/\.local\/state\/hardness\/slack-triage\.md$/) as string, digestAt: null, scope: "opted_in" },
       jira: null,
       sla: { gateSecs: 172_800, cycleSecs: null },
+      sandboxPolicy: DEFAULT_MACHINE_POLICY,
     });
   });
 
@@ -326,9 +329,19 @@ describe("loadConfig", () => {
   });
 });
 
+describe("MACHINE_ENGINE_RELAY", () => {
+  it("is on by default, off with off, and never on without the egress proxy that serves it", () => {
+    expect(loadConfig({ HOME: "/h" }).egress.relay).toBe(true);
+    expect(loadConfig({ HOME: "/h", MACHINE_ENGINE_RELAY: "off" }).egress.relay).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_ENGINE_RELAY: "on" }).egress.relay).toBe(true);
+    expect(loadConfig({ HOME: "/h", MACHINE_EGRESS: "off" }).egress.relay).toBe(false);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_ENGINE_RELAY: "maybe" })).toThrow(/MACHINE_ENGINE_RELAY/);
+  });
+});
+
 describe("MACHINE_EGRESS and MACHINE_EGRESS_ENGINE_HOSTS", () => {
   it("are on and empty by default; off is the owner's switch", () => {
-    expect(loadConfig({ HOME: "/h" }).egress).toEqual({ enabled: true, engineHosts: [] });
+    expect(loadConfig({ HOME: "/h" }).egress).toEqual({ enabled: true, engineHosts: [], relay: true });
     expect(loadConfig({ HOME: "/h", MACHINE_EGRESS: "off" }).egress.enabled).toBe(false);
     expect(loadConfig({ HOME: "/h", MACHINE_EGRESS: "on" }).egress.enabled).toBe(true);
     expect(() => loadConfig({ HOME: "/h", MACHINE_EGRESS: "maybe" })).toThrow(/MACHINE_EGRESS/);
@@ -338,5 +351,85 @@ describe("MACHINE_EGRESS and MACHINE_EGRESS_ENGINE_HOSTS", () => {
     expect(loadConfig({ HOME: "/h", MACHINE_EGRESS_ENGINE_HOSTS: " Gateway.Example.net , *.llm.example.com:8443 " }).egress.engineHosts).toEqual(["gateway.example.net", "*.llm.example.com:8443"]);
     expect(() => loadConfig({ HOME: "/h", MACHINE_EGRESS_ENGINE_HOSTS: "ok.example.com,10.0.0.1" })).toThrow(/MACHINE_EGRESS_ENGINE_HOSTS.*10\.0\.0\.1/);
     expect(() => loadConfig({ HOME: "/h", MACHINE_EGRESS_ENGINE_HOSTS: "*" })).toThrow(/MACHINE_EGRESS_ENGINE_HOSTS/);
+  });
+});
+
+describe("the machine sandbox policy file", () => {
+  const home = () => mkdtempSync(join(tmpdir(), "sandbox-policy-"));
+  const write = (path: string, text: string): string => {
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, text);
+    return path;
+  };
+
+  it("an absent file is the defaults", () => {
+    expect(loadConfig({ HOME: home() }).sandboxPolicy).toEqual(DEFAULT_MACHINE_POLICY);
+    expect(loadConfig({ HOME: home(), MACHINE_SANDBOX_POLICY: "/nonexistent/sandbox.yaml" }).sandboxPolicy).toEqual(DEFAULT_MACHINE_POLICY);
+  });
+
+  it("reads ~/.config/hardness/sandbox.yaml, and MACHINE_SANDBOX_POLICY over it", () => {
+    const dir = home();
+    write(join(dir, ".config", "hardness", "sandbox.yaml"), "limits: { max_cpu: 4 }\n");
+    expect(loadConfig({ HOME: dir }).sandboxPolicy.limits).toEqual({ max_cpu: 4, max_memory_gb: 1024, max_pids: 1024 });
+    const other = write(join(dir, "other.yaml"), "egress: { deny: ['*.pastebin.com'], repo_hosts: deny }\n");
+    expect(loadConfig({ HOME: dir, MACHINE_SANDBOX_POLICY: other }).sandboxPolicy.egress).toEqual({ deny: ["*.pastebin.com"], max_repo_hosts: 50, repo_hosts: "deny" });
+  });
+
+  it("refuses an invalid file, naming the file and the key", () => {
+    const dir = home();
+    const file = write(join(dir, "bad.yaml"), "limits: { max_cpu: 0 }\n");
+    expect(() => loadConfig({ HOME: dir, MACHINE_SANDBOX_POLICY: file })).toThrow(/MACHINE_SANDBOX_POLICY.*bad\.yaml.*limits\.max_cpu/);
+    const unknown = write(join(dir, "unknown.yaml"), "runtime: { default: runc, sneaky: 1 }\n");
+    expect(() => loadConfig({ HOME: dir, MACHINE_SANDBOX_POLICY: unknown })).toThrow(/runtime\.sneaky/);
+    const broken = write(join(dir, "broken.yaml"), "limits: [unclosed\n");
+    expect(() => loadConfig({ HOME: dir, MACHINE_SANDBOX_POLICY: broken })).toThrow(/broken\.yaml/);
+  });
+
+  describe("the seccomp profile path", () => {
+    const policyWith = (dir: string, seccomp: string): string => write(join(dir, "seccomp.yaml"), `seccomp: ${seccomp}\n`);
+    const start = (dir: string, profile: string) => () => loadConfig({ HOME: dir, MACHINE_SANDBOX_POLICY: policyWith(dir, profile) });
+
+    it("starts with a readable JSON profile", () => {
+      const dir = home();
+      const profile = write(join(dir, "profile.json"), '{"defaultAction":"SCMP_ACT_ERRNO"}');
+      expect(start(dir, profile)().sandboxPolicy.seccomp).toBe(profile);
+    });
+
+    it("refuses a profile that does not exist, naming the key and the path", () => {
+      const dir = home();
+      const missing = join(dir, "gone.json");
+      expect(start(dir, missing)).toThrow(`seccomp ${missing}`);
+    });
+
+    it("refuses a profile that is not a regular file", () => {
+      const dir = home();
+      const folder = join(dir, "folder.json");
+      mkdirSync(folder);
+      expect(start(dir, folder)).toThrow(`seccomp ${folder} is not a regular file`);
+    });
+
+    it.skipIf(process.getuid?.() === 0)("refuses a profile that cannot be read", () => {
+      const dir = home();
+      const profile = write(join(dir, "locked.json"), "{}");
+      chmodSync(profile, 0o000);
+      expect(start(dir, profile)).toThrow(`seccomp ${profile} cannot be read`);
+    });
+
+    it("refuses a profile that is not JSON", () => {
+      const dir = home();
+      const profile = write(join(dir, "bad.json"), "not json");
+      expect(start(dir, profile)).toThrow(`seccomp ${profile} is not valid JSON`);
+    });
+  });
+});
+
+describe("sandbox policy keys that have no effect", () => {
+  it("names bash_sandbox when it is on, and warns that the nested Bash sandbox was not built", () => {
+    const on = { ...DEFAULT_MACHINE_POLICY, bash_sandbox: "on" as const };
+    expect(sandboxPolicyNotes(on)).toEqual({ notInForce: ["bash_sandbox"], warnings: [expect.stringMatching(/bash_sandbox.*on.*nested Bash sandbox was not built.*RFC 0009.*no effect/)] });
+  });
+
+  it("names nothing when bash_sandbox is off", () => {
+    expect(sandboxPolicyNotes(DEFAULT_MACHINE_POLICY)).toEqual({ notInForce: [], warnings: [] });
   });
 });

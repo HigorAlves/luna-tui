@@ -2,14 +2,19 @@
 // repository's services beside it, the seed run first, and the app only counted ready when the configured path answers from inside its container.
 // The browser run's own network (the `agent` list) joins the app's; the app never gets the agent's proxy or the engine's host, and no port is
 // published on the host. What the app and the seed print is untrusted: flattened, capped and redacted before it is in a reason.
-import { cacheVolumeFor, type SandboxExec, SecretsMissingError } from "../adapters/docker/docker.ts";
+import { cacheVolumeFor, hostUser, makeSecretFolder, type SandboxExec, SecretsMissingError, serviceHardeningOf } from "../adapters/docker/docker.ts";
 import { APP_ALIAS, appArgs, probeArgs } from "../adapters/docker/app.ts";
 import type { BlockedRow, CardNetwork, openCardNetwork, openPlainNetwork } from "../adapters/docker/egress.ts";
+import { RuntimeUnavailableError } from "../adapters/docker/runtimes.ts";
+import { SeccompUnavailableError } from "../adapters/docker/seccomp.ts";
 import type { startServices } from "../adapters/docker/services.ts";
+import type { Trust } from "../domain/trust.ts";
+import { envBrokenDetail } from "./env-broken.ts";
 import type { ExecResult } from "../adapters/process/exec.ts";
 import { safe } from "../domain/evidence-markdown.ts";
 import { hostRedactor, secretRedactor } from "../domain/redact-secrets.ts";
 import type { Policy } from "../domain/policy.ts";
+import { sandboxSizeOf } from "../domain/sandbox-bounds.ts";
 import type { EgressPolicy } from "./egress-policy.ts";
 import type { InstallInput, InstallOutcome } from "./install.ts";
 import type { SecretStore } from "./secrets.ts";
@@ -28,6 +33,8 @@ export function e2eModeOf(policy: Pick<Policy, "qaTargets" | "factory">): E2eMod
 export interface AppDeps {
   policies: { for(repoPath: string): Promise<Policy> };
   imageFor(repoPath: string, taskId: string): Promise<string>;
+  /** The repository's devcontainer `containerEnv`: for its seed and app, like its checks and install. */
+  containerEnvOf?(repoPath: string): Promise<Record<string, string>>;
   install(input: InstallInput): Promise<InstallOutcome>;
   egress?: EgressPolicy;
   secrets?: SecretStore;
@@ -35,6 +42,10 @@ export interface AppDeps {
   /** The network when `MACHINE_EGRESS=off` (no `egress` above): an ordinary one, the owner's switch honoured as in every other container start. */
   openPlainNetwork: typeof openPlainNetwork;
   startServices: typeof startServices;
+  /** Throws `RuntimeUnavailableError` when the daemon lacks the runtime (the app container is started here, not through the sandbox). */
+  checkRuntime?: (runtime: string) => Promise<void>;
+  /** Throws `SeccompUnavailableError` when the daemon has no seccomp filter. */
+  checkSeccomp?: () => Promise<void>;
   exec(run: SandboxExec, options: { timeoutMs?: number }): Promise<ExecResult & { blocked?: BlockedRow[] }>;
   docker(args: string[], options?: { env?: NodeJS.ProcessEnv }): Promise<ExecResult>;
   sleep?(ms: number): Promise<void>;
@@ -47,6 +58,8 @@ export interface OpenAppInput {
   workspace: string;
   commit: string;
   attempt: number;
+  /** The card's trust (`trustOf`): its runtime, process limit and cache volume. */
+  trust?: Trust;
   signal?: AbortSignal;
   /** What the app's proxy refused, once per row, as `seed` and then `app`. */
   onBlocked(step: "seed" | "app" | "deploy", rows: BlockedRow[]): void;
@@ -90,7 +103,7 @@ export async function openApp(deps: AppDeps, input: OpenAppInput): Promise<OpenA
   const redactHost = hostRedactor(values);
   const text = (raw: string): string => safe(redact(raw)).slice(0, REASON_CAP);
 
-  const installed = await deps.install({ taskId: input.taskId, repoPath: input.repoPath, workspace: input.workspace, commit: input.commit, ...(input.signal ? { signal: input.signal } : {}) });
+  const installed = await deps.install({ taskId: input.taskId, repoPath: input.repoPath, workspace: input.workspace, commit: input.commit, ...(input.trust ? { trust: input.trust } : {}), ...(input.signal ? { signal: input.signal } : {}) });
   if (!installed.ok) return { ok: false, detail: installed.detail };
 
   const image = await deps.imageFor(input.repoPath, input.taskId);
@@ -105,11 +118,14 @@ export async function openApp(deps: AppDeps, input: OpenAppInput): Promise<OpenA
     if (fresh.length > 0) input.onBlocked(step, fresh.map((row) => ({ ...row, host: redactHost(row.host) })));
   };
   let closed = false;
+  // The app's own secret files, mounted at /run/luna-secrets; deleted with the container.
+  let appSecrets: { dir: string; remove(): Promise<void> } | null = null;
   const close = async (): Promise<void> => {
     if (closed) return;
     closed = true;
     await report("app").catch(() => {});
     await deps.docker(["rm", "-f", container]);
+    await appSecrets?.remove();
     await services?.teardown();
     await card.teardown();
   };
@@ -119,16 +135,21 @@ export async function openApp(deps: AppDeps, input: OpenAppInput): Promise<OpenA
   };
 
   try {
-    services = await deps.startServices(runName, policy.services, { network: { name: card.name, dns: card.dns } });
-    const limits = { cpu: policy.factory.sandbox.cpu, memoryGb: policy.factory.sandbox.memory_gb };
-    const cacheVolume = cacheVolumeFor(input.repoPath);
+    const limits = sandboxSizeOf(policy, input.trust);
+    const cacheVolume = cacheVolumeFor(input.repoPath, limits.cacheTrust);
+    // The app container is started by `docker run` here, not through the sandbox: the daemon's seccomp filter and the runtime are checked here too.
+    await deps.checkSeccomp?.();
+    if (limits.runtime) await deps.checkRuntime?.(limits.runtime);
+    services = await deps.startServices(runName, policy.services, { network: { name: card.name, dns: card.dns }, harden: serviceHardeningOf(limits) });
+    const containerEnv = (await deps.containerEnvOf?.(input.repoPath)) ?? {};
     if (seed.command) {
-      const seeded = await deps.exec({ name: `${container}-seed`, image, worktree: input.workspace, limits, argv: ["sh", "-c", seed.command], env: services.env, cacheVolume, cardNetwork: card, services: policy.services, servicesUp: true, network: services.network, serviceEnv: services.env, ...(seed.secrets.length > 0 ? { secrets: pick(seed.secrets) } : {}) }, { timeoutMs: SEED_TIMEOUT_MS });
+      const seeded = await deps.exec({ name: `${container}-seed`, image, worktree: input.workspace, limits, argv: ["sh", "-c", seed.command], env: { ...containerEnv, ...services.env }, cacheVolume, cardNetwork: card, services: policy.services, servicesUp: true, network: services.network, serviceEnv: services.env, serviceHosts: services.hosts, ...(seed.secrets.length > 0 ? { secrets: pick(seed.secrets) } : {}) }, { timeoutMs: SEED_TIMEOUT_MS });
       await report("seed");
       if (seeded.code !== 0) return await fail("seed", `the seed command exited ${seeded.code}`, `${seeded.stdout}\n${seeded.stderr}`);
     }
-    const args = appArgs({ name: container, image, worktree: input.workspace, command: start.command!, port: start.port, limits, cacheVolume, cardNetwork: card, services: policy.services, serviceEnv: services.env, ...(start.secrets.length > 0 ? { secrets: pick(start.secrets) } : {}) });
-    const started = await deps.docker(args, { env: { ...process.env, ...pick(start.secrets) } });
+    if (start.secrets.length > 0) appSecrets = await makeSecretFolder(pick(start.secrets), hostUser());
+    const args = appArgs({ name: container, image, env: containerEnv, worktree: input.workspace, command: start.command!, port: start.port, limits, cacheVolume, cardNetwork: card, services: policy.services, serviceEnv: services.env, serviceHosts: services.hosts, ...(appSecrets ? { secrets: pick(start.secrets), secretsDir: appSecrets.dir } : {}) });
+    const started = await deps.docker(args);
     if (started.code !== 0) return await fail("start", "the app container did not start", started.stderr);
     const deadline = now() + start.ready_timeout_s * 1000;
     for (;;) {
@@ -143,6 +164,7 @@ export async function openApp(deps: AppDeps, input: OpenAppInput): Promise<OpenA
     }
   } catch (error) {
     await close();
+    if (error instanceof RuntimeUnavailableError || error instanceof SeccompUnavailableError) return { ok: false, detail: envBrokenDetail(error)! };
     throw error;
   }
   return { ok: true, target: { name: "app", baseUrl: `http://${APP_ALIAS}:${start.port}` }, network: card.name, aliases: [APP_ALIAS, ...Object.keys(policy.services)], redactValues: values, close };
@@ -182,11 +204,11 @@ export async function openPreview(deps: AppDeps, input: OpenAppInput & { branch:
   }
   const redact = secretRedactor(values);
   const redactHost = hostRedactor(values);
-  const installed = await deps.install({ taskId: input.taskId, repoPath: input.repoPath, workspace: input.workspace, commit: input.commit, ...(input.signal ? { signal: input.signal } : {}) });
+  const installed = await deps.install({ taskId: input.taskId, repoPath: input.repoPath, workspace: input.workspace, commit: input.commit, ...(input.trust ? { trust: input.trust } : {}), ...(input.signal ? { signal: input.signal } : {}) });
   if (!installed.ok) return { ok: false, detail: installed.detail };
   const image = await deps.imageFor(input.repoPath, input.taskId);
-  const base = deps.egress ? await deps.egress.for({ repoPath: input.repoPath, kind: "check" }) : { allow: [], allowPrivate: [], proxyImage: image };
-  const spec = { ...base, allow: [...new Set([...base.allow, `${host}:443`])].sort() };
+  // The preview's host is one the repo chose: the egress policy holds it within the machine's sandbox policy (egress.deny, repo_hosts, max_repo_hosts) like the rest.
+  const spec = deps.egress ? await deps.egress.for({ repoPath: input.repoPath, kind: "check", deploy: [`${host}:443`] }) : { allow: [], allowPrivate: [], proxyImage: image };
   const runName = `${input.taskId.slice(0, 8)}-deploy-${input.attempt}`;
   const card = deps.egress ? await deps.openCardNetwork(runName, spec, { proxyImage: spec.proxyImage }) : await deps.openPlainNetwork(runName);
   const seen = new Set<string>();
@@ -202,11 +224,11 @@ export async function openPreview(deps: AppDeps, input: OpenAppInput & { branch:
     await report().catch(() => {});
     await card.teardown();
   };
-  const limits = { cpu: policy.factory.sandbox.cpu, memoryGb: policy.factory.sandbox.memory_gb };
+  const limits = sandboxSizeOf(policy, input.trust);
   const minutes = deploy.timeout_minutes;
   try {
     if (deploy.command) {
-      const ran = await deps.exec({ name: `hardness-${runName}`, image, worktree: input.workspace, limits, argv: ["sh", "-c", deploy.command], cacheVolume: cacheVolumeFor(input.repoPath), cardNetwork: card, services: policy.services, ...(deploy.secrets.length > 0 ? { secrets: values } : {}) }, { timeoutMs: minutes * 60_000 });
+      const ran = await deps.exec({ name: `hardness-${runName}`, image, worktree: input.workspace, limits, argv: ["sh", "-c", deploy.command], cacheVolume: cacheVolumeFor(input.repoPath, limits.cacheTrust), cardNetwork: card, services: policy.services, ...(deploy.secrets.length > 0 ? { secrets: values } : {}) }, { timeoutMs: minutes * 60_000 });
       if (ran.code !== 0) {
         await close();
         return broken(`the deploy command exited ${ran.code}`, `${ran.stdout}\n${ran.stderr}`, redact);

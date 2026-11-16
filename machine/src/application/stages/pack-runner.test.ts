@@ -15,6 +15,8 @@ import { DEFAULT_POLICY } from "../../domain/policy.ts";
 import type { TaskRow } from "../../domain/task.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
 import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
+import { RuntimeUnavailableError } from "../../adapters/docker/runtimes.ts";
+import { SeccompUnavailableError } from "../../adapters/docker/seccomp.ts";
 import type { SecretStore } from "../secrets.ts";
 import { noEconomy } from "../economy.ts";
 import { type AgentDeps, agentRunners, runAgent } from "./pack-runner.ts";
@@ -247,10 +249,44 @@ describe("agent stages through packs", () => {
 
   it("sizes the container from the repository's sandbox section, two CPUs and four gigabytes without one", async () => {
     await runners(fakeSandbox(output())).triage!(context("triage"));
-    expect(seen!.limits).toEqual({ cpu: 2, memoryGb: 4 });
+    expect(seen!.limits).toEqual({ cpu: 2, memoryGb: 4, pids: 1024, cacheTrust: "trusted" });
     const small = { ...deps(fakeSandbox(output())), policies: { for: async () => ({ ...DEFAULT_POLICY, factory: { ...FACTORY_DEFAULTS, sandbox: { ...FACTORY_DEFAULTS.sandbox, cpu: 2, memory_gb: 3 } } }) } as never };
     await agentRunners(small).triage!(context("triage"));
-    expect(seen!.limits).toEqual({ cpu: 2, memoryGb: 3 });
+    expect(seen!.limits).toEqual({ cpu: 2, memoryGb: 3, pids: 1024, cacheTrust: "trusted" });
+  });
+
+  it("runs at the bounded size and the owner's seccomp profile, and leaves a note on the task for a capped size", async () => {
+    const bounds = { notes: ["sandbox.cpu 16 is capped at 4 by the machine's sandbox policy (limits.max_cpu)"], egress: [], image: [], seccomp: "/etc/luna/seccomp.json", runtime: { default: "runc", untrusted: "runc" }, maxPids: 1024, splitCache: true };
+    const capped = { ...deps(fakeSandbox(output())), policies: { for: async () => ({ ...DEFAULT_POLICY, bounds, factory: { ...FACTORY_DEFAULTS, sandbox: { ...FACTORY_DEFAULTS.sandbox, cpu: 4, memory_gb: 4 } } }) } as never };
+    const note = vi.fn(async () => {});
+    await agentRunners(capped).triage!({ ...context("triage"), note });
+    expect(seen!.limits).toEqual({ cpu: 4, memoryGb: 4, pids: 1024, cacheTrust: "trusted", seccomp: "/etc/luna/seccomp.json" });
+    expect(note).toHaveBeenCalledWith(bounds.notes[0]);
+  });
+
+  describe("a card from outside the repository's people", () => {
+    const stranger = (ctx: StageContext, authorAssociation = "NONE"): StageContext => ({ ...ctx, task: { ...ctx.task, id: `stranger-${authorAssociation}-${Math.random()}`, source: { kind: "github", repo: "o/a", number: 9, url: "u", authorAssociation } } as unknown as TaskRow });
+    const bounds = { notes: [], egress: [], image: [], seccomp: null, runtime: { default: "runc", untrusted: "runsc" }, maxPids: 300, splitCache: true };
+    const withBounds = (over = {}) => ({ ...deps(fakeSandbox(output())), policies: { for: async () => ({ ...DEFAULT_POLICY, bounds: { ...bounds, ...over } }) } as never });
+
+    it("gets its own cache volume and the policy's runtime, and says so on the task once", async () => {
+      const note = vi.fn(async (_text: string) => {});
+      const runner = agentRunners(withBounds());
+      const ctx = { ...stranger(context("triage")), note };
+      await runner.triage!(ctx);
+      expect(seen!.cacheVolume).toBe("hardness-cache-repo-untrusted");
+      expect(seen!.limits).toMatchObject({ runtime: "runsc", pids: 300, cacheTrust: "untrusted" });
+      await runner.triage!(ctx);
+      expect(note.mock.calls.filter(([text]) => String(text).includes("runs untrusted"))).toEqual([["This card runs untrusted (its GitHub author is not an owner, member or collaborator): its own cache volume and the runsc container runtime."]]);
+    });
+
+    it("keeps the shared cache when the policy does not split, and a trusted card keeps runc", async () => {
+      await agentRunners(withBounds({ splitCache: false })).triage!(stranger(context("triage")));
+      expect(seen!.cacheVolume).toBe("hardness-cache-repo");
+      await agentRunners(withBounds()).triage!(stranger(context("triage"), "MEMBER"));
+      expect(seen!.cacheVolume).toBe("hardness-cache-repo");
+      expect(seen!.limits).not.toHaveProperty("runtime");
+    });
   });
 
   it("carries the agent's typed escalation reason, and reads one off the enum as other", async () => {
@@ -380,6 +416,58 @@ describe("agent stages through packs", () => {
     expect(bare.detail).toMatchObject({ outcome: "plan", criteria: ["c"] });
     expect(bare.detail).not.toHaveProperty("assumptions");
     expect(bare.detail).not.toHaveProperty("confidence");
+  });
+
+  it("reads a council member's answer: the summary and the findings ride on the detail", async () => {
+    const finding = { path: "plan", line: 1, severity: "security", title: "No auth", body: "Anyone can export.", confidence: 0.9 };
+    const heard = await runAgent(deps(fakeSandbox(output({ answer: { summary: "one gap", findings: [finding] } }))), context("test_design"), "council_security");
+    expect(heard.outcome).toBe("pass");
+    expect(heard.detail).toMatchObject({ summary: "one gap", findings: [finding] });
+  });
+
+  it("tells the machine a council member's container, and the question council's, since a sub-run's own `started` is withheld", async () => {
+    for (const [pack, state] of [["council_security", "test_design"], ["council_second", "test_design"], ["question_council", "triage"]] as const) {
+      const subStarted = vi.fn(async (_facts: { container: string }) => {});
+      await runAgent(deps(fakeSandbox(output({ answer: { summary: "s", findings: [], answers: [] } }))), { ...context(state), subStarted }, pack);
+      expect(subStarted, pack).toHaveBeenCalledTimes(1);
+      expect(subStarted.mock.calls[0]![0].container, pack).toMatch(/^hardness-[0-9a-f]{8}-/);
+      expect(seen!.name).toBe(subStarted.mock.calls[0]![0].container);
+    }
+  });
+
+  it("does not report a sub-run container for a pack that is a stage of its own, or for a re-attached council run", async () => {
+    const subStarted = vi.fn(async (_facts: { container: string }) => {});
+    await runAgent(deps(fakeSandbox(output())), { ...context("triage"), subStarted }, "triage");
+    expect(subStarted).not.toHaveBeenCalled();
+    await runAgent(deps(fakeSandbox(output({ answer: { answers: [] } }))), { ...context("triage"), subStarted, resume: { container: "hardness-abcd1234-question-council-1", inputCommit: null } }, "question_council");
+    expect(subStarted).not.toHaveBeenCalled();
+  });
+
+  it("reads the question council's answer: the answers ride on the detail", async () => {
+    const answers = [{ id: "q1", answer: "pnpm", confidence: 0.9, evidence: ["package.json:3"] }, { id: "q2", answer: null, confidence: 0, evidence: [] }];
+    const heard = await runAgent(deps(fakeSandbox(output({ answer: { answers } }))), context("triage"), "question_council");
+    expect(heard.outcome).toBe("pass");
+    expect(heard.detail).toMatchObject({ answers });
+  });
+
+  it("answers the question council's card_search from the task's own repository, as triage's is", async () => {
+    const asked: Array<{ repoPath: string; query: string }> = [];
+    const cards = { search: async (q: { repoPath: string; query: string }) => (asked.push(q), [{ id: "c1", title: "Export CSV", state: "triage" }]) };
+    const inner = fakeSandbox(output({ answer: { answers: [] } }));
+    let answer: unknown = null;
+    const sandbox = async (run: SandboxRun) => {
+      run.onStarted?.("c1");
+      const checks = join(run.runDir, "out", "checks");
+      mkdirSync(checks, { recursive: true });
+      writeFileSync(join(checks, "card-search-request.json"), JSON.stringify({ query: "csv export", repoPath: "/some/other/repo" }));
+      for (let i = 0; i < 200 && !existsSync(join(checks, "card-search.json")); i++) await new Promise((r) => setTimeout(r, 10));
+      answer = existsSync(join(checks, "card-search.json")) ? JSON.parse(readFileSync(join(checks, "card-search.json"), "utf8")) : null;
+      return inner(run);
+    };
+    const d = { ...deps(sandbox), cards: cards as never, watchEvery: 5 };
+    await runAgent(d, context("triage"), "question_council");
+    expect(asked).toEqual([expect.objectContaining({ query: "csv export", repoPath: context("triage").task.repoPath })]);
+    expect(answer).toMatchObject({ verdict: "ok", cards: [{ id: "c1" }] });
   });
 
   it("reads the v2.2 plan answer: steps become the slices Build reads (files are the touchpoints) and ride along with out of scope, migration and flags", async () => {
@@ -1075,6 +1163,14 @@ describe("the engine a stage runs on", () => {
     expect(result.events?.map((e) => e.kind)).toEqual(["slice_committed"]);
   });
 
+  it("releases the credential when a step between its preparation and the container throws, so the real token is not left on disk", async () => {
+    const { credentials, log } = recordingCredentials();
+    const sandbox = fakeSandbox(output(), () => log.push("sandbox"));
+    const d: AgentDeps = { ...deps(sandbox), credentials, egress: { for: async () => { throw new Error("policy broke"); } } };
+    await expect(runAgent(d, context("triage"), "triage")).rejects.toThrow("policy broke");
+    expect(log).toEqual(["prepare claude:opus", "release claude:opus"]);
+  });
+
   it("never runs an engine the pack does not allow: the task's override is passed over and the reason logged", async () => {
     const { credentials, log } = recordingCredentials();
     const task = { ...context("triage").task, stages: { triage: "openai:sol" } } as TaskRow;
@@ -1085,6 +1181,46 @@ describe("the engine a stage runs on", () => {
       pack: "triage",
       engine: "claude:opus",
       reason: expect.stringMatching(/^the task's openai:sol is not allowed for triage/),
+    });
+  });
+
+  describe("an effort the runner image may not honour", () => {
+    const runInfo = (effort?: string) => ({ runtime: "claude", engine: "claude:opus", modelId: "m", ...(effort ? { effort } : {}), sdk: { name: "s", version: "1" }, fingerprint: "a".repeat(64) }) as StageOutput["run"];
+    const asked = () => writeFileSync(join(repo, "luna.yaml"), "effort:\n  triage: low\n");
+
+    it("says on the task, and in the run's events, when the result ran at another effort than the input set", async () => {
+      asked();
+      const note = vi.fn(async (_text: string) => {});
+      const result = await runAgent(deps(fakeSandbox(output({ run: runInfo("high") }))), { ...context("triage"), note }, "triage");
+      expect((seen!.input as unknown as StageInput).effort).toBe("low");
+      const reason = "triage was asked to run at low effort and ran at high: the runner image may be older than this build (pnpm images)";
+      expect(note).toHaveBeenCalledWith(reason);
+      expect(result.events?.find((e) => e.kind === "engine")?.payload).toEqual({ pack: "triage", engine: "claude:opus", reason });
+    });
+
+    it("says so when the result reports no effort at all (an old image strips the key)", async () => {
+      asked();
+      const note = vi.fn(async (_text: string) => {});
+      await runAgent(deps(fakeSandbox(output({ run: runInfo() }))), { ...context("triage"), note }, "triage");
+      expect(note).toHaveBeenCalledWith("triage was asked to run at low effort and reported none: the runner image may be older than this build (pnpm images)");
+    });
+
+    it("says nothing on a re-attached run: its container started with the input of before the restart, not the luna.yaml of now", async () => {
+      asked();
+      const note = vi.fn(async (_text: string) => {});
+      const result = await runAgent(deps(fakeSandbox(output({ run: runInfo("high") }))), { ...context("triage"), note, resume: { container: "hardness-abcd1234-triage-1", inputCommit: null, engine: "claude:opus" } }, "triage");
+      expect(note).not.toHaveBeenCalled();
+      expect(result.events?.find((e) => e.kind === "engine")).toBeUndefined();
+    });
+
+    it("says nothing when the result ran at the effort asked for, or no effort was set", async () => {
+      asked();
+      const note = vi.fn(async (_text: string) => {});
+      const same = await runAgent(deps(fakeSandbox(output({ run: runInfo("low") }))), { ...context("triage"), note }, "triage");
+      expect(same.events?.find((e) => e.kind === "engine")).toBeUndefined();
+      writeFileSync(join(repo, "luna.yaml"), "policy:\n  graph: off\n");
+      await runAgent(deps(fakeSandbox(output({ run: runInfo("high") }))), { ...context("triage"), note }, "triage");
+      expect(note).not.toHaveBeenCalled();
     });
   });
 
@@ -1468,11 +1604,13 @@ describe("a stage's own list of hosts", () => {
     return { d, requests };
   };
 
-  it("asks for the agent list of the run's repository with its engine's owner, and hands it to the sandbox with the machine's image", async () => {
-    const { d, requests } = withEgress(fakeSandbox(output()));
-    await runAgent(d, context("triage"), "triage");
-    expect(requests).toEqual([expect.objectContaining({ repoPath: repo, kind: "agent", owners: expect.arrayContaining(["claude"]), targets: [] })]);
-    expect(seen?.egress).toEqual(spec);
+  it("asks for the pack's network: engine as `pack`, github as `github`, full as `agent`, with its engine's owner, and hands the list to the sandbox", async () => {
+    for (const [pack, kind] of [["reviewing", "pack"], ["triage", "github"], ["implementing", "agent"]] as const) {
+      const { d, requests } = withEgress(fakeSandbox(output()));
+      await runAgent(d, context(pack), pack);
+      expect(requests, pack).toEqual([expect.objectContaining({ repoPath: repo, kind, owners: expect.arrayContaining(["claude"]), targets: [] })]);
+      expect(seen?.egress).toEqual(spec);
+    }
   });
 
   it("gives a browser run the host of the one QA target it is given", async () => {
@@ -1506,6 +1644,24 @@ describe("a stage's own list of hosts", () => {
     const result = await runAgent(d, context("triage"), "triage");
     expect(result.outcome).toBe("escalated");
     expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true, step: "network", reason: expect.stringContaining("Docker Engine 28"), options: expect.any(Array) });
+  });
+});
+
+describe("sandbox environment errors on the agent path", () => {
+  it("escalates env_broken at step seccomp when the daemon has no seccomp filter", async () => {
+    const d = deps(async () => {
+      throw new SeccompUnavailableError("no seccomp");
+    });
+    const result = await runAgent(d, context("triage"), "triage");
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true, step: "seccomp" });
+  });
+
+  it("escalates env_broken at step runtime when the install step finds no runtime, on a writable stage", async () => {
+    const d: AgentDeps = { ...deps(fakeSandbox(output())), install: async () => { throw new RuntimeUnavailableError("no runsc"); } };
+    const result = await runAgent(d, context("implementing"), "implementing");
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true, step: "runtime" });
   });
 });
 

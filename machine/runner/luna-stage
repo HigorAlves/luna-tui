@@ -4,4 +4,5 @@
 export PATH="/opt/luna/bin:$PATH"
 export LUNA_FACTORY_ROOT=/opt/luna/factory-src/factory
 export CODEX_HOME="${CODEX_HOME:-/tmp/.codex}" EVE_TELEMETRY_DISABLED=1 GOTOOLCHAIN="${GOTOOLCHAIN:-local}"
-exec /opt/luna/bin/node /opt/luna/factory-src/factory/src/main.ts "$@"
+# luna-env puts the secrets the machine mounted at /run/luna-secrets into the environment before node starts, so the factory's presence checks pass.
+exec /opt/luna/bin/luna-env /opt/luna/bin/node /opt/luna/factory-src/factory/src/main.ts "$@"

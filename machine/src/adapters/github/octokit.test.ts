@@ -40,7 +40,7 @@ function stub(answers: Record<string, unknown>) {
       },
       git: { deleteRef: endpoint("git.deleteRef") },
       checks: { listForRef: endpoint("checks.listForRef") },
-      issues: { listForRepo: "issues.listForRepo", createComment: endpoint("issues.createComment"), listComments: "issues.listComments", updateComment: endpoint("issues.updateComment") },
+      issues: { get: endpoint("issues.get"), listForRepo: "issues.listForRepo", createComment: endpoint("issues.createComment"), listComments: "issues.listComments", updateComment: endpoint("issues.updateComment") },
       actions: {
         listJobsForWorkflowRun: endpoint("actions.listJobsForWorkflowRun"),
         downloadJobLogsForWorkflowRun: endpoint("actions.downloadJobLogsForWorkflowRun"),
@@ -437,16 +437,23 @@ describe("OctokitGitHub", () => {
     expect(calls.at(-1)![1]).toMatchObject({ variables: { id: "PR_1" } });
   });
 
+  it("reads one issue's author association, and null when it has none", async () => {
+    const a = stub({ "issues.get": { author_association: "OWNER" } }).github;
+    expect(await a.issueAssociation("o/a", 5)).toBe("OWNER");
+    expect((await stub({ "issues.get": {} }).github.issueAssociation("o/a", 5))).toBeNull();
+    await expect(stub({ "issues.get": Object.assign(new Error("nope"), { status: 404 }) }).github.issueAssociation("o/a", 5)).rejects.toThrow(GitHubError);
+  });
+
   it("joins the failed jobs' logs, filters PRs out of the issue list, and wraps failures as GitHubError", async () => {
     const { github } = stub({
       "actions.listJobsForWorkflowRun": { jobs: [{ id: 1, name: "lint", conclusion: "failure" }, { id: 2, name: "unit", conclusion: "success" }] },
       "actions.downloadJobLogsForWorkflowRun": "ERR at a.ts:1",
-      "issues.listForRepo": [{ number: 1, title: "issue", body: null, html_url: "u", labels: [{ name: "bug" }, "ready"] }, { number: 2, title: "pr", body: "", html_url: "u2", pull_request: {} }],
+      "issues.listForRepo": [{ number: 1, title: "issue", body: null, html_url: "u", labels: [{ name: "bug" }, "ready"], author_association: "CONTRIBUTOR" }, { number: 2, title: "pr", body: "", html_url: "u2", pull_request: {} }],
       "pulls.merge": Object.assign(new Error("Pull Request is not mergeable"), { status: 405 }),
       "pulls.get": { head: { ref: "x", repo: null } },
     });
     expect(await github.failedRunLog("o/a", "111")).toBe("== lint ==\nERR at a.ts:1");
-    expect(await github.listReadyIssues("o/a", "ready")).toEqual([{ number: 1, title: "issue", body: null, url: "u", labels: ["bug", "ready"] }]);
+    expect(await github.listReadyIssues("o/a", "ready")).toEqual([{ number: 1, title: "issue", body: null, url: "u", labels: ["bug", "ready"], authorAssociation: "CONTRIBUTOR" }]);
     await expect(github.mergePr("o/a", 1)).rejects.toThrow(GitHubError);
     await expect(github.mergePr("o/a", 1)).rejects.toThrow(/merging o\/a#1 failed \(405\): Pull Request is not mergeable/);
   });

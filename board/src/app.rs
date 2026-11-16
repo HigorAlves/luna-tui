@@ -467,6 +467,8 @@ pub enum Mode {
         field: usize,
         picks: [usize; 5],
     },
+    /// `m`: ask the foreman, then walk the actions it suggests. Each runs on its own `y`.
+    Foreman(crate::foreman::State),
     ConfirmDelete(String),
     ConfirmAbort(String),
     ConfirmWorktree(String),
@@ -497,7 +499,10 @@ pub enum Mode {
     /// `A` on the Floor: approve a repository's base image, which runs with the stage's credential. Holds what was shown.
     ConfirmBase {
         repo: String,
+        /// What `POST /repos/base/approve` takes: an image reference, or a `dockerfile=sha256:…` key.
         base: String,
+        /// For a Dockerfile: the line shown (`Dockerfile <path> sha256:<12>`); its build runs with network access.
+        dockerfile: Option<String>,
     },
     /// `a` on a proposed tool mask in the Economy: the pack and the units its proposal names.
     ConfirmMask {
@@ -1217,6 +1222,7 @@ impl App {
                     self.slack_catalog = Some((groups, channels));
                     self.slack_catalog_pending = false;
                 }
+                Incoming::Foreman(result) => self.take_foreman(result),
             }
         }
     }
@@ -2466,6 +2472,18 @@ impl App {
             .and_then(|a| a.id.clone())
     }
 
+    /// The machine's id of the approval open on `id` right now: the loaded detail when it is fresh, else a read of the card.
+    fn current_approval_id(&self, id: &str) -> Result<Option<String>, String> {
+        if self.shows_detail_of(id) && !self.detail_stale {
+            return Ok(self.open_approval_id(id));
+        }
+        let detail = self
+            .machine
+            .detail(id)
+            .map_err(|e| format!("could not read the card to check its gate: {e}"))?;
+        Ok(detail.open_approval().and_then(|a| a.id.clone()))
+    }
+
     /// Whether the task view of `id` is where this key was pressed: the task itself, or a prompt or command opened over it.
     fn task_is_open(&self, id: &str) -> bool {
         matches!(&self.mode, Mode::Detail(open) if open == id)
@@ -2601,7 +2619,10 @@ impl App {
                         text: String::new(),
                     };
                 } else {
-                    self.notify("only the plan gate and the release question reject", false);
+                    self.notify(
+                        "only the plan gate, the release question and a config proposal reject",
+                        false,
+                    );
                 }
             }
             'r' => {
@@ -2952,6 +2973,9 @@ impl App {
                 *pick = None;
             }
             Mode::Filter => self.filter.push_str(&flat()),
+            Mode::Foreman(state) if state.phase == crate::foreman::Phase::Typing => {
+                state.input.push_str(&flat())
+            }
             _ => {}
         }
     }
@@ -2993,6 +3017,7 @@ impl App {
             Mode::Reason { .. } => self.handle_reason(key),
             Mode::Reject { .. } => self.handle_reject(key),
             Mode::EvidenceNote { .. } => self.handle_evidence_note(key),
+            Mode::Foreman(_) => self.handle_foreman(key),
             Mode::ConfirmApprove(_) => self.handle_confirm_approve(key),
             Mode::ConfirmDelete(id) | Mode::ConfirmAbort(id) | Mode::ConfirmWorktree(id) => {
                 let id = id.clone();
@@ -3138,33 +3163,47 @@ impl App {
             );
             return;
         };
-        let Some(base) = floor
+        let image = floor
             .health
             .iter()
             .find(|h| h.repo == repo)
-            .and_then(|h| h.image.pending_base.clone())
-        else {
+            .map(|h| &h.image);
+        let ask = match image {
+            Some(i) => match (&i.pending_base, &i.pending_dockerfile) {
+                (Some(base), _) => Some((base.clone(), None)),
+                (None, Some(d)) => Some((d.key.clone(), Some(d.label()))),
+                (None, None) => None,
+            },
+            None => None,
+        };
+        let Some((base, dockerfile)) = ask else {
             self.notify("that repository has no base waiting".to_string(), false);
             return;
         };
-        self.mode = Mode::ConfirmBase { repo, base };
+        self.mode = Mode::ConfirmBase {
+            repo,
+            base,
+            dockerfile,
+        };
     }
 
     /// `y` in the base box: the machine checks the reference is the one in the repository's luna.yaml.
     fn handle_confirm_base(&mut self, key: KeyEvent) -> Outcome {
         match key.code {
             KeyCode::Char('y') => {
-                let Mode::ConfirmBase { repo, base } =
-                    std::mem::replace(&mut self.mode, Mode::Normal)
+                let Mode::ConfirmBase {
+                    repo,
+                    base,
+                    dockerfile,
+                } = std::mem::replace(&mut self.mode, Mode::Normal)
                 else {
                     return Outcome::Continue;
                 };
                 match self.machine.approve_base(&repo, &base) {
                     Ok(()) => {
-                        self.notify(
-                            format!("approved base {}", crate::model::plain(&base, 60)),
-                            false,
-                        );
+                        let what = dockerfile
+                            .unwrap_or_else(|| format!("base {}", crate::model::plain(&base, 60)));
+                        self.notify(format!("approved {what}"), false);
                         self.refresh_floor();
                     }
                     Err(e) => self.notify(format!("approve base: {e}"), true),
@@ -3310,7 +3349,7 @@ impl App {
     #[cfg(test)]
     pub(crate) const HANDLED_INBOX: &[&str] = &[
         "esc", "I", "q", "?", "j", "k", "l", "h", "1-5", "enter", "A", "a", "S", "e", "R", "r",
-        "N", "u", "X", "w", "Z", "C", "d", "f", "o", "J", "T", "p",
+        "N", "u", "X", "w", "Z", "C", "d", "f", "o", "J", "T", "p", "m",
     ];
 
     /// The Inbox's keys: move, switch split, act in place, open, approve the split.
@@ -3334,6 +3373,10 @@ impl App {
             }
             KeyCode::Char('?') => {
                 self.open_help();
+                return Outcome::Continue;
+            }
+            KeyCode::Char('m') => {
+                self.open_foreman();
                 return Outcome::Continue;
             }
             KeyCode::Char('j') | KeyCode::Down => {
@@ -5018,6 +5061,7 @@ impl App {
         "v",
         "V",
         "?",
+        "m",
         ":",
         "esc",
         "enter",
@@ -5130,6 +5174,7 @@ impl App {
                 }
             }
             KeyCode::Char('?') => self.open_help(),
+            KeyCode::Char('m') => self.open_foreman(),
             KeyCode::Char(':') => {
                 self.mode = Mode::Command {
                     text: String::new(),
@@ -6324,6 +6369,102 @@ impl App {
         Outcome::Continue
     }
 
+    /// `m`: the foreman's prompt over the board or the Inbox.
+    fn open_foreman(&mut self) {
+        self.mode = Mode::Foreman(crate::foreman::State::new());
+    }
+
+    /// The foreman's popup: type a question and enter sends it; then walk the actions, each run by its own `y`.
+    fn handle_foreman(&mut self, key: KeyEvent) -> Outcome {
+        use crate::foreman::Phase;
+        let Mode::Foreman(state) = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match state.phase {
+            Phase::Typing => match key.code {
+                KeyCode::Char(c) => state.input.push(c),
+                KeyCode::Backspace => {
+                    state.input.pop();
+                }
+                KeyCode::Esc if state.turns.is_empty() => self.mode = Mode::Normal,
+                KeyCode::Esc => state.phase = Phase::Walk,
+                KeyCode::Enter => {
+                    if let Some((question, history)) = state.ask() {
+                        let machine = self.machine.clone();
+                        let tx = self.tx.clone();
+                        thread::spawn(move || {
+                            let _ =
+                                tx.send(Incoming::Foreman(machine.foreman(&question, &history)));
+                        });
+                    }
+                }
+                _ => {}
+            },
+            // The answer is on its way; esc leaves, and the answer is dropped when it lands.
+            Phase::Waiting => {
+                if key.code == KeyCode::Esc {
+                    self.mode = Mode::Normal;
+                }
+            }
+            Phase::Walk => match key.code {
+                KeyCode::Char('j') | KeyCode::Down => state.move_by(1),
+                KeyCode::Char('k') | KeyCode::Up => state.move_by(-1),
+                KeyCode::Char('s') => state.skip(),
+                KeyCode::Char('i') => state.phase = Phase::Typing,
+                KeyCode::Char('y') => {
+                    if let Some(action) = state.runnable() {
+                        if action.is_gate_bound() {
+                            match self.current_approval_id(&action.task_id) {
+                                Err(error) => {
+                                    if let Mode::Foreman(state) = &mut self.mode {
+                                        state.settle(&Err(error));
+                                    }
+                                    return Outcome::Continue;
+                                }
+                                Ok(current) if action.is_stale(current.as_deref()) => {
+                                    if let Mode::Foreman(state) = &mut self.mode {
+                                        state.mark_stale();
+                                    }
+                                    return Outcome::Continue;
+                                }
+                                Ok(_) => {}
+                            }
+                        }
+                        let result = crate::foreman::call_of(&action)
+                            .and_then(|call| crate::foreman::run(&self.machine, &call));
+                        if let Mode::Foreman(state) = &mut self.mode {
+                            state.settle(&result);
+                        }
+                        if let Ok(task) = result {
+                            self.upsert(task);
+                            self.detail_stale = true;
+                        }
+                    }
+                }
+                KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+                _ => {}
+            },
+        }
+        Outcome::Continue
+    }
+
+    /// The foreman answered: its reply and actions show, unless the popup was closed meanwhile.
+    fn take_foreman(&mut self, result: Result<crate::foreman::Reply, String>) {
+        let Mode::Foreman(state) = &mut self.mode else {
+            return;
+        };
+        if state.phase != crate::foreman::Phase::Waiting {
+            return;
+        }
+        match result {
+            Ok(reply) => state.answered(reply),
+            Err(error) => {
+                state.failed();
+                self.notify(error, true);
+            }
+        }
+    }
+
     fn handle_reject(&mut self, key: KeyEvent) -> Outcome {
         let Mode::Reject { id, text } = &mut self.mode else {
             return Outcome::Continue;
@@ -6338,7 +6479,7 @@ impl App {
                 let (id, comment) = (id.clone(), text.trim().to_string());
                 if comment.is_empty() {
                     self.notify(
-                        "say why the plan is rejected; the card ends and the comment is kept",
+                        "say why it is rejected; the card ends and the comment is kept",
                         true,
                     );
                     return Outcome::Continue;
@@ -12311,6 +12452,43 @@ mod confirm_tests {
         seen.lock().unwrap().clone()
     }
 
+    pub(super) type PostBodies = Arc<Mutex<Vec<(String, serde_json::Value)>>>;
+
+    /// Like `recording_machine`, and keeps each POST's JSON body too.
+    pub(super) fn body_recording_machine() -> (Machine, PostBodies) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = seen.clone();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut request = String::new();
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    request.push_str(&line);
+                }
+                let mut raw = vec![0; length];
+                let _ = reader.read_exact(&mut raw);
+                let body: serde_json::Value = serde_json::from_slice(&raw).unwrap_or_default();
+                let mut parts = request.split_whitespace();
+                if let (Some("POST"), Some(path)) = (parts.next(), parts.next()) {
+                    record.lock().unwrap().push((path.to_string(), body));
+                }
+                let mut stream = reader.into_inner();
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+            }
+        });
+        (Machine::at(&format!("http://{addr}")), seen)
+    }
+
     fn at_split_gate() -> App {
         let task = task_json(
             "aaaaaaaa7777",
@@ -13962,6 +14140,66 @@ mod stale_approval_tests {
         assert_eq!(posts(&seen), vec!["/repos/base/approve".to_string()]);
     }
 
+    const DOCKERFILE_KEY: &str =
+        "dockerfile=sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn floor_with_a_pending_dockerfile(changed: bool) -> App {
+        let (machine, _) = recording_machine();
+        let mut app = App::new(machine);
+        app.floor = Some(FloorState::default());
+        let floor = app.floor.as_mut().unwrap();
+        floor.health = serde_json::from_str(&format!(
+            r#"[{{"repo":"/r/fresh","image":{{"inUse":"m","base":null,"builtAt":null,"lastFailure":null,"pendingBase":null,
+                 "pendingDockerfile":{{"path":".devcontainer/Dockerfile","key":"{DOCKERFILE_KEY}","changed":{changed}}}}},
+                 "graph":{{"on":false,"commit":null,"behind":null,"graphify":null,"builtAt":null,"building":false,"lastFailure":null}}}}]"#
+        ))
+        .unwrap();
+        press(&mut app, KeyCode::Tab);
+        app
+    }
+
+    #[test]
+    fn floor_capital_a_shows_the_dockerfile_its_short_sha_and_the_open_network_before_it_approves_its_key()
+     {
+        let mut app = floor_with_a_pending_dockerfile(false);
+        let (machine, seen) = super::confirm_tests::body_recording_machine();
+        app.machine = machine;
+        press(&mut app, KeyCode::Char('A'));
+        assert!(seen.lock().unwrap().is_empty(), "asking sends nothing");
+        let screen = render(&mut app, 120, 40);
+        assert!(
+            screen.contains("/r/fresh")
+                && screen.contains("Dockerfile .devcontainer/Dockerfile sha256:0123456789ab")
+                && !screen.contains("0123456789abc")
+                && screen.contains("builds with network access"),
+            "{screen}"
+        );
+        press(&mut app, KeyCode::Char('n'));
+        assert!(seen.lock().unwrap().is_empty());
+        press(&mut app, KeyCode::Char('A'));
+        press(&mut app, KeyCode::Char('y'));
+        let sent = seen.lock().unwrap().clone();
+        assert_eq!(
+            sent,
+            vec![(
+                "/repos/base/approve".to_string(),
+                serde_json::json!({"repo": "/r/fresh", "base": DOCKERFILE_KEY})
+            )]
+        );
+    }
+
+    #[test]
+    fn floor_capital_a_on_a_pending_base_still_shows_the_image_and_not_a_network_warning() {
+        let mut app = floor_with_a_pending_base();
+        press(&mut app, KeyCode::Char('A'));
+        let screen = render(&mut app, 120, 40);
+        assert!(
+            screen.contains("image python:3.13-slim")
+                && !screen.contains("builds with network access"),
+            "{screen}"
+        );
+    }
+
     fn economy_at_a_proposal() -> (App, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
         let (machine, seen) = recording_machine();
         let mut app = App::new(machine);
@@ -14315,5 +14553,240 @@ mod coverage_picker_tests {
         };
         assert_eq!(choice.chosen(), vec!["C4".to_string()]);
         assert_eq!(choice.gaps.len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod foreman_tests {
+    use super::confirm_tests::{posts, recording_machine};
+    use super::*;
+    use crate::foreman::{Action, Phase, Reply, Status};
+    use crate::testkit::{PLAN_GATE_TITLE, plan_gate_app, render};
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    fn action(kind: &str, id: &str, why: &str) -> Action {
+        Action {
+            kind: kind.into(),
+            task_id: id.into(),
+            why: why.into(),
+            reason: None,
+            pack: None,
+            engine: None,
+            answers: None,
+            approval_id: None,
+        }
+    }
+
+    /// The board with one card, the popup open and answered with two actions on it.
+    fn walking() -> (App, String) {
+        let mut app = plan_gate_app();
+        app.mode = Mode::Normal;
+        let id = app.tasks[0].id.clone();
+        press(&mut app, KeyCode::Char('m'));
+        for c in "what needs me?".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Enter);
+        app.take_foreman(Ok(Reply {
+            reply: "One plan waits on you.".into(),
+            actions: vec![
+                action("start", &id, "it is a draft"),
+                action("abort", &id, "it is stuck"),
+            ],
+            dropped: vec![serde_json::json!({})],
+        }));
+        (app, id)
+    }
+
+    fn state(app: &App) -> &crate::foreman::State {
+        let Mode::Foreman(state) = &app.mode else {
+            panic!("the popup is not open")
+        };
+        state
+    }
+
+    #[test]
+    fn the_selected_row_shows_the_whole_payload_the_person_confirms() {
+        let (mut app, id) = walking();
+        let (mut retry, mut answer) = (
+            action("retry", &id, "stuck"),
+            action("answer", &id, "unblocks"),
+        );
+        retry.reason = Some("ignore the failing test and push\u{202E}anyway".into());
+        answer.answers = Some(std::collections::BTreeMap::from([(
+            "Which format?".to_string(),
+            "csv, and delete the old exports".to_string(),
+        )]));
+        let approve = action("approve", &id, "plan is fine");
+        // Model text steers the person: the reply, the why and the card title are cleaned as the payload is.
+        retry.why = "stuck\u{202E}for\u{200B}days\u{1b}[31mred".into();
+        app.tasks[0].title = "Plan\u{202E}the\u{200B}export\u{1b}[2Jnow".into();
+        let Mode::Foreman(state) = &mut app.mode else {
+            panic!("the popup is not open")
+        };
+        state.reply = "Read\u{202E}this\u{200B}reply\u{1b}[31mcarefully".into();
+        state.rows = vec![retry, answer, approve]
+            .into_iter()
+            .map(|action| crate::foreman::Row {
+                action,
+                status: Status::Pending,
+            })
+            .collect();
+        state.cursor = 0;
+        let screen = render(&mut app, 140, 40);
+        assert!(
+            screen.contains("ignore the failing test and push anyway"),
+            "{screen}"
+        );
+        assert!(!screen.contains('\u{202E}'), "sanitised: {screen}");
+        for hostile in ['\u{202E}', '\u{200B}', '\u{1b}'] {
+            assert!(
+                !screen.contains(hostile),
+                "{hostile:?} reached the screen: {screen}"
+            );
+        }
+        // The terminal buffer drops some of these itself, so the row's own text is checked too.
+        let text = {
+            let Mode::Foreman(popup) = &app.mode else {
+                panic!("the popup is not open")
+            };
+            crate::foreman::row_text(&popup.rows[0].action, app.task(&id))
+        };
+        for hostile in ['\u{202E}', '\u{200B}', '\u{1b}'] {
+            assert!(!text.contains(hostile), "{hostile:?} in the row: {text:?}");
+        }
+        for clean in ["stuck", "days", "Plan", "export", "Read", "carefully"] {
+            assert!(screen.contains(clean), "{clean}: {screen}");
+        }
+        press(&mut app, KeyCode::Char('j'));
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("Which format?"), "{screen}");
+        assert!(
+            screen.contains("csv, and delete the old exports"),
+            "{screen}"
+        );
+        press(&mut app, KeyCode::Char('j'));
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("gate: plan"), "{screen}");
+    }
+
+    #[test]
+    fn a_suggestion_made_at_an_earlier_gate_makes_no_call_and_says_so() {
+        let (mut app, id) = walking();
+        let (machine, seen) = recording_machine();
+        app.machine = machine;
+        let stale = Action {
+            approval_id: Some("an-older-approval".into()),
+            ..action("approve", &id, "plan is fine")
+        };
+        let current = Action {
+            approval_id: Some("p1".into()),
+            ..action("approve", &id, "plan is fine")
+        };
+        let Mode::Foreman(popup) = &mut app.mode else {
+            panic!("the popup is not open")
+        };
+        popup.rows = vec![stale, current]
+            .into_iter()
+            .map(|action| crate::foreman::Row {
+                action,
+                status: Status::Pending,
+            })
+            .collect();
+        popup.cursor = 0;
+        press(&mut app, KeyCode::Char('y'));
+        assert!(posts(&seen).is_empty(), "a stale row makes no call");
+        assert_eq!(state(&app).rows[0].status, Status::Stale);
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("[stale: ask again]"), "{screen}");
+        assert_eq!(state(&app).cursor, 1, "the walk moves on");
+        press(&mut app, KeyCode::Char('y'));
+        assert_eq!(
+            posts(&seen).len(),
+            1,
+            "the row at the card's open approval runs"
+        );
+    }
+
+    #[test]
+    fn m_opens_the_foreman_from_the_board_and_from_the_inbox() {
+        let mut app = App::new(crate::testkit::dead_machine());
+        press(&mut app, KeyCode::Char('m'));
+        assert!(matches!(&app.mode, Mode::Foreman(s) if s.phase == Phase::Typing));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        press(&mut app, KeyCode::Char('I'));
+        assert!(app.inbox.is_some());
+        press(&mut app, KeyCode::Char('m'));
+        assert!(matches!(app.mode, Mode::Foreman(_)));
+    }
+
+    #[test]
+    fn enter_sends_the_question_and_the_answer_shows_the_reply_and_the_actions() {
+        let (mut app, _) = walking();
+        assert_eq!(state(&app).phase, Phase::Walk);
+        let screen = render(&mut app, 120, 40);
+        assert!(screen.contains("One plan waits on you."), "{screen}");
+        assert!(screen.contains("[ ] start"), "{screen}");
+        assert!(screen.contains("it is stuck"), "{screen}");
+        assert!(
+            screen.contains(PLAN_GATE_TITLE),
+            "the row names the card: {screen}"
+        );
+        assert!(screen.contains("1 suggestion(s)"), "{screen}");
+    }
+
+    #[test]
+    fn y_runs_only_the_selected_row_and_nothing_runs_without_it() {
+        let (mut app, id) = walking();
+        let (machine, seen) = recording_machine();
+        app.machine = machine;
+        press(&mut app, KeyCode::Char('j'));
+        assert!(posts(&seen).is_empty(), "moving runs nothing");
+        press(&mut app, KeyCode::Char('y'));
+        assert_eq!(posts(&seen), vec![format!("/tasks/{id}/abort")]);
+        let rows = &state(&app).rows;
+        assert_eq!(rows[0].status, Status::Pending, "the other row waits");
+        assert!(matches!(rows[1].status, Status::Done | Status::Failed(_)));
+    }
+
+    #[test]
+    fn a_refused_call_marks_its_row_failed_and_s_skips_a_row() {
+        let (mut app, _) = walking();
+        press(&mut app, KeyCode::Char('y'));
+        assert!(
+            matches!(&state(&app).rows[0].status, Status::Failed(m) if m.contains("machine unreachable"))
+        );
+        let screen = render(&mut app, 120, 40);
+        assert!(screen.contains("[failed]"), "{screen}");
+        press(&mut app, KeyCode::Char('s'));
+        assert_eq!(state(&app).rows[0].status, Status::Skipped);
+        assert_eq!(state(&app).cursor, 1);
+    }
+
+    #[test]
+    fn a_failed_question_comes_back_to_the_box_and_a_late_answer_is_dropped() {
+        let mut app = App::new(crate::testkit::dead_machine());
+        press(&mut app, KeyCode::Char('m'));
+        for c in "hello".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(state(&app).phase, Phase::Waiting);
+        app.take_foreman(Err("the foreman failed".into()));
+        assert_eq!(state(&app).input, "hello");
+        assert_eq!(state(&app).phase, Phase::Typing);
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        app.take_foreman(Ok(Reply {
+            reply: "late".into(),
+            actions: vec![],
+            dropped: vec![],
+        }));
+        assert!(matches!(app.mode, Mode::Normal));
     }
 }

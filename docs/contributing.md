@@ -2,6 +2,8 @@
 
 We welcome issues and pull requests.
 
+Machine tests need Postgres. Run `pnpm db:up` first. `machine/src/test/database.ts` drops and recreates schema `public` in the test database. A checkout that tests beside another one must set its own `TEST_DATABASE_URL`, or the two checkouts wipe each other's data. Unit tests must never call the real docker daemon or GitHub. Give them a fake.
+
 Run these checks before you send a change:
 
 ```sh

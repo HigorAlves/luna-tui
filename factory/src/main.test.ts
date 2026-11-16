@@ -69,8 +69,8 @@ function run(input: unknown, env: Record<string, string> = {}, files: Record<str
   return { code, stdout, out, result };
 }
 
-// slack_triage, chat_triage and eval_judge have no worktree and read no project context; their dry runs are below.
-const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "eval_judge").map((p) => p.id);
+// slack_triage, chat_triage, foreman and eval_judge have no worktree and read no project context; their dry runs are below. council_second defaults to an eve engine: its dry run is below.
+const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "foreman" && p.id !== "eval_judge" && p.id !== "council_second").map((p) => p.id);
 
 describe("factory main (dry run)", () => {
   it.each(agentPacks)("%s: renders the prompt, prints the options and leaves a valid result", (pack) => {
@@ -85,6 +85,8 @@ describe("factory main (dry run)", () => {
     expect(options).toMatchObject({ agent: def.agent, agents: [def.agent, ...helpersOn(def, "claude").filter((h) => resolveEngine(h.engine).runtime === "claude").map((h) => h.role)], model: resolveEngine(def.engines.default).modelId, effort: def.effort, maxTurns: 5, permissionMode: "dontAsk", settingSources: [], hooks: ["PreToolUse"], mcpServers: ["luna"] });
     // Commits and PRs are the person's: no attribution from the SDK.
     expect(options.settings).toEqual({ attribution: false, includeCoAuthoredBy: false });
+    // The SDK's subprocesses (Bash, hooks, MCP) do not inherit the credential, and nothing phones home.
+    expect(options.env).toEqual({ CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" });
     // A helper on another runtime is reached through `delegate`, beside the pack's own tools.
     const delegating = helpersOn(def, "claude").some((h) => resolveEngine(h.engine).runtime !== "claude") ? ["mcp__luna__delegate"] : [];
     const { tools, allowedTools } = claudeTools(def.access, options.cwd);
@@ -150,6 +152,22 @@ describe("factory main (dry run)", () => {
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });
 
+  it("foreman: runs over an empty /work with no tools, renders the board as data and leaves a valid result", () => {
+    const task = { id: "foreman", title: "Foreman", description: "", criteria: [], repoPath: "", branch: "", source: null };
+    const card = { id: "t1", title: "Fix login", repo: "o/a", state: "awaiting_approval", column: "plan", gate: "plan", gateSummary: "approve the plan", gateOutcome: null, route: "feature", approvalId: null, escalation: null, questions: [], engines: {}, updatedAt: "2026-11-16T10:00:00.000Z" };
+    const foreman = { question: "what needs me?", history: [], board: { now: "2026-11-16T12:00:00.000Z", cards: [card], packs: [{ id: "foreman", allowed: ["claude:haiku", "codex:luna"] }] } };
+    const { code, stdout, out, result } = run(stageInput("foreman", { task, plan: null, context: { projectContext: null, foreman } }), {}, {}, { emptyWork: true });
+    expect(code).toBe(0);
+    const prompt = readFileSync(join(out, "prompt.md"), "utf8");
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("`foreman` role running the `foreman` stage");
+    expect(prompt).toContain("| t1 · o/a · awaiting_approval · plan · gate plan (approve the plan) · Fix login");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: "foreman", agents: ["foreman"], model: "claude-haiku-5-5", effort: "low", tools: [], allowedTools: [] });
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+    expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
+  });
+
   it("jira_intake: runs over the repo checkout read-only with Read, Glob and Grep, renders the issue and leaves a valid result", () => {
     const task = { id: "jira-intake", title: "Login page", description: "Users sign in.", criteria: [], repoPath: "/r/a", branch: "", source: null };
     const jira = { key: "PLAT-123", url: "https://acme.atlassian.net/browse/PLAT-123", summary: "Login page", description: "Users sign in.", issueType: "Story", priority: "High", labels: ["luna"], dueAt: null, comments: ["Marta: please"], repoPath: "/r/a" };
@@ -204,6 +222,7 @@ describe("factory main (dry run)", () => {
       runtime: "claude",
       engine: "claude:haiku",
       modelId: "claude-haiku-5-5",
+      effort: PACKS.triage.effort,
       sdk: { name: "@anthropic-ai/claude-agent-sdk", version: expect.stringMatching(/^\d+\.\d+\.\d+/) },
       fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
@@ -221,6 +240,26 @@ describe("factory main (dry run)", () => {
     const { stdout } = run(stageInput("triage", { engine: "claude:haiku" }));
     const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
     expect(options.model).toBe("claude-haiku-5-5");
+  });
+
+  it("runs a pack at the effort the input names, over the pack's own", () => {
+    expect(PACKS.triage.effort).not.toBe("low");
+    const claude = run(stageInput("triage", { effort: "low" }));
+    expect(JSON.parse(claude.stdout.slice(claude.stdout.indexOf("{"), claude.stdout.lastIndexOf("}") + 1))).toMatchObject({ effort: "low" });
+    expect(claude.result.run).toMatchObject({ effort: "low" });
+    const eve = run(stageInput("triage", { engine: "codex:sol", effort: "low" }));
+    expect(JSON.parse(eve.stdout.slice(eve.stdout.indexOf("{"), eve.stdout.lastIndexOf("}") + 1))).toMatchObject({ reasoning: "low" });
+  });
+
+  it("records the pack's own effort when the input names none", () => {
+    expect(run(stageInput("triage")).result.run).toMatchObject({ effort: PACKS.triage.effort });
+  });
+
+  it("fails the stage as invalid input on an effort the engine does not support", () => {
+    // A decision engine supports no effort.
+    const { code, result } = run(stageInput("triage", { engine: "jev", effort: "low" }));
+    expect(code).toBe(0);
+    expect(result).toMatchObject({ ok: false, outcome: "fail", error: "invalid stage input: jev does not support effort low (supports: none)" });
   });
 
   it("ends the stage, without a crash, on an engine whose runtime cannot run the pack", () => {
@@ -242,6 +281,15 @@ describe("factory main (dry run)", () => {
       tools: ["bash", "read_file", "glob", "grep", "web_fetch", "step", "decision_get", "card_search", "delegate"],
       guard: { writable: false, commands: expect.arrayContaining(["gh issue view"]), roots: { scratch: expect.stringMatching(/luna-scratch-/), read: [expect.stringMatching(/\/in$/), "/graph"] } },
     });
+    expect(result).toMatchObject({ ok: true, summary: "dry-run" });
+  });
+
+  it("council_second: renders the council prompt on its default eve engine, read-only", () => {
+    const { code, stdout, out, result } = run(stageInput("council_second"));
+    expect(code).toBe(0);
+    expect(readFileSync(join(out, "prompt.md"), "utf8")).not.toContain("{{");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: expect.stringMatching(/\.eve-agents\/council_second$/), model: "chatgpt(gpt-5.6-terra)", guard: { writable: false } });
     expect(result).toMatchObject({ ok: true, summary: "dry-run" });
   });
 

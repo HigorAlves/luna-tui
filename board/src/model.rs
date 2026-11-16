@@ -2218,6 +2218,40 @@ pub struct ImageHealth {
     /// A base the repository names that nobody approved yet; it runs on the machine's image until you approve it.
     #[serde(default)]
     pub pending_base: Option<String>,
+    /// A Dockerfile the repository's devcontainer.json builds from that nobody approved yet (this exact content).
+    #[serde(default)]
+    pub pending_dockerfile: Option<PendingDockerfile>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingDockerfile {
+    /// Repo-relative path, for display.
+    pub path: String,
+    /// `dockerfile=sha256:<hex>`: what the machine takes as the base to approve.
+    pub key: String,
+    /// An earlier Dockerfile was approved; this one differs.
+    #[serde(default)]
+    pub changed: bool,
+}
+
+impl PendingDockerfile {
+    /// `sha256:` and the first 12 hex characters of the key: enough to compare by eye, not the whole hash.
+    pub fn short_sha(&self) -> String {
+        let hex = self
+            .key
+            .strip_prefix("dockerfile=sha256:")
+            .unwrap_or(&self.key);
+        format!(
+            "sha256:{}",
+            plain(&hex.chars().take(12).collect::<String>(), 12)
+        )
+    }
+
+    /// `Dockerfile <path> sha256:<12>`, as both the Floor line and the approval box show it.
+    pub fn label(&self) -> String {
+        format!("Dockerfile {} {}", plain(&self.path, 80), self.short_sha())
+    }
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -2278,10 +2312,22 @@ impl RepoHealth {
 
     /// The base waiting for approval, on its own line, with the key: approving trusts that image with the stage's credential.
     pub fn pending_line(&self) -> Option<String> {
-        self.image.pending_base.as_ref().map(|base| {
-            format!(
+        if let Some(base) = self.image.pending_base.as_ref() {
+            return Some(format!(
                 "base waiting for you: {} (A approves; it will run with the stage's credential)",
                 plain(base, 80)
+            ));
+        }
+        self.image.pending_dockerfile.as_ref().map(|d| {
+            let what = if d.changed {
+                "Dockerfile changed since you approved"
+            } else {
+                "Dockerfile waiting for you"
+            };
+            format!(
+                "{what}: {} {} (A approves; its build runs with network access)",
+                plain(&d.path, 80),
+                d.short_sha()
             )
         })
     }
@@ -3000,6 +3046,33 @@ pub fn questions_of(approval: &Approval) -> Vec<(String, String)> {
                     Some((
                         q["question"].as_str()?.to_string(),
                         q["recommended"].as_str().unwrap_or_default().to_string(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// What the question council settled before the person was asked: question, answer, confidence and the places it read.
+pub fn settled_by_council_of(approval: &Approval) -> Vec<(String, String, f64, Vec<String>)> {
+    approval.requested["settledByCouncil"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|s| {
+                    Some((
+                        s["question"].as_str()?.to_string(),
+                        s["answer"].as_str()?.to_string(),
+                        s["confidence"].as_f64().unwrap_or_default(),
+                        s["evidence"]
+                            .as_array()
+                            .map(|e| {
+                                e.iter()
+                                    .filter_map(|l| l.as_str().map(str::to_string))
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
                     ))
                 })
                 .collect()

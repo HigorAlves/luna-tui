@@ -9,9 +9,9 @@ import type { ChecksSession, SessionOptions } from "../../adapters/docker/docker
 export type SessionExec<F> = F & { session?: (options: SessionOptions) => Promise<ChecksSession> };
 
 /** The exec to run a pass of checks with, and what removes the services when the pass is over. No services, or no session on the exec: the exec itself, and nothing to remove. */
-export async function openChecksSession<F>(exec: SessionExec<F>, options: { cwd: string; repoPath?: string; services?: Record<string, ServiceSpec> }): Promise<{ exec: F; close: () => Promise<void> }> {
+export async function openChecksSession<F>(exec: SessionExec<F>, options: { cwd: string; repoPath?: string; trust?: "trusted" | "untrusted"; services?: Record<string, ServiceSpec> }): Promise<{ exec: F; close: () => Promise<void> }> {
   const services = options.services ?? {};
   if (!exec.session || Object.keys(services).length === 0) return { exec, close: async () => {} };
-  const opened = await exec.session({ cwd: options.cwd, services, ...(options.repoPath ? { repoPath: options.repoPath } : {}) });
+  const opened = await exec.session({ cwd: options.cwd, services, ...(options.repoPath ? { repoPath: options.repoPath } : {}), ...(options.trust ? { trust: options.trust } : {}) });
   return { exec: opened.exec as unknown as F, close: opened.close };
 }

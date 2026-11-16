@@ -25,8 +25,12 @@ pnpm eval --pack triage --engine claude:opus --case task-price-decimals --no-jud
 | `--engine <id>` | the engine under test; one outside the pack's `allowed` runs as a candidate |
 | `--against <id>` | runs the cases on a second engine too and prints the diff |
 | `--case <id>` | only this case; repeat it for several |
+| `--effort <low\|medium\|high>` | runs an agent pack at that effort. Without it, the pack's own effort applies. A bad `--effort` is refused before any case runs: a decision pack takes none, and an engine may not support it. An image that ignores it fails each case and refuses `--save-baseline`: rebuild it (`pnpm images`) |
 | `--no-judge` | schema and checks only |
-| `--save-baseline` | writes each scorecard to `baselines/<engine>/<pack>.json` (`claude:opus` is `claude-opus`) |
+| `--judge` | adds the judge to a decision pack, which runs without one by default |
+| `--trials <n>` | runs every case n times (1 to 20), each in its own container |
+| `--dataset <name>` | takes the cases from the Laminar dataset of that name instead of the folder |
+| `--save-baseline` | writes each scorecard to `baselines/<engine>/<pack>.json` (`claude:opus` is `claude-opus`). With `--effort`, the folder is `<engine>@<effort>` |
 | `--image <tag>` | the stage image (`RUNNER_IMAGE`, else `hardness-runner:dev`) |
 
 On a laptop, keep it awake for the run (`caffeinate -s pnpm eval …` on macOS). A sleep freezes the container, and the grader counts the run as timed out.
@@ -94,14 +98,15 @@ An adversarial case must be unambiguous apart from its steering text. A borderli
 | `pnpm eval label --pack <p> --record <id> --set <question>=<value>... [--note <text>]` | a person's truth, source `person_cli`, on this computer; the value must be one of the question's labels |
 | `pnpm eval label --pack <p> --next` | the oldest record with no person's label: stored context (capped, control characters removed), the model's answer, the allowed labels, the command to type |
 | `pnpm eval label push --queue <queue id> [--pack <p>] [--since <date>]` | sends the records that wait for a label to the local labelling queue, scrubbed. It names private and scrub-refused ones and never sends them. The queue id names the queue |
-| `pnpm eval cases [--pack <p>]` | a table of the cases for a person to read: kind, label, the criterion quoted, the twin, the second reading |
+| `pnpm eval cases [--pack <p>]` | a table of the cases for a person to read: kind, label, the criterion quoted, the twin, the second reading. For an agent pack (`plan`, `decompose`) it gives each case's id, outcome and rubric |
 | `pnpm eval preflight` | no model call. It checks eight cases per decision pack: six labelled, an adversarial with its twin, a borderline. It also checks every reading, the runner image (reported, never built), each engine's credential and the collector (a warning). It exits 1 on a failure |
 | `pnpm eval calibrate --pack <p> [--since <date>] [--target 0.9] [--with-outcome] [--out <file>]` | proposes confidence bars from labelled answers: per question the count, the acted-on accuracy at each bar from 0.50 to 0.95, and a proposal needing 20 answers. It prints the `luna.yaml` lines, marked proposed, not applied |
 | `pnpm eval calibrate --weights [--machine <m>] [--out <file>]` | proposes the priority weights and bands from the priority files (30 files, 10 that a person changed, a knock-out card left out) |
-| `pnpm eval baseline-plan [--engines a,b,c]` | prints the baseline commands in order and runs none; `evals/baseline-run.sh` is that output |
+| `pnpm eval baseline-plan [--engines a,b,c] [--efforts a,b]` | prints the baseline commands in order and runs none; `evals/baseline-run.sh` is that output. With `--efforts`, it adds one run for each agent pack that has cases, each engine and each effort that engine supports |
+| `pnpm eval propose --repo <abs path> [--machine <url>] [--dry-run]` | turns the agent baselines and the decision scorecards into candidates and posts them to the machine's `POST /repos/proposals`. The machine adds the repo's own signals and, when the rule finds a change, opens a `luna.yaml` card on the board. It prints the changes and the card id. `--dry-run` prints the request and makes no call. It reads `MACHINE_API_TOKEN` or `~/.config/hardness/machine-api-token` |
 | `pnpm eval prune-runs [--older-than 30]` | removes stamped run folders under `evals/.runs/` older than that |
 
-Neither calibrate mode writes a config, a default, a pack or a record. Only `--out` writes, and it writes the report. The team has not built the automatic loop that would turn these by itself. See [architecture](../docs/architecture.md#evals-and-calibration).
+Neither calibrate mode writes a config, a default, a pack or a record. Only `--out` writes, and it writes the report. Nothing turns these by itself. `propose` is the one command that ends in a config change, and a person approves it on the board. See [architecture](../docs/architecture.md#config-proposals).
 
 **Harvest now takes every decision the machine asked**, not only those that name a stage. A record's `origin` says whose it is: `machine` for the machine's own callers. A record from before that field is the pipeline's own when it names a stage. Harvest skips a record from `POST /runs` without `--all`.
 
@@ -128,6 +133,8 @@ You can set a Laminar key in `LMNR_PROJECT_API_KEY` or in `~/.config/hardness/lm
 | `avoids` `words` | the text at the path names none of them |
 
 A selector value cannot hold a `.`. Keep checks to what any good answer must contain. Put judgement calls in the rubric.
+
+An agent pack's case has no label and no reading. Its `expect.json` has an `outcome`, a few loose `checks` and a `rubric` for the judge. The `plan` and `decompose` cases are the first of this kind. Their inputs come from the `fixtures/` repos. A person reviews each rubric before any baseline of the pack counts.
 
 ## What is scrubbed
 

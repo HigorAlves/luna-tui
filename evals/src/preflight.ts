@@ -35,10 +35,11 @@ const quote = (text: string): string => (text.length > 80 ? `${text.slice(0, 77)
 const labelText = (label: Record<string, Record<string, unknown>> | null | undefined): string =>
   label ? Object.entries(label).map(([q, e]) => Object.entries(e).map(([k, v]) => `${q}.${k}=${JSON.stringify(v)}`.replace(/"/g, "")).join(" ")).join(" ") : "-";
 
-/** One row per case: id, kind, the label, the criterion quoted, the twin, the second reading. */
+/** One row per case: id, kind, the label, the criterion quoted, the twin, the second reading. An agent pack's case has no label: its row is the id, the outcome and the rubric. */
 export function casesTable(evalsDir: string, pack: PackId): string[] {
   return caseViews(evalsDir, pack).map((v) => {
     const { expect: e } = v;
+    if (PACKS[pack].kind === "agent") return [v.id, e.outcome ?? "-", `"${quote(e.rubric)}"`].join("  |  ");
     const criterion = Object.values(e.reading?.criteria ?? {})[0] ?? Object.values(e.reading?.readings?.[0]?.criteria ?? {})[0] ?? "";
     const second = e.reading ? `second: ${labelText(e.reading.second.label)}${e.reading.second.agrees ? " agrees" : " DISAGREES"}` : "no reading";
     return [`${v.id}`, e.kind ?? "-", labelText(e.label), criterion ? `"${quote(criterion)}"` : "", e.twin ? `twin ${e.twin}` : "", second].filter((cell) => cell !== "").join("  |  ");

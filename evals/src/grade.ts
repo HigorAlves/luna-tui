@@ -1,7 +1,7 @@
 // Grading one case, then a scorecard per pack and engine, then the diff between two scorecards.
 // The order is RFC 0003's: the StageOutput and the pack's answer schema first, the case's
 // deterministic checks second, the judge last. Pure: runs and verdicts come in as data.
-import { type ConfidencePolicy, type EngineId, PACKS, type PackId, type StageOutput, applyPolicy, confidenceOf, lowestBar, verdictOf } from "@hardness/contracts";
+import { type ConfidencePolicy, type Effort, type EngineId, PACKS, type PackId, type StageOutput, applyPolicy, confidenceOf, lowestBar, verdictOf } from "@hardness/contracts";
 
 import { type Calibration, type DecisionGrade, calibrate } from "./calibration.ts";
 import { decisionPack, matches, type Label } from "./labels.ts";
@@ -124,6 +124,8 @@ export interface Scorecard {
   /** The judge's engine, or null when it was skipped. */
   judge: EngineId | null;
   at: string;
+  /** The effort the run set, when it set one; absent means the pack's own. */
+  effort?: Effort;
   /** Runs of each case, when more than one. */
   trials?: number;
   summary: Summary;
@@ -165,7 +167,7 @@ export function summarize(cases: CaseResult[], pack?: PackId): Summary {
   };
 }
 
-export function scorecard(meta: { pack: PackId; engine: EngineId; judge: EngineId | null; at: string; trials?: number }, cases: CaseResult[]): Scorecard {
+export function scorecard(meta: { pack: PackId; engine: EngineId; judge: EngineId | null; at: string; effort?: Effort; trials?: number }, cases: CaseResult[]): Scorecard {
   return { schema: 1, ...meta, model: cases.find((c) => c.model)?.model ?? null, summary: summarize(cases, meta.pack), cases };
 }
 
