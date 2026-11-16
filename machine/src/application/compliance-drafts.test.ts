@@ -181,4 +181,42 @@ describe("publisher.approve", () => {
     await expect(publisher({ drafts, wiki: wikiOf(writePages) }).approve(d.id, "0000000000000000", "p")).rejects.toBeInstanceOf(StaleDraftError);
     expect(writePages).not.toHaveBeenCalled();
   });
+
+  it("hands each other target to the writer registered for its kind, in order", async () => {
+    const drafts = store();
+    const d = await drafts.open(
+      fields({
+        kind: "questionnaire",
+        id: "questionnaire:acme/web:C0123ABCD:1731772800.000100",
+        period: null,
+        targets: [
+          { kind: "slack_thread", channel: "C0123ABCD", ts: "1731772800.000100" },
+          { kind: "answer_bank", repo: "acme/web" },
+        ],
+      }),
+    );
+    const calls: string[] = [];
+    const handlers = {
+      slack_thread: vi.fn(async (draft: { id: string }, target: { channel: string }) => void calls.push(`thread ${target.channel} ${draft.id}`)),
+      answer_bank: vi.fn(async (_draft: unknown, target: { repo: string }) => void calls.push(`bank ${target.repo}`)),
+    };
+    const done = await publisher({ drafts, wiki: wikiOf(vi.fn()), handlers }).approve(d.id, d.hash, "person");
+    expect(done.status).toBe("posted");
+    expect(calls).toEqual([`thread C0123ABCD ${d.id}`, "bank acme/web"]);
+  });
+
+  it("fails a draft whose target has no writer, naming the kind", async () => {
+    const drafts = store();
+    const d = await drafts.open(fields({ targets: [{ kind: "github_release", repo: "acme/web", tag: "v1.0.0" }] }));
+    const done = await publisher({ drafts, wiki: wikiOf(vi.fn()) }).approve(d.id, d.hash, "person");
+    expect(done).toMatchObject({ status: "waiting", error: "no writer for github_release targets" });
+  });
+
+  it("names the commit after the draft's kind", async () => {
+    const drafts = store();
+    const d = await drafts.open(fields({ kind: "access_review", id: "access_review:acme:2026-Q4", period: "2026-Q4", targets: [{ kind: "wiki", repo: "acme/home", path: "Compliance/Access-Reviews/acme-2026-Q4.md" }] }));
+    const writePages = vi.fn<Wiki["writePages"]>(async () => ({ sha: "abc" }));
+    await publisher({ drafts, wiki: wikiOf(writePages) }).approve(d.id, d.hash, "person");
+    expect(writePages.mock.calls[0]?.[2]).toBe("Access review 2026-Q4");
+  });
 });

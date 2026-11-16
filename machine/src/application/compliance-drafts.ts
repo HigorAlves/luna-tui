@@ -7,7 +7,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { ComplianceDraft } from "@hardness/contracts";
+import { ComplianceDraft, type ComplianceDraftKind, type ComplianceTarget } from "@hardness/contracts";
 
 import { carriesSecret } from "../domain/postable.ts";
 import type { Wiki } from "./wiki.ts";
@@ -197,21 +197,47 @@ export class ComplianceDrafts {
   }
 }
 
+/** Writes one target of an approved draft. A writer throws with the target's own words when it cannot. */
+export type TargetWriter<K extends ComplianceTarget["kind"]> = (draft: ComplianceDraft, target: Extract<ComplianceTarget, { kind: K }>) => Promise<void>;
+/** The writers beside the built-in `wiki` one: each wave registers the targets it adds. */
+export type TargetWriters = { [K in ComplianceTarget["kind"]]?: TargetWriter<K> };
+
+const SUBJECT: Record<ComplianceDraftKind, string> = {
+  change_evidence: "Change management evidence",
+  questionnaire: "Questionnaire answers",
+  access_review: "Access review",
+  postmortem: "Postmortem",
+  status_report: "Status report",
+  release_notes: "Release notes",
+};
+
+/** The wiki commit message of a draft: its kind, then its period or title. */
+export const commitMessage = (draft: Pick<ComplianceDraft, "kind" | "period" | "title">): string => `${SUBJECT[draft.kind]} ${draft.period ?? draft.title}`;
+
 export interface PublisherDeps {
   drafts: ComplianceDrafts;
   wiki: Wiki;
+  handlers?: TargetWriters;
 }
 
-/** Approve: claim the draft, write each target (one wiki call per target), mark it posted. A target that fails puts the draft back with its words on `error`; the caller still answers with the draft. */
+/** Approve: claim the draft, hand each target to the writer for its kind in order, mark it posted. A target that fails, or has no
+ *  writer, puts the draft back with its words on `error`; the caller still answers with the draft. A retry writes every target again,
+ *  so each writer must be safe to repeat (a wiki write of unchanged pages makes no commit). */
 export function publisher(deps: PublisherDeps) {
+  const writers: TargetWriters = {
+    wiki: async (draft, target) => void (await deps.wiki.writePages(target.repo, [{ path: target.path, text: draft.text }], commitMessage(draft))),
+    ...deps.handlers,
+  };
+  const write = (draft: ComplianceDraft, target: ComplianceTarget): Promise<void> => {
+    const writer = writers[target.kind] as TargetWriter<typeof target.kind> | undefined;
+    if (!writer) throw new Error(`no writer for ${target.kind} targets`);
+    return writer(draft, target as never);
+  };
   return {
     async approve(id: string, hash: string, from: string): Promise<ComplianceDraft> {
       const draft = await deps.drafts.claim(id, hash);
       try {
-        const message = `Change management evidence ${draft.period ?? draft.title}`;
-        for (const target of draft.targets) {
-          if (target.kind === "wiki") await deps.wiki.writePages(target.repo, [{ path: target.path, text: draft.text }], message);
-        }
+        for (const target of draft.targets) await write(draft, target);
         return await deps.drafts.finish(id, from);
       } catch (error) {
         return deps.drafts.fail(id, error instanceof Error ? error.message : String(error));
