@@ -2438,10 +2438,11 @@ export class Pipeline {
     }
   }
 
-  /** A plan that has waited the repo's `auto_approve_plan_minutes` is approved by itself when
-   *  triage reported high confidence and low risk and asked nothing; a medium or high risk plan whose council passed counts as well,
-   *  when the repo lets a passed council count (`plan.council.counts_as_pass`). Anything less waits for you,
-   *  and a notch task always does: the machine never moves a notch card into Approved (RFC 0004). */
+  /** A plan that has waited the repo's `auto_approve_plan_minutes` is approved by itself when it is low risk, every check
+   *  proceeded, nothing was asked, it carries no flag (council-settled answers are one) and needs one approver at most; a medium
+   *  or high risk plan whose council passed counts as well, when the repo lets a passed council count (`plan.council.counts_as_pass`).
+   *  Anything less waits for you. An untrusted card always does, and a notch task always does: the machine never moves a notch
+   *  card into Approved (RFC 0004). */
   private async autoApprovePlans(): Promise<void> {
     for (const task of await this.store.findStuckTasks(new Set<TaskState>(["awaiting_approval"]))) {
       // A Luna Notch task's plan is the notch's to approve (its AutoApproval calls /decision).
