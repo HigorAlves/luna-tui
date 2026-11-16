@@ -34,6 +34,7 @@ import { IGNORED_EFFORT, effortProblems, honourEffort } from "./src/effort-check
 import { formatDiff, formatScorecard } from "./src/format.ts";
 import { type CaseResult, type JudgeVerdict, type Scorecard, caseResult, diffScorecards, gradeAnswer, scorecard } from "./src/grade.ts";
 import { evalDatapoint } from "./src/report.ts";
+import { evalSandbox } from "./src/sandbox.ts";
 
 const EVALS = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(EVALS, "..");
@@ -82,9 +83,11 @@ const effort = (() => {
 const unrunnable = effortProblems(pack, engines, effort);
 if (unrunnable) fail(unrunnable);
 const image = values.image!;
-const credentials = machineCredentials();
-// The same list a real run of the pack gets (kind agent: the engine's host, GitHub, the registries), so what is measured is what runs; MACHINE_EGRESS=off applies here too.
+// The sandbox a real run of the pack gets: the engine relay as the machine sets it (no real token in the stage), the pack's own egress list, a trusted card.
+// MACHINE_EGRESS=off and MACHINE_ENGINE_RELAY apply here too.
 const machineConfig = loadConfig(process.env);
+const sandboxOf = (of: PackId) => evalSandbox(of, machineConfig.egress.relay);
+const credentials = machineCredentials(sandboxOf(pack).credentials);
 const policies = new PolicyStore({ machinePolicy: machineConfig.sandboxPolicy });
 const egress = buildEgress({ egress: machineConfig.egress, runnerImage: image, traces: tracesFromEnv(), sandboxPolicy: machineConfig.sandboxPolicy }, policies);
 
@@ -129,7 +132,7 @@ async function runCase(evalCase: EvalCase, engine: EngineId, index: number, tria
   const span = telemetry.run({ kind: "eval", pack, engine, client: "eval", sessionId: `eval-${pack}-${stamp}` });
   const started = Date.now();
   const run = await runPackOnce(
-    { name: `hardness-eval-${slug(pack)}-${slug(evalCase.id)}-${slug(engine)}-${stamp.slice(11, 19)}${trial > 1 ? `-t${trial}` : ""}`, image, runDir, worktree, input: caseInput(evalCase.input, engine, effort), engine, labels: { luna: "eval" }, extraEnv: span.childEnv(), egressKind: "agent" },
+    { name: `hardness-eval-${slug(pack)}-${slug(evalCase.id)}-${slug(engine)}-${stamp.slice(11, 19)}${trial > 1 ? `-t${trial}` : ""}`, image, runDir, worktree, input: caseInput(evalCase.input, engine, effort), engine, labels: { luna: "eval" }, extraEnv: span.childEnv(), egressKind: sandboxOf(pack).egressKind, trust: sandboxOf(pack).trust },
     { credentials, policies, ...(egress ? { egress } : {}) },
   ).catch((error: Error) => ({ output: null, error: error.message }) as const);
   const caseRun = { id: evalCase.id, output: run.output, error: run.error, wallMs: Date.now() - started };
@@ -160,7 +163,7 @@ async function runCase(evalCase: EvalCase, engine: EngineId, index: number, tria
 async function judgeAnswer(evalCase: EvalCase, answer: unknown, engine: EngineId, runDir: string): Promise<JudgeVerdict> {
   mkdirSync(join(runDir, "work"), { recursive: true });
   const run = await runPackOnce(
-    { name: `hardness-eval-judge-${slug(evalCase.id)}-${stamp.slice(11, 19)}-${Math.random().toString(36).slice(2, 6)}`, image, runDir, worktree: join(runDir, "work"), input: judgeInput(evalCase, answer, engine), engine, labels: { luna: "eval" }, egressKind: "agent" },
+    { name: `hardness-eval-judge-${slug(evalCase.id)}-${stamp.slice(11, 19)}-${Math.random().toString(36).slice(2, 6)}`, image, runDir, worktree: join(runDir, "work"), input: judgeInput(evalCase, answer, engine), engine, labels: { luna: "eval" }, egressKind: sandboxOf("eval_judge").egressKind, trust: sandboxOf("eval_judge").trust },
     { credentials, policies, ...(egress ? { egress } : {}) },
   ).catch((error: Error) => ({ output: null, error: error.message }) as const);
   if (run.error !== null) return { error: `judge: ${run.error}` };

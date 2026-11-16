@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, EscalationReason, type EngineId, Ledger, PACKS, type Pack, Slice, credentialOwner, helpersOn, resolveEngine, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
+import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -37,6 +37,7 @@ import { type EgressPolicy, blockedPayloads } from "../egress-policy.ts";
 import type { InstallInput, InstallOutcome } from "../install.ts";
 import type { SecretStore } from "../secrets.ts";
 import { redactDeep, secretRedactor } from "../../domain/redact-secrets.ts";
+import { egressKindOf } from "../../domain/egress-kind.ts";
 import { redactFiles } from "../../adapters/fs/redact-files.ts";
 import { saveKept } from "../kept-sandboxes.ts";
 import { LOCKFILES, envOf } from "../../domain/env-hash.ts";
@@ -199,12 +200,6 @@ export interface AgentExtra {
   noProxy?: string[];
   /** e2e: secret values of the app, the seed or the deploy, which the browser run never holds: used only to clean what its output and files carry. */
   redactValues?: Record<string, string>;
-}
-
-/** The list a pack's `network` asks for: engine is the engines' hosts only (`pack`), github adds GitHub's, full is the agent list. A decision pack keeps the agent list. */
-function egressKindOf(pack: Pack): "pack" | "github" | "agent" {
-  if (pack.kind === "decision") return "agent";
-  return pack.network === "engine" ? "pack" : pack.network === "github" ? "github" : "agent";
 }
 
 /** `host:port` of each QA target's URL, for the browser run's list (an address or a private name is dropped later, by the list's own rules). */
