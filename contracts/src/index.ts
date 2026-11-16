@@ -20,6 +20,7 @@ export * from "./scoring.ts";
 export * from "./config-v22.ts";
 export * from "./egress.ts";
 export * from "./events.ts";
+export * from "./foreman.ts";
 export * from "./packs.ts";
 export * from "./models.ts";
 export * from "./engines.ts";
