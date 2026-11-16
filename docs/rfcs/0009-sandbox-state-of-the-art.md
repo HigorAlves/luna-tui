@@ -105,7 +105,7 @@ Conditions:
 - **The cause is Docker's default seccomp profile, not the kernel.** `max_user_namespaces` is 64024 and `unprivileged_userns_clone` is 1. The default profile allows `unshare`, `setns`, `mount`, `umount2`, `sethostname` and `clone3` only with `CAP_SYS_ADMIN`. It allows `clone` only without the namespace flags, and never allows `pivot_root`. `--cap-drop ALL` therefore denies them all.
 - **`seccomp=unconfined`.** The weaker-nested form works. A fresh `/proc` mount still fails, so `enableWeakerNestedSandbox: true` is required regardless.
 - **A custom profile** (the default plus unconditional `unshare`, `clone`, `mount`, `umount2` and `pivot_root`) works under the Luna flags.
-- **gVisor.** Not available on this host, so not tested.
+- **gVisor.** Not available on this host at the time of this spike. A later test ran it; see "Test: gVisor" below.
 - **Native Linux.** Not tested. Ubuntu 24.04's AppArmor user-namespace restriction may add a second blocker.
 
 ### Go / no-go for S7
@@ -170,4 +170,22 @@ The review rounds found 24 issues, and the PR fixes all of them. A later gap rou
 - Codex, OpenAI and Jev are not relayed. Their stages still hold the engine's credential.
 - Condition 2, the real relay smoke, has not run. Run it before you rely on the relay. See [verify-the-engine-relay.md](../runbooks/verify-the-engine-relay.md).
 - The eval scorecards for the eve 1.0.0 and SDK 0.3.325 bumps are still to run. The bumps shipped in this PR against "a bump goes alone", by the maintainer's choice.
-- gVisor is untested on a host with `runsc`. See [turn-on-gvisor.md](../runbooks/turn-on-gvisor.md).
+- gVisor is tested behind an isolated docker daemon, not on a native Linux host that runs Luna's machine. See "Test: gVisor".
+
+## Test: gVisor
+
+This test ran gVisor `runsc` release-20261109.0 (arm64). It ran behind an isolated docker daemon (`docker:29-dind`, `--add-runtime runsc`), which ran on Docker Desktop 4.99. Docker Desktop's own settings did not change. The runner image came from `pnpm images` at this PR.
+
+**What holds under runsc:**
+
+- The stage flags hold: the root is read-only, `/tmp` takes writes and runs files, the uid is not root, no capability is in effect, and `no_new_privs` is set. The kernel reads `4.19.0-gvisor`.
+- Luna's own start-up checks pass on that daemon. The seccomp filter is active, and `runsc` is listed. A runtime that is not there (`kata`) is refused as `RuntimeUnavailableError`.
+- `luna-env` and Node 24 run from the runner image under runsc.
+- The egress integration suite runs with `RUNNER_TEST_RUNTIME=runsc`. All 8 of its cases pass, and a ninth proves that the probe ran inside gVisor. A stage reaches no address directly, gets 403 for a host off the list, is refused for literals, `localhost`, the metadata address and private hosts, reaches the listed server through the proxy, and reaches no other run. The proxy stays on runc.
+
+**What gVisor changes:**
+
+- **Docker Desktop.** gVisor shows the files that Docker Desktop shares from the host as root's (`0:0`). This held in every file-access mode tried: the default, `--directfs=false`, `--file-access-mounts=shared` and `--overlay2=none`. A stage's uid then cannot enter a 0700 folder or read its worktree. Files on the daemon's own disk keep their owner. The runtime check now refuses `runsc` on a Docker Desktop daemon, so the card ends `env_broken` with a reason instead of failing on file errors.
+- **DNS.** gVisor's own network stack does not run Docker's embedded resolver (127.0.0.11). A container cannot resolve another container by name or alias, so a stage could not reach its services. Luna now writes each service's name and address into the container's `/etc/hosts` (`--add-host`). A refused outside lookup still fails, but it does not reach the proxy, so it leaves no `blocked()` row.
+
+**Still open:** run the same suite once on a native Linux host with `runsc` installed.
