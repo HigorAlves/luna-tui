@@ -382,6 +382,13 @@ describe("agent stages through packs", () => {
     expect(bare.detail).not.toHaveProperty("confidence");
   });
 
+  it("reads a council member's answer: the summary and the findings ride on the detail", async () => {
+    const finding = { path: "plan", line: 1, severity: "security", title: "No auth", body: "Anyone can export.", confidence: 0.9 };
+    const heard = await runAgent(deps(fakeSandbox(output({ answer: { summary: "one gap", findings: [finding] } }))), context("test_design"), "council_security");
+    expect(heard.outcome).toBe("pass");
+    expect(heard.detail).toMatchObject({ summary: "one gap", findings: [finding] });
+  });
+
   it("reads the v2.2 plan answer: steps become the slices Build reads (files are the touchpoints) and ride along with out of scope, migration and flags", async () => {
     const answer = {
       kind: "done", summary: "s", brief: "b", criteria: ["c1"], assumptions: [], rollback: "revert", outOfScope: ["refunds"], migration: "add a column", flags: ["f1"],

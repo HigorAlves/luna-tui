@@ -14,8 +14,10 @@
 import { isDocsOnly } from "../../domain/docs-only.ts";
 import {
   CodeMapAnswer,
+  type CouncilTurn,
   type DecisionOverrides,
   FACTORY_DEFAULTS,
+  Finding,
   type SizeContext,
   type SplitContext,
   type Tokens,
@@ -62,9 +64,20 @@ const OPTIONAL_QUESTIONS: Partial<Record<DecisionPackName, string[]>> = { risk_s
 
 type DecisionPackName = "risk_score" | "coverage_check" | "plan_check";
 
+type CouncilConfig = FactoryConfig["plan"]["council"];
+
+/** Whether the plan council reviews this card: switched on, not on the fast lane, and a high-risk or large card. */
+export function councilDue(level: Risk, size: string | undefined, cfg: CouncilConfig, fastLane = false): boolean {
+  if (!cfg.enabled || fastLane) return false;
+  return level === cfg.on_risk || (size !== undefined && (cfg.on_size as string[]).includes(size.toUpperCase()));
+}
+
+const MEMBERS = ["security", "second"] as const;
+type Member = (typeof MEMBERS)[number];
+
 export interface PlanDeps {
   /** Runs one pack as a sub-run of this stage: `context` already carries the derived run id. `extra.plan` reaches the pack as `context.plan`. */
-  runPack: (pack: "plan" | "plan_fast" | "test_design" | "test_design_fast" | "code_map", context: StageContext, extra: { plan?: PlanContext }) => Promise<StageResult>;
+  runPack: (pack: "plan" | "plan_fast" | "test_design" | "test_design_fast" | "code_map" | "council_security" | "council_second", context: StageContext, extra: { plan?: PlanContext }) => Promise<StageResult>;
   /** Runs a decision pack on a plan context and answers its answer; null when no decision can run (agents off, no runtime). Read at call time: main.ts binds it late. */
   decide: ((pack: DecisionPackName, plan: PlanContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
   /** The size_estimate decision (full lane only, after risk_score and before the planner): null or absent skips it. `similar` lists the repository's nearest closed cards with a counted diff. */
@@ -82,7 +95,7 @@ export interface PlanDeps {
     via?: (task: StageContext["task"]) => Promise<"cards" | "tickets">;
   };
   /** Each repo's luna.yaml bars for the decisions. */
-  policies: { for(repoPath: string | null): Promise<{ decisions: Record<string, DecisionOverrides>; graph?: boolean; factory?: { size?: FactoryConfig["size"]; fast_lane?: FactoryConfig["fast_lane"]; plan: { coverage_rounds: number; plan_check_retries: number; coverage_score_min?: number; approvers?: FactoryConfig["plan"]["approvers"] }; triage?: FactoryConfig["triage"]; graph?: FactoryConfig["graph"] } }> };
+  policies: { for(repoPath: string | null): Promise<{ decisions: Record<string, DecisionOverrides>; graph?: boolean; factory?: { size?: FactoryConfig["size"]; fast_lane?: FactoryConfig["fast_lane"]; plan: { coverage_rounds: number; plan_check_retries: number; coverage_score_min?: number; approvers?: FactoryConfig["plan"]["approvers"]; council?: Partial<CouncilConfig> }; triage?: FactoryConfig["triage"]; graph?: FactoryConfig["graph"] } }> };
   /** The machine's code graphs: a repo with one (and its luna.yaml `policy.graph` on) gets a code map before the plan. */
   graph?: {
     stampOf(repoPath: string): Promise<unknown | null>;
@@ -146,6 +159,24 @@ function combine(results: StageResult[]): Pick<StageResult, "events" | "artifact
 const flatNote = (text: string): string => text.replace(/\s+/g, " ").trim().slice(0, 2000);
 
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.map(String) : []);
+
+/** The plan the council reads: the brief, the steps (else the slices) with their files and what each is done when, then assumptions, rollback, migration and flags. */
+function councilPlanText(plan: { brief: string; assumptions: string[]; slices: PlanContext["slices"]; rollback?: string }, extras: { steps?: PlanStep[]; outOfScope: string[]; migration?: string; flags?: string[] }): string {
+  const steps = extras.steps ?? plan.slices;
+  const lines = steps.map((s, i) => {
+    const step = s as { title?: string; est_loc?: number; files?: string[]; touchpoints?: string[]; done_when?: string[]; acceptance?: string[] };
+    return `${i + 1}. ${step.title ?? "(untitled)"} (~${step.est_loc ?? "?"} LOC; touches ${(step.files ?? step.touchpoints ?? []).join(", ") || "?"}): ${(step.done_when ?? step.acceptance ?? []).join("; ") || "(no acceptance)"}`;
+  });
+  return [
+    plan.brief,
+    ...lines,
+    ...(plan.assumptions.length ? [`Assumptions: ${plan.assumptions.join("; ")}`] : []),
+    ...(extras.outOfScope.length ? [`Out of scope: ${extras.outOfScope.join("; ")}`] : []),
+    ...(extras.migration ? [`Migration: ${extras.migration}`] : []),
+    ...(extras.flags?.length ? [`Flags: ${extras.flags.join(", ")}`] : []),
+    ...(plan.rollback ? [`Rollback: ${plan.rollback}`] : []),
+  ].join("\n");
+}
 
 export function planStage(deps: PlanDeps): StageRunner {
   const log = deps.log ?? ((line: string) => console.warn(line));
@@ -393,6 +424,35 @@ export function planStage(deps: PlanDeps): StageRunner {
     let planCheck: Judged = { verdict: "skipped", problems: [], answer: null };
     const flagged = new Set<string>();
 
+    /** The plan a planner run wrote: what it changed, the v2.2 extras beside the slices, and the plan itself. A re-run for the council keeps the criteria it was given. */
+    const adopt = (d: Record<string, unknown>, criteria?: string[]) => {
+      if (typeof d.changed === "string") changed = d.changed;
+      extras = {
+        ...(Array.isArray(d.steps) ? { steps: d.steps as PlanStep[] } : {}),
+        outOfScope: strings(d.outOfScope),
+        ...(typeof d.migration === "string" ? { migration: d.migration } : {}),
+        ...(Array.isArray(d.flags) ? { flags: strings(d.flags) } : {}),
+      };
+      return {
+        brief: typeof d.brief === "string" && d.brief ? d.brief : String(d.summary ?? ""),
+        criteria: criteria ?? (strings(d.criteria).length ? strings(d.criteria) : task.criteria),
+        assumptions: strings(d.assumptions),
+        slices: Array.isArray(d.slices) ? (d.slices as PlanContext["slices"]) : [],
+        ...(typeof d.rollback === "string" ? { rollback: d.rollback } : {}),
+        ...(typeof d.summary === "string" ? { summary: d.summary } : {}),
+      };
+    };
+    /** The facts by script, then the two things a script cannot judge, asked of the record, the scenarios, the map, the risk and the steps: never the plan's own brief, assumptions or rollback. */
+    const checkPlan = async (current: NonNullable<typeof plan>) => {
+      const planDoc = planOf({ brief: current.brief, criteria: current.criteria, assumptions: current.assumptions, slices: extras.steps ?? current.slices, rollback: current.rollback, outOfScope: extras.outOfScope, version: planRuns, ...(extras.migration !== undefined ? { migration: extras.migration } : {}), ...(extras.flags !== undefined ? { flags: extras.flags } : {}) });
+      const facts = planFacts(planDoc, cases, map);
+      const judgedCheck = await judge("plan_check", { record: task.record ?? null, brief: "", criteria: current.criteria, assumptions: [], slices: current.slices, cases, ...mapPart(), ...riskPart });
+      const problems = [...facts.issues, ...judgedCheck.problems];
+      planCheck = { ...judgedCheck, problems, verdict: judgedCheck.verdict === "proceed" && facts.issues.length > 0 ? "flag" : judgedCheck.verdict };
+      planIssues = facts.issues;
+      finalPlan = planDoc;
+    };
+
     for (;;) {
       // The planner: the first run, or a re-run with what plan_check found.
       planRuns += 1;
@@ -409,21 +469,7 @@ export function planStage(deps: PlanDeps): StageRunner {
         await goFull(`the fast planner asked for the full plan: ${String(d.summary ?? "the ticket is bigger than it looked")}`);
         continue;
       }
-      if (typeof d.changed === "string") changed = d.changed;
-      extras = {
-        ...(Array.isArray(d.steps) ? { steps: d.steps as PlanStep[] } : {}),
-        outOfScope: strings(d.outOfScope),
-        ...(typeof d.migration === "string" ? { migration: d.migration } : {}),
-        ...(Array.isArray(d.flags) ? { flags: strings(d.flags) } : {}),
-      };
-      plan = {
-        brief: typeof d.brief === "string" && d.brief ? d.brief : String(d.summary ?? ""),
-        criteria: strings(d.criteria).length ? strings(d.criteria) : task.criteria,
-        assumptions: strings(d.assumptions),
-        slices: Array.isArray(d.slices) ? (d.slices as PlanContext["slices"]) : [],
-        ...(typeof d.rollback === "string" ? { rollback: d.rollback } : {}),
-        ...(typeof d.summary === "string" ? { summary: d.summary } : {}),
-      };
+      plan = adopt(d);
 
       // The fast lane's owners are asked about again from the plan's own files, never the ticket's words: more than one owning team leaves the lane.
       if (lane === "fast" && deps.graph) {
@@ -497,15 +543,7 @@ export function planStage(deps: PlanDeps): StageRunner {
       if (excused.length > 0) flagged.add(`coverage: excused as untestable, not covered: ${excused.join(", ")}`);
 
       // The plan against the record: a finding sends the planner back, within the cap.
-      // The facts by script, then the two things a script cannot judge, asked of the record, the scenarios, the map, the risk and the steps:
-      // never the plan's own brief, assumptions or rollback.
-      const planDoc = planOf({ brief: plan.brief, criteria: plan.criteria, assumptions: plan.assumptions, slices: extras.steps ?? plan.slices, rollback: plan.rollback, outOfScope: extras.outOfScope, version: planRuns, ...(extras.migration !== undefined ? { migration: extras.migration } : {}), ...(extras.flags !== undefined ? { flags: extras.flags } : {}) });
-      const facts = planFacts(planDoc, cases, map);
-      const judgedCheck = await judge("plan_check", { record: task.record ?? null, brief: "", criteria: plan.criteria, assumptions: [], slices: plan.slices, cases, ...mapPart(), ...riskPart });
-      const problems = [...facts.issues, ...judgedCheck.problems];
-      planCheck = { ...judgedCheck, problems, verdict: judgedCheck.verdict === "proceed" && facts.issues.length > 0 ? "flag" : judgedCheck.verdict };
-      planIssues = facts.issues;
-      finalPlan = planDoc;
+      await checkPlan(plan);
       if (lane === "fast") {
         // One plan check, no re-run: unsure whether the plan fits means the ticket needs the full path.
         if (planCheck.verdict !== "ask") break;
@@ -515,6 +553,51 @@ export function planStage(deps: PlanDeps): StageRunner {
       const wrong = planCheck.problems.length > 0 || planCheck.verdict === "ask";
       if (!wrong || planRunsOnLane > planCheckRetries) break;
       review = planCheck.problems.length ? planCheck.problems : ["the plan check could not tell whether the plan fits the record"];
+    }
+
+    // The council reads a plan that passed plan_check: a security reviewer and an independent second opinion, on a high-risk or large card.
+    // A step on the control plane makes the card high risk below, so it counts here too. A council never fails the stage.
+    const councilCfg: CouncilConfig = { ...FACTORY_DEFAULTS.plan.council, ...repoPlan?.council };
+    const councilFiles = (finalPlan?.steps ?? []).flatMap((s) => s.files ?? s.touchpoints);
+    let council: { passed: boolean; rounds: number; transcript: CouncilTurn[] } | undefined;
+    if (plan && councilDue(controlPlaneFiles(councilFiles).length > 0 ? "high" : level, task.classification?.sizeBucket ?? task.record?.size, councilCfg, lane === "fast")) {
+      const transcript: CouncilTurn[] = [];
+      /** One member's turn: its answer, or a turn that says it did not answer. */
+      const turn = async (who: Member, round: 1 | 2, current: NonNullable<typeof plan>): Promise<CouncilTurn> => {
+        const text = councilPlanText(current, extras);
+        const result = await deps
+          .runPack(`council_${who}`, sub(`council-${who}-${round}`), { plan: { record: task.record ?? null, brief: "", criteria: current.criteria, assumptions: [], slices: [], council: { plan: text, criteria: current.criteria, round, transcript: [...transcript] } } })
+          .catch((error: unknown): StageResult => ({ outcome: "fail", detail: { error: error instanceof Error ? error.message : String(error) } }));
+        results.push(result);
+        if (result.outcome !== "pass") return { member: who, round, summary: `did not answer: ${String(result.detail?.error ?? result.detail?.reason ?? result.outcome).slice(0, 200)}`, findings: [] };
+        const found = Finding.array().safeParse(result.detail?.findings);
+        return { member: who, round, summary: String(result.detail?.summary ?? "").slice(0, 300), findings: found.success ? found.data : [] };
+      };
+      let asked: Member[] = [...MEMBERS];
+      let open = new Map<Member, Finding[]>();
+      let roundsRun = 0;
+      for (let round = 1 as 1 | 2; round <= councilCfg.rounds; round = 2) {
+        const current = plan;
+        open = new Map();
+        for (const who of asked) {
+          const answered = await turn(who, round, current);
+          transcript.push(answered);
+          if (answered.findings.length > 0) open.set(who, answered.findings);
+        }
+        roundsRun = round;
+        if (open.size === 0 || round === councilCfg.rounds) break;
+        // Findings, and another round to follow: the planner revises with them as its review, and plan_check reads the revision once.
+        planRuns += 1;
+        review = [...open.entries()].flatMap(([who, list]) => list.map((f) => `council ${who}: ${f.title}: ${f.body}`));
+        const revised = await deps.runPack("plan", sub(`plan-${planRuns}`), { plan: { record: task.record ?? null, ...plan, cases, round: planRuns, review, ...mapPart(), ...riskPart, ...replanPart } });
+        results.push(revised);
+        if (revised.outcome !== "pass") break;
+        plan = adopt(revised.detail ?? {}, plan.criteria);
+        await checkPlan(plan);
+        asked = [...open.keys()];
+      }
+      for (const who of open.keys()) flagged.add(`council.${who}`);
+      council = { passed: open.size === 0 && !transcript.some((t) => t.summary.startsWith("did not answer")), rounds: roundsRun, transcript };
     }
 
     // The risk was fixed before the plan, so the files the planner named could not raise it: a script reads them now. A step that touches the
@@ -589,7 +672,8 @@ export function planStage(deps: PlanDeps): StageRunner {
         size,
         // The decisions' records, so the gate's outcome can be written onto them (decision-truth.ts).
         decisions: Object.fromEntries(([["coverage_check", coverage], ["plan_check", planCheck], ["risk_score", riskJudged]] as const).flatMap(([pack, judged]) => (judged.recordId ? [[pack, judged.recordId]] : [])).concat(sizeRecordId ? [["size_estimate", sizeRecordId]] : [])),
-        rounds: { tests: testRuns, plan: planRuns },
+        rounds: { tests: testRuns, plan: planRuns, ...(council ? { council: council.rounds } : {}) },
+        ...(council ? { council } : {}),
         flagged: [...flagged],
         map,
         ...(mapNote ? { mapNote } : {}),

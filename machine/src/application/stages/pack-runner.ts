@@ -997,6 +997,10 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       },
     });
   }
+  if (pack === "council_security" || pack === "council_second") {
+    const answer = answerOf(output.answer);
+    return merged({ ...mapped, detail: { ...mapped.detail, summary: typeof answer?.summary === "string" ? answer.summary : output.summary, findings: Array.isArray(answer?.findings) ? answer.findings : [] } });
+  }
   if (pack === "code_map") {
     const answer = answerOf(output.answer);
     return merged({ ...mapped, detail: { ...mapped.detail, summary: output.summary, ...(answer ? { map: answer } : {}) } });
