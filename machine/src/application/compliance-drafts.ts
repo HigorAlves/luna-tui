@@ -40,6 +40,15 @@ export class DraftStatusError extends Error {
   }
 }
 
+/** A questionnaire draft with no answer bank target was opened before a repository was known: approving it would post a
+ *  "needs a repository" note to the person who asked. The person picks a repository first (`p` on the board). */
+export class DraftNeedsRepoError extends Error {
+  constructor() {
+    super("pick a repository first: press p on the draft");
+    this.name = "DraftNeedsRepoError";
+  }
+}
+
 export class DraftRefusedError extends Error {
   constructor() {
     super("the text carries a token-shaped string, so it is not kept");
@@ -244,6 +253,8 @@ export function publisher(deps: PublisherDeps) {
   };
   return {
     async approve(id: string, hash: string, from: string, tap: Tap | null = null): Promise<ComplianceDraft> {
+      const shown = await deps.drafts.get(id);
+      if (shown?.kind === "questionnaire" && !shown.targets.some((target) => target.kind === "answer_bank")) throw new DraftNeedsRepoError();
       const draft = await deps.drafts.claim(id, hash);
       try {
         for (const target of draft.targets) await write(draft, target, tap);

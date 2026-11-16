@@ -74,7 +74,7 @@ import type { IncidentJob } from "../../application/incidents.ts";
 import type { Questionnaires } from "../../application/questionnaires.ts";
 import type { Vulns } from "../../application/vulns.ts";
 import type { ReleaseNotes } from "../../application/release-notes.ts";
-import { type ComplianceDrafts, type CompliancePublisher, DraftNotFoundError, DraftRefusedError, DraftStatusError, StaleDraftError } from "../../application/compliance-drafts.ts";
+import { type ComplianceDrafts, type CompliancePublisher, DraftNeedsRepoError, DraftNotFoundError, DraftRefusedError, DraftStatusError, StaleDraftError } from "../../application/compliance-drafts.ts";
 import { type TicketMachine, TicketNotFound, TicketRefusal } from "../../application/ticket-machine.ts";
 import { streamSSE } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
@@ -264,6 +264,7 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     if (error instanceof DraftStatusError) return fail(c, 409, "draft_not_waiting", error.message);
     if (error instanceof DraftNotFoundError) return fail(c, 404, "not_found", error.message);
     if (error instanceof DraftRefusedError) return fail(c, 422, "secret", error.message);
+    if (error instanceof DraftNeedsRepoError) return fail(c, 422, "needs_repository", error.message);
     if (error instanceof TicketNotFound) return fail(c, 404, "not_found", error.message);
     if (error instanceof TicketRefusal) return fail(c, 409, "ticket_refused", error.message);
     if (error instanceof BacklogItemNotFoundError) return fail(c, 404, "not_found", error.message);

@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ComplianceDrafts, DraftNotFoundError, DraftRefusedError, DraftStatusError, StaleDraftError, complianceHash, publisher } from "./compliance-drafts.ts";
+import { ComplianceDrafts, DraftNeedsRepoError, DraftNotFoundError, DraftRefusedError, DraftStatusError, StaleDraftError, complianceHash, publisher } from "./compliance-drafts.ts";
 import { tapOf } from "./slack-send.ts";
 import type { Wiki } from "./wiki.ts";
 import { WikiError } from "./wiki.ts";
@@ -226,10 +226,12 @@ describe("publisher.approve", () => {
 
   it("hands the person's tap to each writer", async () => {
     const drafts = store();
-    const d = await drafts.open(fields({ kind: "questionnaire", id: "questionnaire:acme/web:C0123ABCD:1731772800.000100", period: null, targets: [{ kind: "slack_thread", channel: "C0123ABCD", ts: "1731772800.000100" }] }));
+    const d = await drafts.open(
+      fields({ kind: "questionnaire", id: "questionnaire:acme/web:C0123ABCD:1731772800.000100", period: null, targets: [{ kind: "slack_thread", channel: "C0123ABCD", ts: "1731772800.000100" }, { kind: "answer_bank", repo: "acme/web" }] }),
+    );
     const slack_thread = vi.fn(async (_d: unknown, _t: unknown, _tap: unknown) => {});
     const tap = tapOf("POST /compliance/drafts/:id/approve");
-    await publisher({ drafts, wiki: wikiOf(vi.fn()), handlers: { slack_thread } }).approve(d.id, d.hash, "person", tap);
+    await publisher({ drafts, wiki: wikiOf(vi.fn()), handlers: { slack_thread, answer_bank: vi.fn(async () => {}) } }).approve(d.id, d.hash, "person", tap);
     expect(slack_thread.mock.calls[0]![2]).toBe(tap);
   });
 
@@ -238,6 +240,17 @@ describe("publisher.approve", () => {
     const d = await drafts.open(fields({ targets: [{ kind: "github_release", repo: "acme/web", tag: "v1.0.0" }] }));
     const done = await publisher({ drafts, wiki: wikiOf(vi.fn()) }).approve(d.id, d.hash, "person");
     expect(done).toMatchObject({ status: "waiting", error: "no writer for github_release targets" });
+  });
+
+  it("refuses a questionnaire that still needs a repository, and writes nothing", async () => {
+    const drafts = store();
+    const d = await drafts.open(
+      fields({ kind: "questionnaire", id: "questionnaire:slack:C0123ABCD:1731772800.000100", period: null, summary: "pick a repository", targets: [{ kind: "slack_thread", channel: "C0123ABCD", ts: "1731772800.000100" }] }),
+    );
+    const slack_thread = vi.fn(async () => undefined);
+    await expect(publisher({ drafts, wiki: wikiOf(vi.fn()), handlers: { slack_thread } }).approve(d.id, d.hash, "person")).rejects.toBeInstanceOf(DraftNeedsRepoError);
+    expect(slack_thread).not.toHaveBeenCalled();
+    expect((await drafts.get(d.id))?.status).toBe("waiting");
   });
 
   it("names the commit after the draft's kind", async () => {
