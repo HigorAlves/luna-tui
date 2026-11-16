@@ -1091,7 +1091,7 @@ describe("planStage's council", () => {
   const councilCalls = (calls: Call[]) => calls.filter((c) => c.pack.startsWith("council_")).map((c) => [c.pack, c.runId]);
 
   it("is due for a high-risk or an L or XL card, when enabled and not on the fast lane", () => {
-    const on = { enabled: true, rounds: 2 as const, on_risk: "high" as const, on_size: ["L", "XL"] as Array<"L" | "XL"> };
+    const on = { enabled: true, rounds: 2 as const, on_risk: "high" as const, on_size: ["L", "XL"] as Array<"L" | "XL">, counts_as_pass: true };
     expect(councilDue("high", "S", on)).toBe(true);
     expect(councilDue("medium", "XL", on)).toBe(true);
     expect(councilDue("medium", "M", on)).toBe(false);

@@ -68,7 +68,7 @@ export const FactoryConfigInput = {
     plan_check_retries: count(5).optional(),
     approvers: section({ low: count(5).optional(), medium: count(5).optional(), high: count(5).optional(), outside_owning_team: z.boolean().optional() }).optional(),
     sla: Sla.optional(),
-    council: section({ enabled: z.boolean().optional(), rounds: z.union([z.literal(1), z.literal(2)]).optional(), on_risk: z.literal("high").optional(), on_size: z.array(SizeBucket).max(5).optional() }).optional(),
+    council: section({ enabled: z.boolean().optional(), rounds: z.union([z.literal(1), z.literal(2)]).optional(), on_risk: z.literal("high").optional(), on_size: z.array(SizeBucket).max(5).optional(), counts_as_pass: z.boolean().optional() }).optional(),
   }).optional(),
   size: section({
     target_loc: z.tuple([count(100_000), count(100_000)]).optional(),
@@ -148,7 +148,7 @@ export interface FactoryConfig {
   scoring: { weights: { who: number; what: number; impact: number; time: number; demand: number }; bands: { P0: number; P1: number; P2: number } };
   graph: { stale_commits: number; first_build_minutes: number };
   fast_lane: { max_risk: "low" | "medium" | "high"; max_size: "XS" | "S" | "M" | "L" | "XL"; excluded_types: string[]; cross_team: boolean };
-  plan: { coverage_score_min: number; coverage_rounds: number; plan_check_retries: number; approvers: { low: number; medium: number; high: number; outside_owning_team: boolean }; sla: { reminder_days: number; escalate_days: number }; council: { enabled: boolean; rounds: 1 | 2; on_risk: "high"; on_size: Array<"XS" | "S" | "M" | "L" | "XL"> } };
+  plan: { coverage_score_min: number; coverage_rounds: number; plan_check_retries: number; approvers: { low: number; medium: number; high: number; outside_owning_team: boolean }; sla: { reminder_days: number; escalate_days: number }; council: { enabled: boolean; rounds: 1 | 2; on_risk: "high"; on_size: Array<"XS" | "S" | "M" | "L" | "XL">; counts_as_pass: boolean } };
   size: { target_loc: [number, number]; hard_limit_loc: number; max_children: number; max_rounds: number; depth: number };
   build: { max_iterations: number; max_tokens: number; max_minutes: number; backoff_minutes: [number, number]; regression_full_suite_minutes: number };
   sandbox: { cpu: number; memory_gb: number; keep_hours: number; egress: { allow: string[]; registries: "install" | "always" }; install: { run: "on" | "off"; scripts: "off" | "on" }; image: { base: string | null } };
@@ -169,7 +169,7 @@ export const FACTORY_DEFAULTS: FactoryConfig = {
   scoring: { weights: { who: 3, what: 3, impact: 2, time: 2, demand: 1 }, bands: { P0: 28, P1: 22, P2: 16 } },
   graph: { stale_commits: 50, first_build_minutes: 10 },
   fast_lane: { max_risk: "low", max_size: "S", excluded_types: ["infra", "data"], cross_team: false },
-  plan: { coverage_score_min: 0.85, coverage_rounds: 3, plan_check_retries: 2, approvers: { low: 1, medium: 1, high: 1, outside_owning_team: true }, sla: { reminder_days: 2, escalate_days: 5 }, council: { enabled: true, rounds: 2, on_risk: "high", on_size: ["L", "XL"] } },
+  plan: { coverage_score_min: 0.85, coverage_rounds: 3, plan_check_retries: 2, approvers: { low: 1, medium: 1, high: 1, outside_owning_team: true }, sla: { reminder_days: 2, escalate_days: 5 }, council: { enabled: true, rounds: 2, on_risk: "high", on_size: ["L", "XL"], counts_as_pass: true } },
   size: { target_loc: [1000, 2000], hard_limit_loc: 2500, max_children: 8, max_rounds: 3, depth: 2 },
   build: { max_iterations: 15, max_tokens: 2_000_000, max_minutes: 90, backoff_minutes: [1, 30], regression_full_suite_minutes: 10 },
   sandbox: { cpu: 2, memory_gb: 4, keep_hours: 24, egress: { allow: [], registries: "always" }, install: { run: "on", scripts: "off" }, image: { base: null } },
@@ -191,7 +191,7 @@ export const CONSUMED_FROM: Readonly<Record<string, number>> = {
   "fast_lane.max_risk": 9, "fast_lane.max_size": 9, "fast_lane.excluded_types": 9, "fast_lane.cross_team": 9,
   "plan.coverage_score_min": 9, "plan.coverage_rounds": 8, "plan.plan_check_retries": 8,
   "plan.approvers.low": 9, "plan.approvers.medium": 9, "plan.approvers.high": 9, "plan.approvers.outside_owning_team": 9, "plan.sla.reminder_days": 9, "plan.sla.escalate_days": 9,
-  "plan.council.enabled": 19, "plan.council.rounds": 19, "plan.council.on_risk": 19, "plan.council.on_size": 19,
+  "plan.council.enabled": 19, "plan.council.rounds": 19, "plan.council.on_risk": 19, "plan.council.on_size": 19, "plan.council.counts_as_pass": 19,
   "size.target_loc": 15, "size.hard_limit_loc": 15, "size.max_children": 15, "size.max_rounds": 15, "size.depth": 15,
   "build.max_iterations": 10, "build.max_tokens": 10, "build.max_minutes": 10, "build.backoff_minutes": 10, "build.regression_full_suite_minutes": 10,
   "sandbox.cpu": 11, "sandbox.memory_gb": 11, "sandbox.keep_hours": 11, "sandbox.egress.allow": 11, "sandbox.egress.registries": 11, "sandbox.install.run": 11, "sandbox.install.scripts": 11, "sandbox.image.base": 11,

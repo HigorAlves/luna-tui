@@ -56,9 +56,10 @@ describe("the diagram's config defaults", () => {
 
 describe("the plan council section", () => {
   it("defaults to on, two rounds, high risk or an L or XL card, read from wave 19", () => {
-    expect(FACTORY_DEFAULTS.plan.council).toEqual({ enabled: true, rounds: 2, on_risk: "high", on_size: ["L", "XL"] });
-    for (const key of ["enabled", "rounds", "on_risk", "on_size"]) expect(CONSUMED_FROM[`plan.council.${key}`], key).toBe(19);
-    expect(factoryConfigOf({ plan: { council: { rounds: 1 } } }).plan.council).toEqual({ enabled: true, rounds: 1, on_risk: "high", on_size: ["L", "XL"] });
+    expect(FACTORY_DEFAULTS.plan.council).toEqual({ enabled: true, rounds: 2, on_risk: "high", on_size: ["L", "XL"], counts_as_pass: true });
+    for (const key of ["enabled", "rounds", "on_risk", "on_size", "counts_as_pass"]) expect(CONSUMED_FROM[`plan.council.${key}`], key).toBe(19);
+    expect(factoryConfigOf({ plan: { council: { rounds: 1 } } }).plan.council).toEqual({ enabled: true, rounds: 1, on_risk: "high", on_size: ["L", "XL"], counts_as_pass: true });
+    expect(factoryConfigOf({ plan: { council: { counts_as_pass: false } } }).plan.council.counts_as_pass).toBe(false);
   });
 
   it("is accepted in a luna.yaml; a third round, an unknown size and an unknown key are refused", () => {

@@ -2334,13 +2334,15 @@ export class Pipeline {
   }
 
   /** A plan that has waited the repo's `auto_approve_plan_minutes` is approved by itself when
-   *  triage reported high confidence and low risk and asked nothing. Anything less waits for you,
+   *  triage reported high confidence and low risk and asked nothing; a medium or high risk plan whose council passed counts as well,
+   *  when the repo lets a passed council count (`plan.council.counts_as_pass`). Anything less waits for you,
    *  and a notch task always does: the machine never moves a notch card into Approved (RFC 0004). */
   private async autoApprovePlans(): Promise<void> {
     for (const task of await this.store.findStuckTasks(new Set<TaskState>(["awaiting_approval"]))) {
       // A Luna Notch task's plan is the notch's to approve (its AutoApproval calls /decision).
       if (task.source?.kind === "notch") continue;
-      const { autoApprovePlanMinutes: minutes } = await this.policies.for(task.repoPath);
+      const policy = await this.policies.for(task.repoPath);
+      const minutes = policy.autoApprovePlanMinutes;
       if (minutes === null) continue;
       const open = (await this.store.listApprovals(task.id)).find((a) => a.kind === "awaiting_approval" && a.decision === null);
       if (!open) continue;
@@ -2351,11 +2353,14 @@ export class Pipeline {
       // Low risk, every check a clear yes, and nothing asked: the plan stage's own findings are the bar.
       // A plan that came back with evidence, or that carries any flag, is a person's to read: the clock never approves it.
       if (open.requested.replan !== undefined || (Array.isArray(open.requested.flagged) && open.requested.flagged.length > 0)) continue;
-      const { risk, verdicts, questions } = open.requested as { risk?: { level?: unknown }; verdicts?: Record<string, unknown>; questions?: unknown };
+      const { risk, verdicts, questions, council } = open.requested as { risk?: { level?: unknown }; verdicts?: Record<string, unknown>; questions?: unknown; council?: { passed?: unknown } };
+      // A council that answered and left nothing open stands in for the low-risk bar; every other bar stays.
+      const councilPassed = council?.passed === true && (policy.factory?.plan.council.counts_as_pass ?? FACTORY_DEFAULTS.plan.council.counts_as_pass);
+      const riskOk = risk?.level === "low" || (councilPassed && (risk?.level === "medium" || risk?.level === "high"));
       const checks = Object.values(verdicts ?? {});
-      if (risk?.level !== "low" || checks.length === 0 || checks.some((verdict) => verdict !== "proceed") || (Array.isArray(questions) && questions.length > 0)) continue;
+      if (!riskOk || checks.length === 0 || checks.some((verdict) => verdict !== "proceed") || (Array.isArray(questions) && questions.length > 0)) continue;
       if (Date.now() - open.createdAt.getTime() < minutes * 60_000) continue;
-      const reason = `auto-approved after ${minutes} min: low risk and every check proceeded`;
+      const reason = risk?.level === "low" ? `auto-approved after ${minutes} min: low risk and every check proceeded` : `auto-approved after ${minutes} min: the council passed and every check proceeded`;
       await this.log(task.id, "plan.auto_approved", { reason });
       await this.decide(task.id, "approved", reason, undefined, { auto: true }).catch((error: unknown) =>
         console.error(`could not auto-approve the plan of task ${task.id}`, error),

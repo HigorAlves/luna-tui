@@ -3236,6 +3236,45 @@ describe("timer-approved plans", () => {
     expect((await pipeline.get(tui.id)).state).toBe("awaiting_ship");
   });
 
+  describe("a passed plan council", () => {
+    const council = (passed: boolean) => ({ passed, rounds: 1, transcript: [{ member: "security", round: 1, summary: "nothing to add", findings: [] }] });
+    const high = (over: Record<string, unknown> = {}) => confident({ risk: { level: "high", scores: {} }, council: council(true), ...over });
+    const councilPolicy = (countsAsPass = true) => ({
+      for: async () => ({ ...PREVIEW_ON, autoApprovePlanMinutes: 10, factory: { ...PREVIEW_ON.factory, plan: { ...PREVIEW_ON.factory.plan, approvers: { ...PREVIEW_ON.factory.plan.approvers, high: 1 }, council: { ...PREVIEW_ON.factory.plan.council, counts_as_pass: countsAsPass } } } }),
+    });
+    const stateAfterWaiting = async (result: StageResult, countsAsPass = true) => {
+      await db.query("truncate tasks cascade");
+      stubs.reset();
+      pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: councilPolicy(countsAsPass) });
+      stubs.plan("test_design", result);
+      const task = await pipeline.createTask({ title: "t", repoPath: "/r/a" });
+      await pipeline.start(task.id);
+      await db.query("update approvals set created_at = now() - interval '11 minutes'");
+      await pipeline.tick();
+      return { task, state: (await pipeline.get(task.id)).state };
+    };
+
+    it("approves a high-risk plan the council passed, and says why", async () => {
+      const { task, state } = await stateAfterWaiting(high());
+      expect(state).toBe("awaiting_ship");
+      expect((await pipeline.approvals(task.id))[0]).toMatchObject({ decision: "approved", reason: "auto-approved after 10 min: the council passed and every check proceeded" });
+    });
+
+    it("approves a medium-risk plan the council passed", async () => {
+      expect((await stateAfterWaiting(high({ risk: { level: "medium", scores: {} } }))).state).toBe("awaiting_ship");
+    });
+
+    it("keeps a high-risk plan waiting when the council did not pass, left no council, or counts_as_pass is off", async () => {
+      expect((await stateAfterWaiting(high({ council: council(false) }))).state).toBe("awaiting_approval");
+      expect((await stateAfterWaiting(high({ council: undefined }))).state).toBe("awaiting_approval");
+      expect((await stateAfterWaiting(high(), false)).state).toBe("awaiting_approval");
+    });
+
+    it("keeps a plan the council passed waiting when it carries a flag", async () => {
+      expect((await stateAfterWaiting(high({ flagged: ["plan outside map"] }))).state).toBe("awaiting_approval");
+    });
+  });
+
   it("keeps waiting when a check did not proceed, risk is not low, the plan stage asked questions, or the policy is off", async () => {
     const cases: Array<[number | null, StageResult]> = [
       [10, confident({ verdicts: { coverage: "proceed", plan: "flag", risk: "proceed" } })],
