@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { TaskRow } from "../../domain/task.ts";
 import type { StageContext, StageResult } from "../ports.ts";
-import { COVERAGE_ROUNDS, PLAN_ROUNDS, type PlanDeps, planStage } from "./plan.ts";
+import { councilDue, COVERAGE_ROUNDS, PLAN_ROUNDS, type PlanDeps, planStage } from "./plan.ts";
 
 const slices = [{ title: "guard j", est_loc: 12, touchpoints: ["board/src/keys.rs"], acceptance: ["no panic", "stays selected"] }];
 const record = { source: "manual", kind: "bug", goal: "Stop the panic", size: "small", urgency: "high", risk: "medium", signals: {}, qa: [], decision: "plan", reason: "r", at: "2026-11-04T00:00:00.000Z", model: "m" };
@@ -55,11 +55,20 @@ const withGraph = { graph: { stampOf: async () => ({ commit: "c" }) } };
 const located = (over: Record<string, unknown> = {}) => ({ files: ["board/src/keys.rs"], symbols: ["handleKey"], components: ["board keys"], confidence: 0.6, owners: [{ path: "board/src/keys.rs", owners: ["@marta"] }], codeowners: true, stale: false, behind: 3, ...over });
 const locating = (over: Record<string, unknown> | null = {}) => ({ graph: { stampOf: async () => ({ commit: "c" }), locate: async () => (over === null ? null : located(over)) } });
 
+/** A council member's answer: a summary and findings (none is silence). */
+const member = (summary: string, findings: Array<{ title: string; body?: string }> = []): StageResult => ({
+  outcome: "pass",
+  detail: { summary, findings: findings.map((f) => ({ path: "plan", line: 1, severity: "security", title: f.title, body: f.body ?? "why", confidence: 0.9 })) },
+  events: [{ at: "t", kind: "stage.note", payload: { from: "council" } }],
+  usage: { turns: 1, costUsd: 0.1 },
+});
+const silent = (): StageResult => member("nothing to add");
+
 interface Call { pack: string; runId: string; context: StageContext; plan?: PlanContext }
 const fastTask = { ...task, record: { ...record, decision: "fast_lane", risk: "low" } } as unknown as TaskRow;
 const needsFull: StageResult = { outcome: "pass", detail: { summary: "a second component appears", needsFullPlan: true }, events: [{ at: "t", kind: "stage.note", payload: { from: "fast" } }] };
 
-function setup(script: { plan?: StageResult[]; test_design?: StageResult[]; plan_fast?: StageResult[]; test_design_fast?: StageResult[]; code_map?: StageResult[]; answers?: Partial<Record<"risk_score" | "coverage_check" | "plan_check", Array<Record<string, unknown> | Error>>> } = {}, over: Partial<PlanDeps> = {}) {
+function setup(script: { plan?: StageResult[]; test_design?: StageResult[]; plan_fast?: StageResult[]; test_design_fast?: StageResult[]; code_map?: StageResult[]; council_security?: StageResult[]; council_second?: StageResult[]; answers?: Partial<Record<"risk_score" | "coverage_check" | "plan_check", Array<Record<string, unknown> | Error>>> } = {}, over: Partial<PlanDeps> = {}) {
   const calls: Call[] = [];
   const decided: Array<{ pack: string; plan: PlanContext; repo: string | null }> = [];
   const queues = {
@@ -68,6 +77,8 @@ function setup(script: { plan?: StageResult[]; test_design?: StageResult[]; plan
     plan_fast: [...(script.plan_fast ?? [planned()])],
     test_design_fast: [...(script.test_design_fast ?? [cased("no panic", "stays selected")])],
     code_map: [...(script.code_map ?? [mapped()])],
+    council_security: [...(script.council_security ?? [silent()])],
+    council_second: [...(script.council_second ?? [silent()])],
   };
   const answers = Object.fromEntries((["risk_score", "coverage_check", "plan_check"] as const).map((p) => [p, [...(script.answers?.[p] ?? [])]]));
   const deps: PlanDeps = {
@@ -1069,5 +1080,105 @@ describe("planStage's risk floor and the way a split is made", () => {
     base.deps.split = { decompose: async () => ({ children: [kid(1), kid(2)] }), check: null, via: async () => "tickets" };
     const result = await planStage(base.deps)(context({ task: { ...task, criteria: ["a", "b"] } as unknown as TaskRow }));
     expect(result.detail).toMatchObject({ outcome: "split", split: { via: "tickets" } });
+  });
+});
+
+describe("planStage's council", () => {
+  const highTask = { ...task, record: { ...record, risk: "high" } } as unknown as TaskRow;
+  const largeTask = { ...task, record: { ...record, size: "L" } } as unknown as TaskRow;
+  const cfg = (council: Record<string, unknown> = {}) => ({ policies: { for: async () => ({ decisions: {}, graph: true, factory: { plan: { coverage_rounds: 3, plan_check_retries: 2, council: { enabled: true, rounds: 2, on_risk: "high", on_size: ["L", "XL"], ...council } } } }) } }) as Partial<PlanDeps>;
+  const councilFlags = (result: StageResult) => (result.detail!.flagged as string[]).filter((f) => f.startsWith("council"));
+  const councilCalls = (calls: Call[]) => calls.filter((c) => c.pack.startsWith("council_")).map((c) => [c.pack, c.runId]);
+
+  it("is due for a high-risk or an L or XL card, when enabled and not on the fast lane", () => {
+    const on = { enabled: true, rounds: 2 as const, on_risk: "high" as const, on_size: ["L", "XL"] as Array<"L" | "XL">, counts_as_pass: true };
+    expect(councilDue("high", "S", on)).toBe(true);
+    expect(councilDue("medium", "XL", on)).toBe(true);
+    expect(councilDue("medium", "M", on)).toBe(false);
+    expect(councilDue("high", "L", { ...on, enabled: false })).toBe(false);
+    expect(councilDue("high", "L", on, true)).toBe(false);
+  });
+
+  it("runs nothing for a medium-risk card of size M, and puts no council on the gate", async () => {
+    const { run, calls } = setup({}, cfg());
+    const result = await run(context());
+    expect(councilCalls(calls)).toEqual([]);
+    expect(result.detail).not.toHaveProperty("council");
+    expect((result.detail!.rounds as Record<string, number>).council).toBeUndefined();
+  });
+
+  it("ends in round 1 when both members are silent: passed, one round, both turns kept", async () => {
+    const { run, calls, decided } = setup({}, cfg());
+    const result = await run(context({ task: highTask }));
+    expect(councilCalls(calls)).toEqual([["council_security", "r1-council-security-1"], ["council_second", "r1-council-second-1"]]);
+    expect(calls.map((c) => c.pack).filter((p) => p === "plan")).toHaveLength(1);
+    expect(decided.filter((d) => d.pack === "plan_check")).toHaveLength(1);
+    expect(calls.find((c) => c.pack === "council_security")!.plan!.council).toMatchObject({ round: 1, transcript: [], criteria: ["no panic", "stays selected"] });
+    expect(result.detail).toMatchObject({
+      council: { passed: true, rounds: 1, transcript: [{ member: "security", round: 1, summary: "nothing to add", findings: [] }, { member: "second", round: 1, summary: "nothing to add", findings: [] }] },
+      rounds: { council: 1 },
+    });
+    expect(councilFlags(result)).toEqual([]);
+  });
+
+  it("runs on the size alone: a medium-risk L card", async () => {
+    const { run, calls } = setup({}, cfg());
+    await run(context({ task: largeTask }));
+    expect(councilCalls(calls)).toHaveLength(2);
+  });
+
+  it("sends findings to the planner as its review, checks the plan once, then asks only the finder in round 2: settled is passed", async () => {
+    const { run, calls, decided } = setup({ council_security: [member("a gap", [{ title: "No auth on the export" }]), silent()] }, cfg());
+    const result = await run(context({ task: highTask }));
+    expect(calls.map((c) => c.runId)).toEqual(["r1-plan", "r1-tests-1", "r1-council-security-1", "r1-council-second-1", "r1-plan-2", "r1-council-security-2"]);
+    expect(calls.find((c) => c.runId === "r1-plan-2")!.plan!.review).toEqual([expect.stringContaining("No auth on the export")]);
+    expect(decided.filter((d) => d.pack === "plan_check")).toHaveLength(2);
+    expect(calls.find((c) => c.runId === "r1-council-security-2")!.plan!.council).toMatchObject({ round: 2, transcript: [{ member: "security", round: 1 }, { member: "second", round: 1 }] });
+    expect(result.detail).toMatchObject({ council: { passed: true, rounds: 2 }, rounds: { plan: 2, council: 2 } });
+    expect(councilFlags(result)).toEqual([]);
+    expect((result.detail!.council as { transcript: unknown[] }).transcript).toHaveLength(3);
+  });
+
+  it("flags findings left after the last round as council.<member>, and the council has not passed", async () => {
+    const left = member("still open", [{ title: "No auth on the export" }]);
+    const { run } = setup({ council_security: [member("a gap", [{ title: "No auth on the export" }]), left] }, cfg());
+    const result = await run(context({ task: highTask }));
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({ council: { passed: false, rounds: 2 } });
+    expect(councilFlags(result)).toEqual(["council.security"]);
+  });
+
+  it("with rounds 1 asks once, does not re-plan, and flags what was found", async () => {
+    const { run, calls } = setup({ council_second: [member("a gap", [{ title: "Slice 2 cannot work" }])] }, cfg({ rounds: 1 }));
+    const result = await run(context({ task: highTask }));
+    expect(councilCalls(calls)).toHaveLength(2);
+    expect(calls.filter((c) => c.pack === "plan")).toHaveLength(1);
+    expect(result.detail).toMatchObject({ council: { passed: false, rounds: 1 }, rounds: { council: 1 } });
+    expect(councilFlags(result)).toEqual(["council.second"]);
+  });
+
+  it("records a member that fails as a turn that did not answer, goes on, and the council has not passed", async () => {
+    const { run } = setup({ council_second: [{ outcome: "fail", detail: { error: "engine down" } }] }, cfg());
+    const result = await run(context({ task: highTask }));
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({ council: { passed: false, rounds: 1, transcript: [{ member: "security", summary: "nothing to add" }, { member: "second", round: 1, summary: "did not answer: engine down", findings: [] }] } });
+  });
+
+  it("does not convene for a plan that plan_check still refuses after its retries: a person reads that plan", async () => {
+    const { run, calls } = setup({ answers: { plan_check: [bad, bad, bad] } }, cfg());
+    const result = await run(context({ task: highTask }));
+    expect(councilCalls(calls)).toEqual([]);
+    expect(result.detail).not.toHaveProperty("council");
+  });
+
+  it("skips the fast lane, and a council that is switched off", async () => {
+    const fastHigh = { ...fastTask, record: { ...fastTask.record, risk: "high", size: "L" } } as unknown as TaskRow;
+    const fast = setup({}, cfg());
+    const fastResult = await fast.run(context({ task: fastHigh }));
+    expect(councilCalls(fast.calls)).toEqual([]);
+    expect(fastResult.detail).not.toHaveProperty("council");
+    const off = setup({}, cfg({ enabled: false }));
+    await off.run(context({ task: highTask }));
+    expect(councilCalls(off.calls)).toEqual([]);
   });
 });

@@ -54,6 +54,36 @@ describe("the diagram's config defaults", () => {
   });
 });
 
+describe("the triage council section", () => {
+  it("defaults to on with a bar of 0.8, read from wave 19", () => {
+    expect(FACTORY_DEFAULTS.triage.council).toEqual({ enabled: true, bar: 0.8 });
+    for (const key of ["enabled", "bar"]) expect(CONSUMED_FROM[`triage.council.${key}`], key).toBe(19);
+    expect(factoryConfigOf({ triage: { council: { bar: 0.9 } } }).triage.council).toEqual({ enabled: true, bar: 0.9 });
+  });
+
+  it("is accepted in a luna.yaml; a bar over 1 and an unknown key are refused", () => {
+    expect(LunaConfig.safeParse({ triage: { council: { enabled: false, bar: 0.5 } } }).success).toBe(true);
+    expect(LunaConfig.safeParse({ triage: { council: { bar: 1.5 } } }).success).toBe(false);
+    expect(LunaConfig.safeParse({ triage: { council: { members: 3 } } }).success).toBe(false);
+  });
+});
+
+describe("the plan council section", () => {
+  it("defaults to on, two rounds, high risk or an L or XL card, read from wave 19", () => {
+    expect(FACTORY_DEFAULTS.plan.council).toEqual({ enabled: true, rounds: 2, on_risk: "high", on_size: ["L", "XL"], counts_as_pass: true });
+    for (const key of ["enabled", "rounds", "on_risk", "on_size", "counts_as_pass"]) expect(CONSUMED_FROM[`plan.council.${key}`], key).toBe(19);
+    expect(factoryConfigOf({ plan: { council: { rounds: 1 } } }).plan.council).toEqual({ enabled: true, rounds: 1, on_risk: "high", on_size: ["L", "XL"], counts_as_pass: true });
+    expect(factoryConfigOf({ plan: { council: { counts_as_pass: false } } }).plan.council.counts_as_pass).toBe(false);
+  });
+
+  it("is accepted in a luna.yaml; a third round, an unknown size and an unknown key are refused", () => {
+    expect(LunaConfig.safeParse({ plan: { council: { enabled: false, rounds: 1, on_size: ["XL"] } } }).success).toBe(true);
+    expect(LunaConfig.safeParse({ plan: { council: { rounds: 3 } } }).success).toBe(false);
+    expect(LunaConfig.safeParse({ plan: { council: { on_size: ["huge"] } } }).success).toBe(false);
+    expect(LunaConfig.safeParse({ plan: { council: { members: 3 } } }).success).toBe(false);
+  });
+});
+
 describe("the economy section", () => {
   it("defaults to the guard on, facts on and pruning proposed, read from wave 19", () => {
     expect(FACTORY_DEFAULTS.economy).toEqual({ loop_guard: "on", facts: "on", tool_prune: "propose", propose_every: 3, promote_cards: 5, guard: { judge_confidence: 0.7, redirects: 1, backstop_mult: 2.5, envelope_min_samples: 5 }, prune: { runs: 10, min_cards: 2, cards: 5 } });

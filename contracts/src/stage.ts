@@ -202,6 +202,11 @@ export const PackId = z.enum([
   "pr_reply",
   // The foreman: answers a question about the board from a snapshot and suggests actions the person confirms; no tools, no worktree, on demand (POST /foreman).
   "foreman",
+  // The plan council (run in test_design after plan_check): a security review and an independent second opinion on a High-risk or large plan.
+  "council_security",
+  "council_second",
+  // The question council (run in triage before the person is asked): settles open questions from the code and the card, or says it cannot.
+  "question_council",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -645,7 +650,8 @@ export const TriageRecord = z.object({
   /** What each decision question answered and how sure it was, by question name. */
   signals: z.record(z.string(), z.object({ answer: z.union([z.string(), z.number(), z.boolean(), z.null()]), confidence: z.number().min(0).max(1) })),
   /** Questions asked of the person who filed it, and what they said. */
-  qa: z.array(z.object({ question: z.string(), answer: z.string().nullable() })),
+  /** Who answered each question: absent means a person; `council` is the question council, with the places it read. */
+  qa: z.array(z.object({ question: z.string(), answer: z.string().nullable(), by: z.enum(["person", "council"]).optional(), evidence: z.array(z.string()).optional() })),
   decision: z.enum(["plan", "fast_lane", "conversation", "archive"]),
   reason: z.string(),
   at: z.string(),
@@ -722,6 +728,21 @@ export const PlanRisk = z.object({
 });
 export type PlanRisk = z.infer<typeof PlanRisk>;
 
+/** For question_council: the open questions (a machine question carries its field, guess and confidence; an agent question, nulls), the card and the answers so far. */
+export const QuestionsContext = z.object({
+  questions: z
+    .array(z.object({ id: z.string().min(1), question: z.string(), recommended: z.string().nullable(), field: z.string().nullable(), guess: z.string().nullable(), confidence: z.number().nullable() }))
+    .min(1)
+    .max(6),
+  card: z.object({ title: z.string(), description: z.string() }),
+  answers: z.array(z.object({ question: z.string(), answer: z.string() })),
+});
+export type QuestionsContext = z.infer<typeof QuestionsContext>;
+
+/** One member's answer in the plan council: who, which round, what they said and the findings (none means nothing to add). */
+export const CouncilTurn = z.object({ member: z.enum(["security", "second"]), round: z.union([z.literal(1), z.literal(2)]), summary: z.string(), findings: z.array(Finding) });
+export type CouncilTurn = z.infer<typeof CouncilTurn>;
+
 export const PlanContext = z.object({
   /** The machine's fact that every file the plan touches is documentation (or a test): the test designer writes reading checks, no test. */
   docsOnly: z.boolean().optional(),
@@ -746,6 +767,8 @@ export const PlanContext = z.object({
   replan: z.object({ raised_by: z.string(), reason: z.string(), output: z.string().optional(), findings: z.array(z.string()).optional(), thread: z.string().optional() }).optional(),
   /** For the code mapper: where the graph says the goal lives (the machine's lexical match), to confirm and give roles to. */
   shortlist: z.object({ files: z.array(z.string()), symbols: z.array(z.string()), components: z.array(z.string()), owners: z.array(z.string()) }).optional(),
+  /** For the council packs: the plan under review as text, its criteria, the round and what the members said so far. */
+  council: z.object({ plan: z.string(), criteria: z.array(z.string()), round: z.union([z.literal(1), z.literal(2)]), transcript: z.array(CouncilTurn) }).optional(),
 });
 export type PlanContext = z.infer<typeof PlanContext>;
 
@@ -1268,6 +1291,8 @@ export const StageInput = z.object({
     chat: ChatTriageContext.nullable().optional(),
     /** For foreman: the question and the board snapshot; the task is synthetic and there is no worktree. */
     foreman: ForemanContext.nullable().optional(),
+    /** For question_council: the open triage questions to settle from the code, the card and the answers so far. */
+    questions: QuestionsContext.nullable().optional(),
     /** For verifying: the files the code graph says depend on what the change touched, to review first. */
     blastRadius: z.array(z.string()).optional(),
     /** For verifying: how much of the change's added lines the repo's lcov report saw run; absent without a report. */

@@ -3007,6 +3007,29 @@ pub fn questions_of(approval: &Approval) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+/// What the question council settled before the person was asked: question, answer, confidence and the places it read.
+pub fn settled_by_council_of(approval: &Approval) -> Vec<(String, String, f64, Vec<String>)> {
+    approval.requested["settledByCouncil"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|s| {
+                    Some((
+                        s["question"].as_str()?.to_string(),
+                        s["answer"].as_str()?.to_string(),
+                        s["confidence"].as_f64().unwrap_or_default(),
+                        s["evidence"]
+                            .as_array()
+                            .map(|e| e.iter().filter_map(|l| l.as_str().map(str::to_string)).collect())
+                            .unwrap_or_default(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

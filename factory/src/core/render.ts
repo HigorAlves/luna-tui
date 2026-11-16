@@ -283,6 +283,33 @@ function mapText(map: NonNullable<StageInput["context"]["plan"]>["map"]): string
   ].join("\n");
 }
 
+/** The council packs' view: the plan under review, its criteria, the round and the transcript so far. */
+function councilText(council: NonNullable<StageInput["context"]["plan"]>["council"]): string {
+  if (!council) return NONE;
+  const turn = (t: { member: string; round: number; summary: string; findings: StageInput["priorFindings"] }) =>
+    [`- ${t.member}, round ${t.round}: ${t.summary}`, ...t.findings.map((f) => `    - ${f.severity}: ${f.title}: ${f.body}`)].join("\n");
+  return [
+    `Round: ${council.round}`,
+    `Plan:\n${council.plan}`,
+    `Criteria:\n${council.criteria.map((c) => `- ${c}`).join("\n") || "- (none)"}`,
+    `Earlier turns:\n${council.transcript.length ? council.transcript.map(turn).join("\n") : "(none)"}`,
+  ].join("\n");
+}
+
+/** The question council's view: one line per open question, the card, and the answers so far. All of it is foreign text, quoted as data. */
+function questionsText(questions: StageInput["context"]["questions"]): { list: string; card: string; answers: string } {
+  if (!questions) return { list: NONE, card: NONE, answers: NONE };
+  const list = questions.questions.map((q) => {
+    const notes = [q.recommended === null ? "no recommendation" : `recommended: ${q.recommended}`, q.field !== null ? `the machine read ${q.field} as ${q.guess ?? "nothing"}${q.confidence === null ? "" : ` at ${q.confidence}`}` : null].filter(Boolean);
+    return `${q.id}: ${q.question} (${notes.join("; ")})`;
+  });
+  return {
+    list: list.join("\n"),
+    card: `${questions.card.title}\n${questions.card.description}`.trim() || NONE,
+    answers: questions.answers.length > 0 ? questions.answers.map((a) => `${a.question} -> ${a.answer}`).join("\n") : NONE,
+  };
+}
+
 /** What the machine's lexical match of the goal against the graph found: the code mapper confirms it. */
 function shortlistText(shortlist: NonNullable<StageInput["context"]["plan"]>["shortlist"]): string {
   if (!shortlist) return NONE;
@@ -454,6 +481,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
   const judged = evalText(input.context.eval);
   const chat = chatText(input.context.chat);
   const foreman = foremanText(input.context.foreman);
+  const questions = questionsText(input.context.questions);
   const video = videoText(input.context.video);
   const subs: Record<string, string> = {
     "{{task.title}}": txt(input.task.title),
@@ -468,6 +496,10 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.propose}}": proposeText(input.context.propose),
     "{{context.factCandidates}}": candidatesText(input.context.factCandidates),
     ...(input.context.conversation ? conversationText(input.context.conversation) : Object.fromEntries(Object.keys(CONVERSATION_VARIABLES).map((name) => [`{{context.conversation.${name}}}`, NONE]))),
+    "{{context.plan.council}}": councilText(input.context.plan?.council),
+    "{{context.questions.list}}": questions.list,
+    "{{context.questions.card}}": questions.card,
+    "{{context.questions.answers}}": questions.answers,
     "{{context.plan.map}}": mapText(input.context.plan?.map),
     "{{context.plan.shortlist}}": shortlistText(input.context.plan?.shortlist),
     "{{context.plan.replan}}": replanText(input.context.plan?.replan),

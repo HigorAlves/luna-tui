@@ -17,7 +17,7 @@ export interface ComposeInput {
   /** Where the card came from (`github`, `jira`, `slack`, `manual`). */
   source: string;
   decision: TriageOutcome;
-  qa: Array<{ question: string; answer: string | null }>;
+  qa: Array<{ question: string; answer: string | null; by?: "person" | "council"; evidence?: string[] }>;
   goalRef: string;
   hintsUsed?: string[];
   /** Why the fast lane was taken without looking at the owners (no graph, a stale one...); the plan gate lists it. */

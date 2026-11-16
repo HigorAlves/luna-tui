@@ -58,7 +58,8 @@ const machine = ["agent", "attempt", "skills", "plan.risk", "context.plan.risk",
 const line = ["task.title", "task.branch", "task.goal", "task.classification", "context.jira.classification", "context.slack.me", "context.chat.me", "context.eval.pack", "context.eval.case"];
 const block = [
   "task.description", "task.criteria", "task.record", "task.evidence", "plan.brief", "plan.criteria", "plan.criteria.ids", "plan.assumptions", "plan.slices",
-  "context.plan.map", "context.plan.shortlist", "context.plan.replan", "context.plan.coverageNotes", "context.plan.gaps", "context.plan.review", "context.plan.cases",
+  "context.plan.map", "context.plan.shortlist", "context.plan.replan", "context.plan.coverageNotes", "context.plan.gaps", "context.plan.review", "context.plan.cases", "context.plan.council",
+  "context.questions.list", "context.questions.card", "context.questions.answers",
   "context.sweepFailures", "context.blastRadius", "context.checks", "context.scenarioTests", "context.testsCommit.files", "context.unlockedTests", "context.coverage", "context.qaTargets", "context.video.narration", "context.video.sheets", "decisions", "priorFindings", "context.projectContext", "context.testCases", "context.ci", "context.review", "context.threads", "context.ship", "context.retro",
   "context.video.scenarios", "context.video.steps", "context.video.chapters", "context.video.target", "context.video.timeline", "context.video.report", "context.video.transcript", "context.video.fixCards",
   "context.slack.watches", "context.slack.rules", "context.slack.items", "context.chat.rules", "context.chat.items",
@@ -93,6 +94,11 @@ export const CAPS: Readonly<Record<string, number>> = {
   "context.plan.coverageNotes": 32_000,
   "context.plan.gaps": 32_000,
   "context.plan.review": 32_000,
+  "context.plan.council": 80_000,
+  // At most six questions, the card (title and description) and the answers so far.
+  "context.questions.list": 16_000,
+  "context.questions.card": 32_000,
+  "context.questions.answers": 32_000,
   // The approved scenarios are the work itself (a 13-scenario plan lost S4-S13 at 2,000).
   "context.plan.cases": 200_000,
   "context.testCases": 200_000,

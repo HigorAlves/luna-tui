@@ -1200,6 +1200,23 @@ describe("the triage record: a correction and its ground truth", () => {
     return { p, id: task.id, learned };
   };
 
+  it("writes no ground truth for what the question council settled, and marks the record's answer as the council's", async () => {
+    const learned: unknown[] = [];
+    const truth = new DecisionTruth({ setTruth: async (...a) => (learned.push(a), true), read: async () => null }, { told: async () => {} });
+    stubs.plan("triage", { outcome: "pass", detail: { outcome: "plan", summary: "A bug.", record: { goal: "Fix it", reason: "r" } } });
+    const open = { ...classification, signals: { ...signals, kind: { answer: "bug", confidence: 0.5 } } } as never;
+    const council = async (_c: unknown, q: { questions: Array<{ id: string }> }): Promise<StageResult> => ({ outcome: "pass", detail: { answers: q.questions.map((x) => ({ id: x.id, answer: "bug", confidence: 0.95, evidence: ["src/a.ts:1"] })) } });
+    const saving = (stage: TaskState) =>
+      stage === "triage" ? withTriageSignals(stubs.runnerFor(stage), { classify: async (issue) => (issue.answers?.length ? classification : open), council, save: (id, patch) => new PgTaskStore(db).updateTask(id, patch) }) : stubs.runnerFor(stage);
+    const p = new Pipeline(db, saving, { inline: true, policies: previewOn, hasConfig: () => true, truth });
+    const task = await p.createTask({ title: "Login page", classification });
+    await p.start(task.id);
+    const row = await p.get(task.id);
+    expect(row.state).toBe("awaiting_approval");
+    expect(row.record?.qa).toEqual([{ question: expect.stringContaining("bug or a feature"), answer: "bug", by: "council", evidence: ["src/a.ts:1"] }]);
+    expect(learned).toEqual([]);
+  });
+
   it("keeps a priority edit where a calibration can find it, with the machine's level, the person's and the sub-scores; and not for a repository that keeps no truth", async () => {
     const written: Array<Record<string, unknown>> = [];
     for (const keeps of [true, false]) {
@@ -3234,6 +3251,55 @@ describe("timer-approved plans", () => {
     expect((await pipeline.get(notch.id)).state).toBe("awaiting_approval");
     expect((await pipeline.events(notch.id)).map((e) => e.kind)).not.toContain("plan.auto_approved");
     expect((await pipeline.get(tui.id)).state).toBe("awaiting_ship");
+  });
+
+  describe("a passed plan council", () => {
+    const council = (passed: boolean) => ({ passed, rounds: 1, transcript: [{ member: "security", round: 1, summary: "nothing to add", findings: [] }] });
+    const high = (over: Record<string, unknown> = {}) => confident({ risk: { level: "high", scores: {} }, council: council(true), ...over });
+    const councilPolicy = (countsAsPass = true, approversHigh = 1) => ({
+      for: async () => ({ ...PREVIEW_ON, autoApprovePlanMinutes: 10, factory: { ...PREVIEW_ON.factory, plan: { ...PREVIEW_ON.factory.plan, approvers: { ...PREVIEW_ON.factory.plan.approvers, high: approversHigh }, council: { ...PREVIEW_ON.factory.plan.council, counts_as_pass: countsAsPass } } } }),
+    });
+    const stateAfterWaiting = async (result: StageResult, countsAsPass = true, approversHigh = 1) => {
+      await db.query("truncate tasks cascade");
+      stubs.reset();
+      pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: councilPolicy(countsAsPass, approversHigh) });
+      stubs.plan("test_design", result);
+      const task = await pipeline.createTask({ title: "t", repoPath: "/r/a" });
+      await pipeline.start(task.id);
+      await db.query("update approvals set created_at = now() - interval '11 minutes'");
+      await pipeline.tick();
+      return { task, state: (await pipeline.get(task.id)).state };
+    };
+
+    it("approves a high-risk plan the council passed, and says why", async () => {
+      const { task, state } = await stateAfterWaiting(high());
+      expect(state).toBe("awaiting_ship");
+      expect((await pipeline.approvals(task.id))[0]).toMatchObject({ decision: "approved", reason: "auto-approved after 10 min: the council passed and every check proceeded" });
+    });
+
+    it("approves a medium-risk plan the council passed", async () => {
+      expect((await stateAfterWaiting(high({ risk: { level: "medium", scores: {} } }))).state).toBe("awaiting_ship");
+    });
+
+    it("keeps a high-risk plan waiting when the council did not pass, left no council, or counts_as_pass is off", async () => {
+      expect((await stateAfterWaiting(high({ council: council(false) }))).state).toBe("awaiting_approval");
+      expect((await stateAfterWaiting(high({ council: undefined }))).state).toBe("awaiting_approval");
+      expect((await stateAfterWaiting(high(), false)).state).toBe("awaiting_approval");
+    });
+
+    it("leaves a high-risk plan to people when the repo asks for two approvers, and logs nothing", async () => {
+      const { task, state } = await stateAfterWaiting(high(), true, 2);
+      expect(state).toBe("awaiting_approval");
+      expect((await pipeline.events(task.id)).map((e) => e.kind)).not.toContain("plan.auto_approved");
+    });
+
+    it("approves the same plan when the repo asks for one approver", async () => {
+      expect((await stateAfterWaiting(high(), true, 1)).state).toBe("awaiting_ship");
+    });
+
+    it("keeps a plan the council passed waiting when it carries a flag", async () => {
+      expect((await stateAfterWaiting(high({ flagged: ["plan outside map"] }))).state).toBe("awaiting_approval");
+    });
   });
 
   it("keeps waiting when a check did not proceed, risk is not low, the plan stage asked questions, or the policy is off", async () => {

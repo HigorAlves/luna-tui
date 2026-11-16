@@ -18,6 +18,9 @@ import {
   EvalJudgeAnswer,
   LunaConfig,
   CodeMapAnswer,
+  CouncilAnswer,
+  QuestionCouncilAnswer,
+  QuestionsContext,
   PlanAnswer,
   PlanContext,
   TestDesignAnswer,
@@ -221,11 +224,11 @@ describe("StageOutput", () => {
 describe("PackId", () => {
   it("has the eleven stage packs, each named after a task state, plus the Slack, chat and Jira intake triages, the issue classifier and the eval judge", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "build_tests", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "foreman", "code_map", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "ci_failure_class", "frame_privacy", "evidence_format", "size_estimate", "split_check", "decompose", "video_script", "recording", "video_qa", "video_fix", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "pr_reply", "loop_judge", "loop_redirect", "fact_propose", "conversation_assess", "conversation_relation", "conversation_reply", "pr_link"].sort(),
+      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "build_tests", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "foreman", "code_map", "council_second", "council_security", "question_council", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "ci_failure_class", "frame_privacy", "evidence_format", "size_estimate", "split_check", "decompose", "video_script", "recording", "video_qa", "video_fix", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "pr_reply", "loop_judge", "loop_redirect", "fact_propose", "conversation_assess", "conversation_relation", "conversation_reply", "pr_link"].sort(),
     );
     const onDemand: string[] = ["slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "foreman", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "ci_failure_class", "frame_privacy", "evidence_format", "size_estimate", "split_check", "decompose", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "loop_judge", "loop_redirect", "fact_propose", "conversation_assess", "conversation_relation", "conversation_reply", "pr_link"];
     // The planner runs in the test_design state (the machine's RUNS_IN), so it names no state of its own.
-    const runsInAnotherState: string[] = ["plan", "plan_fast", "test_design_fast", "build_tests", "code_map", "video_script", "recording", "video_qa", "video_fix", "pr_reply"];
+    const runsInAnotherState: string[] = ["plan", "plan_fast", "test_design_fast", "build_tests", "code_map", "council_security", "council_second", "question_council", "video_script", "recording", "video_qa", "video_fix", "pr_reply"];
     for (const pack of PackId.options) {
       if (onDemand.includes(pack) || runsInAnotherState.includes(pack)) expect(TaskState.options).not.toContain(pack);
       else expect(TaskState.options).toContain(pack);
@@ -264,6 +267,41 @@ describe("the plan pack", () => {
     expect(PlanAnswer.parse(plan)).toEqual(plan);
     expect(PlanAnswer.safeParse({ kind: "questions", summary: "s", questions: [{ question: "q", recommended: "r" }] }).success).toBe(true);
     expect(PlanAnswer.safeParse({ ...plan, kind: "maybe" }).success).toBe(false);
+  });
+});
+
+describe("the council packs", () => {
+  it("is a security reviewer on opus and a second opinion on codex, each read-only at medium effort, 15 turns, 6 minutes", () => {
+    expect(PACKS.council_security).toMatchObject({
+      kind: "agent", agent: "security-reviewer", helpers: [], writable: false, maxTurns: 15, timeoutMs: 6 * 60_000, effort: "medium", template: "council_security.md", answer: CouncilAnswer,
+      engines: { default: "claude:opus", allowed: ["claude:opus"] },
+    });
+    expect(PACKS.council_second).toMatchObject({
+      kind: "agent", agent: "second-opinion", helpers: [], writable: false, maxTurns: 15, timeoutMs: 6 * 60_000, effort: "medium", template: "council_second.md", answer: CouncilAnswer,
+      engines: { default: "codex:sol", allowed: ["codex:sol", "claude:opus"], fallback: ["claude:opus"] },
+    });
+    for (const id of ["council_security", "council_second"] as const) {
+      const access = PACKS[id].kind === "agent" ? PACKS[id].access : null;
+      expect(access).toMatchObject({ read: true, write: false, web: false, luna: ["step"] });
+      expect(access?.commands.some((c) => c === "npm" || c === "pnpm" || c.startsWith("git add"))).toBe(false);
+    }
+  });
+
+  it("answers a short summary and up to eight findings; no findings means nothing to add", () => {
+    const finding = { path: "plan", line: 1, severity: "security", title: "t", body: "b", confidence: 0.9 };
+    expect(CouncilAnswer.parse({ summary: "nothing to add", findings: [] }).findings).toEqual([]);
+    expect(CouncilAnswer.safeParse({ summary: "s", findings: [finding] }).success).toBe(true);
+    expect(CouncilAnswer.safeParse({ summary: "s".repeat(301), findings: [] }).success).toBe(false);
+    expect(CouncilAnswer.safeParse({ summary: "s", findings: Array(9).fill(finding) }).success).toBe(false);
+  });
+
+  it("rides on the plan context as the plan, its criteria, the round and the transcript", () => {
+    const plan = { record: null, brief: "b", criteria: ["c"], assumptions: [], slices: [] };
+    const council = { plan: "1. s", criteria: ["c"], round: 2, transcript: [{ member: "security", round: 1, summary: "one gap", findings: [] }] };
+    expect(PlanContext.parse({ ...plan, council }).council).toEqual(council);
+    expect(PlanContext.safeParse({ ...plan, council: { ...council, round: 3 } }).success).toBe(false);
+    expect(PlanContext.safeParse({ ...plan, council: { ...council, transcript: [{ member: "other", round: 1, summary: "", findings: [] }] } }).success).toBe(false);
+    expect(PlanContext.parse(plan).council).toBeUndefined();
   });
 });
 
@@ -702,3 +740,29 @@ describe("VideoContext", () => {
   });
 });
  
+describe("the question council pack", () => {
+  it("is a read-only question settler on sonnet, medium effort, 10 turns, 4 minutes, with no web and no shell", () => {
+    expect(PACKS.question_council).toMatchObject({
+      kind: "agent", agent: "question-settler", helpers: [], skills: ["code-discovery"], writable: false, maxTurns: 10, timeoutMs: 4 * 60_000, effort: "medium", template: "question_council.md", answer: QuestionCouncilAnswer,
+      engines: { default: "claude:sonnet", allowed: ["claude:sonnet", "codex:luna"] },
+    });
+    const access = PACKS.question_council.kind === "agent" ? PACKS.question_council.access : null;
+    expect(access).toMatchObject({ read: true, write: false, web: false, luna: ["step", "card_search"] });
+    expect(access?.commands.some((c) => c === "npm" || c === "pnpm" || c.startsWith("gh"))).toBe(false);
+  });
+
+  it("answers per question: an answer or null, a confidence from 0 to 1 and at most four evidence lines", () => {
+    const one = { id: "q1", answer: "pnpm", confidence: 0.9, evidence: ["package.json:3"] };
+    expect(QuestionCouncilAnswer.safeParse({ answers: [one, { ...one, id: "q2", answer: null, confidence: 0, evidence: [] }] }).success).toBe(true);
+    expect(QuestionCouncilAnswer.safeParse({ answers: [{ ...one, confidence: 1.1 }] }).success).toBe(false);
+    expect(QuestionCouncilAnswer.safeParse({ answers: [{ ...one, evidence: Array(5).fill("a:1") }] }).success).toBe(false);
+  });
+
+  it("rides on the stage input as context.questions: one to six questions, the card and the answers so far", () => {
+    const q = { id: "q1", question: "Which package manager?", recommended: null, field: null, guess: null, confidence: null };
+    const questions = { questions: [q], card: { title: "t", description: "d" }, answers: [{ question: "Which db?", answer: "sqlite" }] };
+    expect(QuestionsContext.parse(questions)).toEqual(questions);
+    expect(QuestionsContext.safeParse({ ...questions, questions: [] }).success).toBe(false);
+    expect(QuestionsContext.safeParse({ ...questions, questions: Array(7).fill(q) }).success).toBe(false);
+  });
+});
