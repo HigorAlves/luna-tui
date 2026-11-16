@@ -69,8 +69,8 @@ function run(input: unknown, env: Record<string, string> = {}, files: Record<str
   return { code, stdout, out, result };
 }
 
-// slack_triage, chat_triage and eval_judge have no worktree and read no project context; their dry runs are below.
-const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "eval_judge").map((p) => p.id);
+// slack_triage, chat_triage, foreman and eval_judge have no worktree and read no project context; their dry runs are below.
+const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "foreman" && p.id !== "eval_judge").map((p) => p.id);
 
 describe("factory main (dry run)", () => {
   it.each(agentPacks)("%s: renders the prompt, prints the options and leaves a valid result", (pack) => {
@@ -146,6 +146,22 @@ describe("factory main (dry run)", () => {
     expect(prompt).toContain(line);
     const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
     expect(options).toMatchObject({ agent: "chat-triager", agents: ["chat-triager"], model: "claude-haiku-5-5", effort: "low", maxTurns: 5, tools: [], allowedTools: [] });
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+    expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
+  });
+
+  it("foreman: runs over an empty /work with no tools, renders the board as data and leaves a valid result", () => {
+    const task = { id: "foreman", title: "Foreman", description: "", criteria: [], repoPath: "", branch: "", source: null };
+    const card = { id: "t1", title: "Fix login", repo: "o/a", state: "awaiting_approval", column: "plan", gate: "plan", gateSummary: "approve the plan", escalation: null, questions: [], engines: {}, updatedAt: "2026-11-16T10:00:00.000Z" };
+    const foreman = { question: "what needs me?", history: [], board: { now: "2026-11-16T12:00:00.000Z", cards: [card], packs: [{ id: "foreman", allowed: ["claude:haiku", "codex:luna"] }] } };
+    const { code, stdout, out, result } = run(stageInput("foreman", { task, plan: null, context: { projectContext: null, foreman } }), {}, {}, { emptyWork: true });
+    expect(code).toBe(0);
+    const prompt = readFileSync(join(out, "prompt.md"), "utf8");
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("`foreman` role running the `foreman` stage");
+    expect(prompt).toContain("| t1 · o/a · awaiting_approval · plan · gate plan (approve the plan) · Fix login");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: "foreman", agents: ["foreman"], model: "claude-haiku-5-5", effort: "low", tools: [], allowedTools: [] });
     expect(StageOutput.safeParse(result).error).toBeUndefined();
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });

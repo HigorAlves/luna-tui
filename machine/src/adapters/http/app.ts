@@ -54,6 +54,8 @@ import {
   type RepoHealth,
 } from "@hardness/contracts";
 import { EconomyApproveInput, type EconomyConfig, EconomyRepoInput, EconomyRestoreInput } from "@hardness/contracts";
+import { ForemanAnswer, ForemanContext, foremanActionProblem, isTerminal } from "@hardness/contracts";
+import { buildForemanBoard } from "../../domain/foreman.ts";
 import { isAbsolute } from "node:path";
 import { type Context, Hono } from "hono";
 import type { Economy } from "../../application/economy.ts";
@@ -155,12 +157,15 @@ export interface AppDeps {
   problems?: () => Promise<string[]> | string[];
 }
 
+/** `POST /foreman`: the question and the last turns of the talk. */
+const ForemanInput = z.object({ question: ForemanContext.shape.question, history: ForemanContext.shape.history.optional() });
+
 class BadRequest extends Error {}
 
 /** The client closed the request first (nginx's 499): nobody reads it, the log does. */
 const CLIENT_CLOSED = 499;
 
-const fail = (c: Context, status: 400 | 404 | 409 | 422 | 429 | 500 | 503 | typeof CLIENT_CLOSED, error: string, message: string, extra: Record<string, unknown> = {}) =>
+const fail = (c: Context, status: 400 | 404 | 409 | 422 | 429 | 500 | 502 | 503 | typeof CLIENT_CLOSED, error: string, message: string, extra: Record<string, unknown> = {}) =>
   c.json<ApiError>({ error, message, ...extra }, status as ContentfulStatusCode);
 
 /** `X-Luna-Client`: who calls `POST /runs` (`notch`), for its record. */
@@ -308,6 +313,43 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     if (!runs) return fail(c, 503, "agents_off", "this machine runs no packs: agents are off (MACHINE_AGENTS=off)");
     // The request's own signal: a client that leaves is dropped from the queue, or its container stopped.
     return c.json(await runs.run(input, client, c.req.raw.signal));
+  });
+
+  /** The foreman: one question on the open board, answered with a reply and actions the board can take. It only suggests; the board makes each call after a person's `y`. */
+  app.post("/foreman", async (c) => {
+    const { question, history } = await body(c, ForemanInput);
+    if (!runs) return fail(c, 503, "agents_off", "this machine runs no packs: agents are off (MACHINE_AGENTS=off)");
+    const open = (await pipeline.list()).filter((row) => !isTerminal(row.state));
+    const glances = await pipeline.glances(open.map((row) => row.id));
+    const gates = new Map([...glances].flatMap(([id, glance]) => (glance.gate ? [[id, glance.gate] as const] : [])));
+    const packs = Object.values(PACKS).filter((pack) => packInfo(pack).states.length > 0);
+    const board = buildForemanBoard(open, gates, packs, new Date());
+    let answer: ForemanAnswer;
+    try {
+      const result = await runs.run({ pack: "foreman", context: { foreman: { question, history: history ?? [], board } } }, "board", c.req.raw.signal);
+      answer = ForemanAnswer.parse(result.answer);
+    } catch (error) {
+      if (error instanceof RunFailedError) return fail(c, 502, "foreman_failed", error.message);
+      if (error instanceof ZodError) return fail(c, 502, "foreman_failed", "the foreman gave no valid answer");
+      throw error;
+    }
+    const actions: ForemanAnswer["actions"] = [];
+    const dropped: Array<{ action: ForemanAnswer["actions"][number]; problem: string }> = [];
+    for (const action of answer.actions) {
+      const problem = foremanActionProblem(action, board);
+      if (problem !== null) {
+        dropped.push({ action, problem });
+        continue;
+      }
+      // `POST /tasks/:id/answers` keys an answer by the question's text; the model keyed it by the id the snapshot gave.
+      if (action.kind === "answer") {
+        const asked = board.cards.find((card) => card.id === action.taskId)?.questions ?? [];
+        actions.push({ ...action, answers: Object.fromEntries(Object.entries(action.answers).map(([id, text]) => [asked.find((q) => q.id === id)?.question ?? id, text])) });
+        continue;
+      }
+      actions.push(action);
+    }
+    return c.json({ reply: answer.reply, actions, dropped });
   });
 
   // "Stop picking up work" / "carry on" / "run N at once": the knobs for leaving and for debugging.

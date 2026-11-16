@@ -448,6 +448,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 );
             }
         }
+        Mode::Foreman(state) => render_foreman(frame, app, state),
         Mode::ConfirmApprove(held) => {
             if let Some(task) = app.task(&held.id) {
                 render_approve(frame, &held.question, task);
@@ -914,6 +915,17 @@ fn footer_line(app: &App, width: u16) -> Line<'static> {
         | Mode::ConfirmAbort(_)
         | Mode::ConfirmWorktree(_)
         | Mode::ConfirmQuit => hint(&[("y", "yes"), ("n", "no")]),
+        Mode::Foreman(state) => match state.phase {
+            crate::foreman::Phase::Typing => hint(&[("enter", "ask"), ("esc", "back")]),
+            crate::foreman::Phase::Waiting => hint(&[("esc", "close")]),
+            crate::foreman::Phase::Walk => hint(&[
+                ("j/k", "move"),
+                ("y", "run this one"),
+                ("s", "skip"),
+                ("i", "ask more"),
+                ("esc", "close"),
+            ]),
+        },
         Mode::ConfirmApprove(_) => hint(&[("y/enter", "approve"), ("n/esc", "cancel")]),
         Mode::CoveragePicker(_) => hint(&[
             ("space", "tick"),
@@ -2215,6 +2227,86 @@ fn render_prompt(
                 .right_aligned(),
         );
     frame.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
+}
+
+/// The foreman's popup: the talk's last reply, then one row per suggested action with where it stands.
+pub(crate) fn render_foreman(frame: &mut Frame, app: &App, state: &crate::foreman::State) {
+    use crate::foreman::{Phase, Status};
+    let area = centered(
+        frame.area(),
+        frame.area().width * 9 / 10,
+        frame.area().height * 8 / 10,
+    );
+    frame.render_widget(Clear, area);
+    let width = (area.width as usize).saturating_sub(6);
+    let mut lines: Vec<Line> = Vec::new();
+    match state.phase {
+        Phase::Typing => {
+            if !state.reply.is_empty() {
+                lines.push(Line::from(Span::from(state.reply.clone())));
+                lines.push(Line::default());
+            }
+            lines.push(Line::from(vec![
+                Span::from(" ask: ").fg(c(ACCENT)).bold(),
+                Span::from(format!("{}▏", state.input)),
+            ]));
+        }
+        Phase::Waiting => lines.push(Line::from(
+            Span::from("The foreman is reading the board…").fg(c(SUBTEXT0)),
+        )),
+        Phase::Walk => {
+            lines.push(Line::from(Span::from(state.reply.clone())));
+            lines.push(Line::default());
+            if state.rows.is_empty() {
+                lines.push(Line::from(Span::from("No action to take.").fg(c(SUBTEXT0))));
+            }
+            for (at, row) in state.rows.iter().enumerate() {
+                let (mark, color) = match &row.status {
+                    Status::Pending => ("[ ]", SUBTEXT0),
+                    Status::Done => ("[done]", GREEN),
+                    Status::Skipped => ("[skipped]", SUBTEXT0),
+                    Status::Failed(_) => ("[failed]", RED),
+                };
+                let text = crate::foreman::row_text(&row.action, app.task(&row.action.task_id));
+                let mut line = Line::from(vec![
+                    Span::from(if at == state.cursor { "▶ " } else { "  " }),
+                    Span::from(format!("{mark} ")).fg(c(color)),
+                    Span::from(truncate(&text, width.saturating_sub(14))),
+                ]);
+                if at == state.cursor {
+                    line = line.bold();
+                }
+                lines.push(line);
+                if let Status::Failed(why) = &row.status {
+                    lines.push(Line::from(
+                        Span::from(format!("      {}", truncate(why, width.saturating_sub(8))))
+                            .fg(c(RED)),
+                    ));
+                }
+            }
+            if state.dropped > 0 {
+                lines.push(Line::default());
+                lines.push(Line::from(
+                    Span::from(format!(
+                        "{} suggestion(s) the board could not take were dropped.",
+                        state.dropped
+                    ))
+                    .fg(c(SUBTEXT0)),
+                ));
+            }
+        }
+    }
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(" Foreman ").fg(c(ACCENT)).bold());
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false }),
+        area,
+    );
 }
 
 fn render_confirm_box(frame: &mut Frame, heading: &str, title: &str, note: &str, accent: Color) {

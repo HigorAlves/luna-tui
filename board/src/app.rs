@@ -467,6 +467,8 @@ pub enum Mode {
         field: usize,
         picks: [usize; 5],
     },
+    /// `m`: ask the foreman, then walk the actions it suggests. Each runs on its own `y`.
+    Foreman(crate::foreman::State),
     ConfirmDelete(String),
     ConfirmAbort(String),
     ConfirmWorktree(String),
@@ -1217,6 +1219,7 @@ impl App {
                     self.slack_catalog = Some((groups, channels));
                     self.slack_catalog_pending = false;
                 }
+                Incoming::Foreman(result) => self.take_foreman(result),
             }
         }
     }
@@ -2952,6 +2955,9 @@ impl App {
                 *pick = None;
             }
             Mode::Filter => self.filter.push_str(&flat()),
+            Mode::Foreman(state) if state.phase == crate::foreman::Phase::Typing => {
+                state.input.push_str(&flat())
+            }
             _ => {}
         }
     }
@@ -2993,6 +2999,7 @@ impl App {
             Mode::Reason { .. } => self.handle_reason(key),
             Mode::Reject { .. } => self.handle_reject(key),
             Mode::EvidenceNote { .. } => self.handle_evidence_note(key),
+            Mode::Foreman(_) => self.handle_foreman(key),
             Mode::ConfirmApprove(_) => self.handle_confirm_approve(key),
             Mode::ConfirmDelete(id) | Mode::ConfirmAbort(id) | Mode::ConfirmWorktree(id) => {
                 let id = id.clone();
@@ -3310,7 +3317,7 @@ impl App {
     #[cfg(test)]
     pub(crate) const HANDLED_INBOX: &[&str] = &[
         "esc", "I", "q", "?", "j", "k", "l", "h", "1-5", "enter", "A", "a", "S", "e", "R", "r",
-        "N", "u", "X", "w", "Z", "C", "d", "f", "o", "J", "T", "p",
+        "N", "u", "X", "w", "Z", "C", "d", "f", "o", "J", "T", "p", "m",
     ];
 
     /// The Inbox's keys: move, switch split, act in place, open, approve the split.
@@ -3334,6 +3341,10 @@ impl App {
             }
             KeyCode::Char('?') => {
                 self.open_help();
+                return Outcome::Continue;
+            }
+            KeyCode::Char('m') => {
+                self.open_foreman();
                 return Outcome::Continue;
             }
             KeyCode::Char('j') | KeyCode::Down => {
@@ -5018,6 +5029,7 @@ impl App {
         "v",
         "V",
         "?",
+        "m",
         ":",
         "esc",
         "enter",
@@ -5130,6 +5142,7 @@ impl App {
                 }
             }
             KeyCode::Char('?') => self.open_help(),
+            KeyCode::Char('m') => self.open_foreman(),
             KeyCode::Char(':') => {
                 self.mode = Mode::Command {
                     text: String::new(),
@@ -6322,6 +6335,85 @@ impl App {
             _ => {}
         }
         Outcome::Continue
+    }
+
+    /// `m`: the foreman's prompt over the board or the Inbox.
+    fn open_foreman(&mut self) {
+        self.mode = Mode::Foreman(crate::foreman::State::new());
+    }
+
+    /// The foreman's popup: type a question and enter sends it; then walk the actions, each run by its own `y`.
+    fn handle_foreman(&mut self, key: KeyEvent) -> Outcome {
+        use crate::foreman::Phase;
+        let Mode::Foreman(state) = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match state.phase {
+            Phase::Typing => match key.code {
+                KeyCode::Char(c) => state.input.push(c),
+                KeyCode::Backspace => {
+                    state.input.pop();
+                }
+                KeyCode::Esc if state.turns.is_empty() => self.mode = Mode::Normal,
+                KeyCode::Esc => state.phase = Phase::Walk,
+                KeyCode::Enter => {
+                    if let Some((question, history)) = state.ask() {
+                        let machine = self.machine.clone();
+                        let tx = self.tx.clone();
+                        thread::spawn(move || {
+                            let _ =
+                                tx.send(Incoming::Foreman(machine.foreman(&question, &history)));
+                        });
+                    }
+                }
+                _ => {}
+            },
+            // The answer is on its way; esc leaves, and the answer is dropped when it lands.
+            Phase::Waiting => {
+                if key.code == KeyCode::Esc {
+                    self.mode = Mode::Normal;
+                }
+            }
+            Phase::Walk => match key.code {
+                KeyCode::Char('j') | KeyCode::Down => state.move_by(1),
+                KeyCode::Char('k') | KeyCode::Up => state.move_by(-1),
+                KeyCode::Char('s') => state.skip(),
+                KeyCode::Char('i') => state.phase = Phase::Typing,
+                KeyCode::Char('y') => {
+                    if let Some(action) = state.runnable() {
+                        let result = crate::foreman::call_of(&action)
+                            .and_then(|call| crate::foreman::run(&self.machine, &call));
+                        if let Mode::Foreman(state) = &mut self.mode {
+                            state.settle(&result);
+                        }
+                        if let Ok(task) = result {
+                            self.upsert(task);
+                            self.detail_stale = true;
+                        }
+                    }
+                }
+                KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+                _ => {}
+            },
+        }
+        Outcome::Continue
+    }
+
+    /// The foreman answered: its reply and actions show, unless the popup was closed meanwhile.
+    fn take_foreman(&mut self, result: Result<crate::foreman::Reply, String>) {
+        let Mode::Foreman(state) = &mut self.mode else {
+            return;
+        };
+        if state.phase != crate::foreman::Phase::Waiting {
+            return;
+        }
+        match result {
+            Ok(reply) => state.answered(reply),
+            Err(error) => {
+                state.failed();
+                self.notify(error, true);
+            }
+        }
     }
 
     fn handle_reject(&mut self, key: KeyEvent) -> Outcome {
@@ -14315,5 +14407,136 @@ mod coverage_picker_tests {
         };
         assert_eq!(choice.chosen(), vec!["C4".to_string()]);
         assert_eq!(choice.gaps.len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod foreman_tests {
+    use super::confirm_tests::{posts, recording_machine};
+    use super::*;
+    use crate::foreman::{Action, Phase, Reply, Status};
+    use crate::testkit::{PLAN_GATE_TITLE, plan_gate_app, render};
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    fn action(kind: &str, id: &str, why: &str) -> Action {
+        Action {
+            kind: kind.into(),
+            task_id: id.into(),
+            why: why.into(),
+            reason: None,
+            pack: None,
+            engine: None,
+            answers: None,
+        }
+    }
+
+    /// The board with one card, the popup open and answered with two actions on it.
+    fn walking() -> (App, String) {
+        let mut app = plan_gate_app();
+        app.mode = Mode::Normal;
+        let id = app.tasks[0].id.clone();
+        press(&mut app, KeyCode::Char('m'));
+        for c in "what needs me?".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Enter);
+        app.take_foreman(Ok(Reply {
+            reply: "One plan waits on you.".into(),
+            actions: vec![
+                action("start", &id, "it is a draft"),
+                action("abort", &id, "it is stuck"),
+            ],
+            dropped: vec![serde_json::json!({})],
+        }));
+        (app, id)
+    }
+
+    fn state(app: &App) -> &crate::foreman::State {
+        let Mode::Foreman(state) = &app.mode else {
+            panic!("the popup is not open")
+        };
+        state
+    }
+
+    #[test]
+    fn m_opens_the_foreman_from_the_board_and_from_the_inbox() {
+        let mut app = App::new(crate::testkit::dead_machine());
+        press(&mut app, KeyCode::Char('m'));
+        assert!(matches!(&app.mode, Mode::Foreman(s) if s.phase == Phase::Typing));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        press(&mut app, KeyCode::Char('I'));
+        assert!(app.inbox.is_some());
+        press(&mut app, KeyCode::Char('m'));
+        assert!(matches!(app.mode, Mode::Foreman(_)));
+    }
+
+    #[test]
+    fn enter_sends_the_question_and_the_answer_shows_the_reply_and_the_actions() {
+        let (mut app, _) = walking();
+        assert_eq!(state(&app).phase, Phase::Walk);
+        let screen = render(&mut app, 120, 40);
+        assert!(screen.contains("One plan waits on you."), "{screen}");
+        assert!(screen.contains("[ ] start"), "{screen}");
+        assert!(screen.contains("it is stuck"), "{screen}");
+        assert!(
+            screen.contains(PLAN_GATE_TITLE),
+            "the row names the card: {screen}"
+        );
+        assert!(screen.contains("1 suggestion(s)"), "{screen}");
+    }
+
+    #[test]
+    fn y_runs_only_the_selected_row_and_nothing_runs_without_it() {
+        let (mut app, id) = walking();
+        let (machine, seen) = recording_machine();
+        app.machine = machine;
+        press(&mut app, KeyCode::Char('j'));
+        assert!(posts(&seen).is_empty(), "moving runs nothing");
+        press(&mut app, KeyCode::Char('y'));
+        assert_eq!(posts(&seen), vec![format!("/tasks/{id}/abort")]);
+        let rows = &state(&app).rows;
+        assert_eq!(rows[0].status, Status::Pending, "the other row waits");
+        assert!(matches!(rows[1].status, Status::Done | Status::Failed(_)));
+    }
+
+    #[test]
+    fn a_refused_call_marks_its_row_failed_and_s_skips_a_row() {
+        let (mut app, _) = walking();
+        press(&mut app, KeyCode::Char('y'));
+        assert!(
+            matches!(&state(&app).rows[0].status, Status::Failed(m) if m.contains("machine unreachable"))
+        );
+        let screen = render(&mut app, 120, 40);
+        assert!(screen.contains("[failed]"), "{screen}");
+        press(&mut app, KeyCode::Char('s'));
+        assert_eq!(state(&app).rows[0].status, Status::Skipped);
+        assert_eq!(state(&app).cursor, 1);
+    }
+
+    #[test]
+    fn a_failed_question_comes_back_to_the_box_and_a_late_answer_is_dropped() {
+        let mut app = App::new(crate::testkit::dead_machine());
+        press(&mut app, KeyCode::Char('m'));
+        for c in "hello".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(state(&app).phase, Phase::Waiting);
+        app.take_foreman(Err("the foreman failed".into()));
+        assert_eq!(state(&app).input, "hello");
+        assert_eq!(state(&app).phase, Phase::Typing);
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        app.take_foreman(Ok(Reply {
+            reply: "late".into(),
+            actions: vec![],
+            dropped: vec![],
+        }));
+        assert!(matches!(app.mode, Mode::Normal));
     }
 }

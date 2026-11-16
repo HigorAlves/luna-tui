@@ -177,6 +177,7 @@ generates the tables below. A test fails when they drift from the registry.
 | `x` then `-` | one slot fewer |
 | `n` | new ticket, then edit it in place |
 | `x` | actions menu for the ticket |
+| `m` | ask the foreman about the open cards |
 | `:` | command palette |
 | `esc` | clear the filter and the marks |
 | `?` | keys |
@@ -695,6 +696,7 @@ What the ticket shows:
 
 | Key | Does |
 |---|---|
+| `m` | ask the foreman about the open cards |
 | `?` | keys |
 
 <!-- keys:end -->

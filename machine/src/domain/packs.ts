@@ -65,6 +65,8 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   pr_reply: ["awaiting_ship"],
   eval_judge: [],
   chat_triage: [],
+  // The foreman, run on demand by POST /foreman.
+  foreman: [],
 };
 
 /** The task states in which the pipeline runs the pack. */

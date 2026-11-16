@@ -126,6 +126,35 @@ const chatText = (chat: StageInput["context"]["chat"]) => {
   };
 };
 
+/** The board, as the foreman reads it: the question and turns as text, one line per card (all of it a person's or a model's, so quoted as data), and each pack's allowed engines (the machine's own). */
+const foremanText = (foreman: StageInput["context"]["foreman"]) => {
+  if (!foreman) return { now: NONE, question: NONE, history: NONE, cards: NONE, packs: NONE };
+  const cards = foreman.board.cards.map((card) => {
+    const engines = Object.entries(card.engines).map(([pack, engine]) => `${pack}=${engine}`);
+    const head = [
+      card.id,
+      card.repo,
+      card.state,
+      card.column,
+      card.gate ? `gate ${card.gate}${card.gateSummary ? ` (${card.gateSummary})` : ""}` : null,
+      card.escalation ? `escalated: ${card.escalation}` : null,
+      engines.length > 0 ? `engines ${engines.join(", ")}` : null,
+      card.title,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    const questions = card.questions.map((q) => `   question ${q.id}: ${q.question} (${q.recommended === null ? "no recommendation" : `recommended: ${q.recommended}`})`);
+    return [head, ...questions].join("\n");
+  });
+  return {
+    now: foreman.board.now,
+    question: foreman.question,
+    history: foreman.history.length > 0 ? foreman.history.map((turn) => `${turn.who}: ${turn.text}`).join("\n") : NONE,
+    cards: cards.length > 0 ? cards.join("\n") : NONE,
+    packs: foreman.board.packs.length > 0 ? foreman.board.packs.map((pack) => `${pack.id}: ${pack.allowed.join(", ")}`).join("\n") : NONE,
+  };
+};
+
 /** The issue, as jira_intake reads it: one header line, the description, the comments, the repo. */
 const jiraText = (jira: StageInput["context"]["jira"]) => {
   if (!jira) return { issue: NONE, description: NONE, comments: NONE, repoPath: NONE, classification: NONE };
@@ -424,6 +453,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
   const jira = jiraText(input.context.jira);
   const judged = evalText(input.context.eval);
   const chat = chatText(input.context.chat);
+  const foreman = foremanText(input.context.foreman);
   const video = videoText(input.context.video);
   const subs: Record<string, string> = {
     "{{task.title}}": txt(input.task.title),
@@ -525,6 +555,11 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.chat.me}}": chat.me,
     "{{context.chat.rules}}": chat.rules,
     "{{context.chat.items}}": chat.items,
+    "{{context.foreman.now}}": foreman.now,
+    "{{context.foreman.question}}": foreman.question,
+    "{{context.foreman.history}}": foreman.history,
+    "{{context.foreman.cards}}": foreman.cards,
+    "{{context.foreman.packs}}": foreman.packs,
     "{{context.jira.issue}}": jira.issue,
     "{{context.jira.description}}": jira.description,
     "{{context.jira.comments}}": jira.comments,

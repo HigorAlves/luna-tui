@@ -14,6 +14,7 @@ import { AnswerScenario, AnswerStep } from "./plan.ts";
 import { DiffSummaryAnswer } from "./reports.ts";
 import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from "./questions.ts";
 import { type Bands, type KnockOutFlags, type SubScores, type Weights, knockOut, riskProduct, scorePriority } from "./scoring.ts";
+import { ForemanAnswer } from "./foreman.ts";
 import { FactProposal, ProjectContextSection } from "./economy.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
 import { SplitChild } from "./split.ts";
@@ -60,6 +61,8 @@ export const AgentRole = z.enum([
   "thread-writer",
   "code-fixer",
   "second-opinion",
+  // The foreman: answers a question about the board from a snapshot and suggests actions; no tools, no worktree.
+  "foreman",
 ]);
 export type AgentRole = z.infer<typeof AgentRole>;
 
@@ -1419,6 +1422,23 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: ChatTriageAnswer,
     template: "chat_triage.md",
+  },
+  foreman: {
+    id: "foreman",
+    kind: "agent",
+    // Answers a question about the board from a snapshot (POST /foreman) and suggests actions the person confirms on the board.
+    // No tools at all: it reads card text, so it can reach nothing, and the board makes every call.
+    agent: "foreman",
+    helpers: [],
+    skills: [],
+    access: NO_ACCESS,
+    writable: false,
+    maxTurns: 2,
+    timeoutMs: 2 * MINUTE,
+    engines: { default: "claude:haiku", allowed: ["claude:haiku", "codex:luna"], fallback: ["codex:luna", "claude:haiku"] },
+    effort: "low",
+    answer: ForemanAnswer,
+    template: "foreman.md",
   },
   triage_signals: {
     id: "triage_signals",

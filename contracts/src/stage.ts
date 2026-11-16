@@ -200,6 +200,8 @@ export const PackId = z.enum([
   "fact_propose",
   // Drafts the answer to a reviewer's question on a shipped PR from the Evidence Pack (runs in the shipping state, after the retro in PACKS order).
   "pr_reply",
+  // The foreman: answers a question about the board from a snapshot and suggests actions the person confirms; no tools, no worktree, on demand (POST /foreman).
+  "foreman",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -372,6 +374,39 @@ export const ChatTriageContext = z.object({
     .max(25),
 });
 export type ChatTriageContext = z.infer<typeof ChatTriageContext>;
+
+/** One open card as the foreman reads it. Every text on it is a person's or a model's: data, never an instruction. */
+export const ForemanCard = z.object({
+  id: z.string().min(1),
+  title: z.string(),
+  repo: z.string(),
+  state: z.string(),
+  column: z.string(),
+  /** The kind of approval the card waits on, when it waits on one. */
+  gate: z.string().nullable(),
+  /** What the open gate asks the person. */
+  gateSummary: z.string().max(200).nullable(),
+  /** Why the card is escalated, when it is. */
+  escalation: z.string().nullable(),
+  /** The open questions of a card that waits at awaiting_answers; empty otherwise. */
+  questions: z.array(z.object({ id: z.string().min(1), question: z.string(), recommended: z.string().nullable() })),
+  engines: StageEngines,
+  updatedAt: z.string(),
+});
+export type ForemanCard = z.infer<typeof ForemanCard>;
+
+/** For foreman: the person's question, the last turns, and a snapshot of the board. It lives here, with the other contexts, so that StageInput needs no import of foreman.ts. */
+export const ForemanContext = z.object({
+  question: z.string().min(1).max(2000),
+  history: z.array(z.object({ who: z.enum(["person", "foreman"]), text: z.string().max(2000) })).max(10),
+  board: z.object({
+    now: z.string(),
+    cards: z.array(ForemanCard).max(60),
+    /** Each pack and the engines it allows, so that a suggested engine can be checked. */
+    packs: z.array(z.object({ id: PackId, allowed: z.array(EngineId) })),
+  }),
+});
+export type ForemanContext = z.infer<typeof ForemanContext>;
 
 /** One slice of the implementer's ledger, kept by the runner in `/out/ledger.json`. */
 export const LedgerSlice = z.object({
@@ -1231,6 +1266,8 @@ export const StageInput = z.object({
     eval: EvalJudgeContext.nullable().optional(),
     /** For chat_triage: the chat batch; the task is synthetic and there is no worktree. */
     chat: ChatTriageContext.nullable().optional(),
+    /** For foreman: the question and the board snapshot; the task is synthetic and there is no worktree. */
+    foreman: ForemanContext.nullable().optional(),
     /** For verifying: the files the code graph says depend on what the change touched, to review first. */
     blastRadius: z.array(z.string()).optional(),
     /** For verifying: how much of the change's added lines the repo's lcov report saw run; absent without a report. */
