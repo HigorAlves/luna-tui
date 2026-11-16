@@ -320,7 +320,9 @@ When the machine probes a repo's own base image, it also runs the version comman
 
 ### Devcontainer support
 
-When a repo's `luna.yaml` names no `sandbox.image.base`, the machine reads `.devcontainer/devcontainer.json` or `.devcontainer.json` from your checkout (comments and trailing commas are fine). Its `image` is the base, and you approve it as you approve any base. Its `containerEnv` (plain strings, not the proxy, the loader or `PATH`) reaches the repo's install, checks and app, not agent stages. `features`, lifecycle commands (`postCreateCommand` and the rest), `mounts`, `runArgs`, `remoteUser` and `build.dockerfile` are not applied; `GET /repos` lists each under `notes` as "not applied: <why>".
+When a repo's `luna.yaml` names no `sandbox.image.base`, the machine reads `.devcontainer/devcontainer.json` or `.devcontainer.json` from your checkout (comments and trailing commas are fine). Its `image` is the base, and you approve it as you approve any base. Its `containerEnv` (plain strings, not the proxy, the loader or `PATH`) reaches the repo's install, checks and app, not agent stages. `features`, lifecycle commands (`postCreateCommand` and the rest), `mounts`, `runArgs` and `remoteUser` are not applied; `GET /repos` lists each under `notes` as "not applied: <why>".
+
+`build.dockerfile` (with `context` and `args`) is a base when luna.yaml names no `sandbox.image.base` and the devcontainer has no `image` (either one wins, with a note). Nothing builds until you approve the Dockerfile on the board (`A`): the approval is its exact sha-256 (the file, the sorted `build.args` and the context path), and any edit asks again. The context is `.devcontainer/` or `build.context`, and must stay inside your checkout. **This one reviewed build runs with open network access and no secrets, credentials or SSH, because BuildKit cannot use the per-run egress proxy. Every other container keeps default-deny egress.** `images.repo_base: deny` or `images.devcontainer: deny` refuses it.
 
 `bash_sandbox` is accepted and has no effect: the nested Bash sandbox was not built (see RFC 0009).
 

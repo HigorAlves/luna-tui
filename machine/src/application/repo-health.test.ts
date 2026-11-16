@@ -41,7 +41,7 @@ describe("a repository's image and graph health", () => {
     const [dev, plain] = await repoHealthOf({
       repos: ["/a/dev", "/a/plain"],
       policy: async () => ({ graph: true, factory: { sandbox: { image: { base: null } } } }),
-      source: { for: async (r) => (r === "/a/dev" ? { base: "node:22", origin: "devcontainer" as const, containerEnv: {}, notes: ["devcontainer.json features: not applied: they need the devcontainers CLI"], bounds: ["devcontainer.json image refused"] } : { base: null, origin: null, containerEnv: {}, notes: [], bounds: [] }) },
+      source: { for: async (r) => (r === "/a/dev" ? { base: "node:22", origin: "devcontainer" as const, containerEnv: {}, notes: ["devcontainer.json features: not applied: they need the devcontainers CLI"], bounds: ["devcontainer.json image refused"], dockerfile: null } : { base: null, origin: null, containerEnv: {}, notes: [], bounds: [], dockerfile: null }) },
       machineImage: "hardness-runner:dev",
       images: { pending: async () => null, status: () => null },
       graph: { stampOf: async () => null },
@@ -51,6 +51,25 @@ describe("a repository's image and graph health", () => {
     expect(dev!.notes).toEqual(["devcontainer.json features: not applied: they need the devcontainers CLI"]);
     expect(dev!.bounds).toEqual(["devcontainer.json image refused"]);
     expect(plain).not.toHaveProperty("notes");
+  });
+
+  it("offers a Dockerfile that waits for approval, and says when it changed since an approval", async () => {
+    const key = `dockerfile=sha256:${"e".repeat(64)}`;
+    const rows = await repoHealthOf({
+      repos: ["/a/new", "/a/changed", "/a/none"],
+      policy: async () => ({ graph: true }),
+      machineImage: "hardness-runner:dev",
+      images: { pending: async () => null, status: () => null, pendingDockerfile: async (r) => (r === "/a/none" ? null : { path: ".devcontainer/Dockerfile", key, changed: r === "/a/changed" }) },
+      graph: { stampOf: async () => null },
+      watch: { health: () => ({ building: false, lastFailure: null }) },
+    });
+    const [fresh, changed, none] = rows;
+    expect(fresh!.image.pendingDockerfile).toEqual({ path: ".devcontainer/Dockerfile", key, changed: false });
+    expect(fresh!.notes).toEqual(["Dockerfile .devcontainer/Dockerfile awaits approval"]);
+    expect(changed!.image.pendingDockerfile).toMatchObject({ changed: true });
+    expect(changed!.notes).toEqual(["Dockerfile .devcontainer/Dockerfile changed since approval"]);
+    expect(none!.image).not.toHaveProperty("pendingDockerfile");
+    expect(none).not.toHaveProperty("notes");
   });
 
   it("shows the image's toolchain warnings as notes", async () => {

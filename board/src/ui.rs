@@ -109,18 +109,34 @@ pub fn draw(frame: &mut Frame, app: &App) {
     {
         render_floor(frame, body, floor);
         frame.render_widget(footer_line(app, footer.width), footer);
-        if let Mode::ConfirmBase { repo, base } = &app.mode {
+        if let Mode::ConfirmBase {
+            repo,
+            base,
+            dockerfile,
+        } = &app.mode
+        {
             let repo = crate::model::plain(repo, 200);
-            render_confirm_details(
-                frame,
-                " Approve base image ",
-                &format!("approve the base image of {repo}?"),
-                &[
-                    format!("image {}", crate::model::plain(base, 200)),
-                    "It runs with the stage's credential.".to_string(),
-                ],
-                PEACH,
-            );
+            let (title, heading, details) = match dockerfile {
+                Some(line) => (
+                    " Approve Dockerfile build ",
+                    format!("approve the Dockerfile build of {repo}?"),
+                    vec![
+                        crate::model::plain(line, 200),
+                        "builds with network access".to_string(),
+                        "No secrets or credentials reach it; every other container keeps default-deny egress."
+                            .to_string(),
+                    ],
+                ),
+                None => (
+                    " Approve base image ",
+                    format!("approve the base image of {repo}?"),
+                    vec![
+                        format!("image {}", crate::model::plain(base, 200)),
+                        "It runs with the stage's credential.".to_string(),
+                    ],
+                ),
+            };
+            render_confirm_details(frame, title, &heading, &details, PEACH);
         }
         if matches!(app.mode, Mode::Help { .. }) {
             render_help(frame, app);
@@ -5281,6 +5297,33 @@ mod tests {
                     && l.contains("A approves")),
             "{text}"
         );
+    }
+
+    #[test]
+    fn floor_shows_a_dockerfile_waiting_for_approval_with_its_short_sha_and_that_its_build_has_network()
+     {
+        for (changed, said) in [
+            (false, "Dockerfile waiting for you"),
+            (true, "Dockerfile changed since you approved"),
+        ] {
+            let mut state = floor();
+            state.repos = repos();
+            state.health = serde_json::from_str(&format!(
+                r#"[{{"repo":"/r/alpha","image":{{"inUse":"hardness-runner:dev","base":null,"builtAt":null,"lastFailure":null,"pendingBase":null,
+                     "pendingDockerfile":{{"path":".devcontainer/Dockerfile","key":"dockerfile=sha256:{}","changed":{changed}}}}},
+                     "graph":{{"on":false,"commit":null,"behind":null,"graphify":null,"builtAt":null,"building":false,"lastFailure":null}}}}]"#,
+                "ab".repeat(32)
+            ))
+            .unwrap();
+            let text = render(160, 40, &state);
+            assert!(
+                text.lines().any(|l| l.contains(said)
+                    && l.contains(".devcontainer/Dockerfile sha256:abababababab")
+                    && l.contains("A approves")
+                    && l.contains("network")),
+                "{text}"
+            );
+        }
     }
 
     #[test]
