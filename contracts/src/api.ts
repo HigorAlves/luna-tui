@@ -357,6 +357,8 @@ export interface TaskLastRun {
 
 /** The open approval a task waits at. */
 export interface TaskGate {
+  /** The approval's id. */
+  id?: string;
   state: TaskState;
   requested: Record<string, unknown>;
 }

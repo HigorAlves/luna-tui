@@ -12,6 +12,7 @@ const card = (id: string, extra: Record<string, unknown> = {}) => ({
   gateSummary: null,
   gateOutcome: null,
   route: "feature",
+  approvalId: null,
   escalation: null,
   questions: [],
   engines: {},
@@ -129,6 +130,11 @@ describe("foremanActionProblem", () => {
 
   it("refuses approve at a gate that acts outward or writes files: a reply, an archive, a split, a config card and the release", () => {
     for (const id of ["c1", "c2", "c3", "c4", "c5", "c6"]) expect(problem({ kind: "approve", taskId: id, why: "w" }), id).toMatch(/own confirm|board/);
+  });
+
+  it("keeps the open approval's id on a card, null when none is open", () => {
+    const parsed = ForemanContext.parse({ ...context, board: { ...board, cards: [card("t2", { gate: "plan", approvalId: "ap-1" }), card("t1")] } });
+    expect(parsed.board.cards.map((c) => c.approvalId)).toEqual(["ap-1", null]);
   });
 
   it("refuses retry for a card that is not escalated", () => {

@@ -267,7 +267,7 @@ export class PgTaskStore implements TaskStore {
         [ids],
       ) as Promise<GlanceRows["runs"]>,
       this.db.query(
-        `select distinct on (task_id) task_id as "taskId", kind, requested from approvals
+        `select distinct on (task_id) id, task_id as "taskId", kind, requested from approvals
          where task_id = any($1::uuid[]) and decision is null order by task_id, created_at desc`,
         [ids],
       ) as Promise<GlanceRows["gates"]>,

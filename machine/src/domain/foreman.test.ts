@@ -46,16 +46,16 @@ describe("buildForemanBoard", () => {
     expect(b).toMatchObject({ gate: null, gateSummary: null, escalation: "tests stay red", column: "Build" });
   });
 
-  it("carries the route and the gate's outcome", () => {
+  it("carries the open approval id, the route and the gate's outcome", () => {
     const gates = new Map([
-      ["a", { state: "awaiting_approval" as const, requested: { outcome: "archive" } }],
-      ["s", { state: "awaiting_ship" as const, requested: { gate: "ship_approval" } }],
+      ["a", { id: "ap1", state: "awaiting_approval" as const, requested: { outcome: "archive" } }],
+      ["s", { id: "ap2", state: "awaiting_ship" as const, requested: { gate: "ship_approval" } }],
     ]);
     const out = board([task("a", { route: "config" } as Partial<TaskRow>), task("s"), task("n")], gates);
     const by = (id: string) => out.cards.find((c) => c.id === id)!;
-    expect(by("a")).toMatchObject({ gateOutcome: "archive", route: "config" });
-    expect(by("s")).toMatchObject({ gateOutcome: "ship_approval" });
-    expect(by("n")).toMatchObject({ gateOutcome: null });
+    expect(by("a")).toMatchObject({ approvalId: "ap1", gateOutcome: "archive", route: "config" });
+    expect(by("s")).toMatchObject({ approvalId: "ap2", gateOutcome: "ship_approval" });
+    expect(by("n")).toMatchObject({ approvalId: null, gateOutcome: null });
   });
 
   it("caps the gate summary at 200 characters", () => {

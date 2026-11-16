@@ -11,6 +11,8 @@ const SUMMARY_MAX = 200;
 
 /** A card's open approval: the gate it waits at and what the machine asked there. */
 export interface OpenGate {
+  /** The approval's id. */
+  id?: string;
   state: string;
   requested: Record<string, unknown>;
 }
@@ -63,6 +65,7 @@ export function buildForemanBoard(
         gate: gate?.state ?? null,
         gateSummary: summaryOf(gate, questions.length),
         gateOutcome: outcomeOf(gate),
+        approvalId: gate?.id ?? null,
         route: t.route,
         escalation: t.state === "escalated" ? (t.reason ?? "escalated") : null,
         questions,

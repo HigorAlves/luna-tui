@@ -152,7 +152,7 @@ describe("factory main (dry run)", () => {
 
   it("foreman: runs over an empty /work with no tools, renders the board as data and leaves a valid result", () => {
     const task = { id: "foreman", title: "Foreman", description: "", criteria: [], repoPath: "", branch: "", source: null };
-    const card = { id: "t1", title: "Fix login", repo: "o/a", state: "awaiting_approval", column: "plan", gate: "plan", gateSummary: "approve the plan", gateOutcome: null, route: "feature", escalation: null, questions: [], engines: {}, updatedAt: "2026-11-16T10:00:00.000Z" };
+    const card = { id: "t1", title: "Fix login", repo: "o/a", state: "awaiting_approval", column: "plan", gate: "plan", gateSummary: "approve the plan", gateOutcome: null, route: "feature", approvalId: null, escalation: null, questions: [], engines: {}, updatedAt: "2026-11-16T10:00:00.000Z" };
     const foreman = { question: "what needs me?", history: [], board: { now: "2026-11-16T12:00:00.000Z", cards: [card], packs: [{ id: "foreman", allowed: ["claude:haiku", "codex:luna"] }] } };
     const { code, stdout, out, result } = run(stageInput("foreman", { task, plan: null, context: { projectContext: null, foreman } }), {}, {}, { emptyWork: true });
     expect(code).toBe(0);

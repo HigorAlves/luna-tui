@@ -27,6 +27,24 @@ pub struct Action {
     pub pack: Option<String>,
     pub engine: Option<String>,
     pub answers: Option<BTreeMap<String, String>>,
+    /// The id of the card's open approval when the machine took its snapshot; null when none was open.
+    #[serde(default)]
+    pub approval_id: Option<String>,
+}
+
+impl Action {
+    /// Whether the action's effect depends on the gate the card waits at.
+    pub fn is_gate_bound(&self) -> bool {
+        matches!(
+            self.kind.as_str(),
+            "approve" | "send_back" | "retry" | "answer" | "post_questions"
+        )
+    }
+
+    /// Whether the card has moved to another gate since the question: `current` is its open approval now.
+    pub fn is_stale(&self, current: Option<&str>) -> bool {
+        self.is_gate_bound() && self.approval_id.as_deref() != current
+    }
 }
 
 /// What `POST /foreman` answers. `dropped` are suggestions the machine refused; only their count shows.
@@ -140,6 +158,8 @@ pub enum Status {
     Pending,
     Done,
     Skipped,
+    /// The card moved to another gate since the question; no call was made, ask again.
+    Stale,
     Failed(String),
 }
 
@@ -268,6 +288,14 @@ impl State {
             .map(|r| r.action.clone())
     }
 
+    /// The row at the cursor was made at a gate the card has left: no call, and the walk moves on.
+    pub fn mark_stale(&mut self) {
+        if let Some(row) = self.rows.get_mut(self.cursor) {
+            row.status = Status::Stale;
+        }
+        self.next_pending();
+    }
+
     pub fn settle(&mut self, result: &Result<Task, String>) {
         if let Some(row) = self.rows.get_mut(self.cursor) {
             row.status = match result {
@@ -332,7 +360,25 @@ mod tests {
             pack: None,
             engine: None,
             answers: None,
+            approval_id: None,
         }
+    }
+
+    #[test]
+    fn a_gate_bound_action_is_stale_when_the_open_approval_is_not_the_one_it_was_made_at() {
+        let at = |id: Option<&str>, kind: &str| Action {
+            approval_id: id.map(str::to_string),
+            ..action(kind)
+        };
+        assert!(at(Some("a1"), "approve").is_stale(Some("a2")));
+        assert!(at(Some("a1"), "answer").is_stale(None));
+        assert!(at(None, "retry").is_stale(Some("a2")));
+        assert!(!at(Some("a1"), "approve").is_stale(Some("a1")));
+        assert!(!at(None, "send_back").is_stale(None));
+        assert!(
+            !at(Some("a1"), "abort").is_stale(Some("a2")),
+            "abort needs no gate"
+        );
     }
 
     #[test]

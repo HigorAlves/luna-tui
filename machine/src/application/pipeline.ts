@@ -886,7 +886,7 @@ export class Pipeline {
     for (const run of runs) {
       out.get(run.taskId)!.lastRun = { stage: run.stage, engine: run.engine, outcome: run.outcome ?? run.status, summary: runSummary(run.finished), at: run.endedAt.toISOString() };
     }
-    for (const gate of gates) out.get(gate.taskId)!.gate = { state: gate.kind, requested: gate.requested };
+    for (const gate of gates) out.get(gate.taskId)!.gate = { id: gate.id, state: gate.kind, requested: gate.requested };
     return out;
   }
 

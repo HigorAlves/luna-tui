@@ -2265,6 +2265,7 @@ pub(crate) fn render_foreman(frame: &mut Frame, app: &App, state: &crate::forema
                     Status::Pending => ("[ ]", SUBTEXT0),
                     Status::Done => ("[done]", GREEN),
                     Status::Skipped => ("[skipped]", SUBTEXT0),
+                    Status::Stale => ("[stale: ask again]", YELLOW),
                     Status::Failed(_) => ("[failed]", RED),
                 };
                 let text = crate::foreman::row_text(&row.action, app.task(&row.action.task_id));

@@ -25,6 +25,9 @@ export const ForemanAction = z.union([
 ]);
 export type ForemanAction = z.infer<typeof ForemanAction>;
 
+/** An action as `POST /foreman` returns it: the machine stamps the open approval id of the card it names, as the snapshot saw it. */
+export type ForemanSuggestion = ForemanAction & { approvalId: string | null };
+
 export const ForemanAnswer = z.object({
   reply: z.string().max(1200),
   actions: z.array(ForemanAction).max(20),
