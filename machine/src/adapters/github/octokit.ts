@@ -231,8 +231,14 @@ export const slugFromRepositoryUrl = (url: string): string => url.replace(/^.*\/
 export const checkRunState = (run: { status: string; conclusion: string | null }): string =>
   run.status.toLowerCase() === "completed" ? (run.conclusion ?? "neutral").toUpperCase() : run.status.toUpperCase();
 
+/** What `time_period: "month"` of the rule-suites API covers, counted back from the call. */
+const RULE_SUITE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
 export class OctokitGitHub implements GitHub {
-  constructor(private readonly octokit: OctokitLike) {}
+  constructor(
+    private readonly octokit: OctokitLike,
+    private readonly now: () => Date = () => new Date(),
+  ) {}
 
   async viewer(): Promise<{ login: string; teams: string[] }> {
     const { data } = await call("reading the token's user", () => this.octokit.rest.users.getAuthenticated());
@@ -745,6 +751,8 @@ export class OctokitGitHub implements GitHub {
 
   async ruleBypasses(slug: string, since: string, until: string): Promise<RuleBypass[] | "unknown"> {
     const { owner, repo } = repoRef(slug);
+    // `time_period: "month"` reads back 30 days from now. A window that starts before that has a part the API cannot show: unknown, never "no bypass".
+    if (Date.parse(since) < this.now().getTime() - RULE_SUITE_WINDOW_MS) return "unknown";
     type Row = { id: number; actor_name?: string | null; pushed_at?: string; ref?: string; after_sha?: string | null };
     let rows: Row[];
     try {

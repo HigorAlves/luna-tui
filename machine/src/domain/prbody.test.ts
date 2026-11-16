@@ -23,6 +23,11 @@ describe("buildPr", () => {
     expect(buildPr({ task: task(), plan, repoSlug: "acme/widgets" }).body).not.toContain("Closes");
   });
 
+  it("never closes an issue for a security alert card: the alert number is no issue number", () => {
+    const alert = { kind: "github_alert" as const, repo: "acme/widgets", alert: 42, tool: "dependabot" as const, url: "https://github.com/acme/widgets/security/dependabot/42" };
+    expect(buildPr({ task: task({ source: alert }), plan, repoSlug: "acme/widgets" }).body).not.toContain("Closes");
+  });
+
   it("is the caveman-pr shape: a short why and how tested, never the criteria as a checklist, and no attribution", () => {
     const { body } = buildPr({ task: task(), plan, repoSlug: null });
     expect(body).toContain("## Why\nPRs open early so CI runs sooner. Ship only flips draft to ready.");

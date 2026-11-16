@@ -136,7 +136,9 @@ describe("Questionnaires.fromJira", () => {
     const draft = await job.fromJira(issue);
     expect(run.mock.calls[0]![0]).toMatchObject({ repo: "acme/api", source: "jira", requester: null, questionnaire: { name: "q.md", markdown: "1. Do you encrypt data at rest?" } });
     expect(draft).toMatchObject({ id: "questionnaire:jira:SEC-42", targets: [{ kind: "jira_comment", key: "SEC-42" }, { kind: "answer_bank", repo: "acme/api" }] });
-    expect(await job.fromJira(issue)).toBeNull();
+    // Asked again (a restart re-reads the issue): the draft that stands is returned, not rebuilt.
+    expect(await job.fromJira(issue)).toMatchObject({ id: "questionnaire:jira:SEC-42" });
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it("does nothing for an issue with no text attachment", async () => {

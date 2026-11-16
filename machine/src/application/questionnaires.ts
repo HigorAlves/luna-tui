@@ -111,7 +111,8 @@ export class Questionnaires {
   async fromJira(issue: JiraIssue): Promise<ComplianceDraft | null> {
     const id = `questionnaire:jira:${issue.key}`;
     try {
-      if (await this.deps.drafts.get(id)) return null;
+      const held = await this.deps.drafts.get(id);
+      if (held) return held;
       const attachment = (await this.deps.jira.attachments(issue.key)).find((a) => textFileRefusal(a.name, a.mimetype, a.size) === null);
       if (!attachment) return null;
       const file = await this.deps.jira.downloadAttachment(attachment.id);

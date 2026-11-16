@@ -107,7 +107,7 @@ describe("JiraIntake with triage_signals", () => {
     expect(task).toMatchObject({ title: "Add the login page", classification: null });
   });
 
-  it("hands an issue classified as a compliance_request to the questionnaire job, and goes on whatever the job does", async () => {
+  it("hands an issue classified as a compliance_request to the questionnaire job, and goes on with a card when the job fails", async () => {
     const asked: string[] = [];
     const questionnaires = { fromJira: async (issue: JiraIssue) => (asked.push(issue.key), Promise.reject(new Error("no wiki"))) };
     const { intake, triaged } = wire({ questionnaires, classify: (issue) => classified(issue.source === "jira:PLAT-2" ? "compliance_request" : "feature") });
@@ -117,12 +117,20 @@ describe("JiraIntake with triage_signals", () => {
   });
 
   it("makes no card for a compliance_request when the questionnaire job is wired, and says it went to the Compliance view", async () => {
-    const questionnaires = { fromJira: async () => ({}) };
+    const questionnaires = { fromJira: async () => ({ id: "questionnaire:jira:PLAT-2" }) };
     const { intake, triaged, pipeline, logs } = wire({ questionnaires, classify: (issue) => classified(issue.source === "jira:PLAT-2" ? "compliance_request" : "feature") });
     await intake.tick();
     expect(triaged).not.toContain("PLAT-2");
     expect((await pipeline.list()).map((t) => (t.source as { key?: string }).key)).not.toContain("PLAT-2");
     expect(logs.filter((l) => l.includes("PLAT-2") && l.includes("Compliance view"))).toHaveLength(1);
+  });
+
+  it("goes on with normal intake for a compliance_request the questionnaire job opened no draft for, and does not say it went to the Compliance view", async () => {
+    const questionnaires = { fromJira: async () => null };
+    const { intake, triaged, logs } = wire({ questionnaires, classify: (issue) => classified(issue.source === "jira:PLAT-2" ? "compliance_request" : "feature") });
+    await intake.tick();
+    expect(triaged).toContain("PLAT-2");
+    expect(logs.filter((l) => l.includes("PLAT-2") && l.includes("Compliance view"))).toEqual([]);
   });
 
   it("keeps making a card for a compliance_request when no questionnaire job is wired", async () => {

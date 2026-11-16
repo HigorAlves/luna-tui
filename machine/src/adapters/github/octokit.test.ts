@@ -4,7 +4,7 @@ import { GitHubError } from "../../application/github.ts";
 import { OctokitGitHub, type OctokitLike, checkRunState, slugFromRepositoryUrl } from "./octokit.ts";
 
 /** An Octokit-shaped stub: each endpoint answers from `answers`, every call is recorded. */
-function stub(answers: Record<string, unknown>) {
+function stub(answers: Record<string, unknown>, now?: () => Date) {
   const calls: Array<[string, unknown]> = [];
   const endpoint = (name: string) =>
     vi.fn(async (params: unknown) => {
@@ -66,7 +66,7 @@ function stub(answers: Record<string, unknown>) {
       return answers[String(method)] as unknown[];
     }),
   } as unknown as OctokitLike;
-  return { github: new OctokitGitHub(octokit), calls };
+  return { github: new OctokitGitHub(octokit, now), calls };
 }
 
 const item = (repo: string, number: number) => ({ number, repository_url: `https://api.github.com/repos/${repo}`, updated_at: "t" });
@@ -828,12 +828,19 @@ describe("ruleBypasses", () => {
   const SUITES = "GET /repos/{owner}/{repo}/rulesets/rule-suites";
   const suite = (id: number, pushedAt: string) => ({ id, actor_name: "ann", pushed_at: pushedAt, ref: "refs/heads/main", after_sha: `a${id}`, result: "bypass" });
   const denied = (status: number) => Object.assign(new Error("denied"), { status });
-  const failing = (status: number) => new OctokitGitHub({ paginate: vi.fn(async () => Promise.reject(denied(status))) } as unknown as OctokitLike);
+  const failing = (status: number) => new OctokitGitHub({ paginate: vi.fn(async () => Promise.reject(denied(status))) } as unknown as OctokitLike, () => new Date("2026-01-25T00:00:00Z"));
 
   it("keeps the bypasses inside the window, asking GitHub for bypass results", async () => {
-    const { github, calls } = stub({ [SUITES]: [suite(1, "2025-12-31T23:59:59Z"), suite(2, "2026-01-10T00:00:00Z"), suite(3, "2026-02-01T00:00:00Z")] });
+    const { github, calls } = stub({ [SUITES]: [suite(1, "2025-12-31T23:59:59Z"), suite(2, "2026-01-10T00:00:00Z"), suite(3, "2026-02-01T00:00:00Z")] }, () => new Date("2026-01-25T00:00:00Z"));
     expect(await github.ruleBypasses("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z")).toEqual([{ ref: "refs/heads/main", actor: "ann", at: "2026-01-10T00:00:00Z", afterSha: "a2", ruleSuiteId: 2 }]);
     expect(calls[0]![1]).toMatchObject({ owner: "o", repo: "a", rule_suite_result: "bypass", time_period: "month", per_page: 100 });
+  });
+
+  it("is unknown when the asked window starts before the month the API reads: a gap is not 'no bypass'", async () => {
+    const { github, calls } = stub({ [SUITES]: [] }, () => new Date("2026-02-10T00:00:00Z"));
+    expect(await github.ruleBypasses("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z")).toBe("unknown");
+    expect(calls).toEqual([]);
+    expect(await github.ruleBypasses("o/a", "2026-01-25T00:00:00Z", "2026-02-09T00:00:00Z")).toEqual([]);
   });
 
   it("is unknown when the token cannot read rule suites", async () => {

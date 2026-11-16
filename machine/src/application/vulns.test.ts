@@ -51,7 +51,7 @@ interface Fakes {
   repoPath?: string | null;
 }
 function build(fakes: Fakes = {}) {
-  const state = { dependabot: fakes.dependabot ?? [], scanning: fakes.scanning ?? [], now: fakes.now ?? "2026-11-16T10:00:00Z" };
+  const state: { dependabot: DependabotAlert[] | "unknown" | Error; scanning: CodeScanningAlert[] | "unknown"; now: string } = { dependabot: fakes.dependabot ?? [], scanning: fakes.scanning ?? [], now: fakes.now ?? "2026-11-16T10:00:00Z" };
   const github = {
     dependabotAlerts: vi.fn(async (_slug: string) => {
       if (state.dependabot instanceof Error) throw state.dependabot;
@@ -97,7 +97,8 @@ describe("the vulnerability job", () => {
     expect(pipeline.createTask).toHaveBeenCalledTimes(1);
     const task = pipeline.createTask.mock.calls[0]![0] as { title: string; description: string; criteria: string[]; repoPath: string; source: unknown; hints: unknown; originMachine: string };
     expect(task).toMatchObject({ title: "Bump lodash to 4.17.21", criteria: ["The alert closes"], repoPath: "/repos/web", originMachine: "automation", hints: { kind: "security" } });
-    expect(task.source).toMatchObject({ kind: "github", repo: "acme/web", number: 7, url: "https://github.com/acme/web/security/dependabot/7" });
+    expect(task.source).toMatchObject({ kind: "github_alert", repo: "acme/web", alert: 7, tool: "dependabot", url: "https://github.com/acme/web/security/dependabot/7" });
+    expect(task.source).not.toHaveProperty("number");
     expect((task.source as { labels?: string[] }).labels ?? []).not.toContain("security");
     expect(task.description).toContain("Close alert 7.");
     expect(task.description).toContain("Lane: fast");
@@ -120,7 +121,8 @@ describe("the vulnerability job", () => {
     const { vulns, pipeline, triage } = build({ scanning: [scanning()], triage: async () => answer({ lane: "hold", severity: "critical", title: "Fix SQL injection in db.ts" }) });
     await vulns.tick();
     expect(triage.mock.calls[0]![0].alert).toMatchObject({ source: "code_scanning", number: 3, rule: "js/sql-injection", tool: "CodeQL", path: "src/db.ts", title: "js/sql-injection", package: null });
-    const task = pipeline.createTask.mock.calls[0]![0] as { description: string };
+    const task = pipeline.createTask.mock.calls[0]![0] as { description: string; source: unknown };
+    expect(task.source).toMatchObject({ kind: "github_alert", tool: "code_scanning", alert: 3 });
     expect(task.description).toContain("Lane: hold");
     expect(task.description).toMatch(/waits for a person/i);
   });
@@ -164,6 +166,30 @@ describe("the vulnerability job", () => {
     expect(log).toHaveBeenCalledTimes(1);
     expect(log.mock.calls[0]![0]).toContain("acme/web");
     expect(Object.keys(stateFile().alerts)).toEqual(["dependabot:7"]);
+  });
+
+  it("reads each source on its own: unreadable code scanning still makes the Dependabot cards and marks them overdue", async () => {
+    const { vulns, pipeline, state, log } = build({ dependabot: [dependabot()], scanning: "unknown", triage: async () => answer({ deadline: "2026-11-20" }) });
+    await vulns.tick();
+    expect(pipeline.createTask).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls.map((c) => c[0]).join("\n")).toContain("code-scanning");
+    state.now = "2026-11-21T00:01:00Z";
+    await vulns.tick();
+    expect(pipeline.record).toHaveBeenCalledWith("card-1", "compliance.deadline", expect.objectContaining({ key: "dependabot:7" }));
+  });
+
+  it("keeps the state keys of an unreadable source, creates none for it, and still drops a closed alert of the readable one", async () => {
+    const { vulns, pipeline, state } = build({ dependabot: [dependabot(), dependabot({ number: 8 })], scanning: [scanning()] });
+    await vulns.tick();
+    expect(pipeline.createTask).toHaveBeenCalledTimes(3);
+    state.scanning = "unknown";
+    state.dependabot = [dependabot()];
+    await vulns.tick();
+    expect(Object.keys(stateFile().alerts).sort()).toEqual(["code_scanning:3", "dependabot:7"]);
+    state.dependabot = "unknown";
+    state.scanning = [scanning(), scanning({ number: 4 })];
+    await vulns.tick();
+    expect(Object.keys(stateFile().alerts).sort()).toEqual(["code_scanning:3", "code_scanning:4", "dependabot:7"]);
   });
 
   it("skips a repo the machine has no checkout of, and a failed GitHub read does not stop the other repos", async () => {

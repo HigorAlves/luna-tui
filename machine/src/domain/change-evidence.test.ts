@@ -60,14 +60,35 @@ describe("changeRecord", () => {
     expect(changeRecord(pr({ closingIssues: [{ number: 7, url: "u" }, { number: 8, url: "u" }] }), input).ticket).toBe("#7");
   });
 
-  it("a failed, cancelled, timed out or action-required check is red; no checks is none", () => {
-    for (const state of ["FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"]) {
+  it("counts a reviewer only when their latest approval-or-objection is an approval: an approval later withdrawn by changes requested is no approval", () => {
+    const review = (author: string, state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | "PENDING", at: string | null, commitId = "h1") => ({ author, state, commitId, submittedAt: at });
+    const approved = (reviews: ReturnType<typeof review>[]) => changeRecord(pr({ reviews }), { ...input, jiraKey: "L-1" });
+    const withdrawn = approved([review("bob", "APPROVED", "2026-01-04T10:00:00Z"), review("bob", "CHANGES_REQUESTED", "2026-01-04T11:00:00Z")]);
+    expect(withdrawn.approvedBy).toEqual([]);
+    expect(withdrawn.exceptions).toEqual(["no_independent_approval"]);
+    expect(approved([review("bob", "APPROVED", "2026-01-04T10:00:00Z"), review("bob", "DISMISSED", "2026-01-04T11:00:00Z")]).approvedBy).toEqual([]);
+    // Without timestamps the order the adapter returned them in stands.
+    expect(approved([review("bob", "APPROVED", null), review("bob", "CHANGES_REQUESTED", null)]).approvedBy).toEqual([]);
+    // A comment or a pending review is not an objection and not an approval: the approval before it stands.
+    expect(approved([review("bob", "APPROVED", "2026-01-04T10:00:00Z"), review("bob", "COMMENTED", "2026-01-04T11:00:00Z"), review("bob", "PENDING", null)]).approvedBy).toEqual(["bob"]);
+    // Changes requested, then approved: approved. The other reviewer's objection does not cancel it.
+    const mixed = approved([review("bob", "CHANGES_REQUESTED", "2026-01-04T09:00:00Z"), review("bob", "APPROVED", "2026-01-04T10:00:00Z"), review("cy", "CHANGES_REQUESTED", "2026-01-04T10:30:00Z")]);
+    expect(mixed.approvedBy).toEqual(["bob"]);
+    expect(mixed.exceptions).toEqual([]);
+    // The stale rule follows the approval that stands: bob's standing approval is on an old commit.
+    expect(approved([review("bob", "APPROVED", "2026-01-04T10:00:00Z", "old")]).exceptions).toEqual(["stale_approval"]);
+  });
+
+  it("a check that ended red is red (every state the CI stage counts), a pending one is pending, not green; no checks is none", () => {
+    for (const state of ["FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "ERROR", "STARTUP_FAILURE", "STALE"]) {
       const r = changeRecord(pr(), { ...input, jiraKey: "L-1", checks: [{ name: "ci", state: "SUCCESS", link: null }, { name: "x", state, link: null }] });
       expect(r.checks).toBe("red");
       expect(r.exceptions).toEqual(["checks_red"]);
     }
     expect(changeRecord(pr(), { ...input, jiraKey: "L-1", checks: [] })).toMatchObject({ checks: "none", exceptions: [] });
-    expect(changeRecord(pr(), { ...input, jiraKey: "L-1", checks: [{ name: "x", state: "PENDING", link: null }, { name: "y", state: "NEUTRAL", link: null }] }).checks).toBe("green");
+    expect(changeRecord(pr(), { ...input, jiraKey: "L-1", checks: [{ name: "x", state: "PENDING", link: null }, { name: "y", state: "NEUTRAL", link: null }] }).checks).toBe("pending");
+    expect(changeRecord(pr(), { ...input, jiraKey: "L-1", checks: [{ name: "x", state: "SUCCESS", link: null }, { name: "y", state: "NEUTRAL", link: null }] }).checks).toBe("green");
+    expect(changeRecord(pr(), { ...input, jiraKey: "L-1", checks: [{ name: "x", state: "PENDING", link: null }, { name: "y", state: "FAILURE", link: null }] }).checks).toBe("red");
   });
 
   it("a bypass of the base branch ending at the merge commit is bypassed", () => {

@@ -20,6 +20,8 @@ export type StageOutcome = z.infer<typeof StageOutcome>;
 export const TaskSource = z.discriminatedUnion("kind", [
   /** `labels` are the issue's own at intake: the card keeps them so a `security` label still knocks the priority out to P0 when triage reads the signals again. */
   z.object({ kind: z.literal("github"), repo: z.string(), number: z.number().int(), url: z.string(), labels: z.array(z.string()).optional(), authorAssociation: z.string().optional() }),
+  /** A Dependabot or code-scanning alert a vulnerability card stands for. `alert` is the alert's own number, a count apart from issues and PRs: nothing reads it as `#N`. `labels` carry `security` for a critical one, as an issue's do. */
+  z.object({ kind: z.literal("github_alert"), repo: z.string(), alert: z.number().int(), tool: z.enum(["dependabot", "code_scanning"]), url: z.string(), labels: z.array(z.string()).optional() }),
   z.object({
     kind: z.literal("github_pr"),
     repo: z.string(),
@@ -474,7 +476,7 @@ export const ChangeExceptionsContext = z.object({
         mergedAt: z.string(),
         approvedBy: z.array(z.string()),
         ticket: z.string().nullable(),
-        checks: z.enum(["green", "red", "none"]),
+        checks: z.enum(["green", "red", "pending", "none"]),
         bypass: z.enum(["yes", "no", "unknown"]),
         kinds: z.array(ChangeExceptionKind).min(1),
         /** The PR's body, capped. */

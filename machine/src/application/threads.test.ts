@@ -85,6 +85,15 @@ describe("ThreadReplies", () => {
     expect(bodies.filter((b) => /implementing|verifying/.test(b!))).toEqual([]);
   });
 
+  it("posts nothing on an issue for a security alert card: the alert number is no issue number", async () => {
+    const { pipeline, replies, comments } = wire();
+    const alert = { kind: "github_alert" as const, repo: "o/a", alert: 42, tool: "dependabot" as const, url: "https://github.com/o/a/security/dependabot/42" };
+    const task = await pipeline.createTask({ title: "Bump lodash", repoPath: "/r/a", source: alert });
+    await pipeline.start(task.id);
+    await replies.idle();
+    expect(comments).toEqual([]);
+  });
+
   it("says once that a gate is still waiting when the tick records a reminder, and that the task was archived", async () => {
     const { pipeline, replies, comments } = wire();
     const task = await pipeline.createTask({ title: "Export CSV", repoPath: "/r/a", source });

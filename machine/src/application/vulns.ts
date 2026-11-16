@@ -150,16 +150,17 @@ export class Vulns {
 
   private async repoPass(repo: string): Promise<void> {
     const [dependabot, scanning] = [await this.deps.github.dependabotAlerts(repo), await this.deps.github.codeScanningAlerts(repo)];
-    if (dependabot === "unknown" || scanning === "unknown") {
-      this.log(`compliance vulns: ${repo}: the token cannot read ${dependabot === "unknown" ? "Dependabot" : "code-scanning"} alerts, skipped`);
-      return;
-    }
-    const open = [...dependabot.map(fromDependabot), ...scanning.map(fromScanning)];
+    // A source the token cannot read is not "no alerts": its cards stay as they are and it makes no new ones.
+    const unreadable: string[] = [];
+    if (dependabot === "unknown") unreadable.push("dependabot");
+    if (scanning === "unknown") unreadable.push("code_scanning");
+    for (const source of unreadable) this.log(`compliance vulns: ${repo}: the token cannot read ${source === "dependabot" ? "Dependabot" : "code-scanning"} alerts, that source is skipped`);
+    const open = [...(dependabot === "unknown" ? [] : dependabot.map(fromDependabot)), ...(scanning === "unknown" ? [] : scanning.map(fromScanning))];
     const state = await this.load(repo);
     const openKeys = new Set(open.map((a) => a.key));
     let changed = false;
     for (const key of Object.keys(state.alerts)) {
-      if (!openKeys.has(key)) {
+      if (!openKeys.has(key) && !unreadable.some((source) => key.startsWith(`${source}:`))) {
         delete state.alerts[key];
         changed = true;
       }
@@ -204,7 +205,7 @@ export class Vulns {
       criteria: answer.acceptance_criteria,
       repoPath,
       // A `security` label on the source knocks the card's priority out to P0 when triage reads its signals: only a critical alert earns it.
-      source: { kind: "github", repo, number: a.number, url: a.url, labels: answer.severity === "critical" ? ["security"] : [] },
+      source: { kind: "github_alert", repo, alert: a.number, tool: a.source, url: a.url, labels: answer.severity === "critical" ? ["security"] : [] },
       originMachine: "automation",
       hints: { kind: "security", urgency: answer.severity },
     });

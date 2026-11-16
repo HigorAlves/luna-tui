@@ -331,7 +331,8 @@ describe("withTriageSignals's source labels", () => {
     await runner(context({ task: github }));
     await runner(context({ task: jira }));
     await runner(context({ task: task({ source: null }) }));
-    expect(seen.map((i) => i.labels)).toEqual([["security", "bug"], ["security"], []]);
+    await runner(context({ task: task({ source: { kind: "github_alert", repo: "o/n", alert: 3, tool: "code_scanning", url: "https://github.com/o/n/security/code-scanning/3", labels: ["security"] } }) }));
+    expect(seen.map((i) => i.labels)).toEqual([["security", "bug"], ["security"], [], ["security"]]);
   });
 });
 

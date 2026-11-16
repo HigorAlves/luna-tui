@@ -3,6 +3,7 @@
 import type { ChangeExceptionKind } from "@hardness/contracts";
 
 import type { Check, MergedPr, RuleBypass } from "../application/github.ts";
+import { FAILED_CHECK_STATES, PENDING_CHECK_STATES } from "./check-states.ts";
 
 /** One merged PR as an auditor reads it: the facts, and the exceptions they add up to. */
 export interface ChangeRecord {
@@ -16,18 +17,23 @@ export interface ChangeRecord {
   approvedBy: string[];
   /** The Jira key, else the first issue the PR closes (`#12`), else null. */
   ticket: string | null;
-  checks: "green" | "red" | "none";
+  /** `pending`: a check had not ended when the PR merged; it is not green. */
+  checks: "green" | "red" | "pending" | "none";
   bypass: "yes" | "no" | "unknown";
   exceptions: ChangeExceptionKind[];
 }
 
-const RED_STATES = new Set(["FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"]);
-
 export function changeRecord(pr: MergedPr, input: { checks: Check[]; bypasses: RuleBypass[] | "unknown"; jiraKey: string | null }): ChangeRecord {
-  const approvals = pr.reviews.filter((r) => r.state === "APPROVED" && r.author !== null && r.author !== pr.author);
+  // Per reviewer, the latest review that approves or objects: a comment or a pending review changes neither. Only a standing approval counts.
+  const stands = new Map<string, MergedPr["reviews"][number]>();
+  const decisive = pr.reviews.filter((r) => r.author !== null && r.author !== pr.author && (r.state === "APPROVED" || r.state === "CHANGES_REQUESTED" || r.state === "DISMISSED"));
+  const byTime = [...decisive].sort((a, b) => (a.submittedAt !== null && b.submittedAt !== null ? Date.parse(a.submittedAt) - Date.parse(b.submittedAt) : 0));
+  for (const r of byTime) stands.set(r.author as string, r);
+  const approvals = [...stands.values()].filter((r) => r.state === "APPROVED");
   const approvedBy = [...new Set(approvals.map((r) => r.author as string))];
   const ticket = input.jiraKey ?? (pr.closingIssues[0] ? `#${pr.closingIssues[0].number}` : null);
-  const checks = input.checks.some((c) => RED_STATES.has(c.state)) ? "red" : input.checks.length === 0 ? "none" : "green";
+  const stateOf = (c: Check): string => String(c.state).toUpperCase();
+  const checks = input.checks.some((c) => FAILED_CHECK_STATES.has(stateOf(c))) ? "red" : input.checks.some((c) => PENDING_CHECK_STATES.has(stateOf(c))) ? "pending" : input.checks.length === 0 ? "none" : "green";
   const bypass = input.bypasses === "unknown" ? "unknown" : input.bypasses.some((b) => b.ref === `refs/heads/${pr.baseRef}` && b.afterSha !== null && b.afterSha === pr.mergeSha) ? "yes" : "no";
 
   const exceptions: ChangeExceptionKind[] = [];

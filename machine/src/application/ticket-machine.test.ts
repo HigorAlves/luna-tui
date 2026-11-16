@@ -264,6 +264,16 @@ describe("scheduling into the shared backlog", () => {
   });
 });
 
+describe("a security alert card is no ticket", () => {
+  it("takes no ticket's key from an alert's number: a Dependabot alert #5 is not issue #5", async () => {
+    const { machine } = setup();
+    const alert = { kind: "github_alert", repo: "acme/web", alert: 5, tool: "dependabot", url: "u" };
+    expect(await machine.ticketOfCard({ id: "card-1", source: alert })).toBeNull();
+    await expect(machine.declineFromBacklog([alert])).resolves.toBeUndefined();
+    expect(await machine.stackOfSources([alert])).toEqual({});
+  });
+});
+
 describe("reassessing after an assessment was posted", () => {
   it("a changed assessment after the first was posted is a new draft with its own id, the posted one kept", async () => {
     const x = setup({ silent: true });
