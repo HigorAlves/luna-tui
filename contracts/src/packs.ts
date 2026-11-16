@@ -60,6 +60,8 @@ export const AgentRole = z.enum([
   "thread-writer",
   "code-fixer",
   "second-opinion",
+  // Settles triage's open questions from the code and the card; read-only.
+  "question-settler",
 ]);
 export type AgentRole = z.infer<typeof AgentRole>;
 
@@ -404,6 +406,12 @@ export type ConversationReplyAnswer = z.infer<typeof ConversationReplyAnswer>;
 /** council_security and council_second: a short summary and findings from the member's own lane. No findings means nothing to add. */
 export const CouncilAnswer = z.object({ summary: z.string().max(300), findings: z.array(Finding).max(8) });
 export type CouncilAnswer = z.infer<typeof CouncilAnswer>;
+
+/** question_council: per question an answer or null (cannot settle it), a confidence and the places it read. */
+export const QuestionCouncilAnswer = z.object({
+  answers: z.array(z.object({ id: z.string(), answer: z.string().nullable(), confidence: z.number().min(0).max(1), evidence: z.array(z.string()).max(4) })),
+});
+export type QuestionCouncilAnswer = z.infer<typeof QuestionCouncilAnswer>;
 
 export const HelperAnswer = z.object({ answer: z.string(), findings: z.array(Finding).optional() });
 export type HelperAnswer = z.infer<typeof HelperAnswer>;
@@ -1046,6 +1054,22 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: CouncilAnswer,
     template: "council_second.md",
+  },
+  // Triage's question council: settles open questions from the code before a person is asked. Read-only, no web, no gh.
+  question_council: {
+    id: "question_council",
+    kind: "agent",
+    agent: "question-settler",
+    helpers: [],
+    skills: ["code-discovery"],
+    access: access(READ_ONLY, { luna: ["card_search"] }),
+    writable: false,
+    maxTurns: 10,
+    timeoutMs: 4 * MINUTE,
+    engines: { default: "claude:sonnet", allowed: ["claude:sonnet", "codex:luna"], fallback: ["codex:luna"] },
+    effort: "medium",
+    answer: QuestionCouncilAnswer,
+    template: "question_council.md",
   },
   plan_fast: {
     id: "plan_fast",

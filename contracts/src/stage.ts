@@ -202,6 +202,8 @@ export const PackId = z.enum([
   // The plan council (run in test_design after plan_check): a security review and an independent second opinion on a High-risk or large plan.
   "council_security",
   "council_second",
+  // The question council (run in triage before the person is asked): settles open questions from the code and the card, or says it cannot.
+  "question_council",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -681,6 +683,17 @@ export const PlanRisk = z.object({
   complexity: z.enum(["S", "M", "L", "XL"]).optional(),
 });
 export type PlanRisk = z.infer<typeof PlanRisk>;
+
+/** For question_council: the open questions (a machine question carries its field, guess and confidence; an agent question, nulls), the card and the answers so far. */
+export const QuestionsContext = z.object({
+  questions: z
+    .array(z.object({ id: z.string().min(1), question: z.string(), recommended: z.string().nullable(), field: z.string().nullable(), guess: z.string().nullable(), confidence: z.number().nullable() }))
+    .min(1)
+    .max(6),
+  card: z.object({ title: z.string(), description: z.string() }),
+  answers: z.array(z.object({ question: z.string(), answer: z.string() })),
+});
+export type QuestionsContext = z.infer<typeof QuestionsContext>;
 
 /** One member's answer in the plan council: who, which round, what they said and the findings (none means nothing to add). */
 export const CouncilTurn = z.object({ member: z.enum(["security", "second"]), round: z.union([z.literal(1), z.literal(2)]), summary: z.string(), findings: z.array(Finding) });
@@ -1230,6 +1243,8 @@ export const StageInput = z.object({
     eval: EvalJudgeContext.nullable().optional(),
     /** For chat_triage: the chat batch; the task is synthetic and there is no worktree. */
     chat: ChatTriageContext.nullable().optional(),
+    /** For question_council: the open triage questions to settle from the code, the card and the answers so far. */
+    questions: QuestionsContext.nullable().optional(),
     /** For verifying: the files the code graph says depend on what the change touched, to review first. */
     blastRadius: z.array(z.string()).optional(),
     /** For verifying: how much of the change's added lines the repo's lcov report saw run; absent without a report. */

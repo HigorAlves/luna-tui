@@ -13,6 +13,8 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   // The plan council runs after plan_check, inside the plan stage.
   council_security: ["test_design"],
   council_second: ["test_design"],
+  // The question council runs inside triage, before a person is asked.
+  question_council: ["triage"],
   // Build's tests step runs inside the implementing stage, before the implementer.
   build_tests: ["implementing"],
   // The inboxes' packs and the decision pack callers run on demand: no task, so no task state.
