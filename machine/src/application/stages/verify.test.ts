@@ -48,13 +48,15 @@ function setup(opts: {
   counted?: { added: number; removed: number } | null;
   size?: { target_loc: [number, number]; hard_limit_loc: number; max_children: number; max_rounds: number; depth: number };
   approvals?: StageContext["approvals"];
+  /** An exec that can open a session of checks sharing one set of services. */
+  session?: () => Promise<{ exec: (command: string, args: string[], options?: unknown) => Promise<ExecResult>; close: () => Promise<void> }>;
 }) {
   const stateDir = mkdtempSync(join(tmpdir(), "verify-"));
   const calls: string[][] = [];
-  const exec = vi.fn(async (command: string, args: string[], _options?: { env?: NodeJS.ProcessEnv; services?: unknown }) => {
+  const exec = Object.assign(vi.fn(async (command: string, args: string[], _options?: { env?: NodeJS.ProcessEnv; services?: unknown }) => {
     calls.push([command, ...args]);
     return opts.checks?.[[command, ...args].join(" ")] ?? { code: 0, stdout: "ok\n", stderr: "" };
-  });
+  }), opts.session ? { session: opts.session } : {});
   const runPack = vi.fn(async () => opts.pack ?? { outcome: "pass" as const, detail: { answer: { verdict: "pass", summary: "fine", findings: [] } } });
   const run = verifyRunner({
     exec,
@@ -167,7 +169,7 @@ describe("verifying stage", () => {
     const { run, context, exec, runPack } = setup({ identity: null });
     const result = await run(context);
     expect(result.outcome).toBe("escalated");
-    expect(result.detail).toMatchObject({ step: "checks", reason: expect.stringMatching(/user\.name.*user\.email/) });
+    expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true, step: "checks", reason: expect.stringMatching(/user\.name.*user\.email/) });
     expect(exec).not.toHaveBeenCalled();
     expect(runPack).not.toHaveBeenCalled();
   });
@@ -474,6 +476,22 @@ describe("verifying stage", () => {
     expect(exec.mock.calls[0]![2]).toMatchObject({ services });
   });
 
+  it("starts the repo's services once for all its checks, and removes them when a check fails too", async () => {
+    const services = { postgres: { image: "postgres:16" } };
+    const events: string[] = [];
+    const opened = vi.fn(async () => ({
+      exec: async (command: string, args: string[]) => (events.push(`check ${[command, ...args].join(" ")}`), { code: args.includes("lint") ? 1 : 0, stdout: "", stderr: "" }),
+      close: async () => void events.push("close"),
+    }));
+    const { run, context, exec } = setup({ services, session: opened });
+    const result = await run(context);
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect(exec).not.toHaveBeenCalled();
+    expect(events.filter((e) => e.startsWith("check")).length).toBeGreaterThan(1);
+    expect(events.filter((e) => e === "close")).toHaveLength(1);
+    expect(result.outcome).toBe("fail");
+  });
+
   it("runs the review pack when checks pass and fails on its fail verdict", async () => {
     const f = finding();
     const { run, context, runPack } = setup({
@@ -748,14 +766,20 @@ describe("verify on a fresh clone", () => {
       expect(result.detail).toMatchObject({ envReproduction: "matched" });
     });
 
-    it("fails with a blocker finding, category env, naming both images, before the review runs", async () => {
+    it("does not fail on a rebuilt runner image: it runs the review and the checks in its own image and records the change as a note", async () => {
       const { runner, context, pack } = runnerFor({ image: "sha256:other", lockfiles: { "Cargo.lock": "h2" } });
+      const result = await runner(context);
+      expect(result.outcome).toBe("pass");
+      expect(pack).toHaveBeenCalled();
+      expect(result.detail).toMatchObject({ envReproduction: expect.stringContaining("the runner image differs: Build ran on sha256:build, Verify on sha256:other") });
+    });
+
+    it("fails with a blocker finding, category env, on a lockfile that differs at the same commit, before the review runs", async () => {
+      const { runner, context, pack } = runnerFor({ image: "sha256:other", lockfiles: { "Cargo.lock": "h9" } });
       const result = await runner(context);
       expect(result.outcome).toBe("fail");
       expect(pack).not.toHaveBeenCalled();
-      expect(result.findings).toMatchObject([{ severity: "blocker", category: "env", body: expect.stringContaining("sha256:build") }]);
-      expect(result.findings![0]!.body).toContain("sha256:other");
-      expect(result.detail).toMatchObject({ envReproduction: expect.stringContaining("the runner image differs") });
+      expect(result.findings).toMatchObject([{ severity: "blocker", category: "env", body: expect.stringContaining("Cargo.lock") }]);
     });
 
     it("fails on a lockfile that differs at the same commit", async () => {
@@ -875,5 +899,120 @@ describe("the counted size of the change", () => {
   it("reads the limit from the repository's size section", async () => {
     const { run, context } = setup({ counted: { added: 150, removed: 0 }, size: { target_loc: [50, 80], hard_limit_loc: 100, max_children: 8, max_rounds: 3, depth: 2 } });
     expect(found(await run(context))[0]?.title).toBe("the change is 150 lines, over the limit of 100");
+  });
+});
+
+describe("a failing check asked again on the base", () => {
+  const BASE = "b".repeat(40);
+  const RED = " FAIL  src/clone.test.ts > a card's workspace > removes a failed move's repository\nAssertionError: promise resolved \"undefined\" instead of rejecting\n";
+  const fail = (stdout: string): ExecResult => ({ code: 1, stdout, stderr: "" });
+  const ok: ExecResult = { code: 0, stdout: "ok\n", stderr: "" };
+
+  /** One verifyRunner whose checks run as `head` answers in the card's folder and as `base` answers in the throwaway clone at the base. */
+  function rig(opts: { head: (script: string) => ExecResult; base: (script: string) => ExecResult; checks?: Array<{ name: string; run: string }>; cache?: Map<string, never>; withBaseline?: boolean }) {
+    const stateDir = mkdtempSync(join(tmpdir(), "verify-base-"));
+    const ran: Array<{ where: "head" | "base"; script: string; image?: string; services?: unknown; identity?: string }> = [];
+    const clone = vi.fn(async (_card: string, _branch: string, _run: string, _sha: string) => ({ path: "/base-clone" }));
+    const remove = vi.fn(async (_path: string) => {});
+    const pack = vi.fn(async () => ({ outcome: "pass" as const, detail: { answer: { verdict: "pass", summary: "fine", findings: [] } } }));
+    const checks = opts.checks ?? [{ name: "machine tests", run: "pnpm --filter @hardness/machine test" }];
+    const runner = verifyRunner({
+      exec: async (_command, args, options) => {
+        const where = options.cwd === "/base-clone" ? "base" : "head";
+        const script = args[args.length - 1]!;
+        ran.push({ where, script, image: options.image, services: options.services, identity: options.env?.GIT_AUTHOR_NAME });
+        return (where === "base" ? opts.base : opts.head)(script);
+      },
+      runPack: pack,
+      stateDir,
+      gitIdentity: async () => ({ name: "Ada L", email: "ada@x.dev" }),
+      policy: async () => ({ checks: checks.map((c) => ({ ...c, minutes: 1 })) as never, services: { db: { image: "postgres" } } }),
+      changedPaths: async () => null,
+      imageOf: async () => "sha256:image",
+      ...(opts.withBaseline === false ? {} : { baseline: { base: async () => BASE, clone, remove, cache: (opts.cache ?? new Map()) as never } }),
+    });
+    const context = { task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    return { runner, context, ran, clone, remove, pack };
+  }
+
+  it("escalates as env_broken with red_on_base, naming the tests, when the failing test file fails on the base too, and runs only that file there in the same image, services and identity", async () => {
+    const { runner, context, ran, clone, remove } = rig({ head: () => fail(RED), base: () => fail(RED) });
+    const result = await runner(context);
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true, step: "checks", red_on_base: true, base: BASE, tests: ["src/clone.test.ts"] });
+    expect(String(result.detail?.reason)).toMatch(/machine tests fails on the base commit bbbbbbb too, so this change did not cause it \(src\/clone\.test\.ts\)/);
+    const onBase = ran.filter((r) => r.where === "base");
+    expect(onBase).toHaveLength(1);
+    expect(onBase[0]).toMatchObject({ script: "pnpm --filter @hardness/machine test 'src/clone.test.ts'", image: "sha256:image", services: { db: { image: "postgres" } }, identity: "Ada L" });
+    expect(clone).toHaveBeenCalledWith("/card", "task/x", "run-1-base", BASE);
+    expect(remove).toHaveBeenCalledWith("/base-clone");
+  });
+
+  it("fails as before, with the check as a finding, when the base passes: the change did cause it", async () => {
+    const { runner, context, remove } = rig({ head: () => fail(RED), base: () => ok });
+    const result = await runner(context);
+    expect(result.outcome).toBe("fail");
+    expect(result.findings).toMatchObject([{ category: "tests", title: "machine tests failed" }]);
+    expect(remove).toHaveBeenCalledWith("/base-clone");
+  });
+
+  it("fails when the base run does not fail on the file the change failed on (a file the card added is missing there), even though the base run exits non-zero", async () => {
+    const { runner, context } = rig({ head: () => fail(RED), base: () => fail("No test files found, exiting with code 1\n") });
+    expect((await runner(context)).outcome).toBe("fail");
+  });
+
+  it("runs the whole check on the base when no failing test file can be named, and a red there is the base's", async () => {
+    const lint = { name: "lint", run: "pnpm run lint" };
+    const red = rig({ head: () => fail("error: something is wrong"), base: () => fail("error: something is wrong"), checks: [lint] });
+    expect((await red.runner(red.context)).detail).toMatchObject({ escalation: "env_broken", red_on_base: true });
+    expect(red.ran.filter((r) => r.where === "base").map((r) => r.script)).toEqual(["pnpm run lint"]);
+    const green = rig({ head: () => fail("error: something is wrong"), base: () => ok, checks: [lint] });
+    expect((await green.runner(green.context)).outcome).toBe("fail");
+  });
+
+  it("sends back only the checks the change broke when others fail on the base too, and says which were the base's", async () => {
+    const { runner, context } = rig({
+      checks: [{ name: "machine tests", run: "pnpm --filter @hardness/machine test" }, { name: "lint", run: "pnpm run lint" }],
+      head: (script) => (script.includes("lint") ? fail("lint: 3 problems") : fail(RED)),
+      base: (script) => (script.includes("lint") ? ok : fail(RED)),
+    });
+    const result = await runner(context);
+    expect(result.outcome).toBe("fail");
+    expect(result.findings).toMatchObject([{ title: "lint failed" }]);
+    expect(result.detail).toMatchObject({ failed: [{ name: "lint" }], redOnBase: [{ name: "machine tests", tests: ["src/clone.test.ts"] }] });
+  });
+
+  it("asks the base once per (base, image, check, files): a second card on the same base reuses the answer", async () => {
+    const cache = new Map<string, never>();
+    const first = rig({ head: () => fail(RED), base: () => fail(RED), cache });
+    await first.runner(first.context);
+    const second = rig({ head: () => fail(RED), base: () => fail(RED), cache });
+    const result = await second.runner(second.context);
+    expect(result.detail).toMatchObject({ red_on_base: true });
+    expect(second.ran.filter((r) => r.where === "base")).toHaveLength(0);
+    expect(second.clone).not.toHaveBeenCalled();
+  });
+
+  it("asks again once a red answer is a couple of minutes old: the environment it blamed may have been fixed since", async () => {
+    const cache = new Map<string, never>();
+    const first = rig({ head: () => fail(RED), base: () => fail(RED), cache });
+    await first.runner(first.context);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.now() + 3 * 60_000);
+      const second = rig({ head: () => fail(RED), base: () => ok, cache });
+      expect((await second.runner(second.context)).outcome).toBe("fail");
+      expect(second.ran.filter((r) => r.where === "base")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not ask the base when every check passes, and without a baseline a red check fails as it always did", async () => {
+    const green = rig({ head: () => ok, base: () => fail(RED) });
+    expect((await green.runner(green.context)).outcome).toBe("pass");
+    expect(green.clone).not.toHaveBeenCalled();
+    const none = rig({ head: () => fail(RED), base: () => fail(RED), withBaseline: false });
+    expect((await none.runner(none.context)).outcome).toBe("fail");
   });
 });

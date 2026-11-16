@@ -8,7 +8,7 @@ when_to_use: Use in the reviewing stage when turning findings into the `comments
 
 Turn structured findings (from `pr-reviewer` and `security-reviewer`) into the shape of a real GitHub PR review: inline comments anchored to specific files and lines, optional one-click suggestion blocks, and a review event (APPROVE / COMMENT / REQUEST_CHANGES) computed mechanically from the severities. The reviewed author opens the PR and sees comments pinned next to the code, not a markdown wall.
 
-In factory mode the stage never posts: it answers `comments[]`, `findings[]`, `verdict` and `summary`, and the host posts one COMMENT review at once; an `approve` or `request_changes` verdict waits for the user, who posts it with a key. The rules below are what makes that post land.
+In factory mode the stage never posts: it answers `comments[]`, `findings[]`, `verdict` and `summary`. The machine computes the event from the severities, and the whole review (event, body, every comment) waits on the board until the user posts it with a key, edits it or drops it. The rules below are what makes that post land.
 
 ## When NOT to use
 
@@ -22,7 +22,7 @@ algorithm, confidence ≥0.8 rule, and self-contradiction detection are defined
 
 Duties from the contract, restated:
 
-- Compute the verdict mechanically from the severity set; a narrative verdict that contradicts the findings is wrong.
+- The event is computed mechanically from the severity set, per `review-contract`; a narrative verdict that contradicts the findings is recomputed and noted.
 - Every comment's `path` and `line` follow the contract's line-number semantics: a line of the new file the diff touches (`side: "RIGHT"`), or a removed line (`side: "LEFT"`). GitHub rejects a comment on an untouched line and, with it, the whole review.
 
 The host posts with one `gh api repos/…/pulls/…/reviews` call; [BACKENDS.md](references/BACKENDS.md) shows the payload the host builds from your `comments[]`.
@@ -40,13 +40,13 @@ Format and per-kind templates: [COMMENT-TEMPLATES.md](references/COMMENT-TEMPLAT
 
 If `suggestion_code` is set on a finding but doesn't meet the rules above, drop it from the suggestion block and keep the prose only.
 
-## The gate that remains
+## The preview gate
 
-Comment reviews go out as soon as the stage answers: the user chose that. What still waits for them is the verdict: `approve` and `request_changes` are shown on the board and posted with one key, or dropped. So the comments you return are final; the verdict is a proposal.
+Nothing goes out until the user has seen it. The board shows the computed event, the body, and every comment with its file, line and severity; the user posts it with one key, edits it, or drops it. Auto-posting a review under someone's name erodes trust; the gate is cheap and catches mistakes at no cost.
 
 ## Iron rules
 
-1. **The verdict is computed mechanically.** `request_changes` on any `bug` or `security` finding at confidence 0.8 or more; `approve` when the whole diff was read and nothing of severity `bug`, `security` or `test` was found; else `comment`.
+1. **The verdict is computed mechanically**, per `review-contract`: no finding is `approve`; any `bug`, `security`, `api-surface` or `test` finding is `request_changes`; anything else (`suggestion`, `question`, `nit`) is `comment`.
 2. **At most 15 inline comments per review.** Over-commenting erodes signal. Keep the highest severities; the rest ride in `findings[]` only.
 3. **Suggestion blocks only when they meet all three rules** (length, completeness, mental compile). Do not smuggle refactors.
 4. **Comments sit on lines the author modified in this PR.** Pre-existing bugs the diff did not touch are not findings (the caveman rule); a comment on an untouched line loses the whole review.

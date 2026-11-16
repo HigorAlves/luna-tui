@@ -43,7 +43,12 @@ checks:
     minutes: 8
   - name: golden fixtures
     run: node machine/scripts/golden-task.mjs --selftest
-    paths: ["fixtures/**", "machine/scripts/golden-task.mjs"]
+    paths: ["fixtures/**", "machine/scripts/golden-*.mjs"]
+    minutes: 2
+  # make setup's scripts: shellcheck (in the runner image), and the .env and credential writes on temp files.
+  - name: setup scripts
+    run: shellcheck -x -P SCRIPTDIR scripts/setup/*.sh scripts/setup/helpers/*.sh && bash scripts/setup/lib.test.sh
+    paths: ["scripts/setup/**"]
     minutes: 2
 
   - name: site facts

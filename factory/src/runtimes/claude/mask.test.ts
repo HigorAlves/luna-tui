@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { claudeRuntime } from "./run.ts";
+import { FACTORY_RULES } from "../../core/render.ts";
+import { claudeRuntime, guardPolicy } from "./run.ts";
 
 const FACTORY = join(import.meta.dirname, "..", "..", "..");
 
@@ -40,6 +41,45 @@ describe("the Claude runtime with a mask", () => {
     expect(options?.tools).toEqual(expect.arrayContaining(["WebFetch", "Agent", "Skill", "mcp__luna__card_search"]));
     expect(Object.keys(options!.agents!)).toEqual(["triage-planner", "reply-drafter"]);
     expect(options).not.toHaveProperty("skills");
+  });
+
+  it("names the stage input, the output and the scratch folder as additional directories, so a shell read of /in matches the SDK's scope", async () => {
+    const { options } = await optionsFor("plan");
+    expect(options?.additionalDirectories).toHaveLength(3);
+    expect(new Set(options?.additionalDirectories).size).toBe(1);
+  });
+
+  it("lets a pack read its run's saved tool results: the SDK writes a big output there and tells the model to read it", () => {
+    const old = process.env.CLAUDE_CONFIG_DIR;
+    const paths = { factoryRoot: FACTORY, work: "/work", out: "/out", input: "/in", scratch: "/tmp/s" };
+    const policy = () => guardPolicy({ pack: PACKS.plan, input: { task: { branch: "x" }, context: {} } as never, paths });
+    try {
+      process.env.CLAUDE_CONFIG_DIR = "/session";
+      expect(policy().roots?.read).toContain("/session/projects/*/*/tool-results");
+      expect(policy().roots?.read).not.toContain("/session");
+      delete process.env.CLAUDE_CONFIG_DIR;
+      expect(policy().roots?.read?.some((root) => root.includes("tool-results"))).toBe(false);
+    } finally {
+      if (old === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = old;
+    }
+  });
+
+  it("tells the model which commands its shell may run, and that a refusal naming none does not mean the shell is broken", async () => {
+    const { options } = await optionsFor("plan");
+    const append = (options?.systemPrompt as { append: string }).append;
+    expect(append).toContain(FACTORY_RULES);
+    expect(append).toContain("git log, git diff");
+    expect(append).toContain("not that Bash is broken");
+    const none = (await optionsFor("ticket_reply")).options;
+    expect((none?.systemPrompt as { append: string }).append).not.toContain("not that Bash is broken");
+  });
+
+  it("registers only the luna tools the pack's access lists, so a pack is never offered a tool it is refused", async () => {
+    const { options } = await optionsFor("plan");
+    const registered = Object.keys((options?.mcpServers?.luna as { instance?: { _registeredTools?: Record<string, unknown> } }).instance?._registeredTools ?? {});
+    expect(registered.sort()).toEqual([...PACKS.plan.access.luna].sort());
+    expect(registered).not.toContain("card_search");
   });
 
   it("with one, leaves out the masked tool, the subagents and the luna tool, and filters the skills", async () => {

@@ -57,7 +57,7 @@ function stub(answers: Record<string, unknown>) {
       calls.push(["graphql", { query, variables }]);
       const answer = answers.graphql;
       if (answer instanceof Error) throw answer;
-      return typeof answer === "function" ? (answer as (q: string) => unknown)(query) : answer;
+      return typeof answer === "function" ? (answer as (q: string, v?: Record<string, unknown>) => unknown)(query, variables) : answer;
     }),
     paginate: vi.fn(async (method: unknown, params?: Record<string, unknown>) => {
       calls.push([`paginate ${String(method)}`, params]);
@@ -83,6 +83,286 @@ describe("OctokitGitHub", () => {
     ]);
     expect(calls.map((c) => (c[1] as { q: string }).q)).toEqual(["is:pr is:open review-requested:@me", "is:pr is:open author:@me"]);
     expect(slugFromRepositoryUrl("https://api.github.com/repos/o/a")).toBe("o/a");
+  });
+
+  it("pages through every search result and stops at a short page", async () => {
+    const full = (from: number) => Array.from({ length: 100 }, (_, i) => item("o/a", from + i));
+    const { github, calls } = stub({
+      "search.issuesAndPullRequests": ({ q, page }: { q: string; page: number }) => ({
+        items: q.includes("review-requested") ? (page === 1 ? full(1) : page === 2 ? full(101) : [item("o/a", 201)]) : [item("o/a", 5)],
+      }),
+    });
+    const hits = await github.searchMyPrs();
+    expect(hits).toHaveLength(201);
+    const pages = calls.filter((c) => (c[1] as { q: string }).q.includes("review-requested")).map((c) => (c[1] as { page: number }).page);
+    expect(pages).toEqual([1, 2, 3]);
+  });
+
+  it("stops paging at GitHub's 1000 result cap", async () => {
+    let n = 0;
+    const { github, calls } = stub({
+      "search.issuesAndPullRequests": ({ q }: { q: string }) => ({ items: q.includes("author") ? [] : Array.from({ length: 100 }, () => item("o/a", ++n)) }),
+    });
+    expect(await github.searchMyPrs()).toHaveLength(1000);
+    expect(calls.filter((c) => (c[1] as { q: string }).q.includes("review-requested"))).toHaveLength(10);
+  });
+
+  describe("listOpenPrs (the two-pass read of the all-list)", () => {
+    /** A PR node as the bulk query answers it: the fields the per-PR query reads, for `number`. */
+    const prNode = (number: number) => ({ number, title: `PR ${number}`, updatedAt: `t${number}`, reviewThreads: { nodes: [] } });
+    interface FakeRepo {
+      slug: string;
+      open: number;
+      archived?: boolean;
+    }
+    /** GitHub as a fake: a viewer with `repos`, each holding `open` open PRs numbered from 1; every answer carries a rateLimit of `cost` points. */
+    function world(repos: FakeRepo[], { cost = 1, remaining = 4000 }: { cost?: number; remaining?: number } = {}) {
+      const reachable = repos.filter((r) => !r.archived);
+      const log: Array<{ kind: "repos" | "nodes" | "page"; query: string; variables: Record<string, unknown> }> = [];
+      const prs = (r: FakeRepo, from: number, first: number) => {
+        const nodes = Array.from({ length: Math.max(0, Math.min(first, r.open - from)) }, (_, i) => prNode(from + i + 1));
+        const more = from + first < r.open;
+        return { totalCount: r.open, pageInfo: { hasNextPage: more, endCursor: more ? String(from + first) : null }, nodes };
+      };
+      const graphql = (query: string, variables: Record<string, unknown> = {}) => {
+        const rateLimit = { cost, remaining: remaining - log.length * cost };
+        if (query.includes("repositories(")) {
+          log.push({ kind: "repos", query, variables });
+          const from = variables.after == null ? 0 : Number(variables.after);
+          const page = reachable.slice(from, from + 100);
+          const end = from + page.length;
+          return {
+            rateLimit,
+            viewer: {
+              repositories: {
+                pageInfo: { hasNextPage: end < reachable.length, endCursor: end < reachable.length ? String(end) : null },
+                nodes: page.map((r) => ({ id: `id:${r.slug}`, nameWithOwner: r.slug, isArchived: false, pullRequests: { totalCount: r.open } })),
+              },
+            },
+          };
+        }
+        if (query.includes("nodes(ids")) {
+          log.push({ kind: "nodes", query, variables });
+          const first = Number(/first:(\d+)/.exec(query)![1]);
+          const ids = variables.ids as string[];
+          return {
+            rateLimit,
+            nodes: ids.map((id) => {
+              const r = repos.find((x) => `id:${x.slug}` === id)!;
+              return { nameWithOwner: r.slug, pullRequests: prs(r, 0, first) };
+            }),
+          };
+        }
+        log.push({ kind: "page", query, variables });
+        const r = repos.find((x) => x.slug === `${variables.owner}/${variables.name}`)!;
+        return { rateLimit, repository: { pullRequests: prs(r, Number(variables.after), 50) } };
+      };
+      return { graphql, log };
+    }
+    const asked = (log: ReturnType<typeof world>["log"]) => log.filter((l) => l.kind === "nodes");
+    const firstOf = (query: string) => Number(/pullRequests\(states:OPEN, first:(\d+)/.exec(query)![1]);
+
+    /** The fake, refusing the pass 2 calls `refuse` picks: GitHub's resource limit, a 502, or an empty answer. */
+    function refusing(w: ReturnType<typeof world>, refuse: (ids: string[]) => "limit" | "502" | "empty" | null) {
+      return async (query: string, variables: Record<string, unknown> = {}) => {
+        if (query.includes("nodes(ids")) {
+          const how = refuse(variables.ids as string[]);
+          if (how === "limit") throw new Error("Request failed due to following response errors:\n - Resource limits for this query exceeded.");
+          if (how === "502") throw Object.assign(new Error("<html>502 Bad Gateway</html>"), { status: 502 });
+          if (how === "empty") return undefined;
+        }
+        return w.graphql(query, variables);
+      };
+    }
+    const many = Array.from({ length: 8 }, (_, i) => ({ slug: `o/r${i}`, open: 3 }));
+
+    it("splits a pass 2 call GitHub refuses as too big and still reads every repo", async () => {
+      const w = world(many);
+      const { github } = stub({ graphql: refusing(w, (ids) => (ids.length > 2 ? "limit" : null)) });
+      const listed = await github.listOpenPrs();
+      expect(new Set(listed.prs.map((p) => p.repo))).toEqual(new Set(many.map((r) => r.slug)));
+      expect(listed.prs).toHaveLength(24);
+      expect(listed.skipped ?? []).toEqual([]);
+    });
+
+    it("treats a 502 or an empty answer as a failed call to split, never as a crash", async () => {
+      for (const how of ["502", "empty"] as const) {
+        const w = world(many);
+        const { github } = stub({ graphql: refusing(w, (ids) => (ids.length > 1 ? how : null)) });
+        const listed = await github.listOpenPrs();
+        expect(listed.prs, how).toHaveLength(24);
+      }
+    });
+
+    it("skips one repo GitHub keeps refusing, names it, and lists the rest", async () => {
+      const w = world(many);
+      const { github } = stub({ graphql: refusing(w, (ids) => (ids.includes("id:o/r3") ? "limit" : null)) });
+      const listed = await github.listOpenPrs();
+      expect(listed.prs.some((p) => p.repo === "o/r3")).toBe(false);
+      expect(listed.prs).toHaveLength(21);
+      expect(listed.skipped?.map((s) => s.repo)).toEqual(["o/r3"]);
+    });
+
+    it("pass 1 pages the repositories 100 at a time, asking only for each one's open count", async () => {
+      const repos = Array.from({ length: 250 }, (_, i) => ({ slug: `o/r${i}`, open: 0 }));
+      const w = world(repos);
+      const { github } = stub({ graphql: w.graphql });
+      const listed = await github.listOpenPrs();
+      const pass1 = w.log.filter((l) => l.kind === "repos");
+      expect(pass1.map((l) => l.variables.after ?? null)).toEqual([null, "100", "200"]);
+      const query = pass1[0]!.query;
+      expect(query).toContain("affiliations:[OWNER,COLLABORATOR,ORGANIZATION_MEMBER]");
+      expect(query).toContain("ownerAffiliations:[OWNER,COLLABORATOR,ORGANIZATION_MEMBER]");
+      expect(query).toContain("isArchived:false");
+      expect(query).toMatch(/repositories\([^)]*first:100[,)]/);
+      expect(query).toContain("rateLimit{cost remaining}");
+      expect(query).toMatch(/pullRequests\(states:OPEN\)\s*\{\s*totalCount\s*\}/);
+      // No PR fields in pass 1, and no repo without an open PR is read again.
+      expect(query).not.toContain("reviewThreads");
+      expect(query).not.toContain("nodes{ id number");
+      expect(asked(w.log)).toHaveLength(0);
+      expect(listed).toEqual({ prs: [], capped: [], calls: 3 });
+    });
+
+    it("pass 2 reads only repos with an open PR, grouped by how many they hold, in the repo order of pass 1", async () => {
+      const repos: FakeRepo[] = [
+        { slug: "o/big", open: 30 },
+        { slug: "o/none", open: 0 },
+        { slug: "o/one", open: 1 },
+        { slug: "o/five", open: 5 },
+        { slug: "o/six", open: 6 },
+        { slug: "o/ten", open: 10 },
+        { slug: "o/eleven", open: 11 },
+        { slug: "o/fifty", open: 50 },
+        { slug: "o/fiftyone", open: 51 },
+      ];
+      const w = world(repos);
+      const { github } = stub({ graphql: w.graphql });
+      const listed = await github.listOpenPrs();
+      const nodes = asked(w.log);
+      const byFirst: Record<number, string[]> = {};
+      for (const n of nodes) byFirst[firstOf(n.query)] = [...(byFirst[firstOf(n.query)] ?? []), ...(n.variables.ids as string[]).map((id) => id.slice(3))];
+      expect(byFirst).toEqual({
+        5: ["o/one", "o/five"],
+        10: ["o/six", "o/ten"],
+        25: ["o/eleven"],
+        50: ["o/big", "o/fifty", "o/fiftyone"],
+      });
+      expect(nodes[0]!.query).toContain("rateLimit{cost remaining}");
+      expect(nodes[0]!.query).toContain("orderBy:{field:UPDATED_AT, direction:DESC}");
+      // The same fields as the per-PR query, nested lists kept short.
+      expect(nodes[0]!.query).toContain("reviewDecision mergeable mergeStateStatus");
+      expect(nodes[0]!.query).toContain("statusCheckRollup{state contexts(first:50)");
+      expect(nodes[0]!.query).toContain("reviewThreads(first:50)");
+      expect(nodes[0]!.query).toContain("commits(last:1)");
+      const counts = new Map<string, number>();
+      for (const p of listed.prs) counts.set(p.repo, (counts.get(p.repo) ?? 0) + 1);
+      // o/fiftyone holds 51 and is paged by one more call; nothing is capped.
+      expect([...counts]).toEqual([["o/big", 30], ["o/one", 1], ["o/five", 5], ["o/six", 6], ["o/ten", 10], ["o/eleven", 11], ["o/fifty", 50], ["o/fiftyone", 51]]);
+      expect(listed.capped).toEqual([]);
+      // first:50 holds two repos a call (2 x 50 slots within 125), so its three repos take two calls.
+      expect(listed.calls).toBe(1 + 5 + 1);
+    });
+
+    it("maps the PR fields as before", async () => {
+      const w = world([{ slug: "o/a", open: 2 }]);
+      const { github } = stub({ graphql: w.graphql });
+      const listed = await github.listOpenPrs();
+      expect(listed.prs.map((p) => [p.repo, p.node.number, p.node.updatedAt])).toEqual([["o/a", 1, "t1"], ["o/a", 2, "t2"]]);
+    });
+
+    it("caps the repos of one call at five, and the PRs it asks for at about 125", async () => {
+      const small = Array.from({ length: 23 }, (_, i) => ({ slug: `o/s${i}`, open: 1 }));
+      const large = Array.from({ length: 12 }, (_, i) => ({ slug: `o/l${i}`, open: 40 }));
+      const w = world([...small, ...large]);
+      const { github } = stub({ graphql: w.graphql });
+      const listed = await github.listOpenPrs();
+      const nodes = asked(w.log);
+      for (const n of nodes) {
+        const ids = n.variables.ids as string[];
+        expect(ids.length).toBeLessThanOrEqual(5);
+        expect(ids.length * firstOf(n.query)).toBeLessThanOrEqual(125);
+      }
+      // 23 small repos at first:5: 5 + 5 + 5 + 5 + 3; 12 repos at first:50: two a call.
+      expect(nodes.map((n) => (n.variables.ids as string[]).length)).toEqual([5, 5, 5, 5, 3, 2, 2, 2, 2, 2, 2]);
+      expect(listed.prs).toHaveLength(23 + 12 * 40);
+    });
+
+    it("pages a repo with more than 50 open PRs on its own and reports one past the ceiling as capped", async () => {
+      const w = world([{ slug: "o/huge", open: 4000 }, { slug: "o/paged", open: 120 }]);
+      const { github } = stub({ graphql: w.graphql });
+      const listed = await github.listOpenPrs();
+      expect(listed.prs.filter((p) => p.repo === "o/paged")).toHaveLength(120);
+      expect(listed.prs.filter((p) => p.repo === "o/huge")).toHaveLength(500);
+      expect(listed.capped).toEqual([{ repo: "o/huge", open: 4000 }]);
+      const pages = w.log.filter((l) => l.kind === "page");
+      expect(pages.filter((p) => p.variables.name === "paged").map((p) => p.variables.after)).toEqual(["50", "100"]);
+      expect(listed.calls).toBe(1 + 1 + pages.length);
+    });
+
+    it("skips archived repositories", async () => {
+      const w = world([{ slug: "o/live", open: 1 }, { slug: "o/old", open: 3, archived: true }]);
+      const { github } = stub({ graphql: w.graphql });
+      const listed = await github.listOpenPrs();
+      expect(listed.prs.map((p) => p.repo)).toEqual(["o/live"]);
+      expect(asked(w.log).flatMap((n) => n.variables.ids as string[])).toEqual(["id:o/live"]);
+    });
+
+    it("skips a repo the first pass reports archived even when the filter let it through", async () => {
+      const { github } = stub({
+        graphql: (query: string) =>
+          query.includes("repositories(")
+            ? { viewer: { repositories: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [{ id: "i", nameWithOwner: "o/old", isArchived: true, pullRequests: { totalCount: 2 } }] } } }
+            : { nodes: [] },
+      });
+      expect(await github.listOpenPrs()).toEqual({ prs: [], capped: [], calls: 1 });
+    });
+
+    it("logs one line per poll with the PRs, repos, calls, points spent and points left", async () => {
+      const w = world([{ slug: "o/a", open: 2 }, { slug: "o/b", open: 1 }, { slug: "o/c", open: 0 }], { cost: 3, remaining: 4000 });
+      const { github } = stub({ graphql: w.graphql });
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        const listed = await github.listOpenPrs();
+        // One page of repos, and one call for o/a and o/b together (both first:5).
+        expect(listed.calls).toBe(2);
+        expect(log.mock.calls.flat().filter((l) => String(l).startsWith("github prs (all):"))).toEqual(["github prs (all): 3 PRs in 2 repos, 2 calls, 6 points, 3997 left"]);
+      } finally {
+        log.mockRestore();
+      }
+    });
+
+    it("sums the cost of every call, the paging ones included", async () => {
+      const w = world([{ slug: "o/p", open: 60 }], { cost: 2, remaining: 100 });
+      const { github } = stub({ graphql: w.graphql });
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        await github.listOpenPrs();
+        expect(log.mock.calls.flat().join("\n")).toContain("60 PRs in 1 repos, 3 calls, 6 points, 96 left");
+      } finally {
+        log.mockRestore();
+      }
+    });
+
+    it("still answers when GitHub reports no rateLimit", async () => {
+      const { github } = stub({
+        graphql: (query: string) =>
+          query.includes("repositories(")
+            ? { viewer: { repositories: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [{ id: "i", nameWithOwner: "o/a", isArchived: false, pullRequests: { totalCount: 1 } }] } } }
+            : { nodes: [{ nameWithOwner: "o/a", pullRequests: { totalCount: 1, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [prNode(1)] } }] },
+      });
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        expect((await github.listOpenPrs()).prs).toHaveLength(1);
+      } finally {
+        log.mockRestore();
+      }
+    });
+
+    it("keeps GitHub's own message in the error of a failed pass", async () => {
+      const { github } = stub({ graphql: new Error("API rate limit exceeded") });
+      await expect(github.listOpenPrs()).rejects.toThrow(/API rate limit exceeded/);
+    });
   });
 
   it("speaks gh pr checks' vocabulary for check runs and statuses", async () => {
@@ -354,6 +634,17 @@ describe("OctokitGitHub: publishing evidence", () => {
     const { github, calls } = stub({ "issues.listComments": [{ id: 7, body: "hi", html_url: "u7", user: { login: "luna-bot" } }, { id: 8, body: null, html_url: "u8" }] });
     expect(await github.listPrComments("o/a", 3)).toEqual([{ id: 7, body: "hi", url: "u7", author: "luna-bot" }, { id: 8, body: "", url: "u8", author: null }]);
     expect(calls[0]).toEqual(["paginate issues.listComments", { owner: "o", repo: "a", issue_number: 3, per_page: 100 }]);
+  });
+
+  it("never posts a comment whose whole body is /ship: that is the release approval, and the machine's own login must not be able to give it", async () => {
+    const { github, calls } = stub({ "issues.createComment": {}, "issues.updateComment": {} });
+    for (const body of ["/ship", "  /SHIP\n"]) {
+      await expect(github.commentOnIssue("o/a", 3, body)).rejects.toThrow(GitHubError);
+      await expect(github.updateComment("o/a", 7, body)).rejects.toThrow(/\/ship/);
+    }
+    expect(calls).toEqual([]);
+    await github.commentOnIssue("o/a", 3, "/ship it");
+    expect(calls).toEqual([["issues.createComment", { owner: "o", repo: "a", issue_number: 3, body: "/ship it" }]]);
   });
 
   it("updates a comment by its id", async () => {

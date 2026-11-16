@@ -52,6 +52,7 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   ticket_assess: [],
   conversation_assess: [],
   conversation_relation: [],
+  pr_link: [],
   conversation_reply: [],
   ticket_recommend: [],
   ticket_reply: [],

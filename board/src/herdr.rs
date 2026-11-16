@@ -73,7 +73,9 @@ pub const REFUSE_CONTAINER: &str = "refused: the container name is not a plain n
 /// into a terminal pane, so nothing a shell would read as more than one word gets there.
 pub fn valid_container(name: &str) -> bool {
     let mut chars = name.chars();
-    chars.next().is_some_and(|c| c.is_ascii_alphanumeric()) && name.len() <= 128 && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+    chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && name.len() <= 128
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
 }
 
 /// The line typed into a pane to tail `container`; none for a name that is not plain.
@@ -128,13 +130,26 @@ pub fn open_and_focus(short_id: &str, stage: &Stage) {
     if focus_task_tab(short_id) {
         return;
     }
-    let Some(created) = json(&["tab", "create", "--cwd", &stage.cwd, "--label", &stage.label]) else {
+    let Some(created) = json(&[
+        "tab",
+        "create",
+        "--cwd",
+        &stage.cwd,
+        "--label",
+        &stage.label,
+    ]) else {
         return;
     };
-    if let (Some(pane), Some(command)) = (created["result"]["root_pane"]["pane_id"].as_str(), logs_command(&stage.container)) {
+    if let (Some(pane), Some(command)) = (
+        created["result"]["root_pane"]["pane_id"].as_str(),
+        logs_command(&stage.container),
+    ) {
         run(&["pane", "run", pane, &command]);
     }
-    if let Some(tab) = created["result"]["tab"]["tab_id"].as_str().or_else(|| created["result"]["tab_id"].as_str()) {
+    if let Some(tab) = created["result"]["tab"]["tab_id"]
+        .as_str()
+        .or_else(|| created["result"]["tab_id"].as_str())
+    {
         run(&["tab", "focus", tab]);
     } else {
         focus_task_tab(short_id);
@@ -162,7 +177,10 @@ fn running_stages(listed: &str) -> Vec<(String, String)> {
 pub fn running_containers() -> Vec<(String, String)> {
     let format = format!("{{{{.Names}}}}\t{{{{.Label \"{TASK_LABEL}\"}}}}");
     let filter = format!("label={TASK_LABEL}");
-    let Ok(output) = Command::new("docker").args(["ps", "--filter", &filter, "--format", &format]).output() else {
+    let Ok(output) = Command::new("docker")
+        .args(["ps", "--filter", &filter, "--format", &format])
+        .output()
+    else {
         return Vec::new();
     };
     running_stages(&String::from_utf8_lossy(&output.stdout))
@@ -173,10 +191,15 @@ pub fn running_containers() -> Vec<(String, String)> {
 /// still finds `.git` from a subdirectory.
 pub fn workspace_repo() -> Option<String> {
     let from_herdr = (|| {
-        let context: Value = serde_json::from_str(&env::var("HERDR_PLUGIN_CONTEXT_JSON").ok()?).ok()?;
+        let context: Value =
+            serde_json::from_str(&env::var("HERDR_PLUGIN_CONTEXT_JSON").ok()?).ok()?;
         Some(context["workspace_cwd"].as_str()?.to_string())
     })();
-    let start = from_herdr.or_else(|| env::current_dir().ok().map(|p| p.to_string_lossy().into_owned()))?;
+    let start = from_herdr.or_else(|| {
+        env::current_dir()
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
+    })?;
     repo_root(Path::new(&start)).map(|p| p.to_string_lossy().into_owned())
 }
 
@@ -209,7 +232,15 @@ pub fn available() -> bool {
 
 /// A desktop notification with herdr's "request" sound.
 pub fn notify(title: &str, body: &str) {
-    run(&["notification", "show", title, "--body", body, "--sound", "request"]);
+    run(&[
+        "notification",
+        "show",
+        title,
+        "--body",
+        body,
+        "--sound",
+        "request",
+    ]);
 }
 
 /// Relabels the board's own tab (`Board`, `Board !2`), when running as a herdr plugin.
@@ -225,38 +256,91 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{follow_command, open_and_focus, pane_in_tab, repo_root, running_stages, tab_with_prefix, watch_action, Stage, WatchAction};
+    use super::{
+        Stage, WatchAction, follow_command, open_and_focus, pane_in_tab, repo_root, running_stages,
+        tab_with_prefix, watch_action,
+    };
 
     fn stage() -> Stage {
-        Stage { label: "#abcd1234 app · Fix".into(), cwd: "/w".into(), container: "c1".into() }
+        Stage {
+            label: "#abcd1234 app · Fix".into(),
+            cwd: "/w".into(),
+            container: "c1".into(),
+        }
     }
 
     #[test]
     fn a_stage_starting_only_repoints_an_existing_pane() {
-        assert_eq!(follow_command(None, "c2"), None, "no tab, no command: nothing is created");
-        assert_eq!(follow_command(Some("p:2"), "c2"), Some(("p:2".to_string(), "docker logs -f c2".to_string())));
+        assert_eq!(
+            follow_command(None, "c2"),
+            None,
+            "no tab, no command: nothing is created"
+        );
+        assert_eq!(
+            follow_command(Some("p:2"), "c2"),
+            Some(("p:2".to_string(), "docker logs -f c2".to_string()))
+        );
     }
 
     #[test]
     fn a_container_name_is_typed_into_a_pane_only_when_it_is_a_plain_name() {
         let long_ok = format!("a{}", "b".repeat(127));
         let too_long = format!("a{}", "b".repeat(128));
-        for name in ["c1", "hardness-abc-triage", "a_b.c-d", "0abc", long_ok.as_str()] {
+        for name in [
+            "c1",
+            "hardness-abc-triage",
+            "a_b.c-d",
+            "0abc",
+            long_ok.as_str(),
+        ] {
             assert!(super::valid_container(name), "{name}");
-            assert_eq!(follow_command(Some("p:1"), name), Some(("p:1".to_string(), format!("docker logs -f {name}"))), "{name}");
+            assert_eq!(
+                follow_command(Some("p:1"), name),
+                Some(("p:1".to_string(), format!("docker logs -f {name}"))),
+                "{name}"
+            );
         }
-        for name in ["", "-rf", ".hidden", "_x", "c1; rm -rf ~", "c1 && id", "$(id)", "a`id`", "a\nb", "a\rb", "a b", "a|b", "a\u{1b}[2J", "né", too_long.as_str()] {
+        for name in [
+            "",
+            "-rf",
+            ".hidden",
+            "_x",
+            "c1; rm -rf ~",
+            "c1 && id",
+            "$(id)",
+            "a`id`",
+            "a\nb",
+            "a\rb",
+            "a b",
+            "a|b",
+            "a\u{1b}[2J",
+            "né",
+            too_long.as_str(),
+        ] {
             assert!(!super::valid_container(name), "{name:?}");
-            assert_eq!(follow_command(Some("p:1"), name), None, "{name:?} is refused, nothing is typed");
+            assert_eq!(
+                follow_command(Some("p:1"), name),
+                None,
+                "{name:?} is refused, nothing is typed"
+            );
         }
-        assert_eq!(super::REFUSE_CONTAINER, "refused: the container name is not a plain name");
+        assert_eq!(
+            super::REFUSE_CONTAINER,
+            "refused: the container name is not a plain name"
+        );
     }
 
     #[test]
     fn f_focuses_an_existing_tab_opens_for_a_running_stage_or_says_nothing_to_watch() {
-        assert_eq!(watch_action(true, Some(&stage())), WatchAction::FocusExisting);
+        assert_eq!(
+            watch_action(true, Some(&stage())),
+            WatchAction::FocusExisting
+        );
         assert_eq!(watch_action(true, None), WatchAction::FocusExisting);
-        assert_eq!(watch_action(false, Some(&stage())), WatchAction::OpenAndFocus(stage()));
+        assert_eq!(
+            watch_action(false, Some(&stage())),
+            WatchAction::OpenAndFocus(stage())
+        );
         assert_eq!(watch_action(false, None), WatchAction::NothingToWatch);
     }
 
@@ -296,8 +380,15 @@ mod tests {
             {"tab_id": "w:3", "label": opened.label},
         ]}});
         let found = tab_with_prefix(&tabs, "#abcd1234 ");
-        assert_eq!(found.as_deref(), Some("w:3"), "the opened tab carries the task's #short prefix");
-        assert_eq!(watch_action(found.is_some(), Some(&stage())), WatchAction::FocusExisting);
+        assert_eq!(
+            found.as_deref(),
+            Some("w:3"),
+            "the opened tab carries the task's #short prefix"
+        );
+        assert_eq!(
+            watch_action(found.is_some(), Some(&stage())),
+            WatchAction::FocusExisting
+        );
         let panes = json!({"result": {"panes": [{"pane_id": "p:3", "tab_id": "w:3"}]}});
         let pane = pane_in_tab(&panes, "w:3");
         assert_eq!(
@@ -310,12 +401,16 @@ mod tests {
     #[test]
     fn reads_running_stage_containers_from_docker_ps() {
         let listed = "hardness-abc-triage\tabc\n\nstray-container\t\n";
-        assert_eq!(running_stages(listed), vec![("hardness-abc-triage".to_string(), "abc".to_string())]);
+        assert_eq!(
+            running_stages(listed),
+            vec![("hardness-abc-triage".to_string(), "abc".to_string())]
+        );
     }
 
     #[test]
     fn repo_root_walks_up_to_the_nearest_git_dir() {
-        let root = std::env::temp_dir().join(format!("hardness-repo-root-test-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("hardness-repo-root-test-{}", std::process::id()));
         let nested = root.join("a").join("b");
         fs::create_dir_all(&nested).unwrap();
         fs::create_dir_all(root.join(".git")).unwrap();

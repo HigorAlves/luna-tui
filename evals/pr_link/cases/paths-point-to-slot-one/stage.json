@@ -1,0 +1,56 @@
+{
+  "schema": 3,
+  "stage": "pr_link",
+  "pack": "pr_link",
+  "attempt": 1,
+  "task": {
+    "id": "pr-link",
+    "title": "Cleanup",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "prLink": {
+      "pr": {
+        "title": "Cleanup",
+        "branch": "feature/avatar-upload",
+        "body": "",
+        "files": [
+          "src/avatar/upload.ts",
+          "src/avatar/AvatarPicker.tsx",
+          "src/avatar/upload.test.ts"
+        ]
+      },
+      "candidates": [
+        {
+          "slot": 1,
+          "kind": "card",
+          "id": "a9e03d12",
+          "title": "Let users upload an avatar",
+          "excerpt": "Profile page: pick an image, crop it, store it as the user's avatar."
+        },
+        {
+          "slot": 2,
+          "kind": "jira",
+          "id": "DISC-91",
+          "title": "Rename the billing tab",
+          "excerpt": "The tab should read Plans."
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -82,6 +82,9 @@ pnpm eval --pack ticket_recommend --engine jev --save-baseline
 pnpm eval --pack loop_judge --engine claude:haiku --save-baseline
 pnpm eval --pack loop_judge --engine codex:luna --save-baseline
 pnpm eval --pack loop_judge --engine jev --save-baseline
+pnpm eval --pack pr_link --engine claude:haiku --save-baseline
+pnpm eval --pack pr_link --engine codex:luna --save-baseline
+pnpm eval --pack pr_link --engine jev --save-baseline
 pnpm eval scorecard
 pnpm eval defaults   # prints every proposal and writes nothing
 # pnpm eval defaults --write --except triage_signals   # then take the packs that now have an entry out of UNMEASURED

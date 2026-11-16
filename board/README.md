@@ -25,6 +25,8 @@ the two needs no restart. `HARDNESS_MACHINE_URL` pins one address instead. `LUNA
 
 From the board, the `x` menu, the Inbox or `:start`, `a` (and `A` at the retro) at any gate opens the task so you read what you approve; inside the task it asks once, naming the gate (`y` or `enter` approves, `n` or `esc` cancels), and sends nothing if the card moved to another gate meanwhile. `a` over marked cards at a plan, split, ship or release gate asks once, with the count and the kinds; the other gates are approved inside their card. `q` asks before quitting while a card needs you or is running, and `Q` quits at once. `tab` on the board jumps to the next card that needs you. Columns collapse by width: empty ones first, then Done, and the header says where the rest are.
 
+The machine refuses to approve a plan while a criterion has no scenario that names it, unless you excuse it as untestable. The Plan page lists those criteria under `Open coverage gaps`. `u` opens a picker over them: `space` ticks one, `a` ticks all or none, `enter` approves with the ticked criteria excused (recorded on the gate and flagged at every later gate, under your `LUNA_APPROVER` name like any approval), `esc` cancels. A plain `a` that the machine answers with `409 coverage_gaps` opens the same picker instead of only showing the error. A criterion you leave unticked keeps the refusal.
+
 ## Install as a herdr plugin (local link)
 
 ```sh
@@ -86,6 +88,8 @@ as given when the path starts with `/`, `~` or `.`. `:filter` covers filtering b
 `pnpm board:keys` (`hardness-board --keys-md board/README.md`)
 generates the tables below. A test fails when they drift from the registry.
 
+`ctrl+l` repaints the whole screen, in any view, when the terminal shows stray characters. The board also repaints in full when a card or popup opens or closes, and when the pane resizes.
+
 <!-- keys:start board -->
 **Gate**
 
@@ -96,6 +100,7 @@ generates the tables below. A test fails when they drift from the registry.
 | `p` | post these questions at the source |
 | `A` | memory review: approve, skip the rules |
 | `N` | reject the plan, with a comment; reject the split, with a comment; reject the release, archive the card |
+| `u` | open to excuse untestable criteria |
 | `r` | send back with a reason |
 | `x` then `S` | ship: approve and open the PR |
 
@@ -238,7 +243,7 @@ about the ticket, whether or not someone decided a gate. The approved plan stays
 | Section | Shows | Keys inside |
 |---|---|---|
 | Overview | the status. One row per acceptance criterion: its state in the plan, how many cases prove it, what verifying found. Repo, branch, issue, the Jira link, the SLA clocks, why, spend. The ticket's description and criteria. A setup gate's `luna.yaml` and proof, triage's questions, the memory review's rules | `e` edits the ticket's text, `J` links or unlinks the Jira issue |
-| Plan | triage's latest plan, read like the Review page (brief, each criterion with its id, steps with size and files, rollback) and its history: send-backs with their reason, your edits, the approval | `e` edits brief, criteria and assumptions until Build starts; `a` / `r` at the gate |
+| Plan | triage's latest plan, read like the Review page (brief, each criterion with its id, steps with size and files, rollback) and its history: send-backs with their reason, your edits, the approval | `e` edits brief, criteria and assumptions until Build starts; `a` / `r` at the gate; `u` excuses open coverage gaps and approves |
 | Tests | test_design's scenarios under the criterion each proves (id, type, layer, title), with ✓ ✗ – from verifying | `e` edits the cases while they wait for your check (`## criterion`, `- case`, the approach under it) |
 | Runs | every stage run with how long it took, its cost and turns. The selected run's error, per-case verdicts and files. It opens on the latest run | `j`/`k` pick a run, `J`/`K` scroll |
 | Diff | the branch against its base: files with +/−, the selected file's patch. The machine sends at most 512 KB of it. The pane says when it cut | `j`/`k` pick a file, `J`/`K` scroll the patch, `o` opens the file from the worktree |
@@ -260,6 +265,7 @@ These are the popup's keys. `?` inside it lists them with the ticket's state.
 | `p` | post these questions at the source |
 | `A` | memory review: approve, skip the rules |
 | `N` | reject the plan, with a comment; reject the split, with a comment; reject the release, archive the card |
+| `u` | approve, excusing untestable criteria |
 | `r` | send back with a reason |
 | `S` | ship: approve and open the PR |
 
@@ -383,7 +389,7 @@ See the [root README](../.github/README.md).
 
 ## Pulls
 
-`P` opens the PR inbox. It shows every open pull request on GitHub where someone requests your review or that you authored. The machine polls GitHub every minute (`:prs` opens the inbox too). The inbox has six splits. Use `h`/`l` or `1`–`6` to move between the splits. Use `j`/`k` to go down the rows, oldest first:
+`P` opens the PR inbox. It shows every open pull request on GitHub where someone requests your review or that you authored. The machine polls GitHub every minute (`:prs` opens the inbox too). The inbox has six splits and a seventh tab, All repos. Use `h`/`l` or `1`–`7` to move between them. Use `j`/`k` to go down the rows, oldest first:
 
 | Split | A PR lands here when |
 |---|---|
@@ -393,8 +399,9 @@ See the [root README](../.github/README.md).
 | CI running | yours, a check still running |
 | Changes requested | yours, changes requested or review threads still open |
 | Mine | everything else you authored, drafts included |
+| All repos | every open PR in the repos you can reach (owner, collaborator, organisation member), newest first. It has its own list, so a PR can be here and in a split. The per-PR keys work on its rows |
 
-Review requested, Ready to merge, CI failed and Changes requested count on the Board tab's badge. They also raise a herdr notice when a PR moves into them.
+Review requested, Ready to merge, CI failed and Changes requested count on the Board tab's badge. They also raise a herdr notice when a PR moves into them. All repos never counts on the badge. A machine without `/github/prs/all` leaves the tab empty and says so in it.
 
 <!-- keys:start pulls -->
 **Pull request**
@@ -411,9 +418,12 @@ Review requested, Ready to merge, CI failed and Changes requested count on the B
 
 | Key | Does |
 |---|---|
+| `C` | clone the repo to a directory you pick |
 | `j / k` | previous / next PR |
 | `h / l` | previous / next split |
-| `1-6` | jump to that split |
+| `1-7` | jump to that split (7: all repos) |
+| `f` | show one repo (filter as you type) |
+| `F` | show every repo again |
 | `enter` | jump to its task, else open the PR |
 | `o` | open the PR in the browser |
 | `esc / P / q` | close |
@@ -494,7 +504,9 @@ verdict waits at the Ship gate for `a`. `t` dispatches an agent that answers eve
 review thread on your PR. It pushes, posts the replies and resolves the threads it settled. `enter`
 jumps to the PR's task on the board when one is running, else opens the PR.
 
-`R` polls GitHub now. A poll reads every PR, so it runs in the background. The header says `◐ polling GitHub…` until the answer lands. Then a toast says `polled GitHub`. A second `R` meanwhile only says it is already polling. Slack's `R` does the same.
+`f` opens a filter-as-you-type picker of the repos in both lists. `enter` sets the filter, `esc` cancels, and `F` clears it. The filter applies to every tab, the tab counts follow it, and the header shows it. `C` clones the selected PR's repo when the machine has no checkout of it. It opens the same folder picker as a dispatch, and `enter` clones into `<folder>/<name>` and runs nothing afterwards. With a checkout already there, `C` says where it is. (`c` is the CI fix key, so the clone key is the capital.)
+
+`R` polls GitHub now, the inbox and the All repos list together. A poll reads every PR, so it runs in the background. The header says `◐ polling GitHub…` until the answer lands. Then a toast says `polled GitHub`. A second `R` meanwhile only says it is already polling. Slack's `R` does the same.
 
 From 100 columns the view is a list beside a detail pane. A row reads `✓ ▌repo  #n  title  age  tag` in fixed columns. The checks glyph comes first (`✓` green, `✗` red, `◐` running). The repo's colour bar and name come next (the name after the owner's `/`, in the same colour its cards wear). While a task runs for the PR, a spinner and the work follow (`◐ ci fix`, `◐ review`, `◐ threads`, in bold yellow). `⌂` shows when the machine has no clone of the repo. The board only ever cuts the title. The list scrolls to keep the selected row in view. The pane shows the selected PR. It lists the author and branches, every check by name, the review state and unresolved threads. It also lists the task in flight and the keys, with why each is off. Under 100 columns the pane hides, and `x` shows the same detail over the list. A dispatch on such a PR opens the clone prompt. It is the same filter-as-you-type search `R` uses, over the folders under `HARDNESS_REPOS_DIR`. `enter` clones into `<folder>/<name>` and runs the action once the clone lands. `esc` leaves the row read-only. `c` and `t` are off on a fork head (nothing can push to it). `v` is off on your own PRs. All three are off while a task already runs for the PR.
 
@@ -502,7 +514,7 @@ From 100 columns the view is a list beside a detail pane. A row reads `✓ ▌re
 
 Since wave 17 the machine reads only the conversations you opted in. That is a channel you watch with `W`, or one listed in `conversation.channels` of a repository's `luna.yaml`. Until you opt something in, the view says so. Each thread shows what the machine made of it. It shows the thread's kind and how sure the machine is. It shows the five scores and the total, and the knock-out when one hit. It shows "asks you" when the machine is not sure. It shows the card or backlog item the thread relates to (for a ticket-sourced card, `about a card from <kind> <key>` on its own line). It shows how many secrets the machine cut. It shows the draft that waits, with how long until it expires. `c` sets the kind, and `L` sets the card or backlog item the thread is about (the picker lists only the candidates the machine listed). Both store an answer and teach the machine. Neither posts. The board posts nothing until you tap. `r` sends or edits the draft. `d` ignores a waiting draft and asks why. The answers are `n` (the thread needed no reply), `b` (the draft was bad) and `s` (skip). The answer teaches the machine, and nothing posts. `t` makes the card.
 
-`S` opens the Slack inbox (`:slack` too). It shows everything your Activity tab shows, plus the handles you watch. The machine polls it every minute, and a triage pass sorts it. The inbox has six splits. Use `h`/`l` or `1`–`6` to move between the splits. Use `j`/`k` to go down the rows. Needs reply and Decide go P0 first, then oldest. The other splits go newest first.
+`S` opens the Slack inbox (`:slack` too). It shows everything your Activity tab shows, plus the handles you watch. The machine polls it every minute, and a triage pass sorts it. The inbox has six splits and a seventh tab, All repos. Use `h`/`l` or `1`–`7` to move between them. Use `j`/`k` to go down the rows. Needs reply and Decide go P0 first, then oldest. The other splits go newest first.
 
 | Split | An item lands here when |
 |---|---|
@@ -644,6 +656,7 @@ What the ticket shows:
 | `T` | correct the triage record |
 | `p` | post these questions at the source |
 | `N` | reject the plan, with a comment; reject the split, with a comment; reject the release, archive the card |
+| `u` | approve, excusing untestable criteria |
 | `r` | send back with a reason |
 | `S` | ship: approve and open the PR |
 

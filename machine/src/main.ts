@@ -1,11 +1,12 @@
 // Entry point for `pnpm dev`: migrates the database, recovers tasks a previous run left
 // mid-stage, then serves the API on localhost.
 import { expireKept, keepFolder } from "./application/kept-sandboxes.ts";
-import { hostFreshWorkspace, removeLeftovers } from "./adapters/git/clone.ts";
+import { hostBaselineWorkspace, hostFreshWorkspace, removeLeftovers } from "./adapters/git/clone.ts";
 import { type BudgetAlert, type EvidenceContext, FACTORY_DEFAULTS, Ledger, PrAction, type PullRequest, RUN_OR_GATE, type TicketContext, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
+import { readinessProblems } from "./application/readiness.ts";
 import { Bus } from "./adapters/http/bus.ts";
 import { StreamWatcher } from "./adapters/http/watch.ts";
 import { parseSince } from "./adapters/http/metrics.ts";
@@ -298,9 +299,11 @@ const stackDeps = {
     ),
   defaultBranch: githubDefaultBranch,
 };
+/** One Jira client for every call; without the three variables each call says so and nothing syncs. */
+const jiraApi = config.jira ? createJira(config.jira) : noTokenJira();
 /** Ship's review-loop decisions run through PackRuns as the `ship` client: bound once it exists. */
 const shipDecisions: { decide: ShipDecide | null } = { decide: null };
-const { real, resolveConflicts, verifyPack, checksExec, proofRig, agentDeps, shipGateProbe } = await buildRealStages(
+const { stubReason, real, resolveConflicts, verifyPack, checksExec, proofRig, agentDeps, shipGateProbe } = await buildRealStages(
   config,
   watcher,
   (taskId) => pipeline.latestStageFinish(taskId, "e2e"),
@@ -341,6 +344,20 @@ const { real, resolveConflicts, verifyPack, checksExec, proofRig, agentDeps, shi
   // A stacked card's workspace: what it is cut from and the base it drops, read from the pipeline's rows when a run first makes it.
   stackDeps,
   economy,
+  // The review route reads the Jira tickets a PR names, only when Jira is configured.
+  config.jira ? jiraApi : null,
+  // The review route links a PR to the cards and tickets it is the work of: by fact from the board, else by the `pr_link` decision (Jev only), and keeps the links.
+  {
+    cards: () => pipeline.list(),
+    prUrls: async (id) => (await pipeline.events(id)).flatMap((e) => (e.kind === "stage.pr.opened" && typeof e.payload.url === "string" ? [e.payload.url] : [])),
+    decision: {
+      // The decision is metered and opt-in: without a Jev credential the fallback is skipped, not moved to a Claude engine.
+      available: async () => packRuns !== undefined && (await credentials.check("jev")).available,
+      decide: async (prLink) => (await ownCalls(packRuns!).run({ pack: "pr_link", context: { prLink }, stage: "reviewing" }, "review")).answer as Record<string, unknown>,
+      overrides: async (repoPath) => (repoPath ? (await policies.for(repoPath)).decisions.pr_link : undefined) ?? {},
+    },
+    record: (taskId, links, pr) => pipeline.recordReview(taskId, links, pr),
+  },
 );
 /** The retro's facts for a task, from the machine's own records. */
 async function retroFactsFor(taskId: string) {
@@ -364,6 +381,8 @@ const realVerifyRunner = verifyRunner({
   runPack: verifyPack,
   // Verify runs on a fresh clone at the head commit, never in the folder Build used.
   fresh: keptFresh,
+  // A failing check is asked again on the base, in a throwaway clone: a failure that is there too is the environment's, not the card's.
+  baseline: hostBaselineWorkspace,
   // The environment Build recorded, and the one Verify's fresh clone has.
   buildEnv: async (taskId) => {
     const env = (await pipeline.latestStageFinish(taskId, "implementing"))?.detail?.env as EnvRecord | undefined;
@@ -542,8 +561,6 @@ pipeline = new Pipeline(db, runnerFor, {
   telemetry,
 });
 replies = new ThreadReplies({ pipeline, github, enabled: config.threadReplies, ...(config.slack ? { slack: config.slack } : {}), slackPort: () => (config.slackInbox.userToken ? slackApi : null) });
-/** One Jira client for every call; without the three variables each call says so and nothing syncs. */
-const jiraApi = config.jira ? createJira(config.jira) : noTokenJira();
 const jiraExpiry = new TokenExpiry(config.jira?.tokenExpiresAt ?? null);
 jiraSync = new JiraSync({ pipeline, jira: jiraApi, enabled: config.jira !== null, boardUrl: `http://${config.host}:${config.port}` });
 slaClocks = new SlaClocks({ pipeline, defaults: { gate: config.sla.gateSecs, cycle: config.sla.cycleSecs } });
@@ -556,6 +573,7 @@ const repoMap = new RepoMap({ map: config.repoMap, reposDir: config.reposDir, fi
 const pulls = new GitHubPulls({
   github,
   intervalMs: config.githubPrs.intervalMs,
+  allIntervalMs: config.githubPrs.allIntervalMs,
   resolveRepo: (repo) => repoMap.resolve(repo),
   rememberRepo: (repo, path) => repoMap.remember(repo, path),
   findTask: async (repo, number) => {
@@ -564,6 +582,7 @@ const pulls = new GitHubPulls({
     return task && route?.success && !isTerminal(task.state) ? { id: task.id, state: task.state, route: route.data } : null;
   },
   publish: (snapshot) => bus.publish({ type: "github.prs", snapshot }),
+  publishAll: (snapshot) => bus.publish({ type: "github.prs.all", snapshot }),
 });
 const prTasks = {
   dispatch: (pr: PullRequest, action: PrAction) => createPrTask({ worktreesDir: config.worktreesDir, pipeline }, pr, action),
@@ -799,6 +818,8 @@ const approveBase = async (repo: string, base: string): Promise<{ ok: true } | {
   return { ok: true };
 };
 const app = createApp({
+  // The identity is read on each call, so a machine fixed in place turns healthy without a restart; the token and the stub reason are fixed at boot.
+  problems: async () => readinessProblems({ githubToken: config.githubToken, identity: await gitIdentity(process.cwd()), stubReason }),
   approveBase,
   ...(config.economy ? { economy: { port: economy, knownRepos, configOf: async (repo: string) => (await policies.for(repo)).factory.economy } } : {}),
   repoHealth: () =>
@@ -840,7 +861,7 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: config.hos
 });
 
 if (config.githubPrs.enabled) {
-  console.log(`github prs: polling every open PR involving you every ${config.githubPrs.intervalMs / 1000}s`);
+  console.log(`github prs: polling every open PR involving you every ${config.githubPrs.intervalMs / 1000}s, every open PR in your repos every ${config.githubPrs.allIntervalMs / 1000}s`);
   pulls.start();
 }
 
@@ -926,6 +947,7 @@ graphWatch = new GraphWatch({
   graph,
   policies,
   repos: knownRepos,
+  skip: (repoPath) => pulls.isCloning(repoPath),
 });
 const graphTicker = config.agents && config.graphIntervalSecs !== null ? new Ticker(() => void graphWatch?.tick(), config.graphIntervalSecs * 1000) : null;
 if (graphTicker) {

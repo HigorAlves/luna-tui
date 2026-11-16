@@ -29,8 +29,18 @@ pub struct RefGroup {
 }
 
 impl RefGroup {
-    pub fn new(id: &'static str, title: &str, summary: impl Into<String>, lines: Vec<Line<'static>>) -> RefGroup {
-        RefGroup { id, title: title.to_string(), summary: summary.into(), lines }
+    pub fn new(
+        id: &'static str,
+        title: &str,
+        summary: impl Into<String>,
+        lines: Vec<Line<'static>>,
+    ) -> RefGroup {
+        RefGroup {
+            id,
+            title: title.to_string(),
+            summary: summary.into(),
+            lines,
+        }
     }
 
     fn is_short(&self) -> bool {
@@ -47,7 +57,10 @@ pub struct Page {
 
 impl Page {
     pub fn of(main: Vec<Line<'static>>) -> Page {
-        Page { main, groups: Vec::new() }
+        Page {
+            main,
+            groups: Vec::new(),
+        }
     }
 }
 
@@ -122,9 +135,16 @@ impl RefState {
     /// and the key moves the focus.
     pub fn scroll_into(&mut self, delta: i64) -> bool {
         let shape = self.side.borrow().clone();
-        let (Some(shape), Some(at)) = (shape, self.at()) else { return false };
-        let Some(&(start, end)) = shape.spans.get(at) else { return false };
-        let offset = self.side_offset.get().min(shape.total.saturating_sub(shape.height));
+        let (Some(shape), Some(at)) = (shape, self.at()) else {
+            return false;
+        };
+        let Some(&(start, end)) = shape.spans.get(at) else {
+            return false;
+        };
+        let offset = self
+            .side_offset
+            .get()
+            .min(shape.total.saturating_sub(shape.height));
         if delta > 0 {
             // The last row of the group must sit above the marker that covers the pane's bottom row.
             let more = offset + shape.height < shape.total;
@@ -146,7 +166,8 @@ impl RefState {
         let Some(shape) = shape else { return false };
         let half = (shape.height / 2).max(1) as i64;
         let max = shape.total.saturating_sub(shape.height) as i64;
-        self.side_offset.set((self.side_offset.get() as i64 + delta * half).clamp(0, max) as usize);
+        self.side_offset
+            .set((self.side_offset.get() as i64 + delta * half).clamp(0, max) as usize);
         true
     }
 
@@ -169,10 +190,18 @@ impl RefState {
 }
 
 /// The groups as lines, and the row of each group's header inside them. `width` pads a focused header.
-pub fn layout(groups: &[RefGroup], section: Section, state: &RefState, side: bool, width: usize) -> (Vec<Line<'static>>, Vec<usize>) {
+pub fn layout(
+    groups: &[RefGroup],
+    section: Section,
+    state: &RefState,
+    side: bool,
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<usize>) {
     let mut lines = Vec::new();
     let mut headers = Vec::new();
-    let focused = state.focus.then(|| state.cursor.min(groups.len().saturating_sub(1)));
+    let focused = state
+        .focus
+        .then(|| state.cursor.min(groups.len().saturating_sub(1)));
     for (i, group) in groups.iter().enumerate() {
         if i > 0 && side {
             lines.push(Line::default());
@@ -180,15 +209,30 @@ pub fn layout(groups: &[RefGroup], section: Section, state: &RefState, side: boo
         headers.push(lines.len());
         let open = state.is_open(section, group, side);
         let fixed = side && group.is_short();
-        let marker = if fixed { " " } else if open { "▾" } else { "▸" };
-        let mut spans = vec![Span::styled(format!("{marker} {}", group.title), theme::label().bold())];
+        let marker = if fixed {
+            " "
+        } else if open {
+            "▾"
+        } else {
+            "▸"
+        };
+        let mut spans = vec![Span::styled(
+            format!("{marker} {}", group.title),
+            theme::label().bold(),
+        )];
         if !open && !group.summary.is_empty() {
             spans.push(Span::styled(format!("  {}", group.summary), theme::dim()));
         }
         let mut header = Line::from(spans);
         if focused == Some(i) {
-            let used = header.spans.iter().map(|s| cells(&s.content)).sum::<usize>();
-            header.spans.push(Span::raw(" ".repeat(width.saturating_sub(used))));
+            let used = header
+                .spans
+                .iter()
+                .map(|s| cells(&s.content))
+                .sum::<usize>();
+            header
+                .spans
+                .push(Span::raw(" ".repeat(width.saturating_sub(used))));
             header = header.style(theme::selection());
         }
         lines.push(header);
@@ -208,11 +252,19 @@ mod tests {
     use super::*;
 
     fn text(lines: &[Line]) -> Vec<String> {
-        lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect()
+        lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
     }
 
     fn group(id: &'static str, title: &str, n: usize) -> RefGroup {
-        RefGroup::new(id, title, format!("{n} lines"), (0..n).map(|i| Line::from(format!("{id} {i}"))).collect())
+        RefGroup::new(
+            id,
+            title,
+            format!("{n} lines"),
+            (0..n).map(|i| Line::from(format!("{id} {i}"))).collect(),
+        )
     }
 
     #[test]
@@ -222,10 +274,17 @@ mod tests {
         let (side, _) = layout(&groups, Section::Plan, &state, true, 30);
         let side = text(&side);
         assert_eq!(side[0], "▸ Code map  5 lines");
-        assert!(side.contains(&"  Risk".to_string()) && side.contains(&"  risk 1".to_string()), "{side:?}");
+        assert!(
+            side.contains(&"  Risk".to_string()) && side.contains(&"  risk 1".to_string()),
+            "{side:?}"
+        );
         assert!(!side.iter().any(|l| l.contains("map 0")), "{side:?}");
         let (under, _) = layout(&groups, Section::Plan, &state, false, 30);
-        assert_eq!(text(&under), ["▸ Code map  5 lines", "▸ Risk  2 lines"], "narrow: every group is folded to its header");
+        assert_eq!(
+            text(&under),
+            ["▸ Code map  5 lines", "▸ Risk  2 lines"],
+            "narrow: every group is folded to its header"
+        );
     }
 
     #[test]
@@ -242,7 +301,10 @@ mod tests {
         assert_eq!(lines[1], "  map 0");
         assert_eq!(headers, [0, 7]);
         state.toggle(Section::Plan);
-        assert_eq!(text(&layout(&groups, Section::Plan, &state, true, 30).0)[0].trim_end(), "▸ Code map  5 lines");
+        assert_eq!(
+            text(&layout(&groups, Section::Plan, &state, true, 30).0)[0].trim_end(),
+            "▸ Code map  5 lines"
+        );
     }
 
     #[test]

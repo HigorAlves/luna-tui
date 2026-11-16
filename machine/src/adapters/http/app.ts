@@ -79,7 +79,7 @@ import { TransitionError } from "../../domain/transition.ts";
 import { checkLunaConfigText } from "../../domain/luna-config.ts";
 import { type ConfigProofs, ConfigProofError } from "../../application/config-proofs.ts";
 import type { Watcher } from "../../application/ports.ts";
-import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, MergeError, DedupAnswerError, UnknownRepositoryError, NoCasesToEditError, NoContextGateError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SplitAutoApprovalError, SplitChangedError, SplitNotValidError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, FindingNotFoundError, NoEvidenceError, NotReleaseOwnerError, WorktreeUnpushedError } from "../../application/pipeline.ts";
+import { ApproverRequiredError, CoverageGapsError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, MergeError, DedupAnswerError, UnknownRepositoryError, NoCasesToEditError, NoContextGateError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SplitAutoApprovalError, SplitChangedError, SplitNotValidError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, FindingNotFoundError, NoEvidenceError, NotReleaseOwnerError, WorktreeUnpushedError } from "../../application/pipeline.ts";
 import { taskStagesProblem } from "../../domain/engine-choice.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
@@ -151,6 +151,8 @@ export interface AppDeps {
   runs?: PackRunsPort;
   /** Proofs of a repository's own luna.yaml for the setup skill; without it (no sandbox) `POST /repos/config/prove` answers 503. */
   configProofs?: ConfigProofs;
+  /** What keeps the machine from doing its job (`readinessProblems`), read on each `GET /health`; absent, `/health` is always ok. */
+  problems?: () => Promise<string[]> | string[];
 }
 
 class BadRequest extends Error {}
@@ -198,7 +200,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs }: AppDeps): Hono {
+export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, problems: problemsOf }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -233,6 +235,7 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     if (error instanceof SameApproverError) return fail(c, 409, "same_approver", error.message);
     if (error instanceof NotReleaseOwnerError) return fail(c, 409, "not_release_owner", error.message);
     if (error instanceof OutsideApproverRequiredError) return fail(c, 409, "outside_approver_required", error.message);
+    if (error instanceof CoverageGapsError) return fail(c, 409, "coverage_gaps", error.message, { gaps: error.gaps });
     if (error instanceof PlanApprovedError) return fail(c, 409, "plan_approved", error.message);
     if (error instanceof RejectNotAllowedError) return fail(c, 409, "reject_not_allowed", error.message);
     if (error instanceof SplitChangedError) return fail(c, 409, "split_changed", error.message);
@@ -281,7 +284,12 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     return fail(c, 500, "internal", error.message);
   });
 
-  app.get("/health", (c) => c.json({ ok: true, slots: pipeline.slots }));
+  // 503 with the problems when the machine cannot do its job (no GitHub token, no git identity, stub stages): the compose healthcheck and `up --wait` then fail visibly. The stage pool is still in the body.
+  app.get("/health", async (c) => {
+    const problems = (await problemsOf?.()) ?? [];
+    if (problems.length === 0) return c.json({ ok: true, slots: pipeline.slots });
+    return c.json({ ok: false, problems, slots: pipeline.slots }, 503);
+  });
 
   /** Every pack in the registry, with the task states it runs in. */
   app.get("/packs", (c) => c.json(PackId.options.map((id) => packInfo(PACKS[id]))));
@@ -535,8 +543,8 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
   /** Approves or sends back whatever the task is waiting on, including an escalation. */
   app.post("/tasks/:id/decision", async (c) => {
     const id = taskId(c);
-    const { decision, reason, comment, applyRules, approver, keepWhole } = await body(c, DecisionInput);
-    const response = applyRules === undefined && keepWhole === undefined ? undefined : { ...(applyRules === undefined ? {} : { applyRules }), ...(keepWhole === undefined ? {} : { keepWhole }) };
+    const { decision, reason, comment, applyRules, approver, keepWhole, untestable } = await body(c, DecisionInput);
+    const response = applyRules === undefined && keepWhole === undefined && untestable === undefined ? undefined : { ...(applyRules === undefined ? {} : { applyRules }), ...(keepWhole === undefined ? {} : { keepWhole }), ...(untestable === undefined ? {} : { untestable }) };
     return c.json(await serialize(await pipeline.decide(id, decision, reason ?? comment ?? undefined, response, approver ? { approver } : {})));
   });
 
@@ -656,6 +664,10 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     // the machine has no checkout of. Actions on a PR are `POST .../actions` (pr-tasks).
     app.get("/github/prs", (c) => c.json(pulls.snapshot));
     app.post("/github/prs/refresh", async (c) => c.json(await pulls.pollOnce()));
+    // Every open PR in the repos you can reach, polled on its own slower cadence. These two sit before the `:owner/:name` routes so "all" is never read as an owner.
+    app.get("/github/prs/all", (c) => c.json(pulls.all));
+    // The refresh starts a poll in the background (one at a time) and answers 202 with the list as it stands; the fresh list arrives as a `github.prs.all` event.
+    app.post("/github/prs/all/refresh", (c) => c.json(pulls.refreshAll(), 202));
     app.post("/github/prs/:owner/:name/:number/merge", async (c) => {
       const { owner, name, number } = prParams(c);
       await pulls.merge(`${owner}/${name}`, number);
@@ -671,7 +683,8 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
         const { owner, name, number } = prParams(c);
         const { action } = await body(c, PrActionInput);
         const slug = `${owner}/${name}`.toLowerCase();
-        const pr = pulls.snapshot.prs.find((p) => p.repo.toLowerCase() === slug && p.number === number);
+        // The inbox first, then the all-list: the All repos tab dispatches on PRs the inbox does not hold.
+        const pr = [...pulls.snapshot.prs, ...pulls.all.prs].find((p) => p.repo.toLowerCase() === slug && p.number === number);
         if (!pr) throw new TaskNotFoundError(`${owner}/${name}#${number}`);
         return c.json(await serialize(await prTasks.dispatch(pr, action)), 201);
       });

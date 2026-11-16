@@ -13,8 +13,13 @@ export interface GraphWatchOptions {
   policies: { for(repoPath: string): Promise<{ graph: boolean }> };
   /** The commit `origin/<default>` points at after a fetch. */
   defaultHead?: (repoPath: string) => Promise<string>;
+  /** A repo to leave alone for now: a folder `git clone` is still filling has nothing to build from. */
+  skip?: (repoPath: string) => boolean;
   log?: (message: string) => void;
 }
+
+/** What git says of a checkout with no commit yet (a clone not finished, an empty repo): nothing to build, nothing to log. */
+const NO_HEAD = /ambiguous argument 'HEAD'|unknown revision or path/;
 
 export class GraphWatch {
   private queue: Promise<void> = Promise.resolve();
@@ -44,7 +49,7 @@ export class GraphWatch {
   /** Schedules a first build for a repo with no graph (a task is about to read it); does not wait for it. */
   ensure(repoPath: string): void {
     const starting = (async () => {
-      if (this.scheduled.has(repoPath) || this.failed.has(repoPath)) return;
+      if (this.scheduled.has(repoPath) || this.failed.has(repoPath) || this.options.skip?.(repoPath)) return;
       if (!(await this.options.policies.for(repoPath)).graph) return;
       if (await this.options.graph.stampOf(repoPath)) return;
       await this.build(repoPath, "");
@@ -57,6 +62,7 @@ export class GraphWatch {
    *  Not tried again until the head moves does not apply here: a merge is new news, so an earlier failure is forgotten. */
   requestRebuild(repoPath: string): void {
     const starting = (async () => {
+      if (this.options.skip?.(repoPath)) return;
       if (!(await this.options.policies.for(repoPath)).graph) return;
       this.failed.delete(repoPath);
       await this.build(repoPath, "");
@@ -79,6 +85,7 @@ export class GraphWatch {
   private async pass(): Promise<void> {
     for (const repoPath of await this.options.repos()) {
       try {
+        if (this.options.skip?.(repoPath)) continue;
         if (!(await this.options.policies.for(repoPath)).graph) continue;
         const head = await this.head(repoPath);
         const stamp = await this.options.graph.stampOf(repoPath);
@@ -86,7 +93,9 @@ export class GraphWatch {
         if (this.failed.get(repoPath) === head) continue;
         await this.build(repoPath, head);
       } catch (error) {
-        this.log(`graph: ${repoPath}: ${error instanceof Error ? error.message : String(error)}`);
+        const said = error instanceof Error ? error.message : String(error);
+        if (NO_HEAD.test(said)) continue;
+        this.log(`graph: ${repoPath}: ${said}`);
       }
     }
   }

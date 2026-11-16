@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "match.confidence",
+      "min": 0.3,
+      "max": 0.85
+    }
+  ],
+  "rubric": "A performance change on the page a ticket names, with no word about large accounts: link or not is a fair call, so confidence stays moderate.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "match": {
+            "choice": "slot1"
+          }
+        },
+        "criteria": {
+          "match": "the PR implements or fixes slot 1"
+        },
+        "why": "The report page is the page the ticket names and the change makes it faster, which is what the ticket asks for."
+      },
+      {
+        "label": {
+          "match": {
+            "choice": "none"
+          }
+        },
+        "criteria": {
+          "match": "no candidate is the work this PR does"
+        },
+        "why": "The PR says nothing of large accounts and may be a general tidy-up rather than the ticket's work."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
+}

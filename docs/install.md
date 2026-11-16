@@ -47,7 +47,7 @@ pnpm board:link       # builds the board and links it into herdr once; `pnpm boa
 
 ## Two ways to run
 
-- **`pnpm start`** (or `docker compose up -d`): Postgres and the machine both run in Docker. You keep no server open in a terminal. It passes your `gh auth token` to the machine as `GH_TOKEN`. This is the one credential that the machine's GitHub calls use. It also passes your git identity. `pnpm stop` stops both and keeps the data. Stage containers still run on your Docker. So the machine mounts repos, worktrees and run folders at the same paths as on your host. See [configuration.md](./configuration.md#compose).
+- **`pnpm start`**: Postgres and the machine both run in Docker. You keep no server open in a terminal. It passes your `gh auth token` to the machine as `GH_TOKEN`. This is the one credential that the machine's GitHub calls use. It also passes your git identity. A bare `docker compose up` passes neither, so the machine answers `/health` with 503 and the reason (`docker compose up --wait` fails, and `make doctor` prints it) instead of failing each card at its first push. `pnpm stop` stops both and keeps the data. Stage containers still run on your Docker. So the machine mounts repos, worktrees and run folders at the same paths as on your host. See [configuration.md](./configuration.md#compose).
 - **`pnpm dev`**: use it to work on the harness itself. It stops the machine container. It starts only Postgres (`docker compose up postgres`). It runs the machine on your host at http://127.0.0.1:4317 with hot reload. It loads `machine/.env` if one exists. `pnpm db:down` stops Postgres and keeps its data.
 
 Both use the same database. Tasks carry over when you switch. For board usage and keys, see [`board/README.md`](../board/README.md).

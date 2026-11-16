@@ -5,18 +5,24 @@
 import { isAbsolute, dirname } from "node:path";
 import { realpath, stat } from "node:fs/promises";
 
-import type { PrAction, PrSnapshot, PullRequest } from "@hardness/contracts";
+import type { CloneStatus, PrAction, PrSnapshot, PullRequest } from "@hardness/contracts";
 
 import { HOST_GIT } from "../adapters/git/worktree.ts";
 import { type ExecResult, exec as realExec } from "../adapters/process/exec.ts";
-import { fromGraphQl, splitOf } from "../domain/pull-request.ts";
-import { type GitHub, messageOf } from "./github.ts";
+import { type PrNode, fromGraphQl, splitOf, summarizeChecks } from "../domain/pull-request.ts";
+import { type GitHub, type PrSearchHit, messageOf } from "./github.ts";
 import { PrBusyError } from "./pr-tasks.ts";
 
 /** What the HTTP routes need from the poller; the real class and a test fake both fit. */
 export interface PullsPort {
+  /** The inbox: PRs you opened and PRs asking your review. */
   readonly snapshot: PrSnapshot;
+  /** Every open PR in the repos you can reach. */
+  readonly all: PrSnapshot;
   pollOnce(): Promise<PrSnapshot>;
+  pollAllOnce(): Promise<PrSnapshot>;
+  /** Starts a poll of the all-list in the background (none if one is running) and answers the list as it stands: the result arrives through `publishAll`. */
+  refreshAll(): PrSnapshot;
   merge(repo: string, number: number): Promise<void>;
   close(repo: string, number: number): Promise<void>;
   clone(repo: string, dest: string): Promise<void>;
@@ -31,6 +37,8 @@ export interface PrTaskRef {
 
 export interface GitHubPullsOptions {
   intervalMs: number;
+  /** How often the all-list polls: slower than the inbox, since it reads every repo you reach. */
+  allIntervalMs: number;
   /** The checkout for `owner/name`, or null when the machine has none. */
   resolveRepo: (repo: string) => Promise<string | null>;
   /** A clone just landed at `path`: later polls resolve `repo` to it. */
@@ -39,6 +47,8 @@ export interface GitHubPullsOptions {
   findTask: (repo: string, number: number) => Promise<PrTaskRef | null>;
   /** Called with the new snapshot when its PRs or its error changed. */
   publish: (snapshot: PrSnapshot) => void;
+  /** The same for the all-list. */
+  publishAll: (snapshot: PrSnapshot) => void;
   github: GitHub;
   /** Runs git for the clone; tests inject a fake. */
   exec?: (command: string, args: string[]) => Promise<ExecResult>;
@@ -69,26 +79,56 @@ export class CloneError extends Error {
   }
 }
 
+/** How long a finished clone (done or failed) stays in the snapshots, so the board can say how it ended. */
+const CLONE_KEPT_MS = 10 * 60_000;
+
+/** The last non-empty line of what git said: the part that names the failure. */
+const lastLine = (text: string): string => text.trim().split(/\r?\n/).filter((l) => l.trim() !== "").at(-1)?.trim() ?? "";
+
 const RATE_LIMIT_BACKOFF_MS = 5 * 60_000;
+/** What GitHub says when a budget is spent (the primary limit, or the secondary one). */
+const RATE_LIMITED = /rate limit|RATE_LIMITED/i;
 const key = (repo: string, number: number) => `${repo.toLowerCase()}#${number}`;
 
+/**
+ * A PR's facts are reused while its `updatedAt` is unchanged, but for no longer than this:
+ * a check finishing or the base branch moving does not bump `updatedAt`, so the cache must expire.
+ */
+const FACTS_MAX_AGE_MS = 30 * 60_000;
+
+/** The two lists the poller keeps; they differ only in where the PRs come from. */
+type Feed = "inbox" | "all";
+
 export class GitHubPulls implements PullsPort {
+  /** The inbox: PRs you opened and PRs asking your review. */
   snapshot: PrSnapshot = { prs: [], polledAt: null, error: null };
+  /** Every open PR in the repos you can reach, built like the inbox. */
+  all: PrSnapshot = { prs: [], polledAt: null, error: null };
   /** The clone in progress, if any; awaited by tests and by nobody else. */
   cloning: Promise<void> = Promise.resolve();
-  /** How long until the next poll: the interval, or the backoff after a rate limit. */
+  /** How long until the next inbox poll: the interval, or the backoff after a rate limit. */
   nextDelayMs: number;
+  /** The same for the all-list. */
+  allNextDelayMs: number;
 
   private timer: NodeJS.Timeout | undefined;
+  private allTimer: NodeJS.Timeout | undefined;
   private stopped = false;
   private polling: Promise<PrSnapshot> | null = null;
+  private pollingAll: Promise<PrSnapshot> | null = null;
   private warnedAuth = false;
+  private warnedCapped = "";
   private me: { login: string; teams: string[] } | null = null;
+  /** The last GraphQL node of each PR, read at `updatedAt`; the inbox reads and fills it (the all-list reads in bulk and does not). */
+  private readonly facts = new Map<string, { node: PrNode; updatedAt: string; at: number }>();
+  /** The clones asked for, by destination: running ones, and finished ones for ten minutes. */
+  private readonly clones = new Map<string, CloneStatus>();
   private readonly now: () => Date;
 
   constructor(private readonly options: GitHubPullsOptions) {
     this.now = options.now ?? (() => new Date());
     this.nextDelayMs = options.intervalMs;
+    this.allNextDelayMs = options.allIntervalMs;
   }
 
   /** Polls now, then again after each poll's delay. Never throws. */
@@ -104,22 +144,51 @@ export class GitHubPulls implements PullsPort {
         });
     };
     tick();
+    // The all-list is read in bulk, so it no longer waits for the inbox's first poll.
+    const tickAll = () => {
+      void this.pollAllOnce()
+        .catch((error: unknown) => console.warn("github prs: poll of all failed", error))
+        .finally(() => {
+          if (this.stopped) return;
+          this.allTimer = setTimeout(tickAll, this.allNextDelayMs);
+          this.allTimer.unref();
+        });
+    };
+    tickAll();
   }
 
   stop(): void {
     this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
+    if (this.allTimer) clearTimeout(this.allTimer);
     this.timer = undefined;
+    this.allTimer = undefined;
   }
 
   /** One poll; a poll already running is shared rather than doubled. */
   pollOnce(): Promise<PrSnapshot> {
     if (!this.polling) {
-      this.polling = this.poll().finally(() => {
+      this.polling = this.poll("inbox").finally(() => {
         this.polling = null;
       });
     }
     return this.polling;
+  }
+
+  /** One poll of the all-list; a poll already running is shared rather than doubled. */
+  pollAllOnce(): Promise<PrSnapshot> {
+    if (!this.pollingAll) {
+      this.pollingAll = this.poll("all").finally(() => {
+        this.pollingAll = null;
+      });
+    }
+    return this.pollingAll;
+  }
+
+  /** A refresh from the board: the poll reads every repo and takes a while, so it runs in the background and the list as it stands is the answer. */
+  refreshAll(): PrSnapshot {
+    this.pollAllOnce().catch((error: unknown) => console.warn("github prs: refresh of all failed", error));
+    return this.all;
   }
 
   private async whoAmI(): Promise<{ login: string; teams: string[] }> {
@@ -127,61 +196,135 @@ export class GitHubPulls implements PullsPort {
     return this.me;
   }
 
-  private async poll(): Promise<PrSnapshot> {
+  private async poll(feed: Feed): Promise<PrSnapshot> {
     const polledAt = this.now().toISOString();
+    const label = feed === "inbox" ? "github prs" : "github prs (all)";
     let prs: PullRequest[];
     let error: string | null = null;
+    let delay = feed === "inbox" ? this.options.intervalMs : this.options.allIntervalMs;
     try {
-      prs = await this.fetchAll();
-      this.nextDelayMs = this.options.intervalMs;
+      prs = await this.fetchAll(feed);
     } catch (thrown) {
       error = messageOf(thrown);
-      prs = this.snapshot.prs;
-      if (/rate limit|RATE_LIMITED|\(403\)/i.test(error)) this.nextDelayMs = RATE_LIMIT_BACKOFF_MS;
+      prs = this.listOf(feed).prs;
+      if (/rate limit|RATE_LIMITED|\(403\)/i.test(error)) delay = RATE_LIMIT_BACKOFF_MS;
       if (/auth|credentials|token|401/i.test(error)) {
-        if (!this.warnedAuth) console.warn(`github prs: ${error}`);
+        if (!this.warnedAuth) console.warn(`${label}: ${error}`);
         this.warnedAuth = true;
       } else {
-        console.warn(`github prs: ${error}`);
+        console.warn(`${label}: ${error}`);
       }
     }
-    return this.replace({ prs, polledAt, error });
+    if (feed === "inbox") this.nextDelayMs = delay;
+    else this.allNextDelayMs = delay;
+    return this.replace(feed, { prs, polledAt, error });
   }
 
-  /** Stores the snapshot and publishes it when the PRs or the error changed. */
-  private replace(next: PrSnapshot): PrSnapshot {
-    const changed = JSON.stringify(next.prs) !== JSON.stringify(this.snapshot.prs) || next.error !== this.snapshot.error;
-    this.snapshot = next;
-    if (changed) this.options.publish(next);
+  private listOf(feed: Feed): PrSnapshot {
+    return feed === "inbox" ? this.snapshot : this.all;
+  }
+
+  /** The clones to show: running ones first as they started, then the finished ones that are not yet ten minutes old. */
+  private cloneList(): CloneStatus[] {
+    const at = this.now().getTime();
+    for (const [dest, c] of this.clones) {
+      if (c.finishedAt !== null && at - Date.parse(c.finishedAt) >= CLONE_KEPT_MS) this.clones.delete(dest);
+    }
+    return [...this.clones.values()];
+  }
+
+  /** Whether `path` is a clone's folder, or inside one, that is still being made. */
+  isCloning(path: string): boolean {
+    for (const c of this.clones.values()) if (c.state === "cloning" && (path === c.dest || path.startsWith(`${c.dest}/`))) return true;
+    return false;
+  }
+
+  /** Stores the snapshot, with the clones and without a checkout that is still being made, and publishes it when the PRs, the error or the clones changed. */
+  private replace(feed: Feed, given: PrSnapshot): PrSnapshot {
+    const before = this.listOf(feed);
+    const clones = this.cloneList();
+    const next: PrSnapshot = {
+      ...given,
+      prs: given.prs.map((pr) => (pr.localPath !== null && this.isCloning(pr.localPath) ? { ...pr, localPath: null } : pr)),
+      clones,
+    };
+    const changed =
+      JSON.stringify(next.prs) !== JSON.stringify(before.prs) || next.error !== before.error || JSON.stringify(clones) !== JSON.stringify(before.clones ?? []);
+    if (feed === "inbox") this.snapshot = next;
+    else this.all = next;
+    if (changed) (feed === "inbox" ? this.options.publish : this.options.publishAll)(next);
     return next;
   }
 
-  private async fetchAll(): Promise<PullRequest[]> {
+
+  /** The PR's node: the cached one while `updatedAt` stands, else read from GitHub (and kept when it has settled). */
+  private async nodeOf(hit: PrSearchHit): Promise<PrNode | null> {
+    const k = key(hit.repo, hit.number);
+    const kept = this.facts.get(k);
+    const at = this.now().getTime();
+    if (kept && kept.updatedAt === hit.updatedAt && at - kept.at < FACTS_MAX_AGE_MS) return kept.node;
+    const node = await this.options.github.prFacts(hit.repo, hit.number);
+    // Running checks and a merge GitHub is still computing change without touching `updatedAt`, so those are read again next time.
+    if (node && node.mergeable !== "UNKNOWN" && summarizeChecks(node.commits.nodes[0]?.commit.statusCheckRollup?.contexts.nodes ?? []).state !== "pending") {
+      this.facts.set(k, { node, updatedAt: hit.updatedAt, at });
+    } else {
+      this.facts.delete(k);
+    }
+    return node;
+  }
+
+  /** The PR the board shows for a node: its facts, split, checkout and task. */
+  private async build(node: PrNode, repo: string, me: { login: string; teams: string[] }): Promise<PullRequest> {
+    const facts = fromGraphQl(node, repo, me.login, me.teams);
+    const [localPath, task] = await Promise.all([
+      this.options.resolveRepo(repo).catch(() => null),
+      this.options.findTask(repo, node.number).catch(() => null),
+    ]);
+    return { ...facts, split: splitOf(facts), localPath, task };
+  }
+
+  /** The all-list: every open PR in the repos you reach, read in bulk (a call covers many PRs), so no PR costs a call of its own. */
+  private async fetchEvery(): Promise<PullRequest[]> {
+    const me = await this.whoAmI();
+    const { prs, capped, calls } = await this.options.github.listOpenPrs();
+    // A repo with more open PRs than the adapter pages through lists the newest ones; say which, instead of dropping the rest quietly.
+    const note = capped.map((c) => `${c.repo} has ${c.open} open PRs, only the newest are listed`).join("; ");
+    if (note && note !== this.warnedCapped) console.warn(`github prs (all): ${note}`);
+    this.warnedCapped = note;
+    console.log(`github prs (all): ${prs.length} PRs in ${calls} GraphQL calls`);
+    return Promise.all(prs.map(({ repo, node }) => this.build(node, repo, me)));
+  }
+
+  private async fetchAll(feed: Feed): Promise<PullRequest[]> {
+    if (feed === "all") return this.fetchEvery();
     const me = await this.whoAmI();
     const hits = await this.options.github.searchMyPrs();
     // One GraphQL call per PR, a few at a time: a long list otherwise takes half a minute.
+    let limited: string | null = null;
     const found = await mapLimit(hits, FETCH_AT_ONCE, async (hit): Promise<PullRequest | null> => {
       let node;
       try {
-        node = await this.options.github.prFacts(hit.repo, hit.number);
+        node = await this.nodeOf(hit);
       } catch (error) {
-        console.warn(`github prs: ${hit.repo}#${hit.number}: ${messageOf(error)}`);
+        const said = messageOf(error);
+        // A spent GraphQL budget fails every PR alike: that is the poll failing (below), not forty PRs gone.
+        if (RATE_LIMITED.test(said)) limited ??= said;
+        else console.warn(`github prs: ${hit.repo}#${hit.number}: ${said}`);
         return null;
       }
-      if (!node) return null;
-      const facts = fromGraphQl(node, hit.repo, me.login, me.teams);
-      const [localPath, task] = await Promise.all([
-        this.options.resolveRepo(hit.repo).catch(() => null),
-        this.options.findTask(hit.repo, hit.number).catch(() => null),
-      ]);
-      return { ...facts, split: splitOf(facts), localPath, task };
+      return node ? this.build(node, hit.repo, me) : null;
     });
+    this.dropStaleFacts();
+    // The poll fails as a whole: the last list stays, the snapshot says why, and the next poll waits (`poll`), so the budget gets the quiet it needs.
+    // Search and GraphQL have separate budgets, so the search can succeed while every PR's facts are refused.
+    if (limited) throw new Error(limited);
     return found.filter((pr): pr is PullRequest => pr !== null);
   }
 
-  /** The PR as the last poll saw it. */
+  /** The PR as the last poll saw it: the inbox first, then the all-list, so a PR the All repos tab shows can be acted on too. */
   find(repo: string, number: number): PullRequest | null {
-    return this.snapshot.prs.find((p) => key(p.repo, p.number) === key(repo, number)) ?? null;
+    const wanted = key(repo, number);
+    return this.snapshot.prs.find((p) => key(p.repo, p.number) === wanted) ?? this.all.prs.find((p) => key(p.repo, p.number) === wanted) ?? null;
   }
 
   /** Squash-merges a PR the snapshot shows as ready, then polls so it drops off the list. */
@@ -189,7 +332,7 @@ export class GitHubPulls implements PullsPort {
     const pr = this.find(repo, number);
     if (!pr || pr.split !== "ready_to_merge") throw new NotReadyError(repo, number);
     await this.options.github.mergePr(repo, number);
-    await this.pollOnce();
+    await this.pollAfterChange();
   }
 
   /** Closes a PR without merging, unless a task is working on it, then polls so it drops off the list. */
@@ -198,37 +341,86 @@ export class GitHubPulls implements PullsPort {
     if (!pr) throw new NoPullError(repo, number);
     if (pr.task) throw new PrBusyError(repo, number, pr.task.id);
     await this.options.github.closePr(repo, number);
+    await this.pollAfterChange();
+  }
+
+  /** A merge or a close changed GitHub: the inbox is read before answering, the all-list (if it was ever read) in the background, since it is slow. */
+  private async pollAfterChange(): Promise<void> {
+    if (this.all.polledAt !== null) void this.pollAllOnce();
     await this.pollOnce();
+  }
+
+  /** A clone landed: the inbox polls as before, and the all-list only re-resolves its checkouts, which needs no call to GitHub. */
+  private async pollAfterClone(): Promise<void> {
+    await Promise.all([this.pollOnce(), this.relinkAll()]);
+  }
+
+  private async relinkAll(): Promise<void> {
+    const prs = await Promise.all(
+      this.all.prs.map(async (pr) => ({ ...pr, localPath: await this.options.resolveRepo(pr.repo).catch(() => null) })),
+    );
+    this.replace("all", { ...this.all, prs });
+  }
+
+  /** Both lists as they are, republished with the clones as they stand now: a clone started, landed or failed. */
+  private republish(): void {
+    this.replace("inbox", this.snapshot);
+    this.replace("all", this.all);
+  }
+
+  /** Forgets facts older than they may be reused, so PRs that left both lists do not pile up. */
+  private dropStaleFacts(): void {
+    const at = this.now().getTime();
+    for (const [k, kept] of this.facts) if (at - kept.at >= FACTS_MAX_AGE_MS) this.facts.delete(k);
   }
 
   /**
    * Clones `owner/name` into `dest` in the background: an absolute path whose parent exists
-   * and which does not exist yet. The next poll after it lands shows the checkout.
+   * and which does not exist yet. Once it lands, both lists show the checkout.
    */
   async clone(repo: string, dest: string): Promise<void> {
     if (!isAbsolute(dest)) throw new CloneError(`dest must be an absolute path, got "${dest}"`);
     const parent = await stat(dirname(dest)).catch(() => null);
     if (!parent?.isDirectory()) throw new CloneError(`the parent of "${dest}" does not exist`);
     const exec = this.options.exec ?? realExec;
+    if (this.isCloning(dest)) throw new CloneError(`already cloning into "${dest}"`);
     if (await stat(dest).catch(() => null)) {
+      // A clone of the same folder may have started while we looked; its half-made folder is no checkout to link.
+      if (this.isCloning(dest)) throw new CloneError(`already cloning into "${dest}"`);
       // The folder you picked already holds the repo (a renamed remote, a checkout the scan
       // never looked in): link it rather than refuse, and never clone over it.
       if (!(await isCheckoutRoot(exec, dest))) throw new CloneError(`"${dest}" already exists and is not a git checkout`);
       this.options.rememberRepo?.(repo, dest);
-      this.cloning = this.cloning.then(async () => {
-        await this.pollOnce();
-      });
+      this.cloning = this.cloning.then(() => this.pollAfterClone());
       return;
     }
+    const started = this.now();
+    this.clones.set(dest, { repo, dest, state: "cloning", startedAt: started.toISOString(), finishedAt: null, error: null });
+    console.log(`clone: ${repo} into ${dest} started`);
+    this.republish();
     this.cloning = this.cloning.then(async () => {
-      // A clone is git with your own credentials, like every push the machine makes.
-      const cloned = await exec("git", [...HOST_GIT, "clone", `https://github.com/${repo}.git`, dest]);
-      if (cloned.code !== 0) {
-        this.replace({ ...this.snapshot, error: `clone of ${repo} failed: ${(cloned.stderr || cloned.stdout).trim()}` });
+      let failure: string | null = null;
+      try {
+        // A clone is git with your own credentials, like every push the machine makes.
+        const cloned = await exec("git", [...HOST_GIT, "clone", `https://github.com/${repo}.git`, dest]);
+        if (cloned.code !== 0) failure = (cloned.stderr || cloned.stdout).trim() || `git exited with ${cloned.code}`;
+      } catch (error) {
+        failure = messageOf(error);
+      }
+      const finished = this.now();
+      const seconds = Math.round((finished.getTime() - started.getTime()) / 1000);
+      const entry = this.clones.get(dest);
+      if (entry) this.clones.set(dest, { ...entry, state: failure === null ? "done" : "failed", finishedAt: finished.toISOString(), error: failure });
+      if (failure !== null) {
+        console.warn(`clone: ${repo} into ${dest} failed after ${seconds}s: ${lastLine(failure)}`);
+        this.republish();
         return;
       }
+      console.log(`clone: ${repo} into ${dest} done in ${seconds}s`);
       this.options.rememberRepo?.(repo, dest);
-      await this.pollOnce();
+      // The board hears it landed at once; the poll then shows the checkout.
+      this.republish();
+      await this.pollAfterClone();
     });
   }
 }

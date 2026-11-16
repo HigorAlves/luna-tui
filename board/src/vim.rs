@@ -22,7 +22,8 @@ pub enum Outcome {
 /// test: the Editor scope may only name keys from this list.
 #[cfg(test)]
 pub const HANDLED: &[&str] = &[
-    "q", "h", "l", "k", "j", "0", "$", "w", "b", "e", "G", "x", "D", "u", "p", "i", "a", "A", "I", "o", "O", "gg", "dd", "^r", "ctrl+s", "esc",
+    "q", "h", "l", "k", "j", "0", "$", "w", "b", "e", "G", "x", "D", "u", "p", "i", "a", "A", "I",
+    "o", "O", "gg", "dd", "^r", "ctrl+s", "esc",
 ];
 
 /// Normal/insert mode state for one `TextArea`. Starts in normal mode, like opening a file
@@ -35,7 +36,10 @@ pub struct Vim {
 
 impl Vim {
     pub fn new() -> Self {
-        Self { mode: Mode::Normal, pending: None }
+        Self {
+            mode: Mode::Normal,
+            pending: None,
+        }
     }
 
     pub fn mode(&self) -> Mode {

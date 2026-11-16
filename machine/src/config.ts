@@ -43,7 +43,8 @@ export interface Config {
   /** Seconds between checks of each repo's default branch for a graph rebuild; null (`MACHINE_GRAPH_INTERVAL=off`) turns the watch off. */
   graphIntervalSecs: number | null;
   /** The PR inbox: poll every open PR involving you. `MACHINE_GITHUB_PRS=off` turns it off. */
-  githubPrs: { enabled: boolean; intervalMs: number };
+  /** The PR inbox and, on its own slower interval, the list of every open PR in the repos you reach. */
+  githubPrs: { enabled: boolean; intervalMs: number; allIntervalMs: number };
   /** The ship monitor: how often it reads the shipped PR, and how many days it waits for a merge before asking a person. */
   /** `intervalMs` is null when `MACHINE_SHIP_POLL_INTERVAL` is unset: each repository's `ship.poll_minutes` (five) applies. */
   shipPoll: { intervalMs: number | null };
@@ -316,6 +317,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       `MACHINE_GITHUB_PRS_INTERVAL must be a positive integer (seconds), got "${env.MACHINE_GITHUB_PRS_INTERVAL}"`,
     );
   }
+  const prsAllSeconds = env.MACHINE_GITHUB_PRS_ALL_INTERVAL === undefined ? 900 : Number(env.MACHINE_GITHUB_PRS_ALL_INTERVAL);
+  if (!Number.isInteger(prsAllSeconds) || prsAllSeconds < 1) {
+    throw new Error(
+      `MACHINE_GITHUB_PRS_ALL_INTERVAL must be a positive integer (seconds), got "${env.MACHINE_GITHUB_PRS_ALL_INTERVAL}"`,
+    );
+  }
   const shipSeconds = env.MACHINE_SHIP_POLL_INTERVAL === undefined ? null : Number(env.MACHINE_SHIP_POLL_INTERVAL);
   if (shipSeconds !== null && (!Number.isInteger(shipSeconds) || shipSeconds < 1)) {
     throw new Error(`MACHINE_SHIP_POLL_INTERVAL must be a positive integer (seconds), got "${env.MACHINE_SHIP_POLL_INTERVAL}"`);
@@ -419,7 +426,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     worktreesDir: env.WORKTREES_DIR ?? join(home, "Developer", "worktrees"),
     stateDir,
     githubPoll: { repos, intervalMs: pollSeconds * 1000, label: env.MACHINE_GITHUB_LABEL ?? "ready-for-agent" },
-    githubPrs: { enabled: env.MACHINE_GITHUB_PRS !== "off", intervalMs: prsSeconds * 1000 },
+    githubPrs: { enabled: env.MACHINE_GITHUB_PRS !== "off", intervalMs: prsSeconds * 1000, allIntervalMs: prsAllSeconds * 1000 },
     shipPoll: { intervalMs: shipSeconds === null ? null : shipSeconds * 1000 },
     graphIntervalSecs: graphIntervalSecs(env),
     githubToken: env.GITHUB_TOKEN?.trim() || env.GH_TOKEN?.trim() || null,

@@ -1,10 +1,10 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ExecResult } from "../process/exec.ts";
-import { CACHE_ENV, SecretsMissingError, type RunDeps, cacheVolumeFor, execInSandbox, runSandbox, sandboxArgs, sandboxExecArgs, sandboxExecutor, type SandboxRun } from "./docker.ts";
+import { CACHE_ENV, SecretsMissingError, type RunDeps, cacheVolumeFor, hostUser, execInSandbox, runSandbox, sandboxArgs, sandboxExecArgs, sandboxExecutor, type SandboxRun } from "./docker.ts";
 import { EgressUnsupportedError } from "./egress.ts";
 
 function run(over: Partial<SandboxRun> = {}): SandboxRun {
@@ -55,6 +55,10 @@ describe("sandboxArgs", () => {
     expect(sandboxArgs(run(), "/in", "/out")).toContain("CLAUDE_CONFIG_DIR=/tmp/claude");
   });
 
+  it("tells Claude Code to send no telemetry or error reports, which the egress list would refuse and log as noise", () => {
+    expect(sandboxArgs(run(), "/i", "/o")).toEqual(expect.arrayContaining(["-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"]));
+  });
+
   it("caps memory, cpu and process count, so a runaway stage cannot take the machine down", () => {
     const args = sandboxArgs(run(), "/i", "/o").join(" ");
     expect(args).toContain("--memory 4g");
@@ -71,6 +75,38 @@ describe("sandboxArgs", () => {
     expect(sandboxArgs(run({ user: "1234:1234" }), "/i", "/o")).toContain("1234:1234");
     const check = sandboxExecArgs({ name: "c", image: "i", worktree: "/wt", argv: ["pnpm", "test"] });
     expect(check[check.indexOf("--user") + 1]).toMatch(/^\d+:\d+$/);
+  });
+
+  describe("hostUser", () => {
+    const stageUser = process.env.MACHINE_STAGE_USER;
+    afterEach(() => {
+      if (stageUser === undefined) delete process.env.MACHINE_STAGE_USER;
+      else process.env.MACHINE_STAGE_USER = stageUser;
+    });
+
+    it("takes the host user the machine was told, because the machine's own uid is the container's root", () => {
+      process.env.MACHINE_STAGE_USER = "4242:4343";
+      expect(hostUser()).toBe("4242:4343");
+    });
+
+    it("ignores a value that is not a non-root uid:gid", () => {
+      for (const bad of ["root", "0:0", "0:20"]) {
+        process.env.MACHINE_STAGE_USER = bad;
+        expect(hostUser()).not.toBe(bad);
+      }
+    });
+
+    it("never hands root to a container: with nothing set and the machine running as root, the image's own user stays", () => {
+      delete process.env.MACHINE_STAGE_USER;
+      const uid = vi.spyOn(process, "getuid").mockReturnValue(0);
+      try {
+        expect(hostUser()).toBeUndefined();
+        expect(sandboxArgs(run(), "/i", "/o")).not.toContain("--user");
+        expect(sandboxExecArgs({ name: "c", image: "i", worktree: "/wt", argv: ["true"] })).not.toContain("--user");
+      } finally {
+        uid.mockRestore();
+      }
+    });
   });
 
   it("mounts the worktree read-only unless writable", () => {
@@ -322,6 +358,60 @@ describe("a run on a card network", () => {
     const args = sandboxArgs(run(), "/in", "/out");
     expect(args).not.toContain("--dns");
     expect(args).not.toContain("--network");
+  });
+});
+
+describe("sandboxExecutor's session: the services start once for a pass of checks", () => {
+  const spec = { allow: ["github.com:443"], allowPrivate: [], proxyImage: "machine:dev" };
+  const row = (host: string) => ({ host, port: 443, via: "connect" as const, reason: "not_listed", count: 1 });
+
+  function setup() {
+    const events: string[] = [];
+    const runs: Array<Record<string, unknown>> = [];
+    let refused = [row("a.example.com")];
+    const card = { name: "net-s", dns: "172.30.0.2", containerArgs: () => [], blocked: async () => refused, teardown: async () => void events.push("teardown network") };
+    const given = {
+      openCardNetwork: async () => (events.push("open network"), card as never),
+      startServices: async (_name: string, _services: unknown, options?: { network?: { name: string } }) => (events.push(`start services on ${options?.network?.name}`), { network: "net-s", env: { DATABASE_URL: "postgres://postgres/t" }, teardown: async () => void events.push("teardown services") }),
+    } as unknown as Partial<RunDeps>;
+    const fake = (async (r: Record<string, unknown>) => (runs.push(r), { code: 0, stdout: "", stderr: "" })) as never;
+    const exec = sandboxExecutor({ machine: "machine:dev", imageOf: async () => "img", egress: async () => spec }, fake, given);
+    return { exec, events, runs, refuse: (rows: ReturnType<typeof row>[]) => void (refused = rows) };
+  }
+
+  it("opens the card network and starts the services once, however many checks run, and removes them on close", async () => {
+    const { exec, events, runs } = setup();
+    const session = await exec.session!({ cwd: "/wt/a/task-1", repoPath: "/a/shop", services: { postgres: { image: "postgres:16" } } });
+    await session.exec("pnpm", ["a"], { cwd: "/wt/a/task-1", repoPath: "/a/shop", services: { postgres: { image: "postgres:16" } } });
+    await session.exec("pnpm", ["b"], { cwd: "/wt/a/task-1", repoPath: "/a/shop", services: { postgres: { image: "postgres:16" } } });
+    expect(events).toEqual(["open network", "start services on net-s"]);
+    for (const r of runs) expect(r).toMatchObject({ servicesUp: true, network: "net-s", serviceEnv: { DATABASE_URL: "postgres://postgres/t" }, cardNetwork: { name: "net-s" } });
+    expect(runs.every((r) => r.egress === undefined)).toBe(true);
+    await session.close();
+    await session.close();
+    expect(events).toEqual(["open network", "start services on net-s", "teardown services", "teardown network"]);
+  });
+
+  it("reports each refused host once, with the check that first met it", async () => {
+    const { exec, refuse } = setup();
+    const session = await exec.session!({ cwd: "/wt/a/task-1", services: { postgres: { image: "postgres:16" } } });
+    const first = await session.exec("a", [], { cwd: "/wt/a/task-1" });
+    const second = await session.exec("b", [], { cwd: "/wt/a/task-1" });
+    refuse([row("a.example.com"), row("b.example.com")]);
+    const third = await session.exec("c", [], { cwd: "/wt/a/task-1" });
+    expect(first.blocked?.map((r) => r.host)).toEqual(["a.example.com"]);
+    expect(second.blocked).toEqual([]);
+    expect(third.blocked?.map((r) => r.host)).toEqual(["b.example.com"]);
+    await session.close();
+  });
+
+  it("removes the network when the services do not come up, and passes the error on", async () => {
+    const events: string[] = [];
+    const card = { name: "n", dns: "1.1.1.1", containerArgs: () => [], blocked: async () => [], teardown: async () => void events.push("teardown network") };
+    const given = { openCardNetwork: async () => card as never, startServices: async () => { throw new Error("postgres never became ready"); } } as unknown as Partial<RunDeps>;
+    const exec = sandboxExecutor({ machine: "m", imageOf: async () => "img", egress: async () => spec }, (async () => ({ code: 0, stdout: "", stderr: "" })) as never, given);
+    await expect(exec.session!({ cwd: "/wt/a/task-1", services: { postgres: { image: "postgres:16" } } })).rejects.toThrow("never became ready");
+    expect(events).toEqual(["teardown network"]);
   });
 });
 

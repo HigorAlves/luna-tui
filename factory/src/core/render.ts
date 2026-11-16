@@ -38,7 +38,29 @@ const ciText = (ci: StageInput["context"]["ci"]): string => {
 const prLine = (pr: NonNullable<StageInput["context"]["review"]>["pr"]): string =>
   `PR #${pr.number} ${pr.title} by @${pr.author}: ${pr.headRef} into ${pr.baseRef} (${pr.url})`;
 
-/** The PR, its files, the comments already on it and the diff, as reviewing reads them. */
+/** The Jira tickets the PR names, each with its status, summary, acceptance criteria and description: the spec the diff is checked against. */
+const ticketsText = (tickets: NonNullable<StageInput["context"]["review"]>["tickets"]): string => {
+  if (!tickets || tickets.length === 0) return "Linked Jira tickets:\n- (none linked)";
+  const one = (t: NonNullable<typeof tickets>[number]): string => {
+    const criteria = t.acceptanceCriteria && t.acceptanceCriteria.trim() !== "" ? `Acceptance criteria:\n${t.acceptanceCriteria.trim()}` : "Acceptance criteria: (none stated)";
+    const description = t.description.trim() !== "" ? t.description.trim() : "(no description)";
+    return `### ${t.key} (${t.type}, ${t.status}): ${t.summary}\n${t.url}\n${criteria}\nDescription:\n${description}`;
+  };
+  return `Linked Jira tickets:\n${tickets.map(one).join("\n\n")}`;
+};
+
+/** The board cards the review is linked to, each with its acceptance criteria and description: a spec beside the tickets. Nothing, not even a heading, when none is linked. */
+const cardsText = (cards: NonNullable<StageInput["context"]["review"]>["cards"]): string | null => {
+  if (!cards || cards.length === 0) return null;
+  const one = (c: NonNullable<typeof cards>[number]): string => {
+    const criteria = c.criteria.length > 0 ? `Acceptance criteria:\n${c.criteria.map((line) => `- ${line}`).join("\n")}` : "Acceptance criteria: (none stated)";
+    const description = c.description.trim() !== "" ? c.description.trim() : "(no description)";
+    return `### Card ${c.id}: ${c.title}\n${criteria}\nDescription:\n${description}`;
+  };
+  return `Linked board cards:\n${cards.map(one).join("\n\n")}`;
+};
+
+/** The PR, the Jira tickets it names, the board cards it is linked to, its files, the comments already on it and the diff, as reviewing reads them. */
 const reviewText = (review: StageInput["context"]["review"]): string => {
   if (!review) return NONE;
   const body = review.pr.body && review.pr.body.trim() !== "" ? review.pr.body.trim() : "(no description)";
@@ -47,7 +69,8 @@ const reviewText = (review: StageInput["context"]["review"]): string => {
     review.existingComments.length > 0
       ? review.existingComments.map((c) => `- ${c.path ?? "(general)"}${c.line !== null ? `:${c.line}` : ""} @${c.author}: ${c.body}`).join("\n")
       : "- (none)";
-  return `${prLine(review.pr)}\n\n${body}\n\nFiles:\n${files}\n\nComments already on the PR:\n${comments}\n\nDiff:\n\`\`\`diff\n${review.diff}\n\`\`\``;
+  const cards = cardsText(review.cards);
+  return `${prLine(review.pr)}\n\n${body}\n\n${ticketsText(review.tickets)}${cards ? `\n\n${cards}` : ""}\n\nFiles:\n${files}\n\nComments already on the PR:\n${comments}\n\nDiff:\n\`\`\`diff\n${review.diff}\n\`\`\``;
 };
 
 /** The unresolved threads, each under its GraphQL id, as addressing reads them. */
@@ -149,14 +172,14 @@ export const CLAUDE_TOOL_NAMES: RuleToolNames = {
   read: "Read/Glob/Grep",
   step: "mcp__luna__step",
   guard: "a hook",
-  shell: "Bash runs only the commands on this stage's allow-list, and a chained command (&&, ;, |) runs only when every part is allowed: one simple command per call, no cd",
+  shell: "Bash runs only the commands on this stage's allow-list, and a chained command (&&, ;, |) runs only when every part is allowed: one simple command per call, no cd (git runs in /work already: write `git log`, not `git -C /work log`)",
 };
 export const EVE_TOOL_NAMES: RuleToolNames = {
   ask: "Never ask a question",
   read: "read_file, glob and grep",
   step: "step",
   guard: "a guard",
-  shell: "bash is not a shell: it runs one command on this stage's allow-list as one process, quotes read as a shell reads them and nothing else (no pipes, redirection, globs, variables, substitution or chaining), no cd",
+  shell: "bash is not a shell: it runs one command on this stage's allow-list as one process, quotes read as a shell reads them and nothing else (no pipes, redirection, globs, variables, substitution or chaining), no cd (git runs in /work already: write `git log`, not `git -C /work log`)",
 };
 
 /** The rules every stage runs under, in the runtime's tool names; the Claude runtime appends them

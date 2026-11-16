@@ -7,7 +7,7 @@ another image (a repository's own base) and run there: `COPY --from=<runner imag
 | --- | --- |
 | `bin/luna-stage` | the stage's entry: the factory on the layer's Node, the layer's tools first on `PATH` |
 | `bin/node`, `bin/rg` | wrappers that run `libexec/<name>` with `lib/` in `LD_LIBRARY_PATH` (only for these two, and what they start) |
-| `bin/gh`, `bin/codex`, `bin/graphify` | the GitHub CLI (static), the Codex CLI (`codex/`), Graphify (from `python/`) |
+| `bin/gh`, `bin/codex`, `bin/graphify`, `bin/pnpm` | the GitHub CLI (static), the Codex CLI (`codex/`), Graphify (from `python/`), pnpm at the version the repo's `package.json` pins (`pnpm/`, so a check-time install downloads no package manager) |
 | `libexec/` | the real Node and ripgrep binaries |
 | `lib/` | the shared libraries those two need, everything except glibc itself (libstdc++, libgcc, pcre2 ...) |
 | `python/` | a relocatable standalone Python (python-build-standalone, pinned) with the pinned Graphify installed in it; the base image's Python is never used or touched |

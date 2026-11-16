@@ -57,6 +57,9 @@ services:
       MACHINE_REPOS_DIR: ${LUNA_REPOS_DIR:-${HOME}/Developer}
       MACHINE_REPO_MAP: ${MACHINE_REPO_MAP:-}
       MACHINE_STATE_DIR: ${MACHINE_STATE_DIR:-${HOME}/.local/state/hardness}
+      # The machine here runs as root, so its own uid is no use to a stage: stage and check containers run as this
+      # uid:gid (`pnpm start` passes yours). Unset, they keep the runner image's `node` user. Never root.
+      MACHINE_STAGE_USER: ${MACHINE_STAGE_USER:-}
       MACHINE_AGENTS: ${MACHINE_AGENTS:-on}
       MACHINE_MAX_CONCURRENT: ${MACHINE_MAX_CONCURRENT:-4}
       MACHINE_MAX_PER_REPO: ${MACHINE_MAX_PER_REPO:-}
