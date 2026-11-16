@@ -560,3 +560,20 @@ describe("the breach_assess decision pack", () => {
     expect(BreachAssessContext.safeParse({ ...ok, severity: "p0" }).success).toBe(false);
   });
 });
+
+describe("the capacity_check decision pack", () => {
+  it("asks three questions about the coming week, as typed answers", async () => {
+    const { PACKS, CapacityContext } = await import("./index.ts");
+    const pack = PACKS.capacity_check;
+    expect(pack.kind).toBe("decision");
+    expect(Object.keys(pack.questions)).toEqual(["over_agent_capacity", "over_review_capacity", "at_risk"]);
+    const answer = { over_agent_capacity: { value: true, p: 0.8 }, over_review_capacity: { value: false, p: 0.2 }, at_risk: { score: 1, confidence: 0.6 } };
+    expect(pack.answer.safeParse(answer).success).toBe(true);
+    expect(pack.answer.safeParse({ ...answer, at_risk: { score: 3, confidence: 0.6 } }).success).toBe(false);
+    const ok = { week: "2026-W47", backlog: [{ title: "Export CSV", repo: "acme/api", size: "M", wsjf: 2.5, state: "backlog" }], throughput: { closedPerWeek: [3, 4, 2, 5], reviewedPerWeek: [6, 5, 7, 4] }, headroom: [{ engine: "claude:sonnet", budgetLeftUsd: null, rateLimitedHours: 0 }] };
+    expect(CapacityContext.safeParse(ok).success).toBe(true);
+    expect(CapacityContext.safeParse({ ...ok, week: "2026-11" }).success).toBe(false);
+    expect(CapacityContext.safeParse({ ...ok, backlog: Array.from({ length: 31 }, () => ok.backlog[0]) }).success).toBe(false);
+    expect(CapacityContext.safeParse({ ...ok, throughput: { ...ok.throughput, closedPerWeek: [1, 2, 3, 4, 5] } }).success).toBe(false);
+  });
+});

@@ -43,7 +43,7 @@ const fields = (over: Partial<ComplianceDraft> = {}) => ({
 let incidentList: Incident[] = [];
 let wrote: unknown[][];
 let wikiFails: string | null;
-const mk = (wired = true, questionnaires?: { rerun: (id: string, repo: string) => Promise<ComplianceDraft> }, vulns?: { list(): Promise<unknown[]> }, releaseNotes?: { draft(input: unknown): Promise<unknown> }) => {
+const mk = (wired = true, questionnaires?: { rerun: (id: string, repo: string) => Promise<ComplianceDraft> }, vulns?: { list(): Promise<unknown[]> }, releaseNotes?: { draft(input: unknown): Promise<unknown> }, status?: { build(week: string): Promise<unknown> }) => {
   wrote = [];
   wikiFails = null;
   const stateDir = mkdtempSync(join(tmpdir(), "compliance-http-"));
@@ -62,7 +62,7 @@ const mk = (wired = true, questionnaires?: { rerun: (id: string, repo: string) =
     orgs: async () => ["acme"],
     buildQuarter: vi.fn(async (org: string) => drafts.open(fields({ id: `access_review:${org}:2026-Q4`, kind: "access_review", title: `Access review, ${org}, 2026-Q4`, period: "2026-Q4", targets: [{ kind: "access_slices", org, period: "2026-Q4" }] }))),
   };
-  const compliance = wired ? { drafts, publisher: publisher({ drafts, wiki }), evidence, repos: async () => ["acme/web"], access, incidents: { list: async () => incidentList }, ...(questionnaires ? { questionnaires } : {}), ...(vulns ? { vulns: vulns as never } : {}), ...(releaseNotes ? { releaseNotes: releaseNotes as never } : {}) } : undefined;
+  const compliance = wired ? { drafts, publisher: publisher({ drafts, wiki }), evidence, repos: async () => ["acme/web"], access, incidents: { list: async () => incidentList }, ...(questionnaires ? { questionnaires } : {}), ...(vulns ? { vulns: vulns as never } : {}), ...(releaseNotes ? { releaseNotes: releaseNotes as never } : {}), ...(status ? { status: status as never } : {}) } : undefined;
   const app = createApp({ db, pipeline: new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true }), bus: new Bus(), ...(compliance ? { compliance } : {}), access: { host: "127.0.0.1", port: 1, token: "tok" } });
   return { app, drafts };
 };
@@ -229,5 +229,28 @@ describe("the compliance routes", () => {
     expect((await run({ repo: "acme/web", tag: "v1", since: "last week" })).status).toBe(400);
     expect(draft).toHaveBeenCalledTimes(2);
     expect((await run({ repo: "acme/web", tag: "v1" }, mk().app)).status).toBe(503);
+  });
+});
+
+describe("the status report route", () => {
+  const run = (app: ReturnType<typeof mk>["app"], body: unknown) => app.request("/compliance/status/run", { method: "POST", headers: auth, body: JSON.stringify(body) });
+
+  it("builds the named week on demand, and the previous week when none is named", async () => {
+    const build = vi.fn(async (week: string) => ({ id: `status_report:${week}`, kind: "status_report" }));
+    const { app } = mk(true, undefined, undefined, undefined, { build });
+    const res = await run(app, { week: "2026-W46" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ id: "status_report:2026-W46" });
+    expect(build).toHaveBeenCalledWith("2026-W46");
+    expect((await run(app, {})).status).toBe(200);
+    expect(build).toHaveBeenLastCalledWith(expect.stringMatching(/^\d{4}-W\d{2}$/));
+  });
+
+  it("refuses a week that is not an ISO week, and answers 503 without the job", async () => {
+    const { app } = mk(true, undefined, undefined, undefined, { build: async () => ({}) });
+    expect((await run(app, { week: "2026-46" })).status).toBe(400);
+    expect((await run(app, { week: "2026-W54" })).status).toBe(400);
+    expect((await run(mk().app, {})).status).toBe(503);
+    expect((await run(mk(false).app, {})).status).toBe(503);
   });
 });

@@ -1,0 +1,129 @@
+{
+  "schema": 3,
+  "stage": "capacity_check",
+  "pack": "capacity_check",
+  "attempt": 1,
+  "task": {
+    "id": "capacity-check",
+    "title": "Capacity of 2026-W47",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "capacity": {
+      "week": "2026-W47",
+      "backlog": [
+        {
+          "title": "Rebuild the billing ledger",
+          "repo": "acme/api",
+          "size": "XL",
+          "wsjf": 3.1,
+          "state": "backlog"
+        },
+        {
+          "title": "Migrate the auth service",
+          "repo": "acme/auth",
+          "size": "XL",
+          "wsjf": 2.9,
+          "state": "backlog"
+        },
+        {
+          "title": "Replace the queue",
+          "repo": "acme/jobs",
+          "size": "L",
+          "wsjf": 2.7,
+          "state": "backlog"
+        },
+        {
+          "title": "Rewrite the export pipeline",
+          "repo": "acme/api",
+          "size": "L",
+          "wsjf": 2.5,
+          "state": "backlog"
+        },
+        {
+          "title": "Split the monolith's search",
+          "repo": "acme/search",
+          "size": "L",
+          "wsjf": 2.4,
+          "state": "backlog"
+        },
+        {
+          "title": "New onboarding flow",
+          "repo": "acme/web",
+          "size": "L",
+          "wsjf": 2.2,
+          "state": "backlog"
+        },
+        {
+          "title": "Audit log for admins",
+          "repo": "acme/api",
+          "size": "L",
+          "wsjf": 2.1,
+          "state": "backlog"
+        },
+        {
+          "title": "Per-tenant rate limits",
+          "repo": "acme/gateway",
+          "size": "L",
+          "wsjf": 2.0,
+          "state": "backlog"
+        },
+        {
+          "title": "Webhook retries",
+          "repo": "acme/api",
+          "size": "M",
+          "wsjf": 1.9,
+          "state": "backlog"
+        },
+        {
+          "title": "Usage dashboard",
+          "repo": "acme/web",
+          "size": "M",
+          "wsjf": 1.8,
+          "state": "backlog"
+        }
+      ],
+      "throughput": {
+        "closedPerWeek": [
+          2,
+          1,
+          2,
+          2
+        ],
+        "reviewedPerWeek": [
+          3,
+          4,
+          3,
+          3
+        ]
+      },
+      "headroom": [
+        {
+          "engine": "claude:sonnet",
+          "budgetLeftUsd": 3.0,
+          "rateLimitedHours": 14
+        },
+        {
+          "engine": "claude:haiku",
+          "budgetLeftUsd": 1.5,
+          "rateLimitedHours": 6
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

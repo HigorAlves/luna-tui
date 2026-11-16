@@ -1,0 +1,75 @@
+{
+  "schema": 3,
+  "stage": "capacity_check",
+  "pack": "capacity_check",
+  "attempt": 1,
+  "task": {
+    "id": "capacity-check",
+    "title": "Capacity of 2026-W47",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "capacity": {
+      "week": "2026-W47",
+      "backlog": [
+        {
+          "title": "Fix the typo on the pricing page",
+          "repo": "acme/web",
+          "size": "XS",
+          "wsjf": 3.0,
+          "state": "backlog"
+        },
+        {
+          "title": "Add a CSV header row",
+          "repo": "acme/api",
+          "size": "XS",
+          "wsjf": 2.6,
+          "state": "backlog"
+        },
+        {
+          "title": "Bump the logging library",
+          "repo": "acme/gateway",
+          "size": "S",
+          "wsjf": 2.2,
+          "state": "backlog"
+        }
+      ],
+      "throughput": {
+        "closedPerWeek": [
+          5,
+          6,
+          5,
+          6
+        ],
+        "reviewedPerWeek": [
+          8,
+          7,
+          9,
+          8
+        ]
+      },
+      "headroom": [
+        {
+          "engine": "claude:sonnet",
+          "budgetLeftUsd": null,
+          "rateLimitedHours": 0
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

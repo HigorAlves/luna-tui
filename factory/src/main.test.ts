@@ -70,7 +70,7 @@ function run(input: unknown, env: Record<string, string> = {}, files: Record<str
 }
 
 // slack_triage, chat_triage, foreman and eval_judge have no worktree and read no project context; their dry runs are below. council_second defaults to an eve engine: its dry run is below.
-const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "foreman" && p.id !== "change_exceptions" && p.id !== "access_review" && p.id !== "postmortem" && p.id !== "questionnaire" && p.id !== "vuln_triage" && p.id !== "release_notes" && p.id !== "eval_judge" && p.id !== "council_second").map((p) => p.id);
+const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "foreman" && p.id !== "change_exceptions" && p.id !== "access_review" && p.id !== "postmortem" && p.id !== "questionnaire" && p.id !== "vuln_triage" && p.id !== "release_notes" && p.id !== "status_report" && p.id !== "eval_judge" && p.id !== "council_second").map((p) => p.id);
 
 describe("factory main (dry run)", () => {
   it.each(agentPacks)("%s: renders the prompt, prints the options and leaves a valid result", (pack) => {
@@ -283,6 +283,21 @@ describe("factory main (dry run)", () => {
     expect(prompt).toContain("| #38 · marta · Export a report as CSV");
     const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
     expect(options).toMatchObject({ agent: "release-writer", agents: ["release-writer"], model: "claude-haiku-5-5", effort: "low", tools: [], allowedTools: [] });
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+    expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
+  });
+
+  it("status_report: runs over an empty /work with no tools on sonnet at medium effort, renders the facts as data and leaves a valid result", () => {
+    const task = { id: "status-report", title: "Status of 2026-W46", description: "", criteria: [], repoPath: "", branch: "", source: null };
+    const status = { week: "2026-W46", from: "2026-11-09", to: "2026-11-15", metrics: { created: 1, closed: 1, open: 1, waitingOnYou: 0, leadTimeHours: null, firstPassRate: null, escalationRate: null, costUsd: 1 }, shipped: [{ title: "Export a report as CSV", repo: "acme/api", pr: "acme/api#38" }], inFlight: [], blocked: [], merged: [], compliance: { waitingDrafts: [], evidence: [], access: [], incidents: [], vulns: [] }, capacity: null };
+    const { code, stdout, out, result } = run(stageInput("status_report", { task, plan: null, context: { projectContext: null, status } }), {}, {}, { emptyWork: true });
+    expect(code).toBe(0);
+    const prompt = readFileSync(join(out, "prompt.md"), "utf8");
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("`status-writer` role running the `status_report` stage");
+    expect(prompt).toContain("| - Export a report as CSV (acme/api, acme/api#38)");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: "status-writer", agents: ["status-writer"], effort: "medium", tools: [], allowedTools: [] });
     expect(StageOutput.safeParse(result).error).toBeUndefined();
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });

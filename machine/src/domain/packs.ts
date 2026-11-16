@@ -80,6 +80,10 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   access_review: [],
   // The incident job asks it when an incident starts and when it resolves.
   breach_assess: [],
+  // The weekly status job asks it before it writes the report.
+  capacity_check: [],
+  // The weekly status report, run on demand by its job.
+  status_report: [],
   // Writes the postmortem when an incident resolves.
   postmortem: [],
   // The docs-drift note, run by Verify as a sub-run when the repo has docs; advisory and never a stage of its own.

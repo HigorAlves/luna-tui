@@ -73,6 +73,7 @@ import { createJiraTriager } from "./application/stages/jira-intake-runner.ts";
 import { PgPackRunStore } from "./adapters/persistence/pack-run-store.ts";
 import { MINUTE_MS, Ticker } from "./application/ticker.ts";
 import { ChangeEvidence } from "./application/change-evidence.ts";
+import { StatusReport } from "./application/status-report.ts";
 import { AccessReview, accessSlicesWriter } from "./application/access-review.ts";
 import { IncidentJob } from "./application/incidents.ts";
 import type { Incident } from "./domain/incident.ts";
@@ -943,7 +944,42 @@ const releaseNotes = new ReleaseNotes({
     return (await ownCalls(packRuns).run({ pack: "release_notes", context: { release: context } }, INTAKE_CLIENT)).answer;
   },
 });
-const compliance = { questionnaires, drafts: complianceDrafts, publisher: compliancePublisher({ drafts: complianceDrafts, wiki, handlers: { access_slices: accessSlicesWriter({ wiki, stateDir: config.stateDir }), jira_actions: jiraActionsWriter({ jira: jiraApi, stateDir: config.stateDir }), github_release: githubReleaseWriter(github), ...questionnaireWriters({ wiki, sender: slackSender, jira: jiraApi, stateDir: config.stateDir }) } }), evidence: changeEvidence, access: accessReview, repos: complianceRepos, incidents: incidentJob, vulns, releaseNotes };
+/** The weekly status for leadership (RFC 0008, wave 7): the previous week's facts, read in-process, go through `capacity_check` and `status_report`; the page waits as a draft. Built whenever the home wiki is set, so the route works with the weekly job off. */
+const statusReport = config.managerWikiRepo
+  ? new StatusReport({
+      drafts: complianceDrafts,
+      tasks: () => pipeline.list(),
+      metrics: async (since, until) => computeMetrics(db, { since, until, slots: pipeline.slots, budget: { ...pipeline.budget, spentTodayUsd: await pipeline.spentTodayUsd() } }),
+      github,
+      incidents: incidentJob,
+      vulns,
+      backlog,
+      // Each engine's monthly budget left (null with no cap), and the hours the tasks now paused on a rate limit have waited, on the engine of the stage they resume at.
+      headroom: async () => {
+        const standings = await engineBudgets.standings();
+        const paused = (await pipeline.list()).filter((t) => t.state === "paused_rate_limit");
+        return [...standings].map(([engine, s]) => ({
+          engine,
+          budgetLeftUsd: s.budgetUsd === null ? null : Math.max(0, Math.round((s.budgetUsd - s.spentThisMonthUsd) * 100) / 100),
+          rateLimitedHours: Math.round(paused.filter((t) => (t.stages as Record<string, string | undefined>)[t.resumeTo ?? "implementing"] === engine).reduce((sum, t) => sum + (t.stateSince ? Date.now() - t.stateSince.getTime() : 0), 0) / 360_000) / 10,
+        }));
+      },
+      assess: async (capacity) => {
+        if (!packRuns) throw new Error("agents are off: no model to check the capacity");
+        return (await ownCalls(packRuns).run({ pack: "capacity_check", context: { capacity } }, INTAKE_CLIENT)).answer;
+      },
+      write: async (status) => {
+        if (!packRuns) throw new Error("agents are off: no model to write the status report");
+        return (await ownCalls(packRuns).run({ pack: "status_report", context: { status } }, INTAKE_CLIENT)).answer;
+      },
+      repos: complianceRepos,
+      wikiRepo: config.managerWikiRepo,
+      slackChannel: config.statusReport.slackChannel,
+      day: config.statusReport.day,
+      stateDir: config.stateDir,
+    })
+  : null;
+const compliance = { questionnaires, drafts: complianceDrafts, publisher: compliancePublisher({ drafts: complianceDrafts, wiki, handlers: { access_slices: accessSlicesWriter({ wiki, stateDir: config.stateDir }), jira_actions: jiraActionsWriter({ jira: jiraApi, stateDir: config.stateDir }), github_release: githubReleaseWriter(github), ...questionnaireWriters({ wiki, sender: slackSender, jira: jiraApi, stateDir: config.stateDir }) } }), evidence: changeEvidence, access: accessReview, repos: complianceRepos, incidents: incidentJob, vulns, releaseNotes, ...(statusReport ? { status: statusReport } : {}) };
 /** A person approves the exact base the repository's luna.yaml (on the user's checkout) names now, or the exact key of the Dockerfile its devcontainer builds now; any other is refused. */
 const approveBase = async (repo: string, base: string): Promise<{ ok: true } | { ok: false; reason: string }> => {
   if (!agentDeps) return { ok: false, reason: "repository images are off on this machine" };
@@ -1105,6 +1141,10 @@ const complianceFirst = complianceTicker ? setTimeout(() => void changeEvidence.
 complianceFirst?.unref();
 complianceTicker?.start();
 console.log(complianceTicker ? "compliance: change-management evidence for each repo's previous month, checked daily; drafts wait in the Compliance view" : "compliance: monthly evidence off (MACHINE_COMPLIANCE_EVIDENCE=off); drafts still listed");
+/** The weekly status report: an hourly tick, since the cursor says whether the week is done and the job itself waits for its day and hour. */
+const statusTicker = config.statusReport.enabled && statusReport ? new Ticker(() => void statusReport.tick().catch((error: unknown) => console.warn("status report failed", error)), 60 * MINUTE_MS) : null;
+statusTicker?.start();
+console.log(statusTicker ? `status report: the previous week's report drafted on ${config.statusReport.day} from 08:00, checked hourly${config.statusReport.slackChannel ? ", summary to its Slack channel on approve" : ", wiki only (no MACHINE_STATUS_SLACK_CHANNEL)"}` : "status report: weekly job off (needs MACHINE_MANAGER_WIKI_REPO, and MACHINE_STATUS_REPORT is not off)");
 /** The quarterly access review: its own daily tick, since the cursor says which orgs are done with the quarter; it needs MACHINE_MANAGER_WIKI_REPO and says so once without it. */
 const accessTicker = config.accessReview ? new Ticker(() => void accessReview.tick().catch((error: unknown) => console.warn("compliance access review failed", error)), 24 * 60 * MINUTE_MS) : null;
 const accessFirst = accessTicker ? setTimeout(() => void accessReview.tick().catch((error: unknown) => console.warn("compliance access review failed", error)), 3 * MINUTE_MS) : null;
@@ -1179,6 +1219,7 @@ async function shutdown(): Promise<void> {
   clearTimeout(vulnsFirst);
   if (complianceFirst) clearTimeout(complianceFirst);
   accessTicker?.stop();
+  statusTicker?.stop();
   if (accessFirst) clearTimeout(accessFirst);
   pulls.stop();
   slackInbox.stop();

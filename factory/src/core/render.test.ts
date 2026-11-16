@@ -684,6 +684,44 @@ describe("renderPrompt", () => {
     expect(renderPrompt({ pack: PACKS.release_notes, input, template })).toContain("repo (none) tag (none) since (none)\nprs:\n(none)");
   });
 
+  it("renders the week's facts for status_report: the dates and numbers as the machine's own text, every title and reason as quoted data", () => {
+    const template = "week {{context.status.week}} from {{context.status.from}} to {{context.status.to}}\nmetrics:\n{{context.status.metrics}}\nshipped:\n{{context.status.shipped}}\nin flight:\n{{context.status.inFlight}}\nblocked:\n{{context.status.blocked}}\nmerged:\n{{context.status.merged}}\ncompliance:\n{{context.status.compliance}}\ncapacity:\n{{context.status.capacity}}";
+    const status = {
+      week: "2026-W46", from: "2026-11-09", to: "2026-11-15",
+      metrics: { created: 9, closed: 7, open: 12, waitingOnYou: 2, leadTimeHours: 31.5, firstPassRate: 0.8, escalationRate: null, costUsd: 42.5 },
+      shipped: [{ title: "Export a report as CSV", repo: "acme/api", pr: "acme/api#38" }, { title: "Fix the footer", repo: null, pr: null }],
+      inFlight: [{ title: "Rate limits per tenant", state: "implementing" }],
+      blocked: [{ title: "Migrate auth", why: "waiting on an answer" }],
+      merged: [{ repo: "acme/api", count: 14 }],
+      compliance: {
+        waitingDrafts: [{ kind: "change_evidence", title: "Change management, acme/api, 2026-10" }],
+        evidence: [{ repo: "acme/api", period: "2026-10", exceptions: 3 }],
+        access: [{ org: "acme", period: "2026-Q4", flags: 4, signed: false }],
+        incidents: [{ title: "Export bucket public", severity: "high" as const, status: "open", nextDeadline: { regime: "GDPR", at: "2026-11-18T09:00:00.000Z" } }],
+        vulns: [{ repo: "acme/api", severity: "high", deadline: "2026-11-20", overdue: true }],
+      },
+      capacity: { answers: { overAgentCapacity: true, overReviewCapacity: false, atRisk: "some" as const } },
+    };
+    const prompt = renderQuoted({ pack: PACKS.status_report, input: { ...input, pack: "status_report", stage: "status_report", context: { projectContext: null, status } }, template });
+    expect(prompt).toContain("week 2026-W46 from 2026-11-09 to 2026-11-15");
+    expect(prompt).toContain("created 9, closed 7, open 12, waiting on you 2, lead time 31.5 h, first pass 80%, escalation rate unknown, cost $42.50");
+    expect(prompt).toContain("| - Export a report as CSV (acme/api, acme/api#38)");
+    expect(prompt).toContain("| - Fix the footer (no repo, no PR)");
+    expect(prompt).toContain("| - Rate limits per tenant [implementing]");
+    expect(prompt).toContain("| - Migrate auth: waiting on an answer");
+    expect(prompt).toContain("acme/api: 14 merged PRs");
+    expect(prompt).toContain("| - change_evidence: Change management, acme/api, 2026-10");
+    expect(prompt).toContain("| - acme/api 2026-10: 3 exceptions");
+    expect(prompt).toContain("| - acme 2026-Q4: 4 flags, not signed");
+    expect(prompt).toContain("| - [high, open] Export bucket public; next deadline GDPR 2026-11-18T09:00:00.000Z");
+    expect(prompt).toContain("| - acme/api high, due 2026-11-20, overdue");
+    expect(prompt).toContain("over agent capacity: yes\nover review capacity: no\nat risk: some");
+    expect(prompt).toContain("`status-writer` role running the `status_report` stage");
+    expect(renderPrompt({ pack: PACKS.status_report, input, template })).toContain("week (none) from (none) to (none)\nmetrics:\n(none)");
+    const noCapacity = renderPrompt({ pack: PACKS.status_report, input: { ...input, pack: "status_report", stage: "status_report", context: { projectContext: null, status: { ...status, capacity: null } } }, template });
+    expect(noCapacity).toContain("capacity:\nnot assessed");
+  });
+
   it("renders the issue for jira_intake: the facts line, the description, the comments and the repo", () => {
     const template = "issue:\n{{context.jira.issue}}\ndescription:\n{{context.jira.description}}\ncomments:\n{{context.jira.comments}}\nrepo: {{context.jira.repoPath}}";
     const jira = { key: "PLAT-123", url: "https://acme.atlassian.net/browse/PLAT-123", summary: "Login page", description: "Users sign in.\n\n- bad password errors", issueType: "Story", priority: "High", labels: ["luna"], dueAt: "2026-10-31", comments: ["Marta: please", "Lee: by Friday"], repoPath: "/work" };

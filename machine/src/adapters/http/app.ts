@@ -68,6 +68,8 @@ import { economyMetrics } from "../../domain/economy/metrics.ts";
 import { type Backlog, BacklogItemNotFoundError, NotSchedulableError } from "../../application/backlog.ts";
 import type { ChangeEvidence } from "../../application/change-evidence.ts";
 import type { AccessReview } from "../../application/access-review.ts";
+import type { StatusReport } from "../../application/status-report.ts";
+import { isoWeek } from "../../domain/status-report.ts";
 import type { IncidentJob } from "../../application/incidents.ts";
 import type { Questionnaires } from "../../application/questionnaires.ts";
 import type { Vulns } from "../../application/vulns.ts";
@@ -139,7 +141,7 @@ export interface AppDeps {
   /** The Ticket Machine; without it the `/tickets` routes are absent. */
   tickets?: TicketMachine;
   /** The manager's drafts (RFC 0008): the store, the publisher an approve goes through, the monthly evidence job, the quarterly access review, the incidents and the `owner/name` of every repo the machine knows. Without it the `/compliance` routes answer 503. */
-  compliance?: { drafts: ComplianceDrafts; publisher: CompliancePublisher; evidence: Pick<ChangeEvidence, "buildMonth">; repos: () => Promise<string[]>; access?: Pick<AccessReview, "orgs" | "buildQuarter">; incidents: Pick<IncidentJob, "list">; vulns?: Pick<Vulns, "list">; releaseNotes?: Pick<ReleaseNotes, "draft">; questionnaires?: Pick<Questionnaires, "rerun"> };
+  compliance?: { drafts: ComplianceDrafts; publisher: CompliancePublisher; evidence: Pick<ChangeEvidence, "buildMonth">; repos: () => Promise<string[]>; access?: Pick<AccessReview, "orgs" | "buildQuarter">; incidents: Pick<IncidentJob, "list">; vulns?: Pick<Vulns, "list">; releaseNotes?: Pick<ReleaseNotes, "draft">; questionnaires?: Pick<Questionnaires, "rerun">; status?: Pick<StatusReport, "build"> };
   /** Closes a task's herdr watch tab when it is deleted; closing it on `closed` is main.ts's job. */
   watcher?: Watcher;
   /** Enables `POST /dev/stubs` when the stub stages are in use. */
@@ -193,6 +195,7 @@ const ReleaseNotesRunInput = z.object({
   since: z.string().datetime().optional(),
 });
 const EvidenceRunInput = z.object({ repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/name"), period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "YYYY-MM") });
+const StatusRunInput = z.object({ week: z.string().regex(/^\d{4}-W(0[1-9]|[1-4]\d|5[0-3])$/, "an ISO week like 2026-W46").optional() });
 const AccessRunInput = z.object({ org: z.string().regex(/^[A-Za-z0-9-]+$/, "a GitHub org") });
 
 /** The window of a repo's own runs that a config proposal reads. */
@@ -747,6 +750,12 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
       const { repo, period } = await body(c, EvidenceRunInput);
       if (!(await compliance.repos()).includes(repo)) return fail(c, 400, "unknown_repository", "the machine does not know that repository");
       return c.json(await compliance.evidence.buildMonth(repo, period));
+    });
+    // An on-demand build of a week's status report (the previous week when none is named): the same draft the weekly job opens.
+    app.post("/compliance/status/run", async (c) => {
+      if (!compliance?.status) return off(c);
+      const { week } = await body(c, StatusRunInput);
+      return c.json(await compliance.status.build(week ?? isoWeek(new Date(Date.now() - 7 * 86_400_000))));
     });
     // An on-demand rebuild of the current quarter's access review: the same draft the quarterly job opens.
     app.post("/compliance/access/run", async (c) => {

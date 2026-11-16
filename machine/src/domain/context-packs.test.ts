@@ -16,7 +16,7 @@ describe("context-only packs", () => {
     const none = PackId.options.filter((id) => packStates(id).length === 0);
     // A new context-only pack must be given a context key or be denied: never on demand by accident.
     expect(none.filter((id) => !NOT_ON_DEMAND.includes(id)).sort()).toEqual(Object.keys(CONTEXT_OF).sort());
-    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["access_review", "breach_assess", "change_exceptions", "chat_triage", "ci_failure_class", "comment_intent", "conversation_assess", "conversation_relation", "conversation_reply", "coverage_check", "decompose", "e2e_failure_cause", "escalation_reason", "event_class", "evidence_format", "evidence_valid", "fact_propose", "finding_classify", "fix_scope", "foreman", "frame_privacy", "intake_dedup", "jira_intake", "loop_judge", "loop_redirect", "plan_check", "postmortem", "pr_link", "questionnaire", "red_check", "release_notes", "risk_score", "scope_check", "size_estimate", "slack_triage", "split_check", "ticket_assess", "ticket_recommend", "ticket_reply", "ticket_validity", "triage_signals", "vuln_triage", "worth_learning"]);
+    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["access_review", "breach_assess", "capacity_check", "change_exceptions", "chat_triage", "ci_failure_class", "comment_intent", "conversation_assess", "conversation_relation", "conversation_reply", "coverage_check", "decompose", "e2e_failure_cause", "escalation_reason", "event_class", "evidence_format", "evidence_valid", "fact_propose", "finding_classify", "fix_scope", "foreman", "frame_privacy", "intake_dedup", "jira_intake", "loop_judge", "loop_redirect", "plan_check", "postmortem", "pr_link", "questionnaire", "red_check", "release_notes", "risk_score", "scope_check", "size_estimate", "slack_triage", "split_check", "status_report", "ticket_assess", "ticket_recommend", "ticket_reply", "ticket_validity", "triage_signals", "vuln_triage", "worth_learning"]);
     expect(isContextPack("triage")).toBe(false);
     expect(isContextPack("reviewing_memory")).toBe(false);
     expect(isContextPack("chat_triage")).toBe(true);
@@ -152,6 +152,41 @@ describe("buildContextPackInput", () => {
     const input = buildContextPackInput("release_notes", { release });
     expect(StageInput.parse(input)).toEqual(input);
     expect(input).toMatchObject({ pack: "release_notes", stage: "release_notes", task: { id: "release-notes", title: "Release notes of acme/api v1.4.0", repoPath: "" }, context: { projectContext: null, release }, limits: { maxTurns: 1, timeoutMs: 120_000 } });
+  });
+
+  it("builds status_report's input around a synthetic task named for the week, the facts under context.status", () => {
+    const status = { week: "2026-W46", from: "2026-11-09", to: "2026-11-15",
+    metrics: { created: 9, closed: 7, open: 12, waitingOnYou: 2, leadTimeHours: 31.5, firstPassRate: 0.8, escalationRate: 0.1, costUsd: 42.5 },
+    shipped: [{ title: "Export a report as CSV", repo: "acme/api", pr: "acme/api#38" }],
+    inFlight: [{ title: "Rate limits per tenant", state: "implementing" }],
+    blocked: [{ title: "Migrate auth", why: "waiting on an answer" }],
+    merged: [{ repo: "acme/api", count: 14 }],
+    compliance: {
+      waitingDrafts: [{ kind: "change_evidence", title: "Change management, acme/api, 2026-10" }],
+      evidence: [{ repo: "acme/api", period: "2026-10", exceptions: 3 }],
+      access: [{ org: "acme", period: "2026-Q4", flags: 4, signed: false }],
+      incidents: [{ title: "Export bucket public", severity: "high" as const, status: "open", nextDeadline: { regime: "GDPR", at: "2026-11-18T09:00:00.000Z" } }],
+      vulns: [{ repo: "acme/api", severity: "high", deadline: "2026-11-20", overdue: false }],
+    },
+    capacity: { answers: { overAgentCapacity: true, overReviewCapacity: false, atRisk: "some" as const } } };
+    expect(isContextPack("status_report")).toBe(true);
+    expect(packStates("status_report")).toEqual([]);
+    expect(contextSchema("status_report").safeParse({ status }).success).toBe(true);
+    expect(contextSchema("status_report").safeParse({ status: { ...status, week: "last week" } }).success).toBe(false);
+    const input = buildContextPackInput("status_report", { status });
+    expect(StageInput.parse(input)).toEqual(input);
+    expect(input).toMatchObject({ pack: "status_report", task: { id: "status-report", title: "Status of 2026-W46", repoPath: "" }, context: { projectContext: null, status }, limits: { maxTurns: 1, timeoutMs: 120_000 } });
+  });
+
+  it("builds capacity_check's input around a synthetic task named for the week, the facts under context.capacity", () => {
+    const capacity = { week: "2026-W47", backlog: [], throughput: { closedPerWeek: [1, 2, 3, 4], reviewedPerWeek: [4, 3, 2, 1] }, headroom: [] };
+    expect(isContextPack("capacity_check")).toBe(true);
+    expect(packStates("capacity_check")).toEqual([]);
+    expect(contextSchema("capacity_check").safeParse({ capacity }).success).toBe(true);
+    expect(contextSchema("capacity_check").safeParse({ capacity: { ...capacity, week: "next" } }).success).toBe(false);
+    const input = buildContextPackInput("capacity_check", { capacity });
+    expect(StageInput.parse(input)).toEqual(input);
+    expect(input).toMatchObject({ pack: "capacity_check", task: { id: "capacity-check", title: "Capacity of 2026-W47", repoPath: "" }, context: { projectContext: null, capacity }, limits: { maxTurns: 1 } });
   });
 
   it("builds the plan checks' input around a synthetic task named for the brief, the plan under context.plan", () => {

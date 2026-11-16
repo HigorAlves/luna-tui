@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { AccessReviewAnswer, AccessReviewContext, PostmortemAnswer, PostmortemContext, QuestionnaireAnswer, QuestionnaireContext, VulnTriageAnswer, VulnTriageContext, ReleaseNotesAnswer, ReleaseNotesContext, ChangeExceptionKind, ChangeExceptionsAnswer, ChangeExceptionsContext, NO_ACCESS, PACKS, ComplianceActInput, ComplianceDraft, ComplianceDraftKind, ComplianceDraftsResponse, ComplianceEditInput, ComplianceTarget } from "./index.ts";
+import { StatusReportAnswer, StatusReportContext, AccessReviewAnswer, AccessReviewContext, PostmortemAnswer, PostmortemContext, QuestionnaireAnswer, QuestionnaireContext, VulnTriageAnswer, VulnTriageContext, ReleaseNotesAnswer, ReleaseNotesContext, ChangeExceptionKind, ChangeExceptionsAnswer, ChangeExceptionsContext, NO_ACCESS, PACKS, ComplianceActInput, ComplianceDraft, ComplianceDraftKind, ComplianceDraftsResponse, ComplianceEditInput, ComplianceTarget } from "./index.ts";
 
 const draft = {
   id: "change_evidence:acme/api:2026-10",
@@ -223,5 +223,43 @@ describe("compliance drafts", () => {
     expect(PACKS.release_notes).toMatchObject({ kind: "agent", agent: "release-writer", writable: false, maxTurns: 1, effort: "low", template: "release_notes.md", helpers: [], skills: [] });
     expect(PACKS.release_notes.engines).toMatchObject({ default: "claude:haiku", allowed: ["claude:haiku", "claude:sonnet"] });
     expect(PACKS.release_notes.access).toEqual(NO_ACCESS);
+  });
+
+  it("gives the status writer one week's facts and answers a headline, shipped, risks, compliance lines, asks and the Slack text, each capped", () => {
+    const context = { week: "2026-W46", from: "2026-11-09", to: "2026-11-15",
+    metrics: { created: 9, closed: 7, open: 12, waitingOnYou: 2, leadTimeHours: 31.5, firstPassRate: 0.8, escalationRate: 0.1, costUsd: 42.5 },
+    shipped: [{ title: "Export a report as CSV", repo: "acme/api", pr: "acme/api#38" }],
+    inFlight: [{ title: "Rate limits per tenant", state: "implementing" }],
+    blocked: [{ title: "Migrate auth", why: "waiting on an answer" }],
+    merged: [{ repo: "acme/api", count: 14 }],
+    compliance: {
+      waitingDrafts: [{ kind: "change_evidence", title: "Change management, acme/api, 2026-10" }],
+      evidence: [{ repo: "acme/api", period: "2026-10", exceptions: 3 }],
+      access: [{ org: "acme", period: "2026-Q4", flags: 4, signed: false }],
+      incidents: [{ title: "Export bucket public", severity: "high", status: "open", nextDeadline: { regime: "GDPR", at: "2026-11-18T09:00:00.000Z" } }],
+      vulns: [{ repo: "acme/api", severity: "high", deadline: "2026-11-20", overdue: false }],
+    },
+    capacity: { answers: { overAgentCapacity: true, overReviewCapacity: false, atRisk: "some" } } };
+    expect(StatusReportContext.parse(context)).toEqual(context);
+    expect(StatusReportContext.parse({ ...context, capacity: null }).capacity).toBeNull();
+    expect(StatusReportContext.parse({ ...context, compliance: { ...context.compliance, incidents: [{ ...context.compliance.incidents[0], nextDeadline: null }] } }).compliance.incidents[0]!.nextDeadline).toBeNull();
+    expect(() => StatusReportContext.parse({ ...context, week: "2026-46" })).toThrow();
+    expect(() => StatusReportContext.parse({ ...context, shipped: Array(41).fill(context.shipped[0]) })).toThrow();
+    expect(() => StatusReportContext.parse({ ...context, capacity: { answers: { ...context.capacity.answers, atRisk: "most" } } })).toThrow();
+    const answer = { headline: "Seven cards shipped; one risk", shipped: ["CSV export"], risks: ["Auth migration waits on an answer"], compliance: ["3 change exceptions in acme/api for 2026-10"], asks: ["Decide whether to hire a contractor for the auth migration"], summary: "Seven shipped." };
+    expect(StatusReportAnswer.parse(answer)).toEqual(answer);
+    expect(() => StatusReportAnswer.parse({ ...answer, headline: "x".repeat(201) })).toThrow();
+    expect(() => StatusReportAnswer.parse({ ...answer, shipped: Array(9).fill("s") })).toThrow();
+    expect(() => StatusReportAnswer.parse({ ...answer, risks: Array(7).fill("r") })).toThrow();
+    expect(() => StatusReportAnswer.parse({ ...answer, compliance: Array(7).fill("c") })).toThrow();
+    expect(() => StatusReportAnswer.parse({ ...answer, asks: Array(5).fill("a") })).toThrow();
+    expect(() => StatusReportAnswer.parse({ ...answer, summary: "x".repeat(601) })).toThrow();
+    expect(() => StatusReportAnswer.parse({ ...answer, summary: "" })).toThrow();
+  });
+
+  it("runs the status writer as a text-only agent on sonnet or haiku at medium effort, with no hands", () => {
+    expect(PACKS.status_report).toMatchObject({ kind: "agent", agent: "status-writer", writable: false, maxTurns: 1, effort: "medium", template: "status_report.md", helpers: [], skills: [] });
+    expect(PACKS.status_report.engines).toMatchObject({ default: "claude:sonnet", allowed: ["claude:sonnet", "claude:haiku"] });
+    expect(PACKS.status_report.access).toEqual(NO_ACCESS);
   });
 });

@@ -8,6 +8,7 @@ import { access } from "node:fs/promises";
 import { join } from "node:path";
 
 import { bankPage, chunkText, parseFilled } from "../domain/questionnaire.ts";
+import { summaryOf, wikiPageUrl } from "../domain/status-report.ts";
 import { COMPLIANCE_DIR, type TargetWriters, commitMessage } from "./compliance-drafts.ts";
 import type { Jira } from "./jira.ts";
 import type { SlackSender } from "./slack-send.ts";
@@ -28,7 +29,7 @@ export interface QuestionnaireWriterDeps {
   jiraLimit?: number;
 }
 
-export function questionnaireWriters(deps: QuestionnaireWriterDeps): Pick<TargetWriters, "answer_bank" | "slack_thread" | "jira_comment"> {
+export function questionnaireWriters(deps: QuestionnaireWriterDeps): Pick<TargetWriters, "answer_bank" | "slack_thread" | "slack_channel" | "jira_comment"> {
   const now = deps.now ?? (() => new Date());
   const dir = join(deps.stateDir, COMPLIANCE_DIR, "posted");
   const keyOf = (parts: string[]) => createHash("sha256").update(parts.join("\u0000")).digest("hex").slice(0, 32);
@@ -59,6 +60,16 @@ export function questionnaireWriters(deps: QuestionnaireWriterDeps): Pick<Target
     async slack_thread(draft, target, tap) {
       if (!tap) throw new Error("a Slack post needs a person's tap");
       await sendOnce(["slack", draft.id, target.channel, target.ts], draft.text, deps.slackLimit ?? SLACK_CHUNK, (chunk) => deps.sender.postMessage(tap, target.channel, chunk, target.ts));
+    },
+
+    /** The status report's post: the page's `## Summary` and, when the draft also goes to a wiki page, the link to it. One message, under the limit; the link is never cut. */
+    async slack_channel(draft, target, tap) {
+      if (!tap) throw new Error("a Slack post needs a person's tap");
+      const limit = deps.slackLimit ?? SLACK_CHUNK;
+      const wiki = draft.targets.find((t) => t.kind === "wiki");
+      const link = wiki ? `\n\nFull report: ${wikiPageUrl(wiki.repo, wiki.path)}` : "";
+      const text = `${summaryOf(draft.text).slice(0, Math.max(0, limit - link.length)).trimEnd()}${link}`;
+      await sendOnce(["slack", draft.id, target.channel], text, limit, (chunk) => deps.sender.postMessage(tap, target.channel, chunk));
     },
 
     async jira_comment(draft, target) {

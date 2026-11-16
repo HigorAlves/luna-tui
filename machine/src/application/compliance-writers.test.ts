@@ -144,3 +144,46 @@ describe("jira_comment writer", () => {
     for (const c of jira.comments["SEC-42"]!) expect(c.length).toBeLessThanOrEqual(120);
   });
 });
+
+describe("slack_channel writer", () => {
+  const target = { kind: "slack_channel" as const, channel: "C9" };
+  const page = ["# Status, 2026-W46", "", "## Summary", "", "Seven shipped. Auth slips.", "", "## Headline", "", "x", ""].join("\n");
+  const status = (over: Partial<ComplianceDraft> = {}) =>
+    draft({ id: "status_report:2026-W46", kind: "status_report", title: "Status, 2026-W46", period: "2026-W46", text: page, targets: [target, { kind: "wiki", repo: "acme/home", path: "Status/2026-W46.md" }], ...over });
+
+  it("posts the page's summary and the link to its wiki page in the channel, not in a thread", async () => {
+    const { writers, slack } = world();
+    await writers.slack_channel!(status(), target, tap);
+    expect(slack.calls).toEqual([["postMessage", "C9", "Seven shipped. Auth slips.\n\nFull report: https://github.com/acme/home/wiki/2026-W46"]]);
+  });
+
+  it("posts the summary alone when the draft has no wiki target", async () => {
+    const { writers, slack } = world();
+    await writers.slack_channel!(status({ targets: [target] }), target, tap);
+    expect(slack.calls.map((c) => c[2])).toEqual(["Seven shipped. Auth slips."]);
+  });
+
+  it("keeps the post under the limit, leaving the link whole", async () => {
+    const { writers, slack } = world({ limit: 80 });
+    await writers.slack_channel!(status({ text: page.replace("Seven shipped. Auth slips.", "word ".repeat(100)) }), target, tap);
+    const posted = slack.calls.map((c) => c[2] as string);
+    expect(posted).toHaveLength(1);
+    expect(posted[0]!.length).toBeLessThanOrEqual(80);
+    expect(posted[0]!.endsWith("Full report: https://github.com/acme/home/wiki/2026-W46")).toBe(true);
+  });
+
+  it("is safe to repeat: a second approve posts nothing, an edited summary posts again", async () => {
+    const { writers, slack } = world();
+    await writers.slack_channel!(status(), target, tap);
+    await writers.slack_channel!(status(), target, tap);
+    expect(slack.calls).toHaveLength(1);
+    await writers.slack_channel!(status({ text: page.replace("Auth slips.", "Auth is fine.") }), target, tap);
+    expect(slack.calls).toHaveLength(2);
+  });
+
+  it("refuses without a person's tap", async () => {
+    const { writers, slack } = world();
+    await expect(writers.slack_channel!(status(), target, null)).rejects.toThrow("needs a person's tap");
+    expect(slack.calls).toEqual([]);
+  });
+});

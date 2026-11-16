@@ -178,6 +178,18 @@ export const ReleaseNotesAnswer = z.object({
 });
 export type ReleaseNotesAnswer = z.infer<typeof ReleaseNotesAnswer>;
 
+/** status_report: the engineering manager's weekly status for leadership. The machine's facts are the record; this is how they read. `summary` is the Slack text. */
+export const StatusReportAnswer = z.object({
+  headline: z.string().min(1).max(200),
+  shipped: z.array(z.string().min(1).max(300)).max(8),
+  risks: z.array(z.string().min(1).max(300)).max(6),
+  compliance: z.array(z.string().min(1).max(300)).max(6),
+  /** Decisions needed from leadership. */
+  asks: z.array(z.string().min(1).max(300)).max(4),
+  summary: z.string().min(1).max(600),
+});
+export type StatusReportAnswer = z.infer<typeof StatusReportAnswer>;
+
 /** vuln_triage: one security alert turned into a work item. `fast` is a patch or minor bump with a patched version, `hold` waits for the person, `full` is every other card. */
 export const VulnLane = z.enum(["fast", "full", "hold"]);
 export type VulnLane = z.infer<typeof VulnLane>;

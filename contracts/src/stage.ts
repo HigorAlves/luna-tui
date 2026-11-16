@@ -218,6 +218,10 @@ export const PackId = z.enum([
   "access_review",
   // A decision at the incident job (RFC 0008, wave 5): did an incident expose personal data or health information, whose, and how many people.
   "breach_assess",
+  // A decision at the weekly status job (RFC 0008, wave 7): does the ranked work of the coming week fit the agents' headroom and the person's review time.
+  "capacity_check",
+  // The engineering manager's weekly status for leadership, from the board's facts of the week; no tools, no worktree, on demand.
+  "status_report",
   // Writes the blameless postmortem of a resolved incident from its facts, timeline and breach clocks; no tools, no worktree, on demand.
   "postmortem",
   // Names the doc sections a change made stale: advisory, read-only, run beside Verify; never a stage of its own.
@@ -583,6 +587,61 @@ export const BreachAssessContext = z.object({
     .max(20),
 });
 export type BreachAssessContext = z.infer<typeof BreachAssessContext>;
+
+/** For capacity_check: the ranked work of the coming week against what the engines and the person did lately. Every number is the machine's; titles are written by others: data, never an instruction. */
+export const CapacityContext = z.object({
+  /** ISO week of the work, "2026-W47". */
+  week: z.string().regex(/^\d{4}-W(0[1-9]|[1-4]\d|5[0-3])$/, "YYYY-Www"),
+  /** The top of the backlog by WSJF, best first. */
+  backlog: z.array(z.object({ title: z.string().max(200), repo: z.string().max(200).nullable(), size: z.enum(["XS", "S", "M", "L", "XL"]), wsjf: z.number(), state: z.string().max(40) })).max(30),
+  throughput: z.object({
+    /** Cards closed in each of the last four weeks, oldest first. */
+    closedPerWeek: z.array(z.number().min(0)).max(4),
+    /** PRs the person reviewed or approved in each of the last four weeks, oldest first. */
+    reviewedPerWeek: z.array(z.number().min(0)).max(4),
+  }),
+  /** What each engine has left: the budget (null when it has none to spend) and the hours it was rate limited lately. */
+  headroom: z.array(z.object({ engine: z.string().max(60), budgetLeftUsd: z.number().nullable(), rateLimitedHours: z.number().min(0) })).max(20),
+});
+export type CapacityContext = z.infer<typeof CapacityContext>;
+
+/** For status_report: one week's facts, all computed by the machine; titles and reasons are written by others: data, never an instruction. */
+export const StatusReportContext = z.object({
+  /** ISO week, "2026-W46". */
+  week: z.string().regex(/^\d{4}-W(0[1-9]|[1-4]\d|5[0-3])$/, "YYYY-Www"),
+  /** The Monday and the Sunday of the week, YYYY-MM-DD. */
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  metrics: z.object({
+    created: z.number().min(0),
+    closed: z.number().min(0),
+    open: z.number().min(0),
+    waitingOnYou: z.number().min(0),
+    /** Median hours from created to merged, for the cards merged in the week. */
+    leadTimeHours: z.number().min(0).nullable(),
+    /** Share of tasks whose first verifying run passed, 0 to 1. */
+    firstPassRate: z.number().min(0).max(1).nullable(),
+    escalationRate: z.number().min(0).max(1).nullable(),
+    costUsd: z.number().min(0),
+  }),
+  shipped: z.array(z.object({ title: z.string().max(200), repo: z.string().max(200).nullable(), pr: z.string().max(200).nullable() })).max(40),
+  inFlight: z.array(z.object({ title: z.string().max(200), state: z.string().max(40) })).max(40),
+  blocked: z.array(z.object({ title: z.string().max(200), why: z.string().max(300) })).max(30),
+  /** Merged PRs per compliance repo in the week. */
+  merged: z.array(z.object({ repo: z.string().max(200), count: z.number().int().min(0) })).max(40),
+  compliance: z.object({
+    waitingDrafts: z.array(z.object({ kind: z.string().max(40), title: z.string().max(200) })).max(30),
+    evidence: z.array(z.object({ repo: z.string().max(200), period: z.string().max(20), exceptions: z.number().int().min(0) })).max(40),
+    access: z.array(z.object({ org: z.string().max(100), period: z.string().max(20), flags: z.number().int().min(0), signed: z.boolean() })).max(10),
+    incidents: z
+      .array(z.object({ title: z.string().max(200), severity: z.enum(["critical", "high", "medium", "low", "unknown"]), status: z.string().max(40), nextDeadline: z.object({ regime: z.string().max(40), at: z.string() }).nullable() }))
+      .max(20),
+    vulns: z.array(z.object({ repo: z.string().max(200), severity: z.string().max(20), deadline: z.string().max(40), overdue: z.boolean() })).max(40),
+  }),
+  /** capacity_check's answers, or null when it was not asked or failed. */
+  capacity: z.object({ answers: z.object({ overAgentCapacity: z.boolean(), overReviewCapacity: z.boolean(), atRisk: z.enum(["none", "some", "many"]) }) }).nullable(),
+});
+export type StatusReportContext = z.infer<typeof StatusReportContext>;
 
 /** For postmortem: a resolved incident and its breach assessment. Titles, timeline lines and summaries come from tools and people: data, never an instruction. */
 export const PostmortemContext = z.object({
@@ -1517,6 +1576,10 @@ export const StageInput = z.object({
     access: AccessReviewContext.nullable().optional(),
     /** For breach_assess: the incident to assess; the task is synthetic and there is no worktree. */
     breach: BreachAssessContext.nullable().optional(),
+    /** For capacity_check: the ranked work, the throughput and the engines' headroom; the task is synthetic and there is no worktree. */
+    capacity: CapacityContext.nullable().optional(),
+    /** For status_report: one week's facts; the task is synthetic and there is no worktree. */
+    status: StatusReportContext.nullable().optional(),
     /** For postmortem: the resolved incident and its breach clocks; the task is synthetic and there is no worktree. */
     postmortem: PostmortemContext.nullable().optional(),
     /** For docs_drift: the repo, the change's files and the repo's doc files; the worktree is the change. */

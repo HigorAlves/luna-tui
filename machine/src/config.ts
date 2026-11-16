@@ -13,6 +13,9 @@ import { normaliseSite } from "./domain/datadog-site.ts";
 import { DEFAULT_GATE_SECS, parseDuration } from "./domain/sla.ts";
 
 /** Settings read from the environment. Defaults match compose.dev.yml and herdr's config. */
+export const STATUS_DAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"] as const;
+export type StatusDay = (typeof STATUS_DAYS)[number];
+
 export interface Config {
   databaseUrl: string;
   port: number;
@@ -69,6 +72,8 @@ export interface Config {
   accessReview: boolean;
   /** `owner/name` whose wiki holds the org-wide pages (RFC 0008). */
   managerWikiRepo: string | null;
+  /** The weekly status report (RFC 0008, wave 7): on by default with a home wiki, `MACHINE_STATUS_REPORT=off` stops it; the channel id its summary goes to and the weekday it is built on. */
+  statusReport: { enabled: boolean; slackChannel: string | null; day: StatusDay };
   /** Incidents from Slack, Jira, Sentry and Datadog (RFC 0008, wave 5): `MACHINE_INCIDENTS=off` stops them; the Slack channel id, the Jira JQL and the Jira project for postmortem action items. */
   incidents: { enabled: boolean; slackChannel: string | null; jiraJql: string; jiraProject: string | null };
   /** Keep each decision pack call's context, answer and verdicts under the state dir, for evals (`MACHINE_DECISIONS=off` stops it) and for how many days (`MACHINE_DECISIONS_RETENTION_DAYS`, 365; 0 keeps them) and up to how many megabytes (`MACHINE_DECISIONS_MAX_MB`, 4096; 0 for no cap). */
@@ -401,6 +406,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (managerWikiRepo !== null && !/^[\w.-]+\/[\w.-]+$/.test(managerWikiRepo)) {
     throw new Error(`MACHINE_MANAGER_WIKI_REPO must be an owner/name repo, got "${managerWikiRepo}"`);
   }
+  const statusChannel = env.MACHINE_STATUS_SLACK_CHANNEL?.trim() || null;
+  if (statusChannel !== null && !/^[CGD][A-Z0-9]+$/.test(statusChannel)) throw new Error(`MACHINE_STATUS_SLACK_CHANNEL must be a channel id like C0123ABC, got "${statusChannel}"`);
+  const statusDay = (env.MACHINE_STATUS_REPORT_DAY?.trim().toLowerCase() || "monday") as StatusDay;
+  if (!STATUS_DAYS.includes(statusDay)) throw new Error(`MACHINE_STATUS_REPORT_DAY must be a weekday like monday, got "${env.MACHINE_STATUS_REPORT_DAY}"`);
   const pollSeconds = env.MACHINE_GITHUB_POLL_INTERVAL === undefined ? 300 : Number(env.MACHINE_GITHUB_POLL_INTERVAL);
   if (!Number.isInteger(pollSeconds) || pollSeconds < 1) {
     throw new Error(
@@ -554,6 +563,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     complianceEvidence: env.MACHINE_COMPLIANCE_EVIDENCE !== "off" && env.MACHINE_COMPLIANCE_EVIDENCE !== "0",
     accessReview: env.MACHINE_ACCESS_REVIEW !== "off" && env.MACHINE_ACCESS_REVIEW !== "0",
     managerWikiRepo,
+    statusReport: { enabled: managerWikiRepo !== null && env.MACHINE_STATUS_REPORT !== "off" && env.MACHINE_STATUS_REPORT !== "0", slackChannel: statusChannel, day: statusDay },
     incidents: { enabled: env.MACHINE_INCIDENTS !== "off" && env.MACHINE_INCIDENTS !== "0", slackChannel: incidentSlackChannel, jiraJql: env.MACHINE_INCIDENT_JIRA_JQL?.trim() || "issuetype = Incident AND updated >= -1d", jiraProject: incidentJiraProject },
     decisions: { enabled: env.MACHINE_DECISIONS !== "off", retentionDays: decisionRetentionDays, maxMb: decisionMaxMb },
     slack: slackToken === "" ? null : { token: slackToken, channel: slackChannel },

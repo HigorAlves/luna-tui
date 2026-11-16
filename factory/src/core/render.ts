@@ -287,6 +287,36 @@ const releaseText = (release: StageInput["context"]["release"]) => {
   return { repo: release.repo, tag: release.tag, since: release.since, prs: prs.length > 0 ? prs.join("\n") : NONE };
 };
 
+/** The week's facts, as status_report reads them. Every number and date is the machine's; each title and reason was written by others, so those blocks are quoted data. */
+const statusText = (status: StageInput["context"]["status"]) => {
+  if (!status) return { week: NONE, from: NONE, to: NONE, metrics: NONE, shipped: NONE, inFlight: NONE, blocked: NONE, merged: NONE, compliance: NONE, capacity: NONE };
+  const list = (lines: string[]) => (lines.length > 0 ? lines.join("\n") : NONE);
+  const m = status.metrics;
+  const pct = (n: number | null) => (n === null ? "unknown" : `${Math.round(n * 100)}%`);
+  const c = status.compliance;
+  const yes = (b: boolean) => (b ? "yes" : "no");
+  const section = (heading: string, lines: string[]) => (lines.length > 0 ? [`${heading}:`, ...lines] : []);
+  const compliance = [
+    ...section("Drafts waiting for the person", c.waitingDrafts.map((d) => `- ${d.kind}: ${d.title}`)),
+    ...section("Change evidence", c.evidence.map((e) => `- ${e.repo} ${e.period}: ${e.exceptions} exceptions`)),
+    ...section("Access review", c.access.map((a) => `- ${a.org} ${a.period}: ${a.flags} flags, ${a.signed ? "signed" : "not signed"}`)),
+    ...section("Incidents", c.incidents.map((i) => `- [${i.severity}, ${i.status}] ${i.title}${i.nextDeadline ? `; next deadline ${i.nextDeadline.regime} ${i.nextDeadline.at}` : ""}`)),
+    ...section("Vulnerabilities", c.vulns.map((v) => `- ${v.repo} ${v.severity}, due ${v.deadline}, ${v.overdue ? "overdue" : "not overdue"}`)),
+  ];
+  return {
+    week: status.week,
+    from: status.from,
+    to: status.to,
+    metrics: `created ${m.created}, closed ${m.closed}, open ${m.open}, waiting on you ${m.waitingOnYou}, lead time ${m.leadTimeHours === null ? "unknown" : `${m.leadTimeHours} h`}, first pass ${pct(m.firstPassRate)}, escalation rate ${pct(m.escalationRate)}, cost $${m.costUsd.toFixed(2)}`,
+    shipped: list(status.shipped.map((s) => `- ${s.title} (${s.repo ?? "no repo"}, ${s.pr ?? "no PR"})`)),
+    inFlight: list(status.inFlight.map((s) => `- ${s.title} [${s.state}]`)),
+    blocked: list(status.blocked.map((b) => `- ${b.title}: ${b.why}`)),
+    merged: list(status.merged.map((x) => `- ${x.repo}: ${x.count} merged PRs`)),
+    compliance: list(compliance),
+    capacity: status.capacity ? `over agent capacity: ${yes(status.capacity.answers.overAgentCapacity)}\nover review capacity: ${yes(status.capacity.answers.overReviewCapacity)}\nat risk: ${status.capacity.answers.atRisk}` : "not assessed",
+  };
+};
+
 /** The issue, as jira_intake reads it: one header line, the description, the comments, the repo. */
 const jiraText = (jira: StageInput["context"]["jira"]) => {
   if (!jira) return { issue: NONE, description: NONE, comments: NONE, repoPath: NONE, classification: NONE };
@@ -614,6 +644,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
   const chat = chatText(input.context.chat);
   const foreman = foremanText(input.context.foreman);
   const exceptions = exceptionsText(input.context.exceptions);
+  const status = statusText(input.context.status);
   const vulns = vulnsText(input.context.vulns);
   const release = releaseText(input.context.release);
   const compliance = complianceText(input.context.compliance);
@@ -746,6 +777,16 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.release.tag}}": release.tag,
     "{{context.release.since}}": release.since,
     "{{context.release.prs}}": release.prs,
+    "{{context.status.week}}": status.week,
+    "{{context.status.from}}": status.from,
+    "{{context.status.to}}": status.to,
+    "{{context.status.metrics}}": status.metrics,
+    "{{context.status.shipped}}": status.shipped,
+    "{{context.status.inFlight}}": status.inFlight,
+    "{{context.status.blocked}}": status.blocked,
+    "{{context.status.merged}}": status.merged,
+    "{{context.status.compliance}}": status.compliance,
+    "{{context.status.capacity}}": status.capacity,
     "{{context.compliance.repo}}": compliance.repo,
     "{{context.compliance.regimes}}": compliance.regimes,
     "{{context.compliance.controls}}": compliance.controls,

@@ -54,6 +54,7 @@ describe("loadConfig", () => {
       complianceEvidence: true,
       accessReview: true,
       managerWikiRepo: null,
+      statusReport: { enabled: false, slackChannel: null, day: "monday" },
       incidents: { enabled: true, slackChannel: null, jiraJql: "issuetype = Incident AND updated >= -1d", jiraProject: null },
       decisions: { enabled: true, retentionDays: 365, maxMb: 4096 },
       slack: null,
@@ -177,6 +178,18 @@ describe("loadConfig", () => {
     expect(loadConfig({ HOME: "/h" }).managerWikiRepo).toBeNull();
     expect(loadConfig({ HOME: "/h", MACHINE_MANAGER_WIKI_REPO: " acme/handbook " }).managerWikiRepo).toBe("acme/handbook");
     expect(() => loadConfig({ HOME: "/h", MACHINE_MANAGER_WIKI_REPO: "nope" })).toThrow(/MACHINE_MANAGER_WIKI_REPO/);
+  });
+
+  it("runs the weekly status report only with a home wiki, on Monday by default, off with MACHINE_STATUS_REPORT=off", () => {
+    expect(loadConfig({ HOME: "/h" }).statusReport).toEqual({ enabled: false, slackChannel: null, day: "monday" });
+    expect(loadConfig({ HOME: "/h", MACHINE_MANAGER_WIKI_REPO: "acme/home" }).statusReport).toEqual({ enabled: true, slackChannel: null, day: "monday" });
+    expect(loadConfig({ HOME: "/h", MACHINE_MANAGER_WIKI_REPO: "acme/home", MACHINE_STATUS_REPORT: "off" }).statusReport.enabled).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_MANAGER_WIKI_REPO: "acme/home", MACHINE_STATUS_REPORT: "0" }).statusReport.enabled).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_STATUS_REPORT: "on" }).statusReport.enabled).toBe(false);
+    const set = loadConfig({ HOME: "/h", MACHINE_MANAGER_WIKI_REPO: "acme/home", MACHINE_STATUS_SLACK_CHANNEL: " C0123ABC ", MACHINE_STATUS_REPORT_DAY: "Friday" }).statusReport;
+    expect(set).toEqual({ enabled: true, slackChannel: "C0123ABC", day: "friday" });
+    expect(() => loadConfig({ HOME: "/h", MACHINE_STATUS_SLACK_CHANNEL: "general" })).toThrow(/MACHINE_STATUS_SLACK_CHANNEL/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_STATUS_REPORT_DAY: "someday" })).toThrow(/MACHINE_STATUS_REPORT_DAY/);
   });
 
   it("reads the incident settings: on unless off, a Slack channel id, a JQL with a default, a Jira project for action items", () => {

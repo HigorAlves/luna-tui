@@ -1,0 +1,96 @@
+{
+  "schema": 3,
+  "stage": "capacity_check",
+  "pack": "capacity_check",
+  "attempt": 1,
+  "task": {
+    "id": "capacity-check",
+    "title": "Capacity of 2026-W47",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "capacity": {
+      "week": "2026-W47",
+      "backlog": [
+        {
+          "title": "Invoice PDF layout",
+          "repo": "acme/billing",
+          "size": "M",
+          "wsjf": 2.4,
+          "state": "backlog"
+        },
+        {
+          "title": "SSO for the admin app",
+          "repo": "acme/web",
+          "size": "M",
+          "wsjf": 2.3,
+          "state": "backlog"
+        },
+        {
+          "title": "Search filters",
+          "repo": "acme/search",
+          "size": "M",
+          "wsjf": 2.1,
+          "state": "backlog"
+        },
+        {
+          "title": "Retry failed exports",
+          "repo": "acme/api",
+          "size": "M",
+          "wsjf": 2.0,
+          "state": "backlog"
+        },
+        {
+          "title": "Bulk user import",
+          "repo": "acme/api",
+          "size": "M",
+          "wsjf": 1.9,
+          "state": "backlog"
+        },
+        {
+          "title": "Audit trail export",
+          "repo": "acme/api",
+          "size": "M",
+          "wsjf": 1.8,
+          "state": "backlog"
+        }
+      ],
+      "throughput": {
+        "closedPerWeek": [
+          3,
+          4,
+          3,
+          4
+        ],
+        "reviewedPerWeek": [
+          4,
+          3,
+          5,
+          4
+        ]
+      },
+      "headroom": [
+        {
+          "engine": "claude:sonnet",
+          "budgetLeftUsd": 20.0,
+          "rateLimitedHours": 2
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}
