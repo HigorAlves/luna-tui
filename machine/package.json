@@ -43,7 +43,7 @@
   },
   "dependencies": {
     "@hardness/contracts": "workspace:*",
-    "@hono/node-server": "^2.1.5",
+    "@hono/node-server": "^2.1.6",
     "@lmnr-ai/lmnr": "^0.8.58",
     "hono": "^4.13.13",
     "octokit": "^5.0.5",

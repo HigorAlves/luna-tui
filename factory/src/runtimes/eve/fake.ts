@@ -22,7 +22,13 @@ function shellCall(command: string): { name: string; input: unknown } {
   return edit ? { name: "write_file", input: { filePath: join(process.env.LUNA_EVE_WORKSPACE ?? "/work", edit[1] as string), content: "edited\n" } } : { name: "bash", input: { command } };
 }
 
-const scriptOf = (): ScriptStep[] => JSON.parse(readFileSync(process.env.LUNA_EVE_SCRIPT ?? "", "utf8")) as ScriptStep[];
+/** The script file the model plays: LUNA_EVE_SCRIPT_<NAME> for a subagent named `name` when that is set (the name upper-cased, each other character an underscore), else LUNA_EVE_SCRIPT. */
+function scriptFile(name?: string): string {
+  const own = name ? process.env[`LUNA_EVE_SCRIPT_${name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`] : undefined;
+  return own || process.env.LUNA_EVE_SCRIPT || "";
+}
+
+const scriptOf = (name?: string): ScriptStep[] => JSON.parse(readFileSync(scriptFile(name), "utf8")) as ScriptStep[];
 
 /** The executor compile.ts hands the scripted agent's `bash`: a failing shell step's output comes from the
  *  script, not from a process, and any other command runs for real. The command is the one the script
@@ -32,13 +38,13 @@ export const scriptedExec: Executor = (argv, options) => {
   return step && "fails" in step ? Promise.resolve({ exitCode: 1, stdout: "", stderr: step.fails as string, truncated: false }) : runArgv(argv, options);
 };
 
-export function scriptedModel() {
+export function scriptedModel(name?: string) {
   const told = new Set<string>();
   return mockModel({
     modelId: "scripted",
     provider: "conformance",
     respond: async ({ toolResults }) => {
-      const script = scriptOf();
+      const script = scriptOf(name);
       const results = toolResults.filter((r) => r.name !== "eve__reply");
       // What the model is told besides the prompt: a redirect rides on the last tool result, in its
       // stdout, content or text. One line (a JSON string) per redirect, in LUNA_EVE_TOLD.

@@ -49,6 +49,7 @@ import {
   TriageRecord,
   ThreadsContext,
   VerifyResult,
+  helpersOn,
   resolveEngine,
 } from "./index.ts";
 
@@ -520,7 +521,7 @@ describe("PR tasks", () => {
       expect(Array.isArray(pack.helpers), pack.id).toBe(true);
       // A role with subagent helpers (on Claude, beside a Claude default) needs the Agent tool to
       // dispatch them; one without must not carry it. A helper on another runtime is `delegate`'s.
-      const subagents = pack.helpers.filter((h) => resolveEngine(h.engine).runtime === "claude" && resolveEngine(pack.engines.default).runtime === "claude");
+      const subagents = helpersOn(pack, "claude").filter((h) => resolveEngine(h.engine).runtime === "claude" && resolveEngine(pack.engines.default).runtime === "claude");
       expect(pack.access.agent, pack.id).toBe(subagents.length > 0);
     }
     expect(AgentRole.options).toEqual(expect.arrayContaining(["security-reviewer", "reply-drafter", "code-fixer"]));
