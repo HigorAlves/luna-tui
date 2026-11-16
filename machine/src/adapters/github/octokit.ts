@@ -10,6 +10,7 @@ import {
   type GhIssue,
   GitHubError,
   type GitHub,
+  type MergedPr,
   type NewPr,
   type PrActivity,
   type PrRef,
@@ -17,6 +18,7 @@ import {
   type OpenPrs,
   type PrSearchHit,
   type ReviewPost,
+  type RuleBypass,
   repoRef,
 } from "../../application/github.ts";
 
@@ -100,6 +102,49 @@ async function call<T>(what: string, run: () => Promise<T>): Promise<T> {
     throw new GitHubError(`${what} failed${status ? ` (${status})` : ""}: ${message}`);
   }
 }
+
+/** The merged PRs of a window: the search page, with each PR's first page of reviews (the rest is read by node id). */
+const MERGED_PR_FIELDS = `id number title url body author{login} mergedBy{login} mergedAt mergeCommit{oid} baseRefName headRefName
+  commits(last:1){nodes{commit{oid}}} closingIssuesReferences(first:10){nodes{number url}}
+  reviews(first:100){nodes{author{login} state commit{oid} submittedAt} pageInfo{hasNextPage endCursor}}`;
+const MERGED_PRS_QUERY = `query($q:String!,$after:String){ search(query:$q, type:ISSUE, first:50, after:$after){ issueCount pageInfo{hasNextPage endCursor}
+  nodes{ ... on PullRequest{ ${MERGED_PR_FIELDS} } } } }`;
+const MORE_REVIEWS_QUERY = `query($id:ID!,$after:String){ node(id:$id){ ... on PullRequest{ reviews(first:100, after:$after){nodes{author{login} state commit{oid} submittedAt} pageInfo{hasNextPage endCursor}} } } }`;
+/** GitHub's search serves at most this many results of one query. */
+const SEARCH_CAP = 1000;
+
+interface ReviewNode {
+  author: { login: string } | null;
+  state: MergedPr["reviews"][number]["state"];
+  commit: { oid: string } | null;
+  submittedAt: string | null;
+}
+interface ReviewsPage {
+  nodes: ReviewNode[];
+  pageInfo: { hasNextPage: boolean; endCursor: string | null };
+}
+interface MergedPrNode {
+  id: string;
+  number: number;
+  title: string;
+  url: string;
+  body: string | null;
+  author: { login: string } | null;
+  mergedBy: { login: string } | null;
+  mergedAt: string;
+  mergeCommit: { oid: string } | null;
+  baseRefName: string;
+  headRefName: string;
+  commits: { nodes: Array<{ commit: { oid: string } }> };
+  closingIssuesReferences: { nodes: Array<{ number: number; url: string }> };
+  reviews: ReviewsPage;
+}
+interface MergedPrsAnswer {
+  search: { issueCount: number; pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: Array<MergedPrNode | null> };
+}
+
+const reviewOf = (r: ReviewNode): MergedPr["reviews"][number] => ({ author: r.author?.login ?? null, state: r.state, commitId: r.commit?.oid ?? null, submittedAt: r.submittedAt });
+const isoSecond = (ms: number): string => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
 
 /** One search page, and how many pages GitHub's search will serve (it stops at 1000 results). */
 const SEARCH_PAGE = 100;
@@ -630,6 +675,79 @@ export class OctokitGitHub implements GitHub {
     const { data } = await call(`reading ${slug}#${number}`, () => this.octokit.rest.pulls.get({ owner, repo, pull_number: number }));
     const id = (data as { node_id: string }).node_id;
     await call(`marking ${slug}#${number} ready`, () => this.octokit.graphql(READY_MUTATION, { id }));
+  }
+
+  async mergedPrs(slug: string, since: string, until: string): Promise<MergedPr[]> {
+    repoRef(slug);
+    const found = new Map<number, MergedPr>();
+    const read = async (from: string, to: string): Promise<void> => {
+      const q = `repo:${slug} is:pr is:merged merged:${from}..${to}`;
+      const nodes: MergedPrNode[] = [];
+      let after: string | null = null;
+      for (;;) {
+        const cursor: string | null = after;
+        const answer: MergedPrsAnswer = await call(`searching the PRs of ${slug} merged ${from}..${to}`, () => this.octokit.graphql<MergedPrsAnswer>(MERGED_PRS_QUERY, { q, after: cursor }));
+        // Past the cap the search drops the rest without saying so: read each half of the window on its own instead.
+        const [fromMs, toMs] = [Date.parse(from), Date.parse(to)];
+        if (answer.search.issueCount > SEARCH_CAP && toMs - fromMs >= 1000) {
+          const mid = Math.floor((fromMs + toMs) / 2000) * 1000;
+          await read(from, isoSecond(mid));
+          await read(isoSecond(mid + 1000), to);
+          return;
+        }
+        nodes.push(...answer.search.nodes.filter((n): n is MergedPrNode => n !== null && typeof n.number === "number"));
+        if (!answer.search.pageInfo.hasNextPage) break;
+        after = answer.search.pageInfo.endCursor;
+      }
+      for (const n of nodes) found.set(n.number, await this.mergedPrOf(n, slug));
+    };
+    await read(since, until);
+    return [...found.values()].sort((a, b) => (a.mergedAt < b.mergedAt ? -1 : a.mergedAt > b.mergedAt ? 1 : a.number - b.number));
+  }
+
+  private async mergedPrOf(n: MergedPrNode, slug: string): Promise<MergedPr> {
+    const reviews = n.reviews.nodes.map(reviewOf);
+    let page = n.reviews.pageInfo;
+    while (page.hasNextPage) {
+      const after = page.endCursor;
+      const more = await call(`reading the reviews of ${slug}#${n.number}`, () => this.octokit.graphql<{ node: { reviews: ReviewsPage } | null }>(MORE_REVIEWS_QUERY, { id: n.id, after }));
+      if (!more.node) break;
+      reviews.push(...more.node.reviews.nodes.map(reviewOf));
+      page = more.node.reviews.pageInfo;
+    }
+    return {
+      number: n.number,
+      title: n.title,
+      url: n.url,
+      body: n.body ?? "",
+      author: n.author?.login ?? null,
+      mergedBy: n.mergedBy?.login ?? null,
+      mergedAt: n.mergedAt,
+      mergeSha: n.mergeCommit?.oid ?? null,
+      baseRef: n.baseRefName,
+      headRef: n.headRefName,
+      headSha: n.commits.nodes[0]?.commit.oid ?? null,
+      closingIssues: n.closingIssuesReferences.nodes.map((i) => ({ number: i.number, url: i.url })),
+      reviews,
+    };
+  }
+
+  async ruleBypasses(slug: string, since: string, until: string): Promise<RuleBypass[] | "unknown"> {
+    const { owner, repo } = repoRef(slug);
+    type Row = { id: number; actor_name?: string | null; pushed_at?: string; ref?: string; after_sha?: string | null };
+    let rows: Row[];
+    try {
+      rows = await this.octokit.paginate<Row>("GET /repos/{owner}/{repo}/rulesets/rule-suites", { owner, repo, rule_suite_result: "bypass", time_period: "month", per_page: 100 });
+    } catch (error) {
+      const { status, message } = error as { status?: number; message?: string };
+      // A token without the right to read rule suites is a fact to report, not a failure.
+      if (status === 403 || status === 404) return "unknown";
+      throw new GitHubError(`listing the rule suites of ${slug} failed${status ? ` (${status})` : ""}: ${message ?? String(error)}`);
+    }
+    const [from, to] = [Date.parse(since), Date.parse(until)];
+    return rows
+      .filter((r) => r.pushed_at !== undefined && Date.parse(r.pushed_at) >= from && Date.parse(r.pushed_at) <= to)
+      .map((r) => ({ ref: r.ref ?? "", actor: r.actor_name ?? null, at: r.pushed_at ?? "", afterSha: r.after_sha ?? null, ruleSuiteId: r.id }));
   }
 
   async prChecks(slug: string, ref: string): Promise<Check[]> {

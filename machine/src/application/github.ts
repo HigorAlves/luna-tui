@@ -113,6 +113,34 @@ export interface PrReview {
   association: string | null;
 }
 
+/** A PR merged in a window, with the facts a change record is computed from. */
+export interface MergedPr {
+  number: number;
+  title: string;
+  url: string;
+  body: string;
+  author: string | null;
+  mergedBy: string | null;
+  mergedAt: string;
+  mergeSha: string | null;
+  baseRef: string;
+  headRef: string;
+  /** The PR's last commit; null when GitHub names none. */
+  headSha: string | null;
+  closingIssues: Array<{ number: number; url: string }>;
+  reviews: Array<{ author: string | null; state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | "PENDING"; commitId: string | null; submittedAt: string | null }>;
+}
+
+/** A push a ruleset evaluated and let through because the actor may bypass it. */
+export interface RuleBypass {
+  /** `refs/heads/<branch>` */
+  ref: string;
+  actor: string | null;
+  at: string;
+  afterSha: string | null;
+  ruleSuiteId: number;
+}
+
 export interface GitHub {
   /** Who the token belongs to, and the slugs of their teams (empty when the token cannot read them). */
   viewer(): Promise<{ login: string; teams: string[] }>;
@@ -171,6 +199,10 @@ export interface GitHub {
   /** Changes the branch an open PR targets (a stacked card's PR, once its parent merged). */
   retargetPr(slug: string, number: number, base: string): Promise<void>;
   markPrReady(slug: string, number: number): Promise<void>;
+  /** The PRs of `slug` merged between `since` and `until` (ISO, inclusive), oldest first. */
+  mergedPrs(slug: string, since: string, until: string): Promise<MergedPr[]>;
+  /** The ruleset evaluations of `slug` that ended in a bypass in the window; "unknown" when the token cannot read rule suites (403 or 404). */
+  ruleBypasses(slug: string, since: string, until: string): Promise<RuleBypass[] | "unknown">;
   /** Every check run and commit status on `ref`. */
   prChecks(slug: string, ref: string): Promise<Check[]>;
   /** The failed jobs' logs of a workflow run, joined. */
@@ -228,6 +260,8 @@ export function noTokenGitHub(): GitHub {
     openPr: refuse,
     retargetPr: refuse,
     markPrReady: refuse,
+    mergedPrs: refuse,
+    ruleBypasses: refuse,
     prChecks: refuse,
     failedRunLog: refuse,
     rerunFailedJobs: refuse,

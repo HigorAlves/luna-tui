@@ -738,3 +738,108 @@ describe("reviewRule", () => {
     expect(await github.reviewRule("o/a", "main")).toEqual({ source: "none" });
   });
 });
+
+describe("mergedPrs", () => {
+  const node = (number: number, mergedAt: string, over: Record<string, unknown> = {}) => ({
+    id: `PR_${number}`,
+    number,
+    title: `t${number}`,
+    url: `https://github.com/o/a/pull/${number}`,
+    body: "body",
+    author: { login: "ann" },
+    mergedBy: { login: "bob" },
+    mergedAt,
+    mergeCommit: { oid: `m${number}` },
+    baseRefName: "main",
+    headRefName: `f${number}`,
+    commits: { nodes: [{ commit: { oid: `h${number}` } }] },
+    closingIssuesReferences: { nodes: [{ number: 7, url: "https://github.com/o/a/issues/7" }] },
+    reviews: { nodes: [{ author: { login: "cy" }, state: "APPROVED", commit: { oid: `h${number}` }, submittedAt: "2026-01-02T00:00:00Z" }], pageInfo: { hasNextPage: false, endCursor: null } },
+    ...over,
+  });
+  const page = (nodes: unknown[], issueCount = nodes.length, next: string | null = null) => ({ search: { issueCount, pageInfo: { hasNextPage: next !== null, endCursor: next }, nodes } });
+
+  it("maps a merged PR with its last commit, closing issues and reviews", async () => {
+    const { github, calls } = stub({ graphql: () => page([node(1, "2026-01-05T00:00:00Z")]) });
+    expect(await github.mergedPrs("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z")).toEqual([
+      {
+        number: 1,
+        title: "t1",
+        url: "https://github.com/o/a/pull/1",
+        body: "body",
+        author: "ann",
+        mergedBy: "bob",
+        mergedAt: "2026-01-05T00:00:00Z",
+        mergeSha: "m1",
+        baseRef: "main",
+        headRef: "f1",
+        headSha: "h1",
+        closingIssues: [{ number: 7, url: "https://github.com/o/a/issues/7" }],
+        reviews: [{ author: "cy", state: "APPROVED", commitId: "h1", submittedAt: "2026-01-02T00:00:00Z" }],
+      },
+    ]);
+    expect((calls[0]![1] as { variables: { q: string } }).variables.q).toBe("repo:o/a is:pr is:merged merged:2026-01-01T00:00:00Z..2026-01-31T23:59:59Z");
+  });
+
+  it("follows the cursor and returns the PRs oldest first", async () => {
+    const { github, calls } = stub({
+      graphql: (_q: string, v: { after: string | null }) => (v.after === null ? page([node(2, "2026-01-09T00:00:00Z")], 2, "c1") : page([node(1, "2026-01-05T00:00:00Z")], 2)),
+    });
+    const prs = await github.mergedPrs("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z");
+    expect(prs.map((p) => p.number)).toEqual([1, 2]);
+    expect(calls.map((c) => (c[1] as { variables: { after: string | null } }).variables.after)).toEqual([null, "c1"]);
+  });
+
+  it("splits the window in halves when the search hits its 1000 result cap", async () => {
+    const { github, calls } = stub({
+      graphql: (_q: string, v: { q: string }) =>
+        v.q.includes("2026-01-01T00:00:00Z..2026-01-31T23:59:59Z") ? page([], 1500) : v.q.includes("..2026-01-16T11:59:59Z") ? page([node(1, "2026-01-05T00:00:00Z")]) : page([node(2, "2026-01-20T00:00:00Z")]),
+    });
+    const prs = await github.mergedPrs("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z");
+    expect(prs.map((p) => p.number)).toEqual([1, 2]);
+    expect(calls.map((c) => (c[1] as { variables: { q: string } }).variables.q.split("merged:")[1])).toEqual([
+      "2026-01-01T00:00:00Z..2026-01-31T23:59:59Z",
+      "2026-01-01T00:00:00Z..2026-01-16T11:59:59Z",
+      "2026-01-16T12:00:00Z..2026-01-31T23:59:59Z",
+    ]);
+  });
+
+  it("reads the reviews past the first page of a PR", async () => {
+    const more = { author: { login: "dee" }, state: "COMMENTED", commit: null, submittedAt: null };
+    const { github } = stub({
+      graphql: (q: string) =>
+        q.includes("node(id")
+          ? { node: { reviews: { nodes: [more], pageInfo: { hasNextPage: false, endCursor: null } } } }
+          : page([node(1, "2026-01-05T00:00:00Z", { reviews: { nodes: [], pageInfo: { hasNextPage: true, endCursor: "r1" } } })]),
+    });
+    const [pr] = await github.mergedPrs("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z");
+    expect(pr!.reviews).toEqual([{ author: "dee", state: "COMMENTED", commitId: null, submittedAt: null }]);
+  });
+
+  it("says GitHub's words when the search fails", async () => {
+    const { github } = stub({ graphql: new Error("boom") });
+    await expect(github.mergedPrs("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z")).rejects.toBeInstanceOf(GitHubError);
+  });
+});
+
+describe("ruleBypasses", () => {
+  const SUITES = "GET /repos/{owner}/{repo}/rulesets/rule-suites";
+  const suite = (id: number, pushedAt: string) => ({ id, actor_name: "ann", pushed_at: pushedAt, ref: "refs/heads/main", after_sha: `a${id}`, result: "bypass" });
+  const denied = (status: number) => Object.assign(new Error("denied"), { status });
+  const failing = (status: number) => new OctokitGitHub({ paginate: vi.fn(async () => Promise.reject(denied(status))) } as unknown as OctokitLike);
+
+  it("keeps the bypasses inside the window, asking GitHub for bypass results", async () => {
+    const { github, calls } = stub({ [SUITES]: [suite(1, "2025-12-31T23:59:59Z"), suite(2, "2026-01-10T00:00:00Z"), suite(3, "2026-02-01T00:00:00Z")] });
+    expect(await github.ruleBypasses("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z")).toEqual([{ ref: "refs/heads/main", actor: "ann", at: "2026-01-10T00:00:00Z", afterSha: "a2", ruleSuiteId: 2 }]);
+    expect(calls[0]![1]).toMatchObject({ owner: "o", repo: "a", rule_suite_result: "bypass", time_period: "month", per_page: 100 });
+  });
+
+  it("is unknown when the token cannot read rule suites", async () => {
+    expect(await failing(403).ruleBypasses("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z")).toBe("unknown");
+    expect(await failing(404).ruleBypasses("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z")).toBe("unknown");
+  });
+
+  it("any other failure is a GitHubError", async () => {
+    await expect(failing(500).ruleBypasses("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z")).rejects.toBeInstanceOf(GitHubError);
+  });
+});
