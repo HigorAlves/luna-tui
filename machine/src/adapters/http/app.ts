@@ -4,6 +4,7 @@ import {
   AnswersInput,
   ComplianceActInput,
   ComplianceEditInput,
+  ComplianceRepoInput,
   type ApiError,
   CloneInput,
   ArchiveInput,
@@ -68,6 +69,7 @@ import { type Backlog, BacklogItemNotFoundError, NotSchedulableError } from "../
 import type { ChangeEvidence } from "../../application/change-evidence.ts";
 import type { AccessReview } from "../../application/access-review.ts";
 import type { IncidentJob } from "../../application/incidents.ts";
+import type { Questionnaires } from "../../application/questionnaires.ts";
 import { type ComplianceDrafts, type CompliancePublisher, DraftNotFoundError, DraftRefusedError, DraftStatusError, StaleDraftError } from "../../application/compliance-drafts.ts";
 import { type TicketMachine, TicketNotFound, TicketRefusal } from "../../application/ticket-machine.ts";
 import { streamSSE } from "hono/streaming";
@@ -135,7 +137,7 @@ export interface AppDeps {
   /** The Ticket Machine; without it the `/tickets` routes are absent. */
   tickets?: TicketMachine;
   /** The manager's drafts (RFC 0008): the store, the publisher an approve goes through, the monthly evidence job, the quarterly access review, the incidents and the `owner/name` of every repo the machine knows. Without it the `/compliance` routes answer 503. */
-  compliance?: { drafts: ComplianceDrafts; publisher: CompliancePublisher; evidence: Pick<ChangeEvidence, "buildMonth">; repos: () => Promise<string[]>; access?: Pick<AccessReview, "orgs" | "buildQuarter">; incidents: Pick<IncidentJob, "list"> };
+  compliance?: { drafts: ComplianceDrafts; publisher: CompliancePublisher; evidence: Pick<ChangeEvidence, "buildMonth">; repos: () => Promise<string[]>; access?: Pick<AccessReview, "orgs" | "buildQuarter">; incidents: Pick<IncidentJob, "list">; questionnaires?: Pick<Questionnaires, "rerun"> };
   /** Closes a task's herdr watch tab when it is deleted; closing it on `closed` is main.ts's job. */
   watcher?: Watcher;
   /** Enables `POST /dev/stubs` when the stub stages are in use. */
@@ -708,13 +710,21 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     const id = (c: Context): string => c.req.param("id") ?? "";
     app.get("/compliance/incidents", async (c) => (compliance ? c.json({ incidents: await compliance.incidents.list() }) : off(c)));
     app.get("/compliance/drafts", async (c) => (compliance ? c.json({ drafts: await compliance.drafts.list() }) : off(c)));
-    app.post("/compliance/drafts/:id/approve", async (c) => (compliance ? c.json(await compliance.publisher.approve(id(c), (await body(c, ComplianceActInput)).hash, "board")) : off(c)));
+    app.post("/compliance/drafts/:id/approve", async (c) => (compliance ? c.json(await compliance.publisher.approve(id(c), (await body(c, ComplianceActInput)).hash, "board", tapOf("POST /compliance/drafts/:id/approve"))) : off(c)));
     app.post("/compliance/drafts/:id/edit", async (c) => {
       if (!compliance) return off(c);
       const { hash, text } = await body(c, ComplianceEditInput);
       return c.json(await compliance.drafts.edit(id(c), hash, text, "board"));
     });
     app.post("/compliance/drafts/:id/ignore", async (c) => (compliance ? c.json(await compliance.drafts.ignore(id(c), (await body(c, ComplianceActInput)).hash, "board")) : off(c)));
+    app.get("/compliance/repos", async (c) => (compliance ? c.json({ repos: await compliance.repos() }) : off(c)));
+    // A questionnaire answered again from another repository's wiki.
+    app.post("/compliance/drafts/:id/repo", async (c) => {
+      if (!compliance?.questionnaires) return off(c);
+      const { repo } = await body(c, ComplianceRepoInput);
+      if (!(await compliance.repos()).includes(repo)) return fail(c, 400, "unknown_repository", "the machine does not know that repository");
+      return c.json(await compliance.questionnaires.rerun(id(c), repo));
+    });
     // An on-demand rebuild of a month, for testing a past one: the same draft the monthly job opens.
     app.post("/compliance/evidence/run", async (c) => {
       if (!compliance) return off(c);

@@ -50,6 +50,7 @@ interface World {
   drafts?: ConversationDrafts;
   cardAddress?: (cardId: string) => Promise<string | null>;
   actions?: { apply: (row: SlackItemRow, relation: ConversationRelation) => Promise<{ relation: ConversationRelation; taskId?: string; priority?: SlackPriority }>; undo: (previous: ConversationRelation | null | undefined, next: ConversationRelation) => Promise<void> };
+  onTriaged?: (row: SlackItemRow) => unknown;
   truth?: { override: (input: unknown) => Promise<void>; relation?: (input: unknown) => Promise<void>; outcome?: (input: unknown) => Promise<void> };
 }
 
@@ -131,6 +132,7 @@ function setup(world: World = {}) {
     scope: world.scope ?? "all",
     ...(world.claimed || world.conv ? { claims: stubClaims(world.claimed ?? {}, world.conv) } : {}),
     ...(world.assessor ? { assessor: world.assessor } : {}),
+    ...(world.onTriaged ? { onTriaged: world.onTriaged } : {}),
     ...(world.actions ? { actions: world.actions } : {}),
     ...(world.drafter ? { drafter: world.drafter } : {}),
     ...(world.drafts ? { drafts: world.drafts } : {}),
@@ -743,6 +745,21 @@ describe("SlackInbox.pollOnce", () => {
       warn.mockRestore();
       log.mockRestore();
     }
+  });
+
+  it("hands an item triage called a compliance_request to onTriaged, and a failing hook does not fail triage", async () => {
+    const seen: string[] = [];
+    const onTriaged = async (row: SlackItemRow) => {
+      seen.push(`${row.id} ${row.triage?.category}`);
+      throw new Error("no wiki");
+    };
+    const answer = (item: TriageItem): TriageAnswer => ({ ...answerAll(item), category: item.text.includes("questionnaire") ? "compliance_request" : "question" });
+    const { inbox, store } = setup({ answer, onTriaged, hits: [hit({ ts: ts(10), text: "<@U1> a security questionnaire from Acme?" }), hit({ ts: ts(5), text: "<@U1> hi?" })] });
+    await inbox.pollOnce();
+    await inbox.idle();
+    expect(seen).toEqual([`C1:${ts(10)} compliance_request`]);
+    expect((await store.item(`C1:${ts(10)}`))!.triage).toMatchObject({ category: "compliance_request", by: "model" });
+    expect((await store.item(`C1:${ts(5)}`))!.triage).toMatchObject({ category: "question" });
   });
 
   it("runs one triage at a time: a poll while the pack runs queues its items for the next run, and a verdict lands on the row as it is now", async () => {

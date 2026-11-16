@@ -12,7 +12,8 @@ You triage one person's Slack inbox. Each item is a message (with up to three ea
 
 ## Fields
 
-- `category`: `blocker` | `decision` | `question` | `request` | `fyi` | `social` | `automated`.
+- `category`: `blocker` | `decision` | `question` | `request` | `fyi` | `social` | `automated` | `compliance_request`.
+  `compliance_request` is a customer, sales or auditor asking for a security questionnaire or an evidence request (a file of questions, or several security questions in one message).
 - `expectsReply`: true only when the text asks them a question or for an action and nobody has answered it yet. Read the context: an answer already in the thread makes it false.
 - `summary`: one line, at most 90 characters, saying what they want from the person, not what they said.
 - `why`: one sentence.

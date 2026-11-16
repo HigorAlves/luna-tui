@@ -59,6 +59,12 @@ pub struct DraftsResponse {
     pub drafts: Vec<ComplianceDraft>,
 }
 
+/// The body of `GET /compliance/repos`: the repositories a questionnaire may be answered from.
+#[derive(Deserialize, Debug)]
+pub struct ReposResponse {
+    pub repos: Vec<String>,
+}
+
 /// Why a tap on a draft did not go through: the draft changed under you (`409`: read it again), or the machine's own words.
 #[derive(Debug, PartialEq)]
 pub enum ActError {
@@ -371,5 +377,12 @@ mod tests {
                 .iter()
                 .all(|l| !l.chars().any(|c| c.is_control()))
         );
+    }
+
+    #[test]
+    fn reads_the_repositories_the_machine_offers() {
+        let r: ReposResponse =
+            serde_json::from_str(r#"{"repos":["acme/api","acme/web"]}"#).unwrap();
+        assert_eq!(r.repos, vec!["acme/api", "acme/web"]);
     }
 }

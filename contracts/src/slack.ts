@@ -14,7 +14,7 @@ export type SlackSplit = z.infer<typeof SlackSplit>;
 export const SlackPriority = z.enum(["P0", "P1", "P2", "P3"]);
 export type SlackPriority = z.infer<typeof SlackPriority>;
 
-export const SlackCategory = z.enum(["blocker", "decision", "question", "request", "fyi", "social", "automated"]);
+export const SlackCategory = z.enum(["blocker", "decision", "question", "request", "fyi", "social", "automated", "compliance_request"]);
 export type SlackCategory = z.infer<typeof SlackCategory>;
 
 /** How an item reached your inbox. `watch` is a watched handle, keyword or channel. */

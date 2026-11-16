@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ComplianceDrafts, DraftNotFoundError, DraftRefusedError, DraftStatusError, StaleDraftError, complianceHash, publisher } from "./compliance-drafts.ts";
+import { tapOf } from "./slack-send.ts";
 import type { Wiki } from "./wiki.ts";
 import { WikiError } from "./wiki.ts";
 
@@ -203,6 +204,15 @@ describe("publisher.approve", () => {
     const done = await publisher({ drafts, wiki: wikiOf(vi.fn()), handlers }).approve(d.id, d.hash, "person");
     expect(done.status).toBe("posted");
     expect(calls).toEqual([`thread C0123ABCD ${d.id}`, "bank acme/web"]);
+  });
+
+  it("hands the person's tap to each writer", async () => {
+    const drafts = store();
+    const d = await drafts.open(fields({ kind: "questionnaire", id: "questionnaire:acme/web:C0123ABCD:1731772800.000100", period: null, targets: [{ kind: "slack_thread", channel: "C0123ABCD", ts: "1731772800.000100" }] }));
+    const slack_thread = vi.fn(async (_d: unknown, _t: unknown, _tap: unknown) => {});
+    const tap = tapOf("POST /compliance/drafts/:id/approve");
+    await publisher({ drafts, wiki: wikiOf(vi.fn()), handlers: { slack_thread } }).approve(d.id, d.hash, "person", tap);
+    expect(slack_thread.mock.calls[0]![2]).toBe(tap);
   });
 
   it("fails a draft whose target has no writer, naming the kind", async () => {

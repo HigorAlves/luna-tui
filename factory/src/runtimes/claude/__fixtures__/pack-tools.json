@@ -854,6 +854,10 @@
       "Bash"
     ]
   },
+  "questionnaire": {
+    "allowedTools": [],
+    "tools": []
+  },
   "code_map": {
     "allowedTools": [
       "Read",

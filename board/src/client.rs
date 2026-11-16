@@ -616,6 +616,27 @@ impl Machine {
             .map(|r| r.drafts)
     }
 
+    /// The repositories a questionnaire may be answered from.
+    pub fn compliance_repos(&self) -> Result<Vec<String>, String> {
+        Self::typed::<compliance::ReposResponse>(
+            self.agent.get(self.url("/compliance/repos")).call(),
+        )
+        .map(|r| r.repos)
+    }
+
+    /// A questionnaire answered again from `repo`'s wiki; the machine answers the reopened draft. A `409` is a draft that is
+    /// posting or posted.
+    pub fn compliance_repo(&self, id: &str, repo: &str) -> Result<ComplianceDraft, String> {
+        Self::typed(
+            self.agent
+                .post(self.url(&format!(
+                    "/compliance/drafts/{}/repo",
+                    compliance::encode_id(id)
+                )))
+                .send_json(json!({ "repo": repo })),
+        )
+    }
+
     /// A tap on a draft: `approve`, `edit` or `ignore`; `body` carries the hash the person saw (and the text for an edit). The
     /// machine answers the draft as it is now. A `409` is a draft that changed since it was read.
     pub fn compliance_act(

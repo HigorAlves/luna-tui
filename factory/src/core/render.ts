@@ -239,6 +239,13 @@ const postmortemText = (postmortem: StageInput["context"]["postmortem"]) => {
   };
 };
 
+/** The questionnaire, as the drafter reads it: the file, then each wiki page under a `## <path>` header the answers cite. Everything but the repo and source is written by others, so it is quoted data. */
+const questionnaireText = (q: StageInput["context"]["questionnaire"]) => {
+  if (!q) return { repo: NONE, source: NONE, requester: NONE, name: NONE, markdown: NONE, policies: NONE, bank: NONE };
+  const pages = (list: Array<{ path: string; text: string }>) => (list.length > 0 ? list.map((p) => `## ${p.path}\n${p.text}`).join("\n\n") : NONE);
+  return { repo: q.repo, source: q.source, requester: q.requester ?? NONE, name: q.questionnaire.name, markdown: q.questionnaire.markdown, policies: pages(q.policies), bank: pages(q.bank) };
+};
+
 /** The issue, as jira_intake reads it: one header line, the description, the comments, the repo. */
 const jiraText = (jira: StageInput["context"]["jira"]) => {
   if (!jira) return { issue: NONE, description: NONE, comments: NONE, repoPath: NONE, classification: NONE };
@@ -570,6 +577,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
   const access = accessText(input.context.access);
   const postmortem = postmortemText(input.context.postmortem);
   const docsDrift = docsDriftText(input.context.docsDrift);
+  const questionnaire = questionnaireText(input.context.questionnaire);
   const questions = questionsText(input.context.questions);
   const video = videoText(input.context.video);
   const subs: Record<string, string> = {
@@ -699,6 +707,13 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.docsDrift.repo}}": docsDrift.repo,
     "{{context.docsDrift.changedFiles}}": docsDrift.changedFiles,
     "{{context.docsDrift.docFiles}}": docsDrift.docFiles,
+    "{{context.questionnaire.repo}}": questionnaire.repo,
+    "{{context.questionnaire.source}}": questionnaire.source,
+    "{{context.questionnaire.requester}}": questionnaire.requester,
+    "{{context.questionnaire.name}}": questionnaire.name,
+    "{{context.questionnaire.markdown}}": questionnaire.markdown,
+    "{{context.questionnaire.policies}}": questionnaire.policies,
+    "{{context.questionnaire.bank}}": questionnaire.bank,
     "{{context.jira.issue}}": jira.issue,
     "{{context.jira.description}}": jira.description,
     "{{context.jira.comments}}": jira.comments,

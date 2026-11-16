@@ -162,4 +162,49 @@ describe("createSlack", () => {
     expect(await createSlack("xoxp", { fetch: world.fetch }).openSocket("xapp-1")).toBe("wss://wss.slack.com/link/?ticket=1");
     expect(world.calls[0]!.auth).toBe("Bearer xapp-1");
   });
+
+  describe("downloadFile", () => {
+    const info = (over: Record<string, unknown> = {}) => ({ ok: true, file: { id: "F1", name: "q.md", mimetype: "text/markdown", size: 20, url_private: "https://files.slack.com/files-pri/T-F1/q.md", ...over } });
+    /** The fake plus the file host: a GET on the private url answers `body`. */
+    function withHost(answers: Record<string, unknown | unknown[]>, body = "1. Do you encrypt?") {
+      const world = fakeSlack(answers);
+      const hosted: Array<{ url: string; auth: string | null }> = [];
+      const fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+        if (String(url).startsWith("https://files.slack.com/")) {
+          hosted.push({ url: String(url), auth: (init?.headers as Record<string, string>).Authorization ?? null });
+          return new Response(body, { status: 200 });
+        }
+        return world.fetch(url, init);
+      }) as typeof globalThis.fetch;
+      return { slack: createSlack("xoxp-1", { fetch }), calls: world.calls, hosted };
+    }
+
+    it("reads a text file through files.info and its private url with the same token", async () => {
+      const { slack, calls, hosted } = withHost({ "files.info": info() });
+      expect(await slack.downloadFile("F1")).toEqual({ name: "q.md", mimetype: "text/markdown", text: "1. Do you encrypt?" });
+      expect(calls[0]).toMatchObject({ method: "files.info", params: { file: "F1" } });
+      expect(hosted).toEqual([{ url: "https://files.slack.com/files-pri/T-F1/q.md", auth: "Bearer xoxp-1" }]);
+    });
+
+    it("accepts a csv or txt by its extension when Slack's mimetype is generic", async () => {
+      const { slack } = withHost({ "files.info": info({ name: "q.csv", mimetype: "application/octet-stream" }) });
+      expect((await slack.downloadFile("F1")).name).toBe("q.csv");
+    });
+
+    it("refuses a binary file, a file over 1 MB and a file with no private url", async () => {
+      const pdf = withHost({ "files.info": info({ name: "q.pdf", mimetype: "application/pdf" }) });
+      await expect(pdf.slack.downloadFile("F1")).rejects.toThrow("not a text file");
+      const big = withHost({ "files.info": info({ size: 1_048_577 }) });
+      await expect(big.slack.downloadFile("F1")).rejects.toThrow("over 1 MB");
+      const bare = withHost({ "files.info": info({ url_private: undefined }) });
+      await expect(bare.slack.downloadFile("F1")).rejects.toThrow("no download address");
+      expect(pdf.hosted.length + big.hosted.length + bare.hosted.length).toBe(0);
+    });
+
+    it("refuses a private url that is not on slack.com", async () => {
+      const { slack, hosted } = withHost({ "files.info": info({ url_private: "https://evil.example/q.md" }) });
+      await expect(slack.downloadFile("F1")).rejects.toThrow("not a Slack address");
+      expect(hosted).toEqual([]);
+    });
+  });
 });

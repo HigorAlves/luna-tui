@@ -166,6 +166,8 @@ export interface SlackInboxOptions {
   truth?: Pick<ConversationTruth, "override" | "relation" | "outcome">;
   /** The drafts that wait for a tap, one per thread. */
   drafts?: ConversationDrafts;
+  /** Called, not awaited, with each item triage called a `compliance_request` once its verdict is stored. A failing hook is a warning. */
+  onTriaged?: (row: SlackItemRow) => unknown;
   /** The card's own PR link as the machine supplies it (the address a draft about the card may hold whole); absent or unreadable, no address is allowed. */
   cardAddress?: (cardId: string) => Promise<string | null>;
   /** The one door to Slack; built from `slack` when absent. */
@@ -932,7 +934,9 @@ export class SlackInbox implements SlackInboxPort {
           }
         }
       }
-      await store.save([{ ...fresh, linked, triage, conversation: { ...conversation, classification: kept, relation, shortlist: out.shortlist } }]);
+      const stored: SlackItemRow = { ...fresh, linked, triage, conversation: { ...conversation, classification: kept, relation, shortlist: out.shortlist } };
+      await store.save([stored]);
+      this.requested([stored]);
       // The thread was assessed again: its waiting draft is replaced by the new one, or dropped.
       if (this.options.drafts) {
         if (draftText) await this.options.drafts.open({ thread: id, channel: fresh.channel.id, threadTs: id.split(":")[1] ?? fresh.slackTs, kind: "reply", text: draftText, cardId: relation?.type === "related_to_in_progress" ? relation.target : null, private: conversation.private, records: kept.records });
@@ -1000,7 +1004,22 @@ export class SlackInbox implements SlackInboxPort {
       saved.push({ ...row, triage: withFloor(this.keepOverride(row.triage, triage), queued.get(id)?.floor ?? null) });
     }
     await store.save(saved);
+    this.requested(saved);
     await this.refresh(this.snapshot.polledAt, this.snapshot.error);
+  }
+
+  /** The compliance requests among freshly triaged rows go to the questionnaire job, which never blocks triage. */
+  private requested(rows: SlackItemRow[]): void {
+    const hook = this.options.onTriaged;
+    if (!hook) return;
+    for (const row of rows) {
+      if (row.triage?.category !== "compliance_request") continue;
+      try {
+        void Promise.resolve(hook(row)).catch((error: unknown) => console.warn(`slack inbox: questionnaire for ${row.id} failed: ${messageOf(error)}`));
+      } catch (error) {
+        console.warn(`slack inbox: questionnaire for ${row.id} failed: ${messageOf(error)}`);
+      }
+    }
   }
 
   /** A hand-set priority outlives a re-triage. */

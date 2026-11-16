@@ -200,10 +200,14 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     | Mode::Help { .. }
                     | Mode::Command { .. }
                     | Mode::EditCompliance { .. }
+                    | Mode::CompliancePick { .. }
             )
     }) {
         render_compliance(frame, body, app, state);
         frame.render_widget(footer_line(app, footer.width), footer);
+        if let Mode::CompliancePick { repos, cursor, .. } = &app.mode {
+            render_compliance_pick(frame, repos, *cursor);
+        }
         if let Mode::EditCompliance { area, vim, .. } = &app.mode {
             render_compliance_editor(frame, app, area, vim);
         }
@@ -1027,7 +1031,9 @@ fn footer_line(app: &App, width: u16) -> Line<'static> {
             ("enter", "set the filter"),
             ("esc", "cancel"),
         ]),
-        Mode::SlackPick { .. } => hint(&[("j/k", "pick"), ("enter", "save"), ("esc", "cancel")]),
+        Mode::SlackPick { .. } | Mode::CompliancePick { .. } => {
+            hint(&[("j/k", "pick"), ("enter", "save"), ("esc", "cancel")])
+        }
         Mode::SlackSnooze { .. } => {
             hint(&[("j/k 1-4", "pick"), ("enter", "snooze"), ("esc", "cancel")])
         }
@@ -4125,6 +4131,37 @@ fn render_record_edit(frame: &mut Frame, task: &Task, field: usize, picks: &[usi
                 Span::from(format!("{label:<14}")).fg(c(SUBTEXT0)),
                 Span::from(format!("◂ {value} ▸")).style(style),
                 Span::from(if changed { "  (you)" } else { "" }).fg(c(YELLOW)),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// `p` in the Compliance view: the repositories the machine knows, one line each; enter answers the questionnaire again from that wiki.
+fn render_compliance_pick(frame: &mut Frame, repos: &[String], cursor: usize) {
+    let area = centered(frame.area(), 64, repos.len().min(12) as u16 + 4);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(" answer from which repository's wiki? ").bold());
+    let top = cursor.saturating_sub(11);
+    let lines: Vec<Line> = repos
+        .iter()
+        .enumerate()
+        .skip(top)
+        .take(12)
+        .map(|(i, repo)| {
+            let selected = i == cursor;
+            let style = if selected {
+                Style::new().fg(c(ACCENT)).bold()
+            } else {
+                Style::new()
+            };
+            Line::from(vec![
+                Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+                Span::from(crate::detail::plain(repo)).style(style),
             ])
         })
         .collect();

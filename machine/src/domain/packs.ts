@@ -84,6 +84,8 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   postmortem: [],
   // The docs-drift note, run by Verify as a sub-run when the repo has docs; advisory and never a stage of its own.
   docs_drift: [],
+  // The questionnaire drafter, run on demand by the questionnaire job.
+  questionnaire: [],
 };
 
 /** The task states in which the pipeline runs the pack. */

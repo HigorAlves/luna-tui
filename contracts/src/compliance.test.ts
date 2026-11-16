@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { AccessReviewAnswer, AccessReviewContext, PostmortemAnswer, PostmortemContext, ChangeExceptionKind, ChangeExceptionsAnswer, ChangeExceptionsContext, NO_ACCESS, PACKS, ComplianceActInput, ComplianceDraft, ComplianceDraftKind, ComplianceDraftsResponse, ComplianceEditInput, ComplianceTarget } from "./index.ts";
+import { AccessReviewAnswer, AccessReviewContext, PostmortemAnswer, PostmortemContext, QuestionnaireAnswer, QuestionnaireContext, ChangeExceptionKind, ChangeExceptionsAnswer, ChangeExceptionsContext, NO_ACCESS, PACKS, ComplianceActInput, ComplianceDraft, ComplianceDraftKind, ComplianceDraftsResponse, ComplianceEditInput, ComplianceTarget } from "./index.ts";
 
 const draft = {
   id: "change_evidence:acme/api:2026-10",
@@ -95,6 +95,38 @@ describe("compliance drafts", () => {
     expect(PACKS.access_review).toMatchObject({ kind: "agent", agent: "access-reviewer", writable: false, maxTurns: 1, effort: "low", template: "access_review.md", helpers: [], skills: [] });
     expect(PACKS.access_review.engines).toMatchObject({ default: "claude:sonnet", allowed: ["claude:sonnet", "claude:haiku"] });
     expect(PACKS.access_review.access).toEqual(NO_ACCESS);
+  });
+
+  it("gives the questionnaire drafter the file, the policy pages and the answer bank, and takes back answers with their sources", () => {
+    const context = {
+      repo: "acme/api",
+      source: "slack",
+      requester: "dana",
+      questionnaire: { name: "acme-vendor.csv", markdown: "1. Do you encrypt data at rest?" },
+      policies: [{ path: "Compliance/Policies/Encryption.md", text: "Data at rest is encrypted with AES-256." }],
+      bank: [{ path: "Compliance/Answers/do-you-encrypt-ab12cd.md", text: "Yes, AES-256." }],
+    };
+    expect(QuestionnaireContext.parse(context)).toEqual(context);
+    expect(QuestionnaireContext.parse({ ...context, requester: null, source: "jira" }).source).toBe("jira");
+    expect(() => QuestionnaireContext.parse({ ...context, source: "email" })).toThrow();
+    expect(() => QuestionnaireContext.parse({ ...context, questionnaire: { name: "q.md", markdown: "x".repeat(100_001) } })).toThrow();
+    expect(() => QuestionnaireContext.parse({ ...context, policies: Array(21).fill(context.policies[0]) })).toThrow();
+    expect(() => QuestionnaireContext.parse({ ...context, bank: Array(101).fill(context.bank[0]) })).toThrow();
+    const answer = {
+      answers: [{ n: 1, question: "Do you encrypt data at rest?", answer: "Yes, with AES-256.", citations: ["Compliance/Policies/Encryption.md"], fromBank: "Compliance/Answers/do-you-encrypt-ab12cd.md", confidence: "high" }],
+      unanswered: [{ n: 2, question: "Do you hold ISO 27001?", why: "No page names the certification." }],
+    };
+    expect(QuestionnaireAnswer.parse(answer)).toEqual(answer);
+    expect(() => QuestionnaireAnswer.parse({ ...answer, answers: [{ ...answer.answers[0], n: 0 }] })).toThrow();
+    expect(() => QuestionnaireAnswer.parse({ ...answer, answers: [{ ...answer.answers[0], answer: "x".repeat(1501) }] })).toThrow();
+    expect(() => QuestionnaireAnswer.parse({ ...answer, answers: [{ ...answer.answers[0], confidence: "certain" }] })).toThrow();
+    expect(QuestionnaireAnswer.parse({ ...answer, answers: [{ ...answer.answers[0], fromBank: null }] }).answers[0]!.fromBank).toBeNull();
+  });
+
+  it("runs the questionnaire drafter as a text-only agent on sonnet or opus, with no hands", () => {
+    expect(PACKS.questionnaire).toMatchObject({ kind: "agent", agent: "questionnaire-drafter", writable: false, maxTurns: 2, effort: "medium", template: "questionnaire.md", helpers: [], skills: [] });
+    expect(PACKS.questionnaire.engines).toMatchObject({ default: "claude:sonnet", allowed: ["claude:sonnet", "claude:opus"] });
+    expect(PACKS.questionnaire.access).toEqual(NO_ACCESS);
   });
 
   it("names every manager draft the waves add", () => {

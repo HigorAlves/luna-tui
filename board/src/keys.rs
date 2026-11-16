@@ -2251,6 +2251,14 @@ const COMPLIANCE: &[Binding] = &[
         80,
     ),
     b(
+        "p",
+        "repo: answer from another wiki",
+        Group::Ticket,
+        Scope::Compliance,
+        compliance_questionnaire,
+        75,
+    ),
+    b(
         "j / k",
         "previous / next draft",
         Group::Move,
@@ -2283,6 +2291,17 @@ const COMPLIANCE: &[Binding] = &[
 
 fn compliance_waiting(app: &App) -> Avail {
     match app.compliance_under_cursor() {
+        Some(d) if d.waiting() => Avail::On,
+        Some(_) => Avail::Off("nothing waiting on it"),
+        None => Avail::Off("no draft selected"),
+    }
+}
+
+fn compliance_questionnaire(app: &App) -> Avail {
+    match app.compliance_under_cursor() {
+        Some(d) if d.kind != "questionnaire" => {
+            Avail::Off("only a questionnaire has a repository to pick")
+        }
         Some(d) if d.waiting() => Avail::On,
         Some(_) => Avail::Off("nothing waiting on it"),
         None => Avail::Off("no draft selected"),

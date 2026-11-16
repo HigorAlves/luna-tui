@@ -83,6 +83,8 @@ import { createSentry } from "./adapters/sentry/rest.ts";
 import { createDatadog } from "./adapters/datadog/rest.ts";
 import { ComplianceDrafts, publisher as compliancePublisher } from "./application/compliance-drafts.ts";
 import { sharedWiki } from "./adapters/git/wiki.ts";
+import { questionnaireWriters } from "./application/compliance-writers.ts";
+import { Questionnaires } from "./application/questionnaires.ts";
 import { graphifyGraph } from "./adapters/graph/graphify.ts";
 import { imageId, imageLabel, runSandbox } from "./adapters/docker/docker.ts";
 import { removeRunNetwork } from "./adapters/docker/egress.ts";
@@ -616,7 +618,10 @@ const slackStore = new PgSlackStore(db);
 const slackSender = new SlackSender(slackApi);
 const conversationDrafts = new ConversationDrafts(new PgDraftStore(db), { expiryHours: (channel) => channelClaims.configOf(channel).conversation.draft_expiry_hours });
 const triager = agentDeps ? createSlackTriager({ ...agentDeps, store: slackStore }) : null;
+/** The questionnaire job is built with the compliance drafts below; the inbox reaches it through this. */
+let questionnaireJob: Questionnaires | null = null;
 const slackInbox = new SlackInbox({
+  onTriaged: (row) => questionnaireJob?.fromSlack(row),
   slack: slackApi,
   sender: slackSender,
   digest: config.slackInbox.digestAt !== null,
@@ -895,7 +900,21 @@ const incidentJob: IncidentJob = new IncidentJob({
   onStarted: async (incident) => void (await reassess(incident)),
   onResolved: async (incident) => void (await writePostmortem(await reassess(incident))),
 });
-const compliance = { drafts: complianceDrafts, publisher: compliancePublisher({ drafts: complianceDrafts, wiki, handlers: { access_slices: accessSlicesWriter({ wiki, stateDir: config.stateDir }), jira_actions: jiraActionsWriter({ jira: jiraApi, stateDir: config.stateDir }) } }), evidence: changeEvidence, access: accessReview, repos: complianceRepos, incidents: incidentJob };
+const questionnaires = new Questionnaires({
+  slack: slackApi,
+  jira: jiraApi,
+  wiki: wiki,
+  drafts: complianceDrafts,
+  run: async (questionnaire) => {
+    if (!packRuns) throw new Error("agents are off: no model to answer the questionnaire");
+    return (await ownCalls(packRuns).run({ pack: "questionnaire", context: { questionnaire } }, INTAKE_CLIENT)).answer;
+  },
+  repos: complianceRepos,
+  defaultRepo: config.managerWikiRepo ?? null,
+  stateDir: config.stateDir,
+});
+questionnaireJob = questionnaires;
+const compliance = { questionnaires, drafts: complianceDrafts, publisher: compliancePublisher({ drafts: complianceDrafts, wiki, handlers: { access_slices: accessSlicesWriter({ wiki, stateDir: config.stateDir }), jira_actions: jiraActionsWriter({ jira: jiraApi, stateDir: config.stateDir }), ...questionnaireWriters({ wiki, sender: slackSender, jira: jiraApi, stateDir: config.stateDir }) } }), evidence: changeEvidence, access: accessReview, repos: complianceRepos, incidents: incidentJob };
 /** A person approves the exact base the repository's luna.yaml (on the user's checkout) names now, or the exact key of the Dockerfile its devcontainer builds now; any other is refused. */
 const approveBase = async (repo: string, base: string): Promise<{ ok: true } | { ok: false; reason: string }> => {
   if (!agentDeps) return { ok: false, reason: "repository images are off on this machine" };
@@ -1015,6 +1034,7 @@ if (config.jira) {
   jiraWatch.start();
   const jiraTriager = agentDeps ? createJiraTriager(agentDeps) : null;
   jiraIntake = new JiraIntake({
+    questionnaires,
     pipeline,
     jira: jiraApi,
     policies,

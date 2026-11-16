@@ -43,7 +43,7 @@ const fields = (over: Partial<ComplianceDraft> = {}) => ({
 let incidentList: Incident[] = [];
 let wrote: unknown[][];
 let wikiFails: string | null;
-const mk = (wired = true) => {
+const mk = (wired = true, questionnaires?: { rerun: (id: string, repo: string) => Promise<ComplianceDraft> }) => {
   wrote = [];
   wikiFails = null;
   const stateDir = mkdtempSync(join(tmpdir(), "compliance-http-"));
@@ -62,11 +62,44 @@ const mk = (wired = true) => {
     orgs: async () => ["acme"],
     buildQuarter: vi.fn(async (org: string) => drafts.open(fields({ id: `access_review:${org}:2026-Q4`, kind: "access_review", title: `Access review, ${org}, 2026-Q4`, period: "2026-Q4", targets: [{ kind: "access_slices", org, period: "2026-Q4" }] }))),
   };
-  const compliance = wired ? { drafts, publisher: publisher({ drafts, wiki }), evidence, repos: async () => ["acme/web"], access, incidents: { list: async () => incidentList } } : undefined;
+  const compliance = wired ? { drafts, publisher: publisher({ drafts, wiki }), evidence, repos: async () => ["acme/web"], access, incidents: { list: async () => incidentList }, ...(questionnaires ? { questionnaires } : {}) } : undefined;
   const app = createApp({ db, pipeline: new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true }), bus: new Bus(), ...(compliance ? { compliance } : {}), access: { host: "127.0.0.1", port: 1, token: "tok" } });
   return { app, drafts };
 };
 const post = (app: ReturnType<typeof mk>["app"], id: string, action: string, body: unknown) => app.request(`/compliance/drafts/${encodeURIComponent(id)}/${action}`, { method: "POST", headers: auth, body: JSON.stringify(body) });
+
+describe("the questionnaire routes", () => {
+  const repoPost = (app: ReturnType<typeof mk>["app"], id: string, body: unknown) => app.request(`/compliance/drafts/${encodeURIComponent(id)}/repo`, { method: "POST", headers: auth, body: JSON.stringify(body) });
+
+  it("list the repositories the machine knows", async () => {
+    const { app } = mk();
+    expect(await (await app.request("/compliance/repos", { headers: auth })).json()).toEqual({ repos: ["acme/web"] });
+    expect((await mk(false).app.request("/compliance/repos", { headers: auth })).status).toBe(503);
+  });
+
+  it("re-run a questionnaire draft against another known repository and answer with the reopened draft", async () => {
+    const rerun = vi.fn(async (id: string, repo: string) => ({ ...fields({ id, kind: "questionnaire", repo, period: null }), status: "waiting", hash: "0123456789abcdef" }) as unknown as ComplianceDraft);
+    const { app } = mk(true, { rerun });
+    const res = await repoPost(app, "questionnaire:slack:C0123ABCD:1.0", { repo: "acme/web" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ id: "questionnaire:slack:C0123ABCD:1.0", repo: "acme/web" });
+    expect(rerun).toHaveBeenCalledWith("questionnaire:slack:C0123ABCD:1.0", "acme/web");
+  });
+
+  it("refuse an unknown repository with 400, a posting or posted draft with 409, and a missing draft with 404", async () => {
+    const { DraftNotFoundError, DraftStatusError } = await import("../../application/compliance-drafts.ts");
+    const rerun = vi.fn(async (id: string) => {
+      if (id === "posted") throw new DraftStatusError(id, "posted");
+      throw new DraftNotFoundError(id);
+    });
+    const { app } = mk(true, { rerun });
+    expect((await repoPost(app, "x", { repo: "acme/other" })).status).toBe(400);
+    expect((await repoPost(app, "posted", { repo: "acme/web" })).status).toBe(409);
+    expect((await repoPost(app, "gone", { repo: "acme/web" })).status).toBe(404);
+    expect((await repoPost(app, "x", { repo: "nope" })).status).toBe(400);
+    expect((await mk(true).app.request("/compliance/drafts/x/repo", { method: "POST", headers: auth, body: JSON.stringify({ repo: "acme/web" }) })).status).toBe(503);
+  });
+});
 
 describe("the compliance routes", () => {
   it("sit behind the API token, and answer 503 when compliance is not wired", async () => {

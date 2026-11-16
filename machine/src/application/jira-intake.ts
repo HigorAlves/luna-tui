@@ -37,6 +37,8 @@ export interface JiraIntakeOptions {
   classifier?: IssueClassifier | null;
   /** The ticket machine. With it, and `tickets.auto` off (the default), an issue is read and held as a ticket with drafts: nothing is posted and no card is made until a person taps. */
   tickets?: TicketIntake | null;
+  /** The questionnaire job: an issue triage_signals calls a `compliance_request` goes to it, not awaited. */
+  questionnaires?: { fromJira(issue: JiraIssue): Promise<unknown> } | null;
   /** How often repos are checked for a due poll; each repo polls at its own `every`. */
   tickMs?: number;
   now?: () => Date;
@@ -175,6 +177,7 @@ export class JiraIntake {
   /** The ticket machine's path: the issue becomes a ticket object with its drafts. Nothing is written to Jira and no card is made. */
   private async hold(issue: JiraIssue, repoPath: string): Promise<void> {
     const classification = (await this.options.classifier?.classify(issueContext(issue)).catch(() => null)) ?? null;
+    this.requested(issue, classification);
     const overrides = (await this.options.policies.for(repoPath)).decisions.triage_signals ?? {};
     await this.options.tickets!.ingest(canonicalTicketOf({ tool: "jira", issue }), { repoPath, question: confidentQuestion(classification, overrides) });
     this.answered.set(issue.key, issue.updated);
@@ -182,6 +185,7 @@ export class JiraIntake {
 
   private async consider(issue: JiraIssue, repoPath: string, comments: "none" | "milestones" | "gates"): Promise<void> {
     const classification = (await this.options.classifier?.classify(issueContext(issue))) ?? null;
+    this.requested(issue, classification);
     const overrides = (await this.options.policies.for(repoPath)).decisions.triage_signals ?? {};
     if (confidentQuestion(classification, overrides)) {
       this.answered.set(issue.key, issue.updated);
@@ -213,6 +217,12 @@ export class JiraIntake {
     }
     await this.comment(issue, `Not for an agent: ${answer.reason}`);
     this.log(`jira intake: ${issue.key} not for an agent: ${answer.reason}`);
+  }
+
+  /** A compliance request starts its questionnaire draft on the side: the issue goes on as it would, and a failure is a log line. */
+  private requested(issue: JiraIssue, classification: { kind: string } | null): void {
+    if (classification?.kind !== "compliance_request" || !this.options.questionnaires) return;
+    void this.options.questionnaires.fromJira(issue).catch((error: unknown) => this.log(`jira intake: questionnaire for ${issue.key} failed: ${messageOf(error)}`));
   }
 
   private async comment(issue: JiraIssue, text: string): Promise<void> {

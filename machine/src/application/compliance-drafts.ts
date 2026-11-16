@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { ComplianceDraft, type ComplianceDraftKind, type ComplianceTarget } from "@hardness/contracts";
 
 import { carriesSecret } from "../domain/postable.ts";
+import type { Tap } from "./slack-send.ts";
 import type { Wiki } from "./wiki.ts";
 
 export const COMPLIANCE_DIR = "compliance";
@@ -198,7 +199,8 @@ export class ComplianceDrafts {
 }
 
 /** Writes one target of an approved draft. A writer throws with the target's own words when it cannot. */
-export type TargetWriter<K extends ComplianceTarget["kind"]> = (draft: ComplianceDraft, target: Extract<ComplianceTarget, { kind: K }>) => Promise<void>;
+/** `tap` is the person's approve, for a writer that posts as them (Slack); null when the approve came from no tap. */
+export type TargetWriter<K extends ComplianceTarget["kind"]> = (draft: ComplianceDraft, target: Extract<ComplianceTarget, { kind: K }>, tap?: Tap | null) => Promise<void>;
 /** The writers beside the built-in `wiki` one: each wave registers the targets it adds. */
 export type TargetWriters = { [K in ComplianceTarget["kind"]]?: TargetWriter<K> };
 
@@ -228,16 +230,16 @@ export function publisher(deps: PublisherDeps) {
     wiki: async (draft, target) => void (await deps.wiki.writePages(target.repo, [{ path: target.path, text: draft.text }], commitMessage(draft))),
     ...deps.handlers,
   };
-  const write = (draft: ComplianceDraft, target: ComplianceTarget): Promise<void> => {
+  const write = (draft: ComplianceDraft, target: ComplianceTarget, tap: Tap | null): Promise<void> => {
     const writer = writers[target.kind] as TargetWriter<typeof target.kind> | undefined;
     if (!writer) throw new Error(`no writer for ${target.kind} targets`);
-    return writer(draft, target as never);
+    return writer(draft, target as never, tap);
   };
   return {
-    async approve(id: string, hash: string, from: string): Promise<ComplianceDraft> {
+    async approve(id: string, hash: string, from: string, tap: Tap | null = null): Promise<ComplianceDraft> {
       const draft = await deps.drafts.claim(id, hash);
       try {
-        for (const target of draft.targets) await write(draft, target);
+        for (const target of draft.targets) await write(draft, target, tap);
         return await deps.drafts.finish(id, from);
       } catch (error) {
         return deps.drafts.fail(id, error instanceof Error ? error.message : String(error));

@@ -16,7 +16,7 @@ describe("context-only packs", () => {
     const none = PackId.options.filter((id) => packStates(id).length === 0);
     // A new context-only pack must be given a context key or be denied: never on demand by accident.
     expect(none.filter((id) => !NOT_ON_DEMAND.includes(id)).sort()).toEqual(Object.keys(CONTEXT_OF).sort());
-    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["access_review", "breach_assess", "change_exceptions", "chat_triage", "ci_failure_class", "comment_intent", "conversation_assess", "conversation_relation", "conversation_reply", "coverage_check", "decompose", "e2e_failure_cause", "escalation_reason", "event_class", "evidence_format", "evidence_valid", "fact_propose", "finding_classify", "fix_scope", "foreman", "frame_privacy", "intake_dedup", "jira_intake", "loop_judge", "loop_redirect", "plan_check", "postmortem", "pr_link", "red_check", "risk_score", "scope_check", "size_estimate", "slack_triage", "split_check", "ticket_assess", "ticket_recommend", "ticket_reply", "ticket_validity", "triage_signals", "worth_learning"]);
+    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["access_review", "breach_assess", "change_exceptions", "chat_triage", "ci_failure_class", "comment_intent", "conversation_assess", "conversation_relation", "conversation_reply", "coverage_check", "decompose", "e2e_failure_cause", "escalation_reason", "event_class", "evidence_format", "evidence_valid", "fact_propose", "finding_classify", "fix_scope", "foreman", "frame_privacy", "intake_dedup", "jira_intake", "loop_judge", "loop_redirect", "plan_check", "postmortem", "pr_link", "questionnaire", "red_check", "risk_score", "scope_check", "size_estimate", "slack_triage", "split_check", "ticket_assess", "ticket_recommend", "ticket_reply", "ticket_validity", "triage_signals", "worth_learning"]);
     expect(isContextPack("triage")).toBe(false);
     expect(isContextPack("reviewing_memory")).toBe(false);
     expect(isContextPack("chat_triage")).toBe(true);
@@ -119,6 +119,17 @@ describe("buildContextPackInput", () => {
     const input = buildContextPackInput("postmortem", { postmortem });
     expect(StageInput.parse(input)).toEqual(input);
     expect(input).toMatchObject({ pack: "postmortem", task: { id: "postmortem", title: "Postmortem: Export bucket public", repoPath: "" }, context: { projectContext: null, postmortem }, limits: { maxTurns: 1 } });
+  });
+
+  it("builds questionnaire's input around a synthetic task named for the repo with the file and pages under context.questionnaire", () => {
+    const questionnaire = { repo: "acme/api", source: "jira" as const, requester: null, questionnaire: { name: "q.md", markdown: "1. Do you encrypt?" }, policies: [], bank: [] };
+    expect(isContextPack("questionnaire")).toBe(true);
+    expect(packStates("questionnaire")).toEqual([]);
+    expect(contextSchema("questionnaire").safeParse({ questionnaire }).success).toBe(true);
+    expect(contextSchema("questionnaire").safeParse({ chat }).success).toBe(false);
+    const input = buildContextPackInput("questionnaire", { questionnaire });
+    expect(StageInput.parse(input)).toEqual(input);
+    expect(input).toMatchObject({ pack: "questionnaire", stage: "questionnaire", task: { id: "questionnaire", title: "Questionnaire for acme/api", repoPath: "" }, context: { projectContext: null, questionnaire }, limits: { maxTurns: 2 } });
   });
 
   it("builds the plan checks' input around a synthetic task named for the brief, the plan under context.plan", () => {

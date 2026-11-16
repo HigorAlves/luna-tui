@@ -41,7 +41,7 @@ describe("the triage_signals pack", () => {
 
   it("asks the diagram's signals: kind, type of work, ready, five sizes, five urgency sub-scores, preliminary risk, archive and why", () => {
     expect(Object.keys(pack.questions)).toEqual(["kind", "type_of_work", "ready", "size", "who", "what", "impact", "time", "demand", "risk_prelim", "archive", "archive_reason"]);
-    expect(Object.keys((pack.questions.kind as { criteria: object }).criteria)).toEqual(["bug", "feature", "task", "chore", "question", "incident"]);
+    expect(Object.keys((pack.questions.kind as { criteria: object }).criteria)).toEqual(["bug", "feature", "task", "chore", "question", "incident", "compliance_request"]);
     expect(Object.keys((pack.questions.type_of_work as { criteria: object }).criteria)).toEqual(["frontend", "backend", "infra", "data", "docs", "mixed"]);
     expect(Object.keys((pack.questions.size as { criteria: object }).criteria)).toEqual(["XS", "S", "M", "L", "XL"]);
     for (const q of ["who", "what", "impact", "time", "demand"]) expect(Object.keys((pack.questions[q] as { rubric: object }).rubric)).toHaveLength(3);

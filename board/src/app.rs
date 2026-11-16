@@ -416,6 +416,12 @@ pub enum Mode {
         area: TextArea<'static>,
         vim: Vim,
     },
+    /// `p` on a questionnaire in the Compliance view: a picker over the repositories the machine offers; enter answers the draft again from that wiki.
+    CompliancePick {
+        id: String,
+        repos: Vec<String>,
+        cursor: usize,
+    },
     /// `e` on the Review page while the cases wait for your check: which of the plan, the cases or the ticket to edit.
     EditChoice(String),
     /// Which side of `EditPlan` has keyboard focus. Tab switches; a save covers both.
@@ -3063,6 +3069,7 @@ impl App {
             Mode::SlackSnooze { .. } => self.handle_slack_snooze(key),
             Mode::SlackDismiss { .. } => self.handle_slack_dismiss(key),
             Mode::SlackPick { .. } => self.handle_slack_pick(key),
+            Mode::CompliancePick { .. } => self.handle_compliance_pick(key),
             Mode::SlackReply { .. } => self.handle_slack_reply(key),
             Mode::SlackTask { .. } => self.handle_slack_task(key),
             Mode::SlackWatchAdd { .. } => self.handle_slack_watch_add(key),
@@ -4001,7 +4008,7 @@ impl App {
     /// The keys `handle_compliance` matches.
     #[cfg(test)]
     pub(crate) const HANDLED_COMPLIANCE: &[&str] =
-        &["esc", "q", "?", "j", "k", "J", "K", "r", "a", "e", "x"];
+        &["esc", "q", "?", "j", "k", "J", "K", "r", "a", "e", "x", "p"];
 
     /// One tap on a draft. The machine answers the draft as it is now: a draft that did not post stays waiting with the target's reason,
     /// and a `409` means it changed since it was read, so the list is fetched again and nothing was sent.
@@ -4067,6 +4074,37 @@ impl App {
                 })
             }
             KeyCode::Char('r') => self.refresh_compliance(),
+            KeyCode::Char('p') => {
+                let Some(d) = self.compliance_under_cursor() else {
+                    self.notify("no draft selected", true);
+                    return Outcome::Continue;
+                };
+                if d.kind != "questionnaire" {
+                    self.notify("only a questionnaire has a repository to pick", true);
+                    return Outcome::Continue;
+                }
+                if !d.waiting() {
+                    self.notify(
+                        "nothing waiting on this draft: it is posting, posted or ignored",
+                        true,
+                    );
+                    return Outcome::Continue;
+                }
+                match self.machine.compliance_repos() {
+                    Ok(repos) if repos.is_empty() => {
+                        self.notify("compliance: the machine knows no repository", true)
+                    }
+                    Ok(repos) => {
+                        let cursor = repos.iter().position(|r| *r == d.repo).unwrap_or(0);
+                        self.mode = Mode::CompliancePick {
+                            id: d.id,
+                            repos,
+                            cursor,
+                        };
+                    }
+                    Err(why) => self.notify(format!("compliance: {why}"), true),
+                }
+            }
             KeyCode::Char(c @ ('a' | 'e' | 'x')) => {
                 let Some(d) = self.compliance_under_cursor() else {
                     self.notify("no draft selected", true);
@@ -4827,6 +4865,37 @@ impl App {
                     Err(error) => self.notify(error, true),
                 }
             }
+        }
+        Outcome::Continue
+    }
+
+    /// The `p` picker of the Compliance view: j/k move, enter answers the questionnaire again from that repository's wiki, esc leaves it.
+    fn handle_compliance_pick(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::CompliancePick { id, repos, cursor } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let last = repos.len().saturating_sub(1);
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(last),
+            KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            KeyCode::Enter => {
+                let (id, repo) = (id.clone(), repos[*cursor].clone());
+                self.mode = Mode::Normal;
+                match self.machine.compliance_repo(&id, &repo) {
+                    Ok(draft) => {
+                        let mut drafts = self.compliance_items.clone();
+                        match drafts.iter_mut().find(|d| d.id == draft.id) {
+                            Some(old) => *old = draft,
+                            None => drafts.push(draft),
+                        }
+                        self.set_compliance(drafts);
+                        self.notify(format!("answered again from {repo}"), false);
+                    }
+                    Err(why) => self.notify(format!("compliance: {why}"), true),
+                }
+            }
+            _ => {}
         }
         Outcome::Continue
     }

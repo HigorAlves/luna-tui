@@ -482,6 +482,7 @@ Review requested, Ready to merge, CI failed and Changes requested count on the B
 | `a` | approve: push the draft to its target |
 | `e` | edit: change the text, then tap again |
 | `x` | ignore: keep the draft, never post it |
+| `p` | repo: answer from another wiki |
 
 **Move**
 

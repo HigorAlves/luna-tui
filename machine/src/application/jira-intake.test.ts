@@ -32,7 +32,7 @@ const verdicts: Record<string, JiraIntakeAnswer> = {
 
 const classified = (kind: string, confidence = 0.9): TaskClassification => ({ kind, area: "machine", ready: kind !== "question", size: 1, confidence, at: "2026-10-28T12:00:00.000Z", model: "typesafe-ai/jev" });
 
-function wire(over: { triager?: boolean; comments?: JiraPolicy["comments"]; classify?: (issue: IssueContext) => TaskClassification | null | Promise<TaskClassification | null> } = {}) {
+function wire(over: { questionnaires?: { fromJira: (issue: JiraIssue) => Promise<unknown> }; triager?: boolean; comments?: JiraPolicy["comments"]; classify?: (issue: IssueContext) => TaskClassification | null | Promise<TaskClassification | null> } = {}) {
   const jira = fakeJira({
     issues: [
       { key: "PLAT-1", summary: "Login page", description: "Users sign in.\n\n- [ ] bad password errors", issueType: "Story" },
@@ -57,6 +57,7 @@ function wire(over: { triager?: boolean; comments?: JiraPolicy["comments"]; clas
     repos: async () => ["/r/a", "/r/a"],
     triager,
     ...(classifier ? { classifier } : {}),
+    ...(over.questionnaires ? { questionnaires: over.questionnaires } : {}),
     now: () => now,
     log: (l) => logs.push(l),
   });
@@ -104,6 +105,15 @@ describe("JiraIntake with triage_signals", () => {
     expect(jira.comments["PLAT-3"]).toEqual(["Not for an agent: needs production credentials"]);
     const [task] = await pipeline.list();
     expect(task).toMatchObject({ title: "Add the login page", classification: null });
+  });
+
+  it("hands an issue classified as a compliance_request to the questionnaire job, and goes on whatever the job does", async () => {
+    const asked: string[] = [];
+    const questionnaires = { fromJira: async (issue: JiraIssue) => (asked.push(issue.key), Promise.reject(new Error("no wiki"))) };
+    const { intake, triaged } = wire({ questionnaires, classify: (issue) => classified(issue.source === "jira:PLAT-2" ? "compliance_request" : "feature") });
+    await intake.tick();
+    expect(asked).toEqual(["PLAT-2"]);
+    expect(triaged).toContain("PLAT-1");
   });
 
   it("without a classification (no Jev credential, a failed run) behaves exactly as without the classifier", async () => {

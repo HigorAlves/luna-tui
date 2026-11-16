@@ -86,6 +86,13 @@ export type ChangeExceptionKind = z.infer<typeof ChangeExceptionKind>;
 export const ComplianceActInput = z.object({ hash: z.string().regex(/^[0-9a-f]{16}$/) });
 export type ComplianceActInput = z.infer<typeof ComplianceActInput>;
 
+/** `POST /compliance/drafts/:id/repo`: the repository whose wiki a questionnaire is answered from. */
+export const ComplianceRepoInput = z.object({ repo: Slug });
+export type ComplianceRepoInput = z.infer<typeof ComplianceRepoInput>;
+
+export const ComplianceReposResponse = z.object({ repos: z.array(Slug) });
+export type ComplianceReposResponse = z.infer<typeof ComplianceReposResponse>;
+
 /** The body of an edit tap. */
 export const ComplianceEditInput = ComplianceActInput.extend({ text: z.string().min(1) });
 export type ComplianceEditInput = z.infer<typeof ComplianceEditInput>;
@@ -138,3 +145,21 @@ export const PostmortemAnswer = z.object({
   breachNotes: z.string().max(1500).nullable(),
 });
 export type PostmortemAnswer = z.infer<typeof PostmortemAnswer>;
+
+/** questionnaire: each question answered from the policy, control and answer-bank pages it was given, or named as unanswered with why. Citations are page paths from the context. */
+export const QuestionnaireAnswer = z.object({
+  answers: z.array(
+    z.object({
+      n: z.number().int().min(1),
+      question: z.string().min(1).max(2000),
+      answer: z.string().min(1).max(1500),
+      /** Paths of the wiki pages the answer rests on. */
+      citations: z.array(z.string().min(1).max(300)).max(10),
+      /** The answer-bank page the answer was taken from, when one fit. */
+      fromBank: z.string().min(1).max(300).nullable(),
+      confidence: z.enum(["high", "medium", "low"]),
+    }),
+  ).max(300),
+  unanswered: z.array(z.object({ n: z.number().int().min(1), question: z.string().min(1).max(2000), why: z.string().min(1).max(400) })).max(300),
+});
+export type QuestionnaireAnswer = z.infer<typeof QuestionnaireAnswer>;

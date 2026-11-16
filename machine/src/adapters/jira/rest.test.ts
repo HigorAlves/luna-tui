@@ -184,4 +184,31 @@ describe("createJira", () => {
     expect(calls[0]!.url).toMatch(/^https:\/\/api\.atlassian\.com\/ex\/jira\/11111111-2222\/rest\/api\/3\/issue\/PLAT-123\?/);
     expect(issue.url).toBe("https://acme.atlassian.net/browse/PLAT-123");
   });
+
+  describe("attachments", () => {
+    const meta = { id: "9001", filename: "q.csv", mimeType: "text/csv", size: 30, content: "https://acme.atlassian.net/rest/api/3/attachment/content/9001" };
+
+    it("lists an issue's attachments", async () => {
+      const { jira, calls } = wire({ json: { key: "PLAT-1", fields: { attachment: [meta, { id: "9002", filename: "x.png", mimeType: "image/png", size: 5 }] } } });
+      expect(await jira.attachments("PLAT-1")).toEqual([
+        { id: "9001", name: "q.csv", mimetype: "text/csv", size: 30 },
+        { id: "9002", name: "x.png", mimetype: "image/png", size: 5 },
+      ]);
+      expect(calls[0]!.url).toBe("https://acme.atlassian.net/rest/api/3/issue/PLAT-1?fields=attachment");
+    });
+
+    it("downloads a text attachment's content", async () => {
+      const { jira, calls } = wire([{ json: meta }, { text: "1,Do you encrypt?" }]);
+      expect(await jira.downloadAttachment("9001")).toEqual({ name: "q.csv", mimetype: "text/csv", text: "1,Do you encrypt?" });
+      expect(calls.map((c) => c.url)).toEqual(["https://acme.atlassian.net/rest/api/3/attachment/9001", "https://acme.atlassian.net/rest/api/3/attachment/content/9001"]);
+    });
+
+    it("refuses a binary attachment and one over 1 MB before reading its content", async () => {
+      const png = wire({ json: { ...meta, filename: "x.png", mimeType: "image/png" } });
+      await expect(png.jira.downloadAttachment("9001")).rejects.toThrow("not a text file");
+      const big = wire({ json: { ...meta, size: 2_000_000 } });
+      await expect(big.jira.downloadAttachment("9001")).rejects.toThrow("over 1 MB");
+      expect(png.calls.length + big.calls.length).toBe(2);
+    });
+  });
 });
