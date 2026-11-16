@@ -70,7 +70,7 @@ function run(input: unknown, env: Record<string, string> = {}, files: Record<str
 }
 
 // slack_triage, chat_triage, foreman and eval_judge have no worktree and read no project context; their dry runs are below. council_second defaults to an eve engine: its dry run is below.
-const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "foreman" && p.id !== "eval_judge" && p.id !== "council_second").map((p) => p.id);
+const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "foreman" && p.id !== "change_exceptions" && p.id !== "eval_judge" && p.id !== "council_second").map((p) => p.id);
 
 describe("factory main (dry run)", () => {
   it.each(agentPacks)("%s: renders the prompt, prints the options and leaves a valid result", (pack) => {
@@ -164,6 +164,22 @@ describe("factory main (dry run)", () => {
     expect(prompt).toContain("| t1 · o/a · awaiting_approval · plan · gate plan (approve the plan) · Fix login");
     const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
     expect(options).toMatchObject({ agent: "foreman", agents: ["foreman"], model: "claude-haiku-5-5", effort: "low", tools: [], allowedTools: [] });
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+    expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
+  });
+
+  it("change_exceptions: runs over an empty /work with no tools, renders the facts as data and leaves a valid result", () => {
+    const task = { id: "change-exceptions", title: "Change exceptions of acme/api, 2026-10", description: "", criteria: [], repoPath: "", branch: "", source: null };
+    const exception = { pr: 41, title: "Hotfix: login loop (INC-204)", url: "https://github.com/acme/api/pull/41", author: "marta", mergedBy: "marta", mergedAt: "2026-10-14T09:30:00Z", approvedBy: [], ticket: null, checks: "green", bypass: "no", kinds: ["no_independent_approval"], body: "Fixes the incident." };
+    const exceptions = { repo: "acme/api", period: "2026-10", controls: ["SOC2 CC8.1"], exceptions: [exception] };
+    const { code, stdout, out, result } = run(stageInput("change_exceptions", { task, plan: null, context: { projectContext: null, exceptions } }), {}, {}, { emptyWork: true });
+    expect(code).toBe(0);
+    const prompt = readFileSync(join(out, "prompt.md"), "utf8");
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("`exception-explainer` role running the `change_exceptions` stage");
+    expect(prompt).toContain("| #41 · no_independent_approval · author marta");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: "exception-explainer", agents: ["exception-explainer"], model: "claude-haiku-5-5", effort: "low", tools: [], allowedTools: [] });
     expect(StageOutput.safeParse(result).error).toBeUndefined();
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });

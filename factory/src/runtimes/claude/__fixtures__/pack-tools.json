@@ -750,6 +750,10 @@
     "allowedTools": [],
     "tools": []
   },
+  "change_exceptions": {
+    "allowedTools": [],
+    "tools": []
+  },
   "code_map": {
     "allowedTools": [
       "Read",

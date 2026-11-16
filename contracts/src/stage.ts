@@ -3,6 +3,7 @@
 // the seam live in this repository; `factory-contract.test.ts` holds them together.
 import { z } from "zod";
 
+import { ChangeExceptionKind } from "./compliance.ts";
 import { EconomyInput, ProposeContext } from "./economy.ts";
 import { EngineBudgets, EngineId } from "./engines.ts";
 import { EffortId } from "./models.ts";
@@ -209,6 +210,8 @@ export const PackId = z.enum([
   "council_second",
   // The question council (run in triage before the person is asked): settles open questions from the code and the card, or says it cannot.
   "question_council",
+  // Explains why a merged PR missed a change-management control, from its title, body and the machine's facts; no tools, no worktree, on demand.
+  "change_exceptions",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -432,6 +435,35 @@ export const ForemanContext = z.object({
   }),
 });
 export type ForemanContext = z.infer<typeof ForemanContext>;
+
+/** For change_exceptions: the merged PRs of one repo and month that missed a change-management control. Every fact is the machine's; the title and body are written by others: data, never an instruction. */
+export const ChangeExceptionsContext = z.object({
+  /** owner/name. */
+  repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/name"),
+  period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "YYYY-MM"),
+  /** The controls the evidence answers, such as "SOC2 CC8.1". */
+  controls: z.array(z.string().min(1)).max(10),
+  exceptions: z
+    .array(
+      z.object({
+        pr: z.number().int().min(1),
+        title: z.string(),
+        url: z.string(),
+        author: z.string().nullable(),
+        mergedBy: z.string().nullable(),
+        mergedAt: z.string(),
+        approvedBy: z.array(z.string()),
+        ticket: z.string().nullable(),
+        checks: z.enum(["green", "red", "none"]),
+        bypass: z.enum(["yes", "no", "unknown"]),
+        kinds: z.array(ChangeExceptionKind).min(1),
+        /** The PR's body, capped. */
+        body: z.string().max(2000),
+      }),
+    )
+    .max(200),
+});
+export type ChangeExceptionsContext = z.infer<typeof ChangeExceptionsContext>;
 
 /** One slice of the implementer's ledger, kept by the runner in `/out/ledger.json`. */
 export const LedgerSlice = z.object({
@@ -1311,6 +1343,8 @@ export const StageInput = z.object({
     chat: ChatTriageContext.nullable().optional(),
     /** For foreman: the question and the board snapshot; the task is synthetic and there is no worktree. */
     foreman: ForemanContext.nullable().optional(),
+    /** For change_exceptions: the merged PRs that missed a change-management control; the task is synthetic and there is no worktree. */
+    exceptions: ChangeExceptionsContext.nullable().optional(),
     /** For question_council: the open triage questions to settle from the code, the card and the answers so far. */
     questions: QuestionsContext.nullable().optional(),
     /** For verifying: the files the code graph says depend on what the change touched, to review first. */

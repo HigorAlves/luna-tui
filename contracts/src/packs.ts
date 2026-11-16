@@ -14,6 +14,7 @@ import { AnswerScenario, AnswerStep } from "./plan.ts";
 import { DiffSummaryAnswer } from "./reports.ts";
 import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from "./questions.ts";
 import { type Bands, type KnockOutFlags, type SubScores, type Weights, knockOut, riskProduct, scorePriority } from "./scoring.ts";
+import { ChangeExceptionsAnswer } from "./compliance.ts";
 import { ForemanAnswer } from "./foreman.ts";
 import { FactProposal, ProjectContextSection } from "./economy.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
@@ -65,6 +66,8 @@ export const AgentRole = z.enum([
   "foreman",
   // Settles triage's open questions from the code and the card; read-only.
   "question-settler",
+  // Explains why a merged PR missed a change-management control, for the auditor and the engineering manager; text only, no tools.
+  "exception-explainer",
 ]);
 export type AgentRole = z.infer<typeof AgentRole>;
 
@@ -1546,6 +1549,23 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     answer: ForemanAnswer,
     template: "foreman.md",
     network: "engine",
+  },
+  change_exceptions: {
+    id: "change_exceptions",
+    kind: "agent",
+    // Explains why each merged PR missed a change-management control, from its title, body and the machine's facts, for the Compliance view.
+    // No tools at all: the PR text is written by others, so it can reach nothing, and the person approves whatever is posted.
+    agent: "exception-explainer",
+    helpers: [],
+    skills: [],
+    access: NO_ACCESS,
+    writable: false,
+    maxTurns: 1,
+    timeoutMs: 2 * MINUTE,
+    engines: { default: "claude:haiku", allowed: ["claude:haiku", "claude:sonnet"] },
+    effort: "low",
+    answer: ChangeExceptionsAnswer,
+    template: "change_exceptions.md",
   },
   triage_signals: {
     id: "triage_signals",

@@ -65,3 +65,17 @@ export type ComplianceActInput = z.infer<typeof ComplianceActInput>;
 /** The body of an edit tap. */
 export const ComplianceEditInput = ComplianceActInput.extend({ text: z.string().min(1) });
 export type ComplianceEditInput = z.infer<typeof ComplianceEditInput>;
+
+/** change_exceptions: one short explanation per (PR, kind) the machine found. The machine's facts are the record; this is only the reading of the PR's own words. */
+export const ChangeExceptionsAnswer = z.object({
+  explanations: z.array(
+    z.object({
+      pr: z.number().int().min(1),
+      kind: ChangeExceptionKind,
+      text: z.string().min(1).max(400),
+      /** Who should confirm, or what is missing, when the PR's text explains nothing. */
+      followUp: z.string().max(200).nullable(),
+    }),
+  ),
+});
+export type ChangeExceptionsAnswer = z.infer<typeof ChangeExceptionsAnswer>;

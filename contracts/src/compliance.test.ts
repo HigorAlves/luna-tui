@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ChangeExceptionKind, ComplianceActInput, ComplianceDraft, ComplianceDraftKind, ComplianceDraftsResponse, ComplianceEditInput, ComplianceTarget } from "./index.ts";
+import { ChangeExceptionKind, ChangeExceptionsAnswer, ChangeExceptionsContext, NO_ACCESS, PACKS, ComplianceActInput, ComplianceDraft, ComplianceDraftKind, ComplianceDraftsResponse, ComplianceEditInput, ComplianceTarget } from "./index.ts";
 
 const draft = {
   id: "change_evidence:acme/api:2026-10",
@@ -53,5 +53,27 @@ describe("compliance drafts", () => {
 
   it("names the five change-management exceptions", () => {
     expect(ChangeExceptionKind.options).toEqual(["no_independent_approval", "stale_approval", "no_ticket", "checks_red", "bypassed"]);
+  });
+
+  it("gives the exception explainer a context of facts and an answer of one short text per exception", () => {
+    const exception = { pr: 41, title: "Hotfix: login loop (INC-204)", url: "https://github.com/acme/api/pull/41", author: "marta", mergedBy: "marta", mergedAt: "2026-10-14T09:30:00Z", approvedBy: [], ticket: null, checks: "green", bypass: "no", kinds: ["no_independent_approval"], body: "Fixes the incident." };
+    const context = { repo: "acme/api", period: "2026-10", controls: ["SOC2 CC8.1"], exceptions: [exception] };
+    expect(ChangeExceptionsContext.parse(context)).toEqual(context);
+    expect(() => ChangeExceptionsContext.parse({ ...context, exceptions: [{ ...exception, body: "x".repeat(2001) }] })).toThrow();
+    expect(() => ChangeExceptionsContext.parse({ ...context, exceptions: Array(201).fill(exception) })).toThrow();
+    expect(() => ChangeExceptionsContext.parse({ ...context, period: "October" })).toThrow();
+    expect(() => ChangeExceptionsContext.parse({ ...context, exceptions: [{ ...exception, kinds: ["vibes"] }] })).toThrow();
+    const answer = { explanations: [{ pr: 41, kind: "no_independent_approval", text: "A hotfix for INC-204, merged by its author.", followUp: "Marta should confirm who reviewed it." }] };
+    expect(ChangeExceptionsAnswer.parse(answer)).toEqual(answer);
+    expect(() => ChangeExceptionsAnswer.parse({ explanations: [{ ...answer.explanations[0], text: "" }] })).toThrow();
+    expect(() => ChangeExceptionsAnswer.parse({ explanations: [{ ...answer.explanations[0], text: "x".repeat(401) }] })).toThrow();
+    expect(() => ChangeExceptionsAnswer.parse({ explanations: [{ ...answer.explanations[0], followUp: "x".repeat(201) }] })).toThrow();
+    expect(ChangeExceptionsAnswer.parse({ explanations: [{ ...answer.explanations[0], followUp: null }] }).explanations[0]!.followUp).toBeNull();
+  });
+
+  it("runs the exception explainer as a text-only agent on haiku or sonnet, with no hands", () => {
+    expect(PACKS.change_exceptions).toMatchObject({ kind: "agent", agent: "exception-explainer", writable: false, maxTurns: 1, effort: "low", template: "change_exceptions.md", helpers: [], skills: [] });
+    expect(PACKS.change_exceptions.engines).toMatchObject({ default: "claude:haiku", allowed: ["claude:haiku", "claude:sonnet"] });
+    expect(PACKS.change_exceptions.access).toEqual(NO_ACCESS);
   });
 });

@@ -161,6 +161,32 @@ const foremanText = (foreman: StageInput["context"]["foreman"]) => {
   };
 };
 
+/** The exceptions, as change_exceptions reads them: one line of the machine's facts and the PR's title per exception, then its body indented under it. The title and body are written by others, so the whole block is quoted data. */
+const exceptionsText = (exceptions: StageInput["context"]["exceptions"]) => {
+  if (!exceptions) return { repo: NONE, period: NONE, controls: NONE, items: NONE };
+  const items = exceptions.exceptions.map((e) => {
+    const head = [
+      `#${e.pr}`,
+      e.kinds.join(", "),
+      `author ${e.author ?? "(unknown)"}`,
+      `merged by ${e.mergedBy ?? "(unknown)"} at ${e.mergedAt}`,
+      `approved by ${e.approvedBy.length > 0 ? e.approvedBy.join(", ") : "(nobody)"}`,
+      `ticket ${e.ticket ?? NONE}`,
+      `checks ${e.checks}`,
+      `bypass ${e.bypass}`,
+      e.title,
+    ].join(" · ");
+    const body = e.body.trim() === "" ? [] : e.body.split("\n").map((line) => `   ${line}`);
+    return [head, ...body].join("\n");
+  });
+  return {
+    repo: exceptions.repo,
+    period: exceptions.period,
+    controls: exceptions.controls.length > 0 ? exceptions.controls.join("\n") : NONE,
+    items: items.length > 0 ? items.join("\n") : NONE,
+  };
+};
+
 /** The issue, as jira_intake reads it: one header line, the description, the comments, the repo. */
 const jiraText = (jira: StageInput["context"]["jira"]) => {
   if (!jira) return { issue: NONE, description: NONE, comments: NONE, repoPath: NONE, classification: NONE };
@@ -487,6 +513,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
   const judged = evalText(input.context.eval);
   const chat = chatText(input.context.chat);
   const foreman = foremanText(input.context.foreman);
+  const exceptions = exceptionsText(input.context.exceptions);
   const questions = questionsText(input.context.questions);
   const video = videoText(input.context.video);
   const subs: Record<string, string> = {
@@ -600,6 +627,10 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.foreman.truncated}}": foreman.truncated,
     "{{context.foreman.pending}}": foreman.pending,
     "{{context.foreman.packs}}": foreman.packs,
+    "{{context.exceptions.repo}}": exceptions.repo,
+    "{{context.exceptions.period}}": exceptions.period,
+    "{{context.exceptions.controls}}": exceptions.controls,
+    "{{context.exceptions.items}}": exceptions.items,
     "{{context.jira.issue}}": jira.issue,
     "{{context.jira.description}}": jira.description,
     "{{context.jira.comments}}": jira.comments,

@@ -72,6 +72,8 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   chat_triage: [],
   // The foreman, run on demand by POST /foreman.
   foreman: [],
+  // Change management's exception explainer, run on demand by the compliance job.
+  change_exceptions: [],
 };
 
 /** The task states in which the pipeline runs the pack. */
