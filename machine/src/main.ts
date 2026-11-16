@@ -6,7 +6,6 @@ import { type BudgetAlert, type EvidenceContext, FACTORY_DEFAULTS, Ledger, PrAct
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
-import { baseRefusal } from "./domain/sandbox-bounds.ts";
 import { readinessProblems } from "./application/readiness.ts";
 import { Bus } from "./adapters/http/bus.ts";
 import { StreamWatcher } from "./adapters/http/watch.ts";
@@ -78,7 +77,7 @@ import { imageId, imageLabel, runSandbox } from "./adapters/docker/docker.ts";
 import { LOCKFILES, type EnvRecord, envOf } from "./domain/env-hash.ts";
 import { lockfilesAt } from "./adapters/git/worktree.ts";
 import { GraphWatch } from "./application/graph-watch.ts";
-import { imageSpecOf } from "./domain/image-spec.ts";
+import { approveRepoBase } from "./application/approve-base.ts";
 import { repoHealthOf } from "./application/repo-health.ts";
 import { EngineBudgetWatch, engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "./application/engine-gates.ts";
 import { PgTaskStore } from "./adapters/persistence/task-store.ts";
@@ -809,19 +808,11 @@ const knownRepos = async (): Promise<string[]> => {
   for (const task of await pipeline.list()) if (task.repoPath && !isTerminal(task.state)) known.push(task.repoPath);
   return [...new Set(known)];
 };
-/** A person approves the exact base the repository's luna.yaml (on the user's checkout) names now; any other reference is refused. */
+/** A person approves the exact base the repository's luna.yaml (on the user's checkout) names now, or the exact key of the Dockerfile its devcontainer builds now; any other is refused. */
 const approveBase = async (repo: string, base: string): Promise<{ ok: true } | { ok: false; reason: string }> => {
   if (!agentDeps) return { ok: false, reason: "repository images are off on this machine" };
-  if (!(await knownRepos()).includes(repo)) return { ok: false, reason: "the machine does not know that repository" };
-  const bounded = await policies.for(repo);
-  const source = await agentDeps.imageSource.for(repo);
-  const refusal = baseRefusal(bounded) ?? source.bounds[0] ?? null;
-  if (refusal) return { ok: false, reason: refusal };
-  const spec = imageSpecOf({ base: source.base });
-  if (spec.kind !== "repo" || spec.base !== base) return { ok: false, reason: "that is not the base in the repository's luna.yaml now" };
-  await agentDeps.approvals.approve(repo, base);
-  agentDeps.repoImages.approved(repo);
-  return { ok: true };
+  const deps = agentDeps;
+  return approveRepoBase({ knownRepos, policyOf: (r) => policies.for(r), sourceOf: (r) => deps.imageSource.for(r), approvals: deps.approvals, approved: (r) => deps.repoImages.approved(r) }, repo, base);
 };
 const app = createApp({
   knownRepos,
@@ -837,7 +828,7 @@ const app = createApp({
       policy: (repoPath) => policies.for(repoPath),
       ...(agentDeps ? { source: agentDeps.imageSource } : {}),
       machineImage: config.runnerImage,
-      images: { warnings: (repoPath) => agentDeps?.repoImages.warnings(repoPath) ?? [], status: (repoPath) => agentDeps?.repoImages.status(repoPath) ?? null, pending: async (repoPath) => (await agentDeps?.repoImages.pending(repoPath)) ?? null },
+      images: { warnings: (repoPath) => agentDeps?.repoImages.warnings(repoPath) ?? [], status: (repoPath) => agentDeps?.repoImages.status(repoPath) ?? null, pending: async (repoPath) => (await agentDeps?.repoImages.pending(repoPath)) ?? null, pendingDockerfile: async (repoPath) => (await agentDeps?.repoImages.pendingDockerfile(repoPath)) ?? null },
       graph,
       watch: { health: (repoPath) => graphWatch?.health(repoPath) ?? { building: false, lastFailure: null } },
     }),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { RepoImageError, type ImageDocker, repoImages } from "./repo-images.ts";
+import { RepoImageError, type ImageDocker, type RepoImagesDeps, repoImages } from "./repo-images.ts";
 
 const MACHINE = "hardness-runner:dev";
 const digest = `sha256:${"b".repeat(64)}`;
@@ -18,13 +18,14 @@ function fakeDocker(over: Partial<ImageDocker> = {}) {
       have.add(spec.tag);
       return { ok: true };
     },
+    buildDockerfile: async () => ({ ok: true, log: "" }),
     ...over,
   };
   return { docker, calls };
 }
 const events: unknown[] = [];
 const approveAll = { isApproved: async () => true };
-const make = (image: { base?: string | null } | undefined, docker: ImageDocker, approvals: { isApproved(repoPath: string, base: string): Promise<boolean> } = approveAll, extra: { now?: () => number } = {}) =>
+const make = (image: Awaited<ReturnType<RepoImagesDeps["imageOf"]>>, docker: ImageDocker, approvals: RepoImagesDeps["approvals"] = approveAll, extra: { now?: () => number } = {}) =>
   repoImages({ machineImage: MACHINE, imageOf: async () => image, slugOf: (p) => `slug-${p}`, docker, approvals, onEvent: (e) => events.push(e), ...extra });
 
 describe("the toolchain warnings of a repository's base", () => {
@@ -198,5 +199,104 @@ describe("the image a repository's stages run in", () => {
     void images.ensure("/a").catch(() => undefined);
     const b = await Promise.race([images.ensure("/b"), new Promise<"late">((r) => setTimeout(() => r("late"), 500))]);
     expect(b).not.toBe("late");
+  });
+});
+
+describe("the image built from a repository's approved Dockerfile", () => {
+  const KEY = `dockerfile=sha256:${"c".repeat(64)}`;
+  const dockerfile = { path: ".devcontainer/Dockerfile", context: "/r/.devcontainer", contextRel: ".devcontainer", args: { A: "1" }, text: "FROM debian:12\n", key: KEY };
+  const dfDocker = (over: Partial<ImageDocker> = {}) => {
+    const calls: string[] = [];
+    const have = new Set<string>();
+    const docker: ImageDocker = {
+      layerKey: async () => "layer-1",
+      checkBase: async (base, _s, _t, options) => (calls.push(`check ${base}${options?.local ? " local" : ""}`), { ok: true, digest }),
+      exists: async (tag) => have.has(tag),
+      build: async (spec) => (calls.push(`build ${spec.tag} from ${spec.base}`), have.add(spec.tag), { ok: true }),
+      buildDockerfile: async (spec) => (calls.push(`dockerfile ${spec.tag} ${spec.key} ${spec.context} ${JSON.stringify(spec.args)}`), have.add(spec.tag), { ok: true, log: "step 1\nstep 2\ndone" }),
+      ...over,
+    };
+    return { docker, calls };
+  };
+  const build = (image: Parameters<typeof make>[0], docker: ImageDocker, approvals: Parameters<typeof make>[2] = approveAll) => make(image, docker, approvals);
+
+  it("builds nothing, pulls nothing and says once that it waits, until a person approved this key", async () => {
+    events.length = 0;
+    const { docker, calls } = dfDocker();
+    const approved = new Set<string>();
+    const images = build({ dockerfile }, docker, { isApproved: async (_r, b) => approved.has(b) });
+    expect((await images.ensure("/r", undefined, "c1")).image).toBe(MACHINE);
+    expect((await images.ensure("/r", undefined, "c2")).image).toBe(MACHINE);
+    expect(calls).toEqual([]);
+    expect(events.filter((e) => (e as { kind: string }).kind === "image.dockerfile_pending")).toHaveLength(1);
+    expect(await images.pending("/r")).toBeNull();
+    expect(await images.pendingDockerfile("/r")).toEqual({ path: ".devcontainer/Dockerfile", key: KEY, changed: false });
+    approved.add(KEY);
+    expect(await images.pendingDockerfile("/r")).toBeNull();
+    expect((await images.ensure("/r")).image).toMatch(/^hardness-runner-slug-/);
+  });
+
+  it("a Dockerfile that changed since its approval is pending again, and says it changed", async () => {
+    const { docker, calls } = dfDocker();
+    const old = `dockerfile=sha256:${"d".repeat(64)}`;
+    const images = build({ dockerfile }, docker, { isApproved: async (_r, b) => b === old, list: async () => [old, "debian:12"] });
+    expect(await images.pendingDockerfile("/r")).toEqual({ path: ".devcontainer/Dockerfile", key: KEY, changed: true });
+    expect((await images.ensure("/r")).image).toBe(MACHINE);
+    expect(calls).toEqual([]);
+  });
+
+  it("builds the approved Dockerfile under a tag from its key, probes the result locally, then puts the machine's layer on it", async () => {
+    events.length = 0;
+    const { docker, calls } = dfDocker();
+    const { image } = await build({ dockerfile }, docker).ensure("/r", undefined, "card-1");
+    const tag = `hardness-devcontainer-slug-/r:${"c".repeat(12)}`;
+    expect(calls).toEqual([`dockerfile ${tag} ${KEY} /r/.devcontainer {"A":"1"}`, `check ${tag} local`, `build ${image} from ${tag}`]);
+    expect(image).toMatch(/^hardness-runner-slug-/);
+    const built = events.find((e) => (e as { kind: string }).kind === "image.dockerfile_built") as { image: string; log: string; taskId: string };
+    expect(built).toMatchObject({ image: tag, taskId: "card-1", path: ".devcontainer/Dockerfile", log: expect.stringContaining("step 2") });
+  });
+
+  it("reuses the built image by tag, and caps the log it reports", async () => {
+    events.length = 0;
+    const long = Array.from({ length: 200 }, (_, i) => `line ${i}`).join("\n");
+    const { docker, calls } = dfDocker({ buildDockerfile: async (spec) => (calls.push(`dockerfile ${spec.tag}`), { ok: true, log: long }) });
+    const images = build({ dockerfile }, docker);
+    await images.ensure("/r");
+    const built = events.find((e) => (e as { kind: string }).kind === "image.dockerfile_built") as { log: string };
+    expect(built.log.length).toBeLessThanOrEqual(803);
+    expect(built.log).toContain("line 199");
+    expect(built.log).not.toContain("line 100");
+    images.approved("/r");
+    calls.length = 0;
+    // The tag is already there: docker is not asked to build the Dockerfile again.
+    const again = repoImages({ machineImage: MACHINE, imageOf: async () => ({ dockerfile }), slugOf: (p) => `slug-${p}`, docker: { ...docker, exists: async () => true }, approvals: approveAll });
+    await again.ensure("/r");
+    expect(calls.some((c) => c.startsWith("dockerfile"))).toBe(false);
+  });
+
+  it("throws the log tail and remembers the failure when the Dockerfile does not build", async () => {
+    events.length = 0;
+    const { docker, calls } = dfDocker({ buildDockerfile: async () => ({ ok: false, log: "RUN failed: exit 2" }) });
+    const images = build({ dockerfile }, docker);
+    await expect(images.ensure("/r")).rejects.toBeInstanceOf(RepoImageError);
+    await expect(images.ensure("/r")).rejects.toThrow("exit 2");
+    expect(calls).toEqual([]);
+    expect(events.map((e) => (e as { kind: string }).kind)).toContain("image.build_failed");
+    expect(images.status("/r")).toMatchObject({ lastFailure: expect.stringContaining("exit 2") });
+  });
+
+  it("refuses the built image when it is not glibc Linux with git, and runs on the machine's image", async () => {
+    events.length = 0;
+    const { docker, calls } = dfDocker({ checkBase: async () => ({ ok: false, reason: "the base image has no git" }) });
+    expect((await build({ dockerfile }, docker).ensure("/r")).image).toBe(MACHINE);
+    expect(calls.some((c) => c.startsWith("build "))).toBe(false);
+    expect(events.map((e) => (e as { kind: string }).kind)).toContain("image.refused");
+  });
+
+  it("lets a named base win over a Dockerfile", async () => {
+    const { docker, calls } = dfDocker();
+    await build({ base: "debian:12", dockerfile }, docker).ensure("/r");
+    expect(calls[0]).toBe("check debian:12");
+    expect(calls.some((c) => c.startsWith("dockerfile"))).toBe(false);
   });
 });

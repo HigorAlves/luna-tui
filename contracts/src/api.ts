@@ -625,6 +625,8 @@ export interface RepoHealth {
     lastFailure: string | null;
     /** A base the repository's luna.yaml names that no person approved yet (flattened, capped); it runs on the machine's image until `POST /repos/base/approve`. */
     pendingBase: string | null;
+    /** A Dockerfile the repository's devcontainer.json builds from that no person approved (this exact content): `path` is repo-relative, `key` is what `POST /repos/base/approve` takes as `base` (`dockerfile=sha256:<hex>`), `changed` is true when an earlier Dockerfile was approved. Its build runs with network access. Absent when none waits. */
+    pendingDockerfile?: { path: string; key: string; changed: boolean };
   };
   /** What the machine's sandbox policy dropped or refused from this repository's luna.yaml (egress hosts, the base image), one sentence each; absent when nothing was. */
   bounds?: string[];

@@ -37,3 +37,21 @@ describe("the bases a person approved", () => {
     }
   });
 });
+
+describe("the approvals of one repository", () => {
+  it("lists every reference and Dockerfile key approved for it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bases-"));
+    const key = `dockerfile=sha256:${"a".repeat(64)}`;
+    try {
+      const a = approvedBases(dir);
+      expect(await a.list("/r")).toEqual([]);
+      await a.approve("/r", "debian:12");
+      await a.approve("/r", key);
+      await a.approve("/other", "x:1");
+      expect(await a.list("/r")).toEqual(["debian:12", key]);
+      expect(await a.isApproved("/r", key)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

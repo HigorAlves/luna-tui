@@ -41,10 +41,15 @@ export function dockerImages(deps: { exec?: Run } = {}): ImageDocker {
     async exists(tag) {
       return (await run("docker", ["image", "inspect", tag])).code === 0;
     },
-    async checkBase(base, signal, toolchains = {}) {
-      const pulled = await run("docker", ["pull", "--quiet", base], { timeoutMs: PULL_TIMEOUT_MS, ...(signal ? { signal } : {}) });
-      // A base that is only local (not in any registry) is used as it is; one that is neither pullable nor local is refused.
-      if (pulled.code !== 0 && (await run("docker", ["image", "inspect", base])).code !== 0) return { ok: false, reason: `the base image could not be pulled: ${pulled.stderr || pulled.stdout}` };
+    async checkBase(base, signal, toolchains = {}, options = {}) {
+      if (options.local) {
+        // An image this machine just built: it is in no registry, so nothing is pulled.
+        if ((await run("docker", ["image", "inspect", base])).code !== 0) return { ok: false, reason: "the built image could not be found" };
+      } else {
+        const pulled = await run("docker", ["pull", "--quiet", base], { timeoutMs: PULL_TIMEOUT_MS, ...(signal ? { signal } : {}) });
+        // A base that is only local (not in any registry) is used as it is; one that is neither pullable nor local is refused.
+        if (pulled.code !== 0 && (await run("docker", ["image", "inspect", base])).code !== 0) return { ok: false, reason: `the base image could not be pulled: ${pulled.stderr || pulled.stdout}` };
+      }
       const info = await run("docker", ["image", "inspect", "--format", "{{.Id}}|{{.Os}}|{{.Architecture}}", base]);
       const [digest, os, arch] = info.stdout.trim().split("|");
       if (info.code !== 0 || !digest?.startsWith("sha256:")) return { ok: false, reason: "the base image could not be inspected" };
@@ -64,6 +69,21 @@ export function dockerImages(deps: { exec?: Run } = {}): ImageDocker {
       if (!lines.some((l) => /\/git$/.test(l))) return { ok: false, reason: "the base image has no git: the machine's layer does not carry it, so the base must" };
       // A toolchain the image does not satisfy is a warning for repo health, never a refusal.
       return tools ? { ok: true, digest, toolchainWarnings: toolchainWarnings(toolchains, probe.stdout) } : { ok: true, digest };
+    },
+    // The one build that runs a repository's own instructions, so it is the one that is reviewed: a person approved these exact bytes.
+    // BuildKit refuses the per-run proxy's network, so it runs on the default network, with no secret, credential, build secret or SSH.
+    async buildDockerfile(spec) {
+      const dir = await mkdtemp(join(tmpdir(), "luna-devcontainer-"));
+      try {
+        const file = join(dir, "Dockerfile");
+        await writeFile(file, spec.text, "utf8");
+        const args = Object.entries(spec.args).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).flatMap(([k, v]) => ["--build-arg", `${k}=${v}`]);
+        const out = await run("docker", ["build", "--progress", "plain", "--label", `dev.hardness.dockerfile=${spec.key}`, ...args, "-t", spec.tag, "-f", file, spec.context], { timeoutMs: BUILD_TIMEOUT_MS, ...(spec.signal ? { signal: spec.signal } : {}) });
+        const log = [out.stdout, out.stderr].filter(Boolean).join("\n");
+        return out.code === 0 ? { ok: true, log } : { ok: false, log };
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
     },
     async build(spec) {
       const dir = await mkdtemp(join(tmpdir(), "luna-image-"));

@@ -14,7 +14,7 @@ export interface RepoHealthDeps {
   /** Where the base comes from (luna.yaml, else the devcontainer) and what the devcontainer asked that is not applied. */
   source?: Pick<RepoImageSource, "for">;
   machineImage: string;
-  images: { warnings?(repoPath: string): string[]; pending(repoPath: string): Promise<string | null>; status(repoPath: string): { image: string; builtAt: string | null; lastFailure: string | null } | null };
+  images: { warnings?(repoPath: string): string[]; pendingDockerfile?(repoPath: string): Promise<{ path: string; key: string; changed: boolean } | null>; pending(repoPath: string): Promise<string | null>; status(repoPath: string): { image: string; builtAt: string | null; lastFailure: string | null } | null };
   graph: { stampOf(repoPath: string): Promise<GraphStamp | null>; health?(repoPath: string): { building: boolean; lastFailure: string | null }; behind?(repoPath: string, commit: string): Promise<number | null> };
   watch: { health(repoPath: string): { building: boolean; lastFailure: string | null } };
 }
@@ -35,10 +35,19 @@ export async function repoHealthOf(deps: RepoHealthDeps): Promise<RepoHealth[]> 
       const health = built ? { building: built.building || watch.building, lastFailure: built.lastFailure } : watch;
       const source = await deps.source?.for(repo).catch(() => null);
       const bounds = [...(policy.bounds?.image ?? []), ...(source?.bounds ?? []), ...(policy.bounds?.egress ?? [])].map((line) => safe(line).slice(0, 400));
-      const notes = [...(source?.notes ?? []), ...(deps.images.warnings?.(repo) ?? [])].map((line) => safe(line).slice(0, 400));
+      const dockerfile = await deps.images.pendingDockerfile?.(repo).catch(() => null);
+      const dockerfileNote = dockerfile ? [`Dockerfile ${dockerfile.path} ${dockerfile.changed ? "changed since approval" : "awaits approval"}`] : [];
+      const notes = [...(source?.notes ?? []), ...dockerfileNote, ...(deps.images.warnings?.(repo) ?? [])].map((line) => safe(line).slice(0, 400));
       return {
         repo,
-        image: { inUse: own?.image ?? deps.machineImage, base: source ? source.base : base, builtAt: own?.builtAt ?? null, lastFailure: own?.lastFailure ?? null, pendingBase: pending === null ? null : safe(pending).slice(0, 255) },
+        image: {
+          inUse: own?.image ?? deps.machineImage,
+          base: source ? source.base : base,
+          builtAt: own?.builtAt ?? null,
+          lastFailure: own?.lastFailure ?? null,
+          pendingBase: pending === null ? null : safe(pending).slice(0, 255),
+          ...(dockerfile ? { pendingDockerfile: { path: safe(dockerfile.path).slice(0, 255), key: dockerfile.key, changed: dockerfile.changed } } : {}),
+        },
         ...(bounds.length > 0 ? { bounds } : {}),
         ...(notes.length > 0 ? { notes } : {}),
         graph: { on: policy.graph !== false, commit: stamp?.commit ?? null, behind, graphify: stamp?.graphify ?? null, builtAt: stamp?.builtAt ?? null, building: health.building, lastFailure: health.lastFailure },

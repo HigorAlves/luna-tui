@@ -84,3 +84,43 @@ describe("a base without git", () => {
     expect(await dockerImages({ exec: withGit }).checkBase("debian:12")).toEqual({ ok: true, digest });
   });
 });
+
+describe("a repository's approved Dockerfile", () => {
+  const spec = { tag: "hardness-devcontainer-x:abc", key: `dockerfile=sha256:${"a".repeat(64)}`, text: "FROM debian:12\nRUN true\n", context: "/repo/.devcontainer", args: { B: "2", A: "1" } };
+
+  it("builds from the approved bytes in a temp file, on the default network, with only the key's label and its build args", async () => {
+    const seen: Array<{ command: string; args: string[]; file: string }> = [];
+    const run = async (command: string, args: string[]): Promise<ExecResult> => {
+      seen.push({ command, args, file: readFileSync(args[args.indexOf("-f") + 1]!, "utf8") });
+      return { code: 0, stdout: "built", stderr: "warn" };
+    };
+    expect(await dockerImages({ exec: run }).buildDockerfile(spec)).toEqual({ ok: true, log: "built\nwarn" });
+    const { command, args, file } = seen[0]!;
+    expect(command).toBe("docker");
+    expect(args.slice(0, 4)).toEqual(["build", "--progress", "plain", "--label"]);
+    expect(args).toContain(`dev.hardness.dockerfile=${spec.key}`);
+    expect(args.filter((_a, i) => args[i - 1] === "--build-arg")).toEqual(["A=1", "B=2"]);
+    expect(args.slice(args.indexOf("-t"), args.indexOf("-t") + 2)).toEqual(["-t", spec.tag]);
+    expect(args.at(-1)).toBe("/repo/.devcontainer");
+    expect(file).toBe(spec.text);
+    expect(args.some((a) => /--network|--secret|--ssh|--allow|--add-host/.test(a))).toBe(false);
+  });
+
+  it("returns the log on failure", async () => {
+    const run = async (): Promise<ExecResult> => ({ code: 1, stdout: "out", stderr: "RUN failed" });
+    expect(await dockerImages({ exec: run }).buildDockerfile(spec)).toEqual({ ok: false, log: "out\nRUN failed" });
+  });
+
+  it("probes a built image locally: no pull, and a missing image is refused", async () => {
+    const cmds: string[][] = [];
+    const run = async (_c: string, a: string[]): Promise<ExecResult> => {
+      cmds.push(a);
+      if (a[0] === "image") return ok(`${digest}|linux|${process.arch === "arm64" ? "arm64" : "amd64"}\n`);
+      return ok("/lib/ld-linux-x\n/usr/bin/git\n");
+    };
+    expect(await dockerImages({ exec: run }).checkBase("hardness-devcontainer-x:abc", undefined, {}, { local: true })).toEqual({ ok: true, digest });
+    expect(cmds.some((a) => a[0] === "pull")).toBe(false);
+    const gone = async (): Promise<ExecResult> => ({ code: 1, stdout: "", stderr: "no such image" });
+    expect(await dockerImages({ exec: gone }).checkBase("hardness-devcontainer-x:abc", undefined, {}, { local: true })).toMatchObject({ ok: false });
+  });
+});

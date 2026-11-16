@@ -208,7 +208,10 @@ export async function buildRealStages(
   const containerEnvOf = async (repoPath: string) => (await imageSource.for(repoPath)).containerEnv;
   const repoImages = makeRepoImages({
     machineImage: config.runnerImage,
-    imageOf: async (repoPath) => ({ base: (await imageSource.for(repoPath)).base }),
+    imageOf: async (repoPath) => {
+      const source = await imageSource.for(repoPath);
+      return { base: source.base, dockerfile: source.dockerfile };
+    },
     toolchainsOf: async (repoPath) => (await policies.for(repoPath)).toolchains,
     slugOf: repoSlug,
     docker: dockerImages(),

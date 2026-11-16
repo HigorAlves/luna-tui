@@ -12,6 +12,8 @@ const MAX_BYTES = 1024 * 1024;
 export interface ApprovedBases {
   isApproved(repoPath: string, base: string): Promise<boolean>;
   approve(repoPath: string, base: string): Promise<void>;
+  /** Everything approved for the repository: exact references, and `dockerfile=sha256:<hex>` keys. */
+  list(repoPath: string): Promise<string[]>;
 }
 
 export function approvedBases(dir: string): ApprovedBases {
@@ -29,6 +31,10 @@ export function approvedBases(dir: string): ApprovedBases {
     async isApproved(repoPath, base) {
       const refs = (await read())[repoPath];
       return Array.isArray(refs) && refs.includes(base);
+    },
+    async list(repoPath) {
+      const refs = (await read())[repoPath];
+      return Array.isArray(refs) ? refs.filter((r) => typeof r === "string") : [];
     },
     approve(repoPath, base) {
       const job = writing.then(async () => {
