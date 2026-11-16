@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -38,6 +38,20 @@ async function commitTo(bare: string, files: Record<string, string>, message: st
   }
   await git(work, "add", "-A");
   await git(work, "commit", "--quiet", "-m", message);
+  await git(work, "push", "--quiet", "origin", `HEAD:refs/heads/${branch}`);
+}
+
+/** Commits a symlink at `path` pointing to `target`, as a hostile collaborator could push to the wiki. */
+async function commitLink(bare: string, path: string, target: string, branch = "master"): Promise<void> {
+  const work = temp("luna-wiki-link-");
+  await git(work, "init", "--quiet", `--initial-branch=${branch}`);
+  await git(work, "config", "core.symlinks", "true");
+  await git(work, "remote", "add", "origin", bare);
+  await git(work, "pull", "--quiet", "origin", branch);
+  mkdirSync(dirname(join(work, path)), { recursive: true });
+  symlinkSync(target, join(work, path));
+  await git(work, "add", "-A");
+  await git(work, "commit", "--quiet", "-m", "link");
   await git(work, "push", "--quiet", "origin", `HEAD:refs/heads/${branch}`);
 }
 
@@ -163,5 +177,34 @@ describe("sharedWiki", () => {
     const stateDir = mkdtempSync(join(tmpdir(), "wiki-shared-"));
     expect(sharedWiki(stateDir)).toBe(sharedWiki(stateDir));
     expect(sharedWiki(stateDir)).not.toBe(sharedWiki(mkdtempSync(join(tmpdir(), "wiki-shared-"))));
+  });
+});
+
+describe("the git wiki: links pushed by others", () => {
+  it("never writes through a link the remote holds at a page path", async () => {
+    const outside = join(temp("luna-wiki-outside-"), "precious.txt");
+    writeFileSync(outside, "precious");
+    const bare = await bareWiki({ "Home.md": "home" });
+    await commitLink(bare, "Compliance/Access-Reviews/2026-Q4.md", outside);
+    await wikiOver(bare).writePages(SLUG, [{ path: "Compliance/Access-Reviews/2026-Q4.md", text: "the review" }], "Access review 2026-Q4").catch(() => undefined);
+    expect(readFileSync(outside, "utf8")).toBe("precious");
+  });
+
+  it("never writes through a linked folder the remote holds", async () => {
+    const outsideDir = temp("luna-wiki-outside-dir-");
+    const bare = await bareWiki({ "Home.md": "home" });
+    await commitLink(bare, "Compliance", outsideDir);
+    await expect(wikiOver(bare).writePages(SLUG, [{ path: "Compliance/Access-Reviews/2026-Q4.md", text: "the review" }], "Access review 2026-Q4")).rejects.toBeInstanceOf(WikiError);
+    expect(readdirSync(outsideDir)).toEqual([]);
+  });
+
+  it("refuses to write through a link it finds in the checkout", async () => {
+    const outside = join(temp("luna-wiki-outside-"), "precious.txt");
+    writeFileSync(outside, "precious");
+    const bare = await bareWiki({ "Home.md": "home" });
+    const cacheDir = temp("luna-wiki-cache-");
+    const wiki = createWiki({ cacheDir, remoteOf: () => bare, afterSync: async () => symlinkSync(outside, join(cacheDir, "acme__widgets", "Guide.md")) });
+    await expect(wiki.writePages(SLUG, [{ path: "Guide.md", text: "g" }], "docs")).rejects.toThrow(/link/);
+    expect(readFileSync(outside, "utf8")).toBe("precious");
   });
 });

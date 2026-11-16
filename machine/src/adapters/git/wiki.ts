@@ -1,8 +1,8 @@
 // The wiki adapter: a repository's GitHub wiki is a git repository (`<slug>.wiki.git`), so it is read and written with
 // host git and the person's own credentials, the way a clone reaches GitHub (application/pulls.ts). One cached checkout
 // per repository, synced to the remote's default branch before every call; calls on one slug run one at a time.
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 
 import { WikiError, type Wiki, type WikiPage } from "../../application/wiki.ts";
 import { exec } from "../process/exec.ts";
@@ -59,6 +59,22 @@ function markdownIn(root: string, dir = root): string[] {
   return found;
 }
 
+/** Refuses a page whose path runs through a link in the checkout: a link there, however it got in, would send the write outside
+ *  the checkout. A part that does not exist yet ends the walk, since nothing below it can be a link. */
+function refuseLinks(repo: string, path: string): void {
+  let at = repo;
+  for (const part of path.split("/")) {
+    at = join(at, part);
+    let link: boolean;
+    try {
+      link = lstatSync(at).isSymbolicLink();
+    } catch {
+      return;
+    }
+    if (link) throw new WikiError(`the wiki checkout holds a link at ${relative(repo, at)}: refusing to write through it`);
+  }
+}
+
 export function createWiki(options: WikiOptions): Wiki {
   const remoteOf = options.remoteOf ?? defaultRemote;
   const tails = new Map<string, Promise<unknown>>();
@@ -93,6 +109,8 @@ export function createWiki(options: WikiOptions): Wiki {
     } else {
       await gitOrThrow(repo, "remote", "set-url", "origin", remote);
     }
+    // A wiki is written by others: a link they push is checked out as a plain file, never followed by a write.
+    await gitOrThrow(repo, "config", "core.symlinks", "false");
     const head = await git(repo, "ls-remote", "--symref", "origin", "HEAD");
     if (head.code !== 0) {
       const why = whyOf(head);
@@ -144,9 +162,14 @@ export function createWiki(options: WikiOptions): Wiki {
         const { repo, branch } = await sync(slug);
         await options.afterSync?.(slug);
         for (const page of pages) {
+          refuseLinks(repo, page.path);
           const file = join(repo, page.path);
-          mkdirSync(dirname(file), { recursive: true });
-          writeFileSync(file, page.text);
+          try {
+            mkdirSync(dirname(file), { recursive: true });
+            writeFileSync(file, page.text);
+          } catch (error) {
+            throw new WikiError(`cannot write ${page.path} in the wiki of ${slug}: ${error instanceof Error ? error.message : String(error)}`);
+          }
         }
         const target = branch ?? "master";
         if (!branch) await gitOrThrow(repo, "symbolic-ref", "HEAD", `refs/heads/${target}`);
