@@ -34,7 +34,7 @@ describe("ConversationMachine.assess", () => {
     expect(out.triage.why).toContain("production_down");
     expect(out.classification).toMatchObject({ kind: "incident", by: "model", records: { assess: "rec-1" }, verdict: "ok" });
   });
-  it.each([["bug", "request"], ["request", "request"], ["question", "question"], ["fyi", "fyi"], ["chatter", "social"]])("maps the kind %s to the category %s", async (kind, category) => {
+  it.each([["bug", "request"], ["request", "request"], ["question", "question"], ["fyi", "fyi"], ["chatter", "social"], ["compliance_request", "compliance_request"]])("maps the kind %s to the category %s", async (kind, category) => {
     const out = await machine(async () => ({ answer: answer({ kind: { choice: kind, confidence: 0.95 }, production_down: { value: false, p: 0.05 } }) })).assess(row());
     expect(out.triage.category).toBe(category);
   });

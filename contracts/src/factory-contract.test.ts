@@ -8,7 +8,7 @@ import { AGENT_PACKS, NO_ACCESS, PACKS, PACK_LIMITS, PackId, StageOutput, answer
 
 /** A minimal instance of a JSON schema: every required property, the first enum value,
  *  one item per array (so item shapes such as findings get exercised). */
-const PATTERN_SAMPLES: Record<string, string> = { "^C\\d{1,3}$": "C1" };
+const PATTERN_SAMPLES: Record<string, string> = { "^C\\d{1,3}$": "C1", "^\\d{4}-\\d{2}-\\d{2}$": "2026-01-01" };
 
 function instance(schema: any): unknown {
   if (schema.const !== undefined) return schema.const;

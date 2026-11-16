@@ -104,6 +104,15 @@ export interface Slack {
   openDm(userId: string): Promise<string>;
   /** The websocket url for Socket Mode, from the app-level token. */
   openSocket(appToken: string): Promise<string>;
+  /** A shared text file (md, txt, csv; 1 MB at most) as text; any other file is refused. */
+  downloadFile(fileId: string): Promise<DownloadedFile>;
+}
+
+/** A file's name, mimetype and text content. */
+export interface DownloadedFile {
+  name: string;
+  mimetype: string;
+  text: string;
 }
 
 /** No user token is set: nothing can be read or posted. The reply route answers 409 `no_token`. */
@@ -131,6 +140,7 @@ export function noTokenSlack(): Slack {
     mark: refuse,
     openDm: refuse,
     openSocket: refuse,
+    downloadFile: refuse,
   };
 }
 

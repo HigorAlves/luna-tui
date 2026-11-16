@@ -41,7 +41,7 @@ describe("the triage_signals pack", () => {
 
   it("asks the diagram's signals: kind, type of work, ready, five sizes, five urgency sub-scores, preliminary risk, archive and why", () => {
     expect(Object.keys(pack.questions)).toEqual(["kind", "type_of_work", "ready", "size", "who", "what", "impact", "time", "demand", "risk_prelim", "archive", "archive_reason"]);
-    expect(Object.keys((pack.questions.kind as { criteria: object }).criteria)).toEqual(["bug", "feature", "task", "chore", "question", "incident"]);
+    expect(Object.keys((pack.questions.kind as { criteria: object }).criteria)).toEqual(["bug", "feature", "task", "chore", "question", "incident", "compliance_request"]);
     expect(Object.keys((pack.questions.type_of_work as { criteria: object }).criteria)).toEqual(["frontend", "backend", "infra", "data", "docs", "mixed"]);
     expect(Object.keys((pack.questions.size as { criteria: object }).criteria)).toEqual(["XS", "S", "M", "L", "XL"]);
     for (const q of ["who", "what", "impact", "time", "demand"]) expect(Object.keys((pack.questions[q] as { rubric: object }).rubric)).toHaveLength(3);
@@ -541,5 +541,39 @@ describe("the fact_propose agent pack", () => {
     expect(ReviewingMemoryAnswer.safeParse({ ...base, factPromotions: [{ id: "a1b2c3d4e5f6", section: "Commands" }] }).success).toBe(true);
     expect(ReviewingMemoryAnswer.safeParse({ ...base, factPromotions: [{ id: "a1", section: "Elsewhere" }] }).success).toBe(false);
     expect(ReviewingMemoryAnswer.safeParse({ ...base, factPromotions: Array(11).fill({ id: "a1", section: "Commands" }) }).success).toBe(false);
+  });
+});
+
+describe("the breach_assess decision pack", () => {
+  it("asks seven questions about what an incident exposed, as typed answers", async () => {
+    const { PACKS, BreachAssessContext } = await import("./index.ts");
+    const pack = PACKS.breach_assess;
+    expect(pack.kind).toBe("decision");
+    expect(Object.keys(pack.questions)).toEqual(["personal_data", "phi", "eu_subjects", "br_subjects", "us_subjects", "us_elements", "subjects"]);
+    const yes = { value: true, p: 0.9 };
+    const answer = { personal_data: yes, phi: { value: false, p: 0.1 }, eu_subjects: yes, br_subjects: { value: false, p: 0.2 }, us_subjects: { value: false, p: 0.2 }, us_elements: { value: false, p: 0.2 }, subjects: { score: 1, confidence: 0.7 } };
+    expect(pack.answer.safeParse(answer).success).toBe(true);
+    expect(pack.answer.safeParse({ ...answer, subjects: { score: 3, confidence: 0.7 } }).success).toBe(false);
+    const ok = { title: "Export bucket public", severity: "high", service: "api", startedAt: "2026-11-16T10:00:00.000Z", timeline: [{ at: "2026-11-16T10:00:00.000Z", source: "jira", text: "Jira signal: bucket public" }], signals: [{ source: "jira", title: "Export bucket public", severity: "high", status: "open", summary: "Jira OPS-9 Incident, Open." }] };
+    expect(BreachAssessContext.safeParse(ok).success).toBe(true);
+    expect(BreachAssessContext.safeParse({ ...ok, timeline: Array.from({ length: 41 }, () => ok.timeline[0]) }).success).toBe(false);
+    expect(BreachAssessContext.safeParse({ ...ok, severity: "p0" }).success).toBe(false);
+  });
+});
+
+describe("the capacity_check decision pack", () => {
+  it("asks three questions about the coming week, as typed answers", async () => {
+    const { PACKS, CapacityContext } = await import("./index.ts");
+    const pack = PACKS.capacity_check;
+    expect(pack.kind).toBe("decision");
+    expect(Object.keys(pack.questions)).toEqual(["over_agent_capacity", "over_review_capacity", "at_risk"]);
+    const answer = { over_agent_capacity: { value: true, p: 0.8 }, over_review_capacity: { value: false, p: 0.2 }, at_risk: { score: 1, confidence: 0.6 } };
+    expect(pack.answer.safeParse(answer).success).toBe(true);
+    expect(pack.answer.safeParse({ ...answer, at_risk: { score: 3, confidence: 0.6 } }).success).toBe(false);
+    const ok = { week: "2026-W47", backlog: [{ title: "Export CSV", repo: "acme/api", size: "M", wsjf: 2.5, state: "backlog" }], throughput: { closedPerWeek: [3, 4, 2, 5], reviewedPerWeek: [6, 5, 7, 4] }, headroom: [{ engine: "claude:sonnet", budgetLeftUsd: null, rateLimitedHours: 0 }] };
+    expect(CapacityContext.safeParse(ok).success).toBe(true);
+    expect(CapacityContext.safeParse({ ...ok, week: "2026-11" }).success).toBe(false);
+    expect(CapacityContext.safeParse({ ...ok, backlog: Array.from({ length: 31 }, () => ok.backlog[0]) }).success).toBe(false);
+    expect(CapacityContext.safeParse({ ...ok, throughput: { ...ok.throughput, closedPerWeek: [1, 2, 3, 4, 5] } }).success).toBe(false);
   });
 });

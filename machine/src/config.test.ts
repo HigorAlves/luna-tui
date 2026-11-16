@@ -51,10 +51,18 @@ describe("loadConfig", () => {
       publicUrl: null,
       groundTruth: true,
       economy: true,
+      complianceEvidence: true,
+      accessReview: true,
+      vulnTriage: true,
+      managerWikiRepo: null,
+      statusReport: { enabled: false, slackChannel: null, day: "monday" },
+      incidents: { enabled: true, slackChannel: null, jiraJql: "issuetype = Incident AND updated >= -1d", jiraProject: null },
       decisions: { enabled: true, retentionDays: 365, maxMb: 4096 },
       slack: null,
       slackInbox: { enabled: true, userToken: null, appToken: null, intervalMs: 60_000, markRead: false, rulesPath: expect.stringMatching(/\/\.local\/state\/hardness\/slack-triage\.md$/) as string, digestAt: null, scope: "opted_in" },
       jira: null,
+      sentry: null,
+      datadog: { apiKey: "", appKey: "", site: "datadoghq.com", scope: "" },
       sla: { gateSecs: 172_800, cycleSecs: null },
       sandboxPolicy: DEFAULT_MACHINE_POLICY,
     });
@@ -83,6 +91,32 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_INBOX_INTERVAL: "0" })).toThrow(/MACHINE_SLACK_INBOX_INTERVAL/);
     expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_DIGEST_AT: "8am" })).toThrow(/MACHINE_SLACK_DIGEST_AT/);
     expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_DIGEST_AT: "25:00" })).toThrow(/MACHINE_SLACK_DIGEST_AT/);
+  });
+
+  it("reads the Datadog keys, which go together, the site and the scope", () => {
+    expect(() => loadConfig({ HOME: "/h", MACHINE_DATADOG_API_KEY: "a" })).toThrow(/MACHINE_DATADOG_API_KEY and MACHINE_DATADOG_APP_KEY go together/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_DATADOG_APP_KEY: "b" })).toThrow(/go together/);
+    expect(loadConfig({ HOME: "/h", MACHINE_DATADOG_API_KEY: "a", MACHINE_DATADOG_APP_KEY: "b" }).datadog).toEqual({ apiKey: "a", appKey: "b", site: "datadoghq.com", scope: "" });
+    expect(loadConfig({ HOME: "/h", MACHINE_DATADOG_SITE: "https://api.datadoghq.eu", MACHINE_DATADOG_SCOPE: " env:prod team:payments " }).datadog).toEqual({ apiKey: "", appKey: "", site: "datadoghq.eu", scope: "env:prod team:payments" });
+    for (const [given, site] of [["app.datadoghq.eu", "datadoghq.eu"], ["api.us5.datadoghq.com", "us5.datadoghq.com"], ["https://app.datadoghq.com/", "datadoghq.com"], ["us3.datadoghq.com", "us3.datadoghq.com"]] as const) {
+      expect(loadConfig({ HOME: "/h", MACHINE_DATADOG_SITE: given }).datadog.site).toBe(site);
+    }
+  });
+
+  it("reads Sentry: a token and an org go together, projects and the url are optional", () => {
+    expect(loadConfig({ HOME: "/h" }).sentry).toBeNull();
+    expect(() => loadConfig({ HOME: "/h", MACHINE_SENTRY_TOKEN: "t" })).toThrow(/MACHINE_SENTRY_TOKEN and MACHINE_SENTRY_ORG go together/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_SENTRY_ORG: "acme" })).toThrow(/go together/);
+    expect(loadConfig({ HOME: "/h", MACHINE_SENTRY_TOKEN: " t ", MACHINE_SENTRY_ORG: "acme" }).sentry).toEqual({ token: "t", org: "acme", projects: [], url: "https://sentry.io" });
+    expect(loadConfig({ HOME: "/h", MACHINE_SENTRY_TOKEN: "t", MACHINE_SENTRY_ORG: "acme", MACHINE_SENTRY_PROJECTS: " web, api-gateway ,", MACHINE_SENTRY_URL: "https://sentry.acme.internal/" }).sentry).toEqual({
+      token: "t",
+      org: "acme",
+      projects: ["web", "api-gateway"],
+      url: "https://sentry.acme.internal",
+    });
+    expect(() => loadConfig({ HOME: "/h", MACHINE_SENTRY_TOKEN: "t", MACHINE_SENTRY_ORG: "acme/x" })).toThrow(/MACHINE_SENTRY_ORG/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_SENTRY_TOKEN: "t", MACHINE_SENTRY_ORG: "acme", MACHINE_SENTRY_PROJECTS: "web,bad slug" })).toThrow(/MACHINE_SENTRY_PROJECTS/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_SENTRY_TOKEN: "t", MACHINE_SENTRY_ORG: "acme", MACHINE_SENTRY_URL: "http://x" })).toThrow(/MACHINE_SENTRY_URL/);
   });
 
   it("resolves the state dir by one rule the evals' harvest shares", async () => {
@@ -130,6 +164,48 @@ describe("loadConfig", () => {
     });
     expect(() => loadConfig({ MACHINE_REPO_MAP: "o/a" })).toThrow(/MACHINE_REPO_MAP/);
     expect(() => loadConfig({ MACHINE_REPO_MAP: "oa=/r/a" })).toThrow(/MACHINE_REPO_MAP/);
+  });
+
+  it("reads the compliance settings: the monthly evidence job is on unless off, the manager wiki repo is optional and owner/name", () => {
+    expect(loadConfig({ HOME: "/h" }).complianceEvidence).toBe(true);
+    expect(loadConfig({ HOME: "/h", MACHINE_COMPLIANCE_EVIDENCE: "off" }).complianceEvidence).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_COMPLIANCE_EVIDENCE: "0" }).complianceEvidence).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_COMPLIANCE_EVIDENCE: "1" }).complianceEvidence).toBe(true);
+    expect(loadConfig({ HOME: "/h" }).accessReview).toBe(true);
+    expect(loadConfig({ HOME: "/h", MACHINE_ACCESS_REVIEW: "off" }).accessReview).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_ACCESS_REVIEW: "0" }).accessReview).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_ACCESS_REVIEW: "1" }).accessReview).toBe(true);
+    expect(loadConfig({ HOME: "/h", MACHINE_COMPLIANCE_EVIDENCE: "off" }).accessReview).toBe(true);
+    expect(loadConfig({ HOME: "/h" }).vulnTriage).toBe(true);
+    expect(loadConfig({ HOME: "/h", MACHINE_VULN_TRIAGE: "off" }).vulnTriage).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_VULN_TRIAGE: "0" }).vulnTriage).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_VULN_TRIAGE: "1" }).vulnTriage).toBe(true);
+    expect(loadConfig({ HOME: "/h" }).managerWikiRepo).toBeNull();
+    expect(loadConfig({ HOME: "/h", MACHINE_MANAGER_WIKI_REPO: " acme/handbook " }).managerWikiRepo).toBe("acme/handbook");
+    expect(() => loadConfig({ HOME: "/h", MACHINE_MANAGER_WIKI_REPO: "nope" })).toThrow(/MACHINE_MANAGER_WIKI_REPO/);
+  });
+
+  it("runs the weekly status report only with a home wiki, on Monday by default, off with MACHINE_STATUS_REPORT=off", () => {
+    expect(loadConfig({ HOME: "/h" }).statusReport).toEqual({ enabled: false, slackChannel: null, day: "monday" });
+    expect(loadConfig({ HOME: "/h", MACHINE_MANAGER_WIKI_REPO: "acme/home" }).statusReport).toEqual({ enabled: true, slackChannel: null, day: "monday" });
+    expect(loadConfig({ HOME: "/h", MACHINE_MANAGER_WIKI_REPO: "acme/home", MACHINE_STATUS_REPORT: "off" }).statusReport.enabled).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_MANAGER_WIKI_REPO: "acme/home", MACHINE_STATUS_REPORT: "0" }).statusReport.enabled).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_STATUS_REPORT: "on" }).statusReport.enabled).toBe(false);
+    const set = loadConfig({ HOME: "/h", MACHINE_MANAGER_WIKI_REPO: "acme/home", MACHINE_STATUS_SLACK_CHANNEL: " C0123ABC ", MACHINE_STATUS_REPORT_DAY: "Friday" }).statusReport;
+    expect(set).toEqual({ enabled: true, slackChannel: "C0123ABC", day: "friday" });
+    expect(() => loadConfig({ HOME: "/h", MACHINE_STATUS_SLACK_CHANNEL: "general" })).toThrow(/MACHINE_STATUS_SLACK_CHANNEL/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_STATUS_REPORT_DAY: "someday" })).toThrow(/MACHINE_STATUS_REPORT_DAY/);
+  });
+
+  it("reads the incident settings: on unless off, a Slack channel id, a JQL with a default, a Jira project for action items", () => {
+    const defaults = loadConfig({ HOME: "/h" }).incidents;
+    expect(defaults).toEqual({ enabled: true, slackChannel: null, jiraJql: "issuetype = Incident AND updated >= -1d", jiraProject: null });
+    expect(loadConfig({ HOME: "/h", MACHINE_INCIDENTS: "off" }).incidents.enabled).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_INCIDENTS: "0" }).incidents.enabled).toBe(false);
+    const set = loadConfig({ HOME: "/h", MACHINE_INCIDENT_SLACK_CHANNEL: " C0123ABC ", MACHINE_INCIDENT_JIRA_JQL: " project = OPS AND issuetype = Incident ", MACHINE_INCIDENT_JIRA_PROJECT: " OPS " }).incidents;
+    expect(set).toMatchObject({ slackChannel: "C0123ABC", jiraJql: "project = OPS AND issuetype = Incident", jiraProject: "OPS" });
+    expect(() => loadConfig({ HOME: "/h", MACHINE_INCIDENT_SLACK_CHANNEL: "#incidents" })).toThrow(/MACHINE_INCIDENT_SLACK_CHANNEL/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_INCIDENT_JIRA_PROJECT: "ops team" })).toThrow(/MACHINE_INCIDENT_JIRA_PROJECT/);
   });
 
   it("reads the GitHub poll settings", () => {

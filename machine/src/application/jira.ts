@@ -122,6 +122,17 @@ export interface Jira {
   createIssue(project: string, issueType: string, summary: string, descriptionMarkdown: string): Promise<{ key: string; url: string }>;
   /** Every status name the project's workflows use. */
   statuses(projectKey: string): Promise<JiraStatusName[]>;
+  /** The issue's attachments, as references. */
+  attachments(key: string): Promise<JiraAttachment[]>;
+  /** A text attachment (md, txt, csv; 1 MB at most) as text; any other file is refused. */
+  downloadAttachment(id: string): Promise<{ name: string; mimetype: string; text: string }>;
+}
+
+export interface JiraAttachment {
+  id: string;
+  name: string;
+  mimetype: string;
+  size: number;
 }
 
 /** A Jira key like `PLAT-123`, as a whole token. */
@@ -150,6 +161,8 @@ export function noTokenJira(): Jira {
     search: refuse,
     createIssue: refuse,
     statuses: refuse,
+    attachments: refuse,
+    downloadAttachment: refuse,
   };
 }
 

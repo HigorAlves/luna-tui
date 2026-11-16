@@ -4,6 +4,8 @@
 // An approve / request-changes verdict waits at the gate; `postVerdictRunner` posts it on `a`.
 import { PrReviewAnswer, type RequestedAction, type ReviewContext, type ReviewLinks } from "@hardness/contracts";
 
+import { type ComplianceDeps, runCompliance } from "./compliance-review.ts";
+import { addUsage } from "./usage.ts";
 import { type GitHub, type ReviewPost, messageOf } from "../github.ts";
 import type { Jira } from "../jira.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
@@ -14,6 +16,8 @@ export interface PrReviewDeps {
   github: GitHub;
   /** Runs the reviewing pack with what the host fetched. */
   runPack: (context: StageContext, review: ReviewContext) => Promise<StageResult>;
+  /** The compliance review beside this one, only when the machine has a wiki to read controls from; it runs when the repo declares regimes. */
+  compliance?: ComplianceDeps;
   /** The Jira port, only when Jira is configured: the tickets the PR names are read and the reviewer checks the diff against them. */
   jira?: Jira | null;
   /** The Jira projects the machine knows for a repo checkout; absent, or none, accepts any project key. */
@@ -124,7 +128,9 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     if (!parsed.success) {
       return { ...pack, outcome: "fail", detail: { ...pack.detail, error: `the review answer does not parse: ${parsed.error.message}` } };
     }
-    const answer = parsed.data;
+    // The compliance lead reads the same diff beside the reviewer; its findings join before the verdict, so a high one blocks. It never fails the review.
+    const compliance = deps.compliance ? await runCompliance(deps.compliance, context, pr.repo, review) : null;
+    const answer = compliance ? { ...parsed.data, summary: [parsed.data.summary, compliance.summary ? `Compliance: ${compliance.summary}` : ""].filter(Boolean).join(" "), findings: [...parsed.data.findings, ...compliance.findings], comments: [...parsed.data.comments, ...compliance.comments] } : parsed.data;
     // The verdict is the findings', never the model's (orc review-contract): any finding keeps a review from approving.
     const verdict = verdictOf(answer.findings);
 
@@ -134,7 +140,9 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       answer.comments.map((c) => ({ path: c.path, line: c.line, side: c.side, body: c.body })),
       answer.findings,
     );
-    const base = { ...pack, findings: answer.findings };
+    // The compliance sub-run's cost joins the review's, so the budget and the engine's counters see both.
+    const usage = addUsage(pack.usage, compliance?.usage);
+    const base = { ...pack, ...(usage ? { usage } : {}), findings: answer.findings };
     const reviewLinks = reviewLinksOf(links, review.tickets ?? []);
     const detail = {
       ...pack.detail,
@@ -144,7 +152,8 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       // What the review was linked to and how (key | fact | decision), and a suggestion that stayed under the bar.
       ...(reviewLinks ? { links: reviewLinks } : {}),
       verdict,
-      ...(answer.verdict !== verdict ? { modelVerdict: answer.verdict } : {}),
+      ...(compliance ? { compliance: { regimesRun: compliance.regimesRun, findings: compliance.findings.length, notes: compliance.notes } } : {}),
+      ...(parsed.data.verdict !== verdict ? { modelVerdict: parsed.data.verdict } : {}),
       posted: false,
       comments: comments.length,
       reason: "verdict",

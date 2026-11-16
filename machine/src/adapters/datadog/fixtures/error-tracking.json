@@ -1,0 +1,77 @@
+{
+  "data": [
+    {
+      "id": "sr-1",
+      "type": "error_tracking_search_result",
+      "attributes": { "total_count": 340, "impacted_sessions": 120, "impacted_users": 95 },
+      "relationships": { "issue": { "data": { "id": "9f3", "type": "issue" } } }
+    },
+    {
+      "id": "sr-2",
+      "type": "error_tracking_search_result",
+      "attributes": { "total_count": 4100, "impacted_sessions": 800, "impacted_users": 610 },
+      "relationships": { "issue": { "data": { "id": "a71", "type": "issue" } } }
+    },
+    {
+      "id": "sr-3",
+      "type": "error_tracking_search_result",
+      "attributes": { "total_count": 12, "impacted_sessions": 3, "impacted_users": 3 },
+      "relationships": { "issue": { "data": { "id": "b02", "type": "issue" } } }
+    }
+  ],
+  "included": [
+    {
+      "id": "9f3",
+      "type": "issue",
+      "attributes": {
+        "error_message": "Cannot read properties of undefined (reading 'id')",
+        "error_type": "TypeError",
+        "file_path": "src/cart/total.ts",
+        "function_name": "computeTotal",
+        "first_seen": 1759276800000,
+        "first_seen_version": "1.41.0",
+        "last_seen": 1761738480000,
+        "last_seen_version": "1.44.2",
+        "is_crash": false,
+        "languages": ["JAVASCRIPT"],
+        "platform": "BACKEND",
+        "regression": { "version": "1.44.0", "timestamp": 1761700000000 },
+        "service": "web",
+        "state": "OPEN"
+      }
+    },
+    {
+      "id": "a71",
+      "type": "issue",
+      "attributes": {
+        "error_message": "connection reset by peer",
+        "error_type": "IOError",
+        "file_path": "src/db/pool.ts",
+        "function_name": "acquire",
+        "first_seen": "2026-09-01T00:00:00Z",
+        "first_seen_version": "1.30.0",
+        "last_seen": "2026-10-29T11:59:00Z",
+        "last_seen_version": "1.44.2",
+        "is_crash": false,
+        "languages": ["JAVASCRIPT"],
+        "platform": "BACKEND",
+        "service": "billing",
+        "state": "RESOLVED"
+      }
+    },
+    {
+      "id": "b02",
+      "type": "issue",
+      "attributes": {
+        "error_message": "legacy widget failed",
+        "error_type": "WidgetError",
+        "first_seen": 1750000000000,
+        "last_seen": 1761000000000,
+        "is_crash": false,
+        "platform": "BROWSER",
+        "service": "web",
+        "state": "IGNORED"
+      }
+    }
+  ]
+}

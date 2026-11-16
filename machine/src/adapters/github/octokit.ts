@@ -6,10 +6,14 @@ import { Octokit } from "octokit";
 
 import { PR_QUERY, type PrNode, prFields } from "../../domain/pull-request.ts";
 import {
+  type AlertSeverity,
   type Check,
+  type CodeScanningAlert,
+  type DependabotAlert,
   type GhIssue,
   GitHubError,
   type GitHub,
+  type MergedPr,
   type NewPr,
   type PrActivity,
   type PrRef,
@@ -17,6 +21,9 @@ import {
   type OpenPrs,
   type PrSearchHit,
   type ReviewPost,
+  type RepoPermission,
+  type RuleBypass,
+  type RulesetBypassActor,
   repoRef,
 } from "../../application/github.ts";
 
@@ -40,8 +47,10 @@ export interface OctokitLike {
     repos: {
       get(params: Record<string, unknown>): Promise<{ data: { default_branch: string } }>;
       getCombinedStatusForRef(params: Record<string, unknown>): Promise<{ data: { statuses: Array<{ context: string; state: string; target_url: string | null }> } }>;
-      listReleases(params: Record<string, unknown>): Promise<{ data: Array<{ id: number; tag_name: string; html_url: string; draft?: boolean }> }>;
+      listReleases(params: Record<string, unknown>): Promise<{ data: Array<{ id: number; tag_name: string; html_url: string; draft?: boolean; published_at?: string | null }> }>;
       createRelease(params: Record<string, unknown>): Promise<{ data: { id: number; html_url: string } }>;
+      updateRelease(params: Record<string, unknown>): Promise<unknown>;
+      getLatestRelease(params: Record<string, unknown>): Promise<{ data: { tag_name: string; published_at: string | null } }>;
       listReleaseAssets: unknown;
       getContent(params: Record<string, unknown>): Promise<{ data: unknown }>;
       uploadReleaseAsset(params: Record<string, unknown>): Promise<{ data: { browser_download_url: string } }>;
@@ -100,6 +109,53 @@ async function call<T>(what: string, run: () => Promise<T>): Promise<T> {
     throw new GitHubError(`${what} failed${status ? ` (${status})` : ""}: ${message}`);
   }
 }
+
+const ORG_ID_QUERY = `query($org:String!){ organization(login:$org){ id } }`;
+/** Members asked about per GraphQL call, one alias each. */
+const ACTIVITY_BATCH = 10;
+
+/** The merged PRs of a window: the search page, with each PR's first page of reviews (the rest is read by node id). */
+const MERGED_PR_FIELDS = `id number title url body author{login} mergedBy{login} mergedAt mergeCommit{oid} baseRefName headRefName
+  commits(last:1){nodes{commit{oid}}} closingIssuesReferences(first:10){nodes{number url}}
+  reviews(first:100){nodes{author{login} state commit{oid} submittedAt} pageInfo{hasNextPage endCursor}}`;
+const MERGED_PRS_QUERY = `query($q:String!,$after:String){ search(query:$q, type:ISSUE, first:50, after:$after){ issueCount pageInfo{hasNextPage endCursor}
+  nodes{ ... on PullRequest{ ${MERGED_PR_FIELDS} } } } }`;
+const MORE_REVIEWS_QUERY = `query($id:ID!,$after:String){ node(id:$id){ ... on PullRequest{ reviews(first:100, after:$after){nodes{author{login} state commit{oid} submittedAt} pageInfo{hasNextPage endCursor}} } } }`;
+/** GitHub's search serves at most this many results of one query. */
+const SEARCH_CAP = 1000;
+
+interface ReviewNode {
+  author: { login: string } | null;
+  state: MergedPr["reviews"][number]["state"];
+  commit: { oid: string } | null;
+  submittedAt: string | null;
+}
+interface ReviewsPage {
+  nodes: ReviewNode[];
+  pageInfo: { hasNextPage: boolean; endCursor: string | null };
+}
+interface MergedPrNode {
+  id: string;
+  number: number;
+  title: string;
+  url: string;
+  body: string | null;
+  author: { login: string } | null;
+  mergedBy: { login: string } | null;
+  mergedAt: string;
+  mergeCommit: { oid: string } | null;
+  baseRefName: string;
+  headRefName: string;
+  commits: { nodes: Array<{ commit: { oid: string } }> };
+  closingIssuesReferences: { nodes: Array<{ number: number; url: string }> };
+  reviews: ReviewsPage;
+}
+interface MergedPrsAnswer {
+  search: { issueCount: number; pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: Array<MergedPrNode | null> };
+}
+
+const reviewOf = (r: ReviewNode): MergedPr["reviews"][number] => ({ author: r.author?.login ?? null, state: r.state, commitId: r.commit?.oid ?? null, submittedAt: r.submittedAt });
+const isoSecond = (ms: number): string => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
 
 /** One search page, and how many pages GitHub's search will serve (it stops at 1000 results). */
 const SEARCH_PAGE = 100;
@@ -175,8 +231,14 @@ export const slugFromRepositoryUrl = (url: string): string => url.replace(/^.*\/
 export const checkRunState = (run: { status: string; conclusion: string | null }): string =>
   run.status.toLowerCase() === "completed" ? (run.conclusion ?? "neutral").toUpperCase() : run.status.toUpperCase();
 
+/** What `time_period: "month"` of the rule-suites API covers, counted back from the call. */
+const RULE_SUITE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
 export class OctokitGitHub implements GitHub {
-  constructor(private readonly octokit: OctokitLike) {}
+  constructor(
+    private readonly octokit: OctokitLike,
+    private readonly now: () => Date = () => new Date(),
+  ) {}
 
   async viewer(): Promise<{ login: string; teams: string[] }> {
     const { data } = await call("reading the token's user", () => this.octokit.rest.users.getAuthenticated());
@@ -632,6 +694,236 @@ export class OctokitGitHub implements GitHub {
     await call(`marking ${slug}#${number} ready`, () => this.octokit.graphql(READY_MUTATION, { id }));
   }
 
+  async mergedPrs(slug: string, since: string, until: string): Promise<MergedPr[]> {
+    repoRef(slug);
+    const found = new Map<number, MergedPr>();
+    const read = async (from: string, to: string): Promise<void> => {
+      const q = `repo:${slug} is:pr is:merged merged:${from}..${to}`;
+      const nodes: MergedPrNode[] = [];
+      let after: string | null = null;
+      for (;;) {
+        const cursor: string | null = after;
+        const answer: MergedPrsAnswer = await call(`searching the PRs of ${slug} merged ${from}..${to}`, () => this.octokit.graphql<MergedPrsAnswer>(MERGED_PRS_QUERY, { q, after: cursor }));
+        // Past the cap the search drops the rest without saying so: read each half of the window on its own instead.
+        const [fromMs, toMs] = [Date.parse(from), Date.parse(to)];
+        if (answer.search.issueCount > SEARCH_CAP && toMs - fromMs >= 1000) {
+          const mid = Math.floor((fromMs + toMs) / 2000) * 1000;
+          await read(from, isoSecond(mid));
+          await read(isoSecond(mid + 1000), to);
+          return;
+        }
+        nodes.push(...answer.search.nodes.filter((n): n is MergedPrNode => n !== null && typeof n.number === "number"));
+        if (!answer.search.pageInfo.hasNextPage) break;
+        after = answer.search.pageInfo.endCursor;
+      }
+      for (const n of nodes) found.set(n.number, await this.mergedPrOf(n, slug));
+    };
+    await read(since, until);
+    return [...found.values()].sort((a, b) => (a.mergedAt < b.mergedAt ? -1 : a.mergedAt > b.mergedAt ? 1 : a.number - b.number));
+  }
+
+  private async mergedPrOf(n: MergedPrNode, slug: string): Promise<MergedPr> {
+    const reviews = n.reviews.nodes.map(reviewOf);
+    let page = n.reviews.pageInfo;
+    while (page.hasNextPage) {
+      const after = page.endCursor;
+      const more = await call(`reading the reviews of ${slug}#${n.number}`, () => this.octokit.graphql<{ node: { reviews: ReviewsPage } | null }>(MORE_REVIEWS_QUERY, { id: n.id, after }));
+      if (!more.node) break;
+      reviews.push(...more.node.reviews.nodes.map(reviewOf));
+      page = more.node.reviews.pageInfo;
+    }
+    return {
+      number: n.number,
+      title: n.title,
+      url: n.url,
+      body: n.body ?? "",
+      author: n.author?.login ?? null,
+      mergedBy: n.mergedBy?.login ?? null,
+      mergedAt: n.mergedAt,
+      mergeSha: n.mergeCommit?.oid ?? null,
+      baseRef: n.baseRefName,
+      headRef: n.headRefName,
+      headSha: n.commits.nodes[0]?.commit.oid ?? null,
+      closingIssues: n.closingIssuesReferences.nodes.map((i) => ({ number: i.number, url: i.url })),
+      reviews,
+    };
+  }
+
+  async ruleBypasses(slug: string, since: string, until: string): Promise<RuleBypass[] | "unknown"> {
+    const { owner, repo } = repoRef(slug);
+    // `time_period: "month"` reads back 30 days from now. A window that starts before that has a part the API cannot show: unknown, never "no bypass".
+    if (Date.parse(since) < this.now().getTime() - RULE_SUITE_WINDOW_MS) return "unknown";
+    type Row = { id: number; actor_name?: string | null; pushed_at?: string; ref?: string; after_sha?: string | null };
+    let rows: Row[];
+    try {
+      rows = await this.octokit.paginate<Row>("GET /repos/{owner}/{repo}/rulesets/rule-suites", { owner, repo, rule_suite_result: "bypass", time_period: "month", per_page: 100 });
+    } catch (error) {
+      const { status, message } = error as { status?: number; message?: string };
+      // A token without the right to read rule suites is a fact to report, not a failure.
+      if (status === 403 || status === 404) return "unknown";
+      throw new GitHubError(`listing the rule suites of ${slug} failed${status ? ` (${status})` : ""}: ${message ?? String(error)}`);
+    }
+    const [from, to] = [Date.parse(since), Date.parse(until)];
+    return rows
+      .filter((r) => r.pushed_at !== undefined && Date.parse(r.pushed_at) >= from && Date.parse(r.pushed_at) <= to)
+      .map((r) => ({ ref: r.ref ?? "", actor: r.actor_name ?? null, at: r.pushed_at ?? "", afterSha: r.after_sha ?? null, ruleSuiteId: r.id }));
+  }
+
+  async orgMembers(org: string): Promise<Array<{ login: string; role: "admin" | "member" }>> {
+    const out: Array<{ login: string; role: "admin" | "member" }> = [];
+    for (const role of ["admin", "member"] as const) {
+      const rows = await call(`listing the ${role} members of ${org}`, () => this.octokit.paginate<{ login: string }>("GET /orgs/{org}/members", { org, role, per_page: 100 }));
+      out.push(...rows.map((m) => ({ login: m.login, role })));
+    }
+    return out;
+  }
+
+  async outsideCollaborators(org: string): Promise<Array<{ login: string }>> {
+    const rows = await call(`listing the outside collaborators of ${org}`, () => this.octokit.paginate<{ login: string }>("GET /orgs/{org}/outside_collaborators", { org, per_page: 100 }));
+    return rows.map((m) => ({ login: m.login }));
+  }
+
+  async orgInvitations(org: string): Promise<Array<{ login: string | null; email: string | null; role: string; createdAt: string; inviter: string | null }>> {
+    type Row = { login?: string | null; email?: string | null; role: string; created_at: string; inviter?: { login: string } | null };
+    const rows = await call(`listing the invitations of ${org}`, () => this.octokit.paginate<Row>("GET /orgs/{org}/invitations", { org, per_page: 100 }));
+    return rows.map((r) => ({ login: r.login ?? null, email: r.email ?? null, role: r.role, createdAt: r.created_at, inviter: r.inviter?.login ?? null }));
+  }
+
+  async repoCollaborators(slug: string): Promise<Array<{ login: string; permission: RepoPermission; direct: boolean }>> {
+    const { owner, repo } = repoRef(slug);
+    type Row = { login: string; role_name?: string; permissions?: { admin?: boolean; maintain?: boolean; push?: boolean; triage?: boolean } };
+    const list = (affiliation: "all" | "direct") =>
+      call(`listing the ${affiliation} collaborators of ${slug}`, () => this.octokit.paginate<Row>("GET /repos/{owner}/{repo}/collaborators", { owner, repo, affiliation, per_page: 100 }));
+    const all = await list("all");
+    const direct = new Set((await list("direct")).map((r) => r.login));
+    const levels: RepoPermission[] = ["admin", "maintain", "write", "triage", "read"];
+    // A custom role has no name in the five; its strongest base permission stands for it.
+    const permissionOf = (r: Row): RepoPermission => {
+      const named = levels.find((l) => l === r.role_name);
+      if (named) return named;
+      const p = r.permissions ?? {};
+      return p.admin ? "admin" : p.maintain ? "maintain" : p.push ? "write" : p.triage ? "triage" : "read";
+    };
+    return all.map((r) => ({ login: r.login, permission: permissionOf(r), direct: direct.has(r.login) }));
+  }
+
+  async rulesetBypassActors(slug: string): Promise<RulesetBypassActor[] | "unknown"> {
+    const { owner, repo } = repoRef(slug);
+    type Detail = { name: string; bypass_actors?: Array<{ actor_id?: number | null; actor_type: string; bypass_mode?: string }> };
+    try {
+      const list = await this.octokit.paginate<{ id: number }>("GET /repos/{owner}/{repo}/rulesets", { owner, repo, per_page: 100 });
+      const out: RulesetBypassActor[] = [];
+      for (const { id } of list) {
+        const { data } = await this.octokit.request("GET /repos/{owner}/{repo}/rulesets/{ruleset_id}", { owner, repo, ruleset_id: id });
+        const ruleset = data as Detail;
+        // GitHub sends bypass_actors only to a caller with write access to the ruleset: absent is not "none".
+        if (ruleset.bypass_actors === undefined) return "unknown";
+        for (const a of ruleset.bypass_actors) out.push({ ruleset: ruleset.name, actorType: a.actor_type, actorId: a.actor_id ?? null, actorName: null, mode: a.bypass_mode ?? "always" });
+      }
+      return out;
+    } catch (error) {
+      const { status, message } = error as { status?: number; message?: string };
+      // A token without the right to read rulesets is a fact to report, not a failure.
+      if (status === 403 || status === 404) return "unknown";
+      throw new GitHubError(`reading the rulesets of ${slug} failed${status ? ` (${status})` : ""}: ${message ?? String(error)}`);
+    }
+  }
+
+  async adminsEnforced(slug: string, branch: string): Promise<boolean | "unknown"> {
+    const { owner, repo } = repoRef(slug);
+    try {
+      const { data } = await this.octokit.request("GET /repos/{owner}/{repo}/branches/{branch}/protection", { owner, repo, branch });
+      return (data as { enforce_admins?: { enabled?: boolean } } | null)?.enforce_admins?.enabled === true;
+    } catch (error) {
+      const { status, message } = error as { status?: number; message?: string };
+      // GitHub answers 404 "Branch not protected" for a branch with no protection: admins are not held to anything.
+      if (status === 404 && /not protected/i.test(message ?? "")) return false;
+      if (status === 403 || status === 404) return "unknown";
+      throw new GitHubError(`reading the protection of ${slug}@${branch} failed${status ? ` (${status})` : ""}: ${message ?? String(error)}`);
+    }
+  }
+
+  async memberActivity(org: string, logins: string[], since: string): Promise<Map<string, boolean>> {
+    const seen = new Map<string, boolean>();
+    if (logins.length === 0) return seen;
+    const { organization } = await call(`reading the id of ${org}`, () => this.octokit.graphql<{ organization: { id: string } | null }>(ORG_ID_QUERY, { org }));
+    if (!organization) throw new GitHubError(`reading the id of ${org} failed: GitHub does not show the organization`);
+    for (let i = 0; i < logins.length; i += ACTIVITY_BATCH) {
+      const batch = logins.slice(i, i + ACTIVITY_BATCH);
+      const params = batch.map((_, n) => `$l${n}:String!`).join(",");
+      const aliases = batch.map((_, n) => `a${n}:user(login:$l${n}){contributionsCollection(organizationID:$org,from:$since){hasAnyContributions}}`).join(" ");
+      const variables: Record<string, unknown> = { org: organization.id, since };
+      batch.forEach((login, n) => (variables[`l${n}`] = login));
+      const data = await call(`reading the activity of ${batch.length} members of ${org}`, () =>
+        this.octokit.graphql<Record<string, { contributionsCollection: { hasAnyContributions: boolean } } | null>>(`query($org:ID!,$since:DateTime!,${params}){ ${aliases} }`, variables),
+      );
+      batch.forEach((login, n) => seen.set(login, data[`a${n}`]?.contributionsCollection.hasAnyContributions === true));
+    }
+    return seen;
+  }
+
+  async dependabotAlerts(slug: string): Promise<DependabotAlert[] | "unknown"> {
+    type Row = {
+      number: number;
+      created_at: string;
+      html_url: string;
+      dependency?: { package?: { name?: string; ecosystem?: string }; manifest_path?: string };
+      security_advisory?: { ghsa_id?: string; cve_id?: string | null; summary?: string; severity?: string };
+      security_vulnerability?: { vulnerable_version_range?: string; first_patched_version?: { identifier?: string } | null };
+    };
+    const rows = await this.openAlerts<Row>(slug, "GET /repos/{owner}/{repo}/dependabot/alerts", "dependabot");
+    if (rows === "unknown") return rows;
+    return rows.map((r) => ({
+      number: r.number,
+      package: r.dependency?.package?.name ?? "",
+      ecosystem: r.dependency?.package?.ecosystem ?? "",
+      severity: alertSeverity(r.security_advisory?.severity),
+      manifestPath: r.dependency?.manifest_path ?? "",
+      vulnerableRange: r.security_vulnerability?.vulnerable_version_range ?? "",
+      patchedVersion: r.security_vulnerability?.first_patched_version?.identifier ?? null,
+      ghsa: r.security_advisory?.ghsa_id ?? "",
+      cve: r.security_advisory?.cve_id ?? null,
+      summary: r.security_advisory?.summary ?? "",
+      url: r.html_url,
+      createdAt: r.created_at,
+    }));
+  }
+
+  async codeScanningAlerts(slug: string): Promise<CodeScanningAlert[] | "unknown"> {
+    type Row = {
+      number: number;
+      created_at: string;
+      html_url: string;
+      rule?: { id?: string | null; severity?: string | null; security_severity_level?: string | null };
+      tool?: { name?: string | null };
+      most_recent_instance?: { location?: { path?: string } };
+    };
+    const rows = await this.openAlerts<Row>(slug, "GET /repos/{owner}/{repo}/code-scanning/alerts", "code-scanning");
+    if (rows === "unknown") return rows;
+    return rows.map((r) => ({
+      number: r.number,
+      rule: r.rule?.id ?? "",
+      // A security rule carries a level of its own; a plain lint rule only error, warning or note.
+      severity: alertSeverity(r.rule?.security_severity_level ?? r.rule?.severity),
+      tool: r.tool?.name ?? "",
+      path: r.most_recent_instance?.location?.path ?? "",
+      url: r.html_url,
+      createdAt: r.created_at,
+    }));
+  }
+
+  /** Every open alert of one kind; "unknown" when the token cannot read them (an alert feature that is off answers 404 as well). */
+  private async openAlerts<Row>(slug: string, route: string, what: string): Promise<Row[] | "unknown"> {
+    const { owner, repo } = repoRef(slug);
+    try {
+      return await this.octokit.paginate<Row>(route, { owner, repo, state: "open", per_page: 100 });
+    } catch (error) {
+      const { status, message } = error as { status?: number; message?: string };
+      if (status === 403 || status === 404) return "unknown";
+      throw new GitHubError(`listing the ${what} alerts of ${slug} failed${status ? ` (${status})` : ""}: ${message ?? String(error)}`);
+    }
+  }
+
   async prChecks(slug: string, ref: string): Promise<Check[]> {
     const { owner, repo } = repoRef(slug);
     const [runs, statuses] = await Promise.all([
@@ -704,6 +996,31 @@ export class OctokitGitHub implements GitHub {
     return rows.map((a) => ({ id: a.id, name: a.name, url: a.browser_download_url }));
   }
 
+  async updateReleaseBody(slug: string, releaseId: number, body: string): Promise<void> {
+    const { owner, repo } = repoRef(slug);
+    await call(`updating the body of release ${releaseId} of ${slug}`, () => this.octokit.rest.repos.updateRelease({ owner, repo, release_id: releaseId, body }));
+  }
+
+  async latestRelease(slug: string): Promise<{ tag: string; publishedAt: string } | null> {
+    const { owner, repo } = repoRef(slug);
+    try {
+      const { data } = await this.octokit.rest.repos.getLatestRelease({ owner, repo });
+      return data.published_at ? { tag: data.tag_name, publishedAt: data.published_at } : null;
+    } catch (error) {
+      const { status, message } = error as { status?: number; message?: string };
+      if (status === 404) return null;
+      throw new GitHubError(`reading the latest release of ${slug} failed${status ? ` (${status})` : ""}: ${message ?? String(error)}`);
+    }
+  }
+
+  async recentReleases(slug: string): Promise<Array<{ tag: string; publishedAt: string }>> {
+    const { owner, repo } = repoRef(slug);
+    const { data } = await call(`listing the releases of ${slug}`, () => this.octokit.rest.repos.listReleases({ owner, repo, per_page: 30 }));
+    return data
+      .flatMap((r) => (!r.draft && r.published_at ? [{ tag: r.tag_name, publishedAt: r.published_at }] : []))
+      .sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt));
+  }
+
   async uploadReleaseAsset(slug: string, releaseId: number, name: string, data: Buffer, contentType: string): Promise<{ url: string }> {
     const { owner, repo } = repoRef(slug);
     const { data: asset } = await call(`uploading ${name} to release ${releaseId}`, () =>
@@ -715,6 +1032,23 @@ export class OctokitGitHub implements GitHub {
   async rerunFailedJobs(slug: string, runId: string): Promise<void> {
     const { owner, repo } = repoRef(slug);
     await call(`re-running the failed jobs of run ${runId}`, () => this.octokit.rest.actions.reRunWorkflowFailedJobs({ owner, repo, run_id: Number(runId) }));
+  }
+}
+
+/** GitHub's severity word as the port has it: a plain rule's `error`, `warning` and `note` count as high, medium and low. */
+function alertSeverity(level: string | null | undefined): AlertSeverity {
+  switch (level) {
+    case "critical":
+      return "critical";
+    case "high":
+    case "error":
+      return "high";
+    case "medium":
+    case "moderate":
+    case "warning":
+      return "medium";
+    default:
+      return "low";
   }
 }
 

@@ -79,7 +79,7 @@ describe("delegate", () => {
     expect(delegatedHelpers(PACKS.reviewing, "claude")).toEqual([]);
     // A helper's engine follows the runtime: a second opinion on Claude's stage is Codex's, on eve's Claude's.
     expect(delegatedHelpers(PACKS.verifying, "claude")).toEqual([{ role: "second-opinion", engine: "codex:sol" }]);
-    expect(delegatedHelpers(PACKS.verifying, "eve")).toEqual([{ role: "second-opinion", engine: "claude:opus" }]);
+    expect(delegatedHelpers(PACKS.verifying, "eve")).toEqual([{ role: "second-opinion", engine: "claude:opus" }, { role: "migration-reviewer", engine: "claude:sonnet" }, { role: "iac-reviewer", engine: "claude:sonnet" }]);
     expect(delegatedHelpers(PACKS.triage, "claude")).toEqual([]);
     expect(delegatedHelpers(PACKS.triage, "eve")).toEqual([]);
     expect(delegatedHelpers(PACKS.triage_signals, "jev")).toEqual([]);

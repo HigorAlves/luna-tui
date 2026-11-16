@@ -37,7 +37,7 @@ import { fileStore as economyStore } from "./adapters/economy/store.ts";
 import { OVERHEAD_PACKS } from "./domain/economy/ledger.ts";
 import { DecisionTruth, tagged } from "./application/decision-truth.ts";
 import { priorityTruth, escalationTruthWriter, evidenceFeedbackWriter, groundTruthWriter, ticketTruthWriter } from "./application/ground-truth.ts";
-import { commitsSince, defaultBranchFile, gitIdentity, headCommit } from "./adapters/git/worktree.ts";
+import { commitsSince, defaultBranchFile, gitIdentity, headCommit, originSlugOf } from "./adapters/git/worktree.ts";
 import { ConfigProofs } from "./application/config-proofs.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
 import type { Decide } from "./application/stages/check-decide.ts";
@@ -72,6 +72,24 @@ import { SlaClocks } from "./application/sla.ts";
 import { createJiraTriager } from "./application/stages/jira-intake-runner.ts";
 import { PgPackRunStore } from "./adapters/persistence/pack-run-store.ts";
 import { MINUTE_MS, Ticker } from "./application/ticker.ts";
+import { ChangeEvidence } from "./application/change-evidence.ts";
+import { StatusReport } from "./application/status-report.ts";
+import { AccessReview, accessSlicesWriter } from "./application/access-review.ts";
+import { IncidentJob } from "./application/incidents.ts";
+import { mergeBreach } from "./domain/breach.ts";
+import type { Incident } from "./domain/incident.ts";
+import { postmortemWriter } from "./application/incident-postmortem.ts";
+import { jiraActionsWriter } from "./application/jira-actions.ts";
+import { breachAssessor } from "./application/breach-assessment.ts";
+import { breachCards } from "./application/breach-card.ts";
+import { createSentry } from "./adapters/sentry/rest.ts";
+import { createDatadog } from "./adapters/datadog/rest.ts";
+import { Vulns } from "./application/vulns.ts";
+import { ReleaseNotes, githubReleaseWriter } from "./application/release-notes.ts";
+import { ComplianceDrafts, publisher as compliancePublisher } from "./application/compliance-drafts.ts";
+import { sharedWiki } from "./adapters/git/wiki.ts";
+import { questionnaireWriters } from "./application/compliance-writers.ts";
+import { Questionnaires } from "./application/questionnaires.ts";
 import { graphifyGraph } from "./adapters/graph/graphify.ts";
 import { imageId, imageLabel, runSandbox } from "./adapters/docker/docker.ts";
 import { removeRunNetwork } from "./adapters/docker/egress.ts";
@@ -308,7 +326,7 @@ const stackDeps = {
 const jiraApi = config.jira ? createJira(config.jira) : noTokenJira();
 /** Ship's review-loop decisions run through PackRuns as the `ship` client: bound once it exists. */
 const shipDecisions: { decide: ShipDecide | null } = { decide: null };
-const { stubReason, real, resolveConflicts, verifyPack, checksExec, proofRig, agentDeps, shipGateProbe } = await buildRealStages(
+const { stubReason, real, resolveConflicts, verifyPack, checksExec, proofRig, agentDeps, shipGateProbe, compliance: complianceReview, docsDrift: docsDriftReview } = await buildRealStages(
   config,
   watcher,
   (taskId) => pipeline.latestStageFinish(taskId, "e2e"),
@@ -384,6 +402,10 @@ const keptFresh = { ...hostFreshWorkspace, keep: (path: string, taskId: string, 
 const realVerifyRunner = verifyRunner({
   exec: checksExec,
   runPack: verifyPack,
+  // The compliance lead reads Verify's change too, when the repo declares regimes; its wiki is the repo's own, by its origin's slug.
+  ...(complianceReview ? { compliance: { ...complianceReview, slugOf: originSlugOf } } : {}),
+  // The docs-keeper reads Verify's change too and names the docs it made stale, as nits.
+  ...(docsDriftReview ? { docsDrift: { ...docsDriftReview, slugOf: originSlugOf } } : {}),
   // Verify runs on a fresh clone at the head commit, never in the folder Build used.
   fresh: keptFresh,
   // A failing check is asked again on the base, in a throwaway clone: a failure that is there too is the environment's, not the card's.
@@ -601,7 +623,10 @@ const slackStore = new PgSlackStore(db);
 const slackSender = new SlackSender(slackApi);
 const conversationDrafts = new ConversationDrafts(new PgDraftStore(db), { expiryHours: (channel) => channelClaims.configOf(channel).conversation.draft_expiry_hours });
 const triager = agentDeps ? createSlackTriager({ ...agentDeps, store: slackStore }) : null;
+/** The questionnaire job is built with the compliance drafts below; the inbox reaches it through this. */
+let questionnaireJob: Questionnaires | null = null;
 const slackInbox = new SlackInbox({
+  onTriaged: (row) => questionnaireJob?.fromSlack(row),
   slack: slackApi,
   sender: slackSender,
   digest: config.slackInbox.digestAt !== null,
@@ -817,6 +842,160 @@ const knownRepos = async (): Promise<string[]> => {
   for (const task of await pipeline.list()) if (task.repoPath && !isTerminal(task.state)) known.push(task.repoPath);
   return [...new Set(known)];
 };
+/** The manager's drafts (RFC 0008): pages wait for a tap, and an approve writes them to the repository's wiki. The evidence job's one model call is the `change_exceptions` pack through PackRuns. */
+const complianceDrafts = new ComplianceDrafts({ stateDir: config.stateDir });
+// An approve a crash cut short left its draft in `posting`, which nothing takes back: put it back to waiting, as a failed approve would.
+void complianceDrafts.recoverPosting().then(
+  (count) => count > 0 && console.log(`compliance: ${count} draft(s) left posting by a restart are back to waiting`),
+  (error: unknown) => console.warn("compliance drafts: could not recover the drafts left posting", error),
+);
+const complianceRepos = async (): Promise<string[]> => {
+  const slugs = new Set([...config.githubPoll.repos, ...Object.keys(config.repoMap)]);
+  for (const path of await knownRepos()) {
+    const slug = await originSlugOf(path).catch(() => null);
+    if (slug) slugs.add(slug);
+  }
+  return [...slugs];
+};
+const changeEvidence = new ChangeEvidence({
+  github,
+  drafts: complianceDrafts,
+  explain: async (exceptions) => {
+    if (!packRuns) throw new Error("agents are off: no model to explain the exceptions");
+    return (await ownCalls(packRuns).run({ pack: "change_exceptions", context: { exceptions } }, INTAKE_CLIENT)).answer;
+  },
+  repos: complianceRepos,
+  vulns: { list: () => vulns.list() },
+  stateDir: config.stateDir,
+});
+const accessReview = new AccessReview({
+  github,
+  drafts: complianceDrafts,
+  suggest: async (access) => {
+    if (!packRuns) throw new Error("agents are off: no model to suggest the access decisions");
+    return (await ownCalls(packRuns).run({ pack: "access_review", context: { access } }, INTAKE_CLIENT)).answer;
+  },
+  repos: complianceRepos,
+  managerWikiRepo: config.managerWikiRepo,
+  stateDir: config.stateDir,
+});
+const wiki = sharedWiki(config.stateDir);
+/** Incidents (RFC 0008, wave 5): each source the person configured is asked every 5 minutes; one with no credential or setting is left out. */
+const incidentSources = {
+  sentry: config.sentry ? createSentry(config.sentry) : undefined,
+  datadog: config.datadog.apiKey ? { port: createDatadog(config.datadog), scope: config.datadog.scope } : undefined,
+  jira: config.jira ? { port: jiraApi, jql: config.incidents.jiraJql } : undefined,
+  slack: config.incidents.slackChannel && config.slackInbox.userToken ? { port: slackApi, channel: config.incidents.slackChannel } : undefined,
+};
+/** The breach assessment runs when an incident starts and again when it resolves, the answer may change; a failed one is kept on the incident as its error. */
+const assessBreach = breachAssessor({
+  decide: async (breach) => {
+    if (!packRuns) throw new Error("agents are off: no model to assess the breach");
+    return (await ownCalls(packRuns).run({ pack: "breach_assess", context: { breach } }, INTAKE_CLIENT)).answer;
+  },
+});
+/** An assessment that finds a regime opens the incident's one breach card, so the clocks are on the board. */
+const breachCard = breachCards({ pipeline, update: (id, patch) => incidentJob.update(id, patch) });
+const reassess = async (incident: Incident): Promise<Incident> => {
+  const assessed = (await incidentJob.update(incident.id, { breach: mergeBreach(incident.breach, await assessBreach(incident), new Date().toISOString()) })) ?? incident;
+  return breachCard(assessed);
+};
+/** On resolve, with the fresh assessment, the postmortem pack writes the page and a draft waits for the person. */
+const writePostmortem = postmortemWriter({
+  drafts: complianceDrafts,
+  write: async (postmortem) => {
+    if (!packRuns) throw new Error("agents are off: no model to write the postmortem");
+    return (await ownCalls(packRuns).run({ pack: "postmortem", context: { postmortem } }, INTAKE_CLIENT)).answer;
+  },
+  wikiRepo: config.managerWikiRepo,
+  // With no Jira the writer holds the no-token port, and approve would fail on the action items after the wiki page: they stay on the page.
+  jiraProject: config.jira ? config.incidents.jiraProject : null,
+});
+if (config.incidents.jiraProject && !config.jira) console.warn("incidents: MACHINE_INCIDENT_JIRA_PROJECT is set but Jira is not configured, so the postmortem action items stay on the page");
+const incidentJob: IncidentJob = new IncidentJob({
+  stateDir: config.stateDir,
+  ...incidentSources,
+  onStarted: async (incident) => void (await reassess(incident)),
+  onResolved: async (incident) => void (await reassess(incident)),
+  // The job runs the postmortem (right after the resolve, then retried hourly, 3 tries) with the stored, reassessed incident.
+  postmortem: { has: async (id) => (await complianceDrafts.get(`postmortem:${id}`)) !== null, run: async (incident) => (await writePostmortem(incident)) !== null },
+});
+const questionnaires = new Questionnaires({
+  slack: slackApi,
+  jira: jiraApi,
+  wiki: wiki,
+  drafts: complianceDrafts,
+  run: async (questionnaire) => {
+    if (!packRuns) throw new Error("agents are off: no model to answer the questionnaire");
+    return (await ownCalls(packRuns).run({ pack: "questionnaire", context: { questionnaire } }, INTAKE_CLIENT)).answer;
+  },
+  repos: complianceRepos,
+  defaultRepo: config.managerWikiRepo ?? null,
+  stateDir: config.stateDir,
+});
+questionnaireJob = questionnaires;
+/** Alerts become cards: the `vuln_triage` pack reads each new one with the repository's policy page. */
+const vulns = new Vulns({
+  github,
+  wiki,
+  triage: async (context) => {
+    if (!packRuns) throw new Error("agents are off: no model to triage the alert");
+    return (await ownCalls(packRuns).run({ pack: "vuln_triage", context: { vulns: context } }, INTAKE_CLIENT)).answer;
+  },
+  pipeline,
+  repos: complianceRepos,
+  repoPathOf: async (slug) => {
+    for (const path of await knownRepos()) if ((await originSlugOf(path).catch(() => null)) === slug) return path;
+    return null;
+  },
+  stateDir: config.stateDir,
+});
+/** Release notes, on demand: the `release_notes` pack drafts them, and an approve sets the body of the release. */
+const releaseNotes = new ReleaseNotes({
+  github,
+  drafts: complianceDrafts,
+  write: async (context) => {
+    if (!packRuns) throw new Error("agents are off: no model to write the release notes");
+    return (await ownCalls(packRuns).run({ pack: "release_notes", context: { release: context } }, INTAKE_CLIENT)).answer;
+  },
+});
+/** The weekly status for leadership (RFC 0008, wave 7): the previous week's facts, read in-process, go through `capacity_check` and `status_report`; the page waits as a draft. Built whenever the home wiki is set, so the route works with the weekly job off. */
+const statusReport = config.managerWikiRepo
+  ? new StatusReport({
+      drafts: complianceDrafts,
+      tasks: () => pipeline.list(),
+      metrics: async (since, until) => computeMetrics(db, { since, until, slots: pipeline.slots, budget: { ...pipeline.budget, spentTodayUsd: await pipeline.spentTodayUsd() } }),
+      github,
+      incidents: incidentJob,
+      vulns,
+      backlog,
+      // Each engine's monthly budget left (null with no cap), and the hours the tasks now paused on a rate limit have waited, on the engine of the stage they resume at.
+      headroom: async () => {
+        const standings = await engineBudgets.standings();
+        const paused = (await pipeline.list()).filter((t) => t.state === "paused_rate_limit");
+        return [...standings].map(([engine, s]) => ({
+          engine,
+          budgetLeftUsd: s.budgetUsd === null ? null : Math.max(0, Math.round((s.budgetUsd - s.spentThisMonthUsd) * 100) / 100),
+          rateLimitedHours: Math.round(paused.filter((t) => (t.stages as Record<string, string | undefined>)[t.resumeTo ?? "implementing"] === engine).reduce((sum, t) => sum + (t.stateSince ? Date.now() - t.stateSince.getTime() : 0), 0) / 360_000) / 10,
+        }));
+      },
+      assess: async (capacity) => {
+        if (!packRuns) throw new Error("agents are off: no model to check the capacity");
+        return (await ownCalls(packRuns).run({ pack: "capacity_check", context: { capacity } }, INTAKE_CLIENT)).answer;
+      },
+      write: async (status) => {
+        if (!packRuns) throw new Error("agents are off: no model to write the status report");
+        return (await ownCalls(packRuns).run({ pack: "status_report", context: { status } }, INTAKE_CLIENT)).answer;
+      },
+      repos: complianceRepos,
+      wikiRepo: config.managerWikiRepo,
+      // The post goes out as the person, with the Slack user token: with none, approve would fail on it, so the report is wiki only.
+      slackChannel: config.slackInbox.userToken ? config.statusReport.slackChannel : null,
+      day: config.statusReport.day,
+      stateDir: config.stateDir,
+    })
+  : null;
+const compliance = { questionnaires, drafts: complianceDrafts, publisher: compliancePublisher({ drafts: complianceDrafts, wiki, handlers: { access_slices: accessSlicesWriter({ wiki, stateDir: config.stateDir }), jira_actions: jiraActionsWriter({ jira: jiraApi, stateDir: config.stateDir }), github_release: githubReleaseWriter(github), ...questionnaireWriters({ wiki, sender: slackSender, jira: jiraApi, stateDir: config.stateDir }) } }), evidence: changeEvidence, access: accessReview, repos: complianceRepos, incidents: incidentJob, vulns, releaseNotes, ...(statusReport ? { status: statusReport } : {}) };
 /** A person approves the exact base the repository's luna.yaml (on the user's checkout) names now, or the exact key of the Dockerfile its devcontainer builds now; any other is refused. */
 const approveBase = async (repo: string, base: string): Promise<{ ok: true } | { ok: false; reason: string }> => {
   if (!agentDeps) return { ok: false, reason: "repository images are off on this machine" };
@@ -847,6 +1026,7 @@ const app = createApp({
   bus,
   backlog,
   tickets: ticketMachine,
+  compliance,
   watcher,
   stubs,
   pulls,
@@ -935,6 +1115,7 @@ if (config.jira) {
   jiraWatch.start();
   const jiraTriager = agentDeps ? createJiraTriager(agentDeps) : null;
   jiraIntake = new JiraIntake({
+    questionnaires,
     pipeline,
     jira: jiraApi,
     policies,
@@ -970,7 +1151,34 @@ if (graphTicker) {
   console.log("graph: off (MACHINE_GRAPH_INTERVAL=off or agents off); stages run without a code graph");
 }
 
+/** The monthly evidence job: a daily tick that builds the previous month once per repo (the cursor says which are done), and a first one shortly after boot. Never one long timer: Node clamps a delay over about 24.8 days to 1 ms. */
+const complianceTicker = config.complianceEvidence ? new Ticker(() => void changeEvidence.tick().catch((error: unknown) => console.warn("compliance evidence failed", error)), 24 * 60 * MINUTE_MS) : null;
+const complianceFirst = complianceTicker ? setTimeout(() => void changeEvidence.tick().catch((error: unknown) => console.warn("compliance evidence failed", error)), 2 * MINUTE_MS) : null;
+complianceFirst?.unref();
+complianceTicker?.start();
+console.log(complianceTicker ? "compliance: change-management evidence for each repo's previous month, checked daily; drafts wait in the Compliance view" : "compliance: monthly evidence off (MACHINE_COMPLIANCE_EVIDENCE=off); drafts still listed");
+/** The weekly status report: an hourly tick, since the cursor says whether the week is done and the job itself waits for its day and hour. */
+const statusTicker = config.statusReport.enabled && statusReport ? new Ticker(() => void statusReport.tick().catch((error: unknown) => console.warn("status report failed", error)), 60 * MINUTE_MS) : null;
+statusTicker?.start();
+console.log(statusTicker ? `status report: the previous week's report drafted on ${config.statusReport.day} from 08:00, checked hourly${config.statusReport.slackChannel && config.slackInbox.userToken ? ", summary to its Slack channel on approve" : config.statusReport.slackChannel ? ", wiki only (MACHINE_STATUS_SLACK_CHANNEL needs the Slack user token)" : ", wiki only (no MACHINE_STATUS_SLACK_CHANNEL)"}` : "status report: weekly job off (needs MACHINE_MANAGER_WIKI_REPO, and MACHINE_STATUS_REPORT is not off)");
+/** The quarterly access review: its own daily tick, since the cursor says which orgs are done with the quarter; it needs MACHINE_MANAGER_WIKI_REPO and says so once without it. */
+const accessTicker = config.accessReview ? new Ticker(() => void accessReview.tick().catch((error: unknown) => console.warn("compliance access review failed", error)), 24 * 60 * MINUTE_MS) : null;
+const accessFirst = accessTicker ? setTimeout(() => void accessReview.tick().catch((error: unknown) => console.warn("compliance access review failed", error)), 3 * MINUTE_MS) : null;
+accessFirst?.unref();
+accessTicker?.start();
+
+const incidentSourceNames = Object.entries(incidentSources).filter(([, v]) => v).map(([k]) => k);
+const incidentTicker = config.incidents.enabled && incidentSourceNames.length > 0 ? new Ticker(() => void incidentJob.tick().catch((error: unknown) => console.warn("incidents failed", error)), 5 * MINUTE_MS) : null;
+incidentTicker?.start();
+console.log(incidentTicker ? `incidents: reading ${incidentSourceNames.join(", ")} every 5 minutes` : "incidents: off (MACHINE_INCIDENTS=off, or no Sentry, Datadog, Jira or Slack channel configured)");
+
 /** The minute tick: a gate goes overdue, a stage passes 80% of its target, with no event to say so. */
+// Alerts are read every six hours, and once soon after boot; with no GitHub token every read refuses and the pass only logs.
+const vulnsTicker = config.vulnTriage ? new Ticker(() => void vulns.tick().catch((error: unknown) => console.warn("compliance vulns failed", error)), 6 * 60 * MINUTE_MS) : null;
+const vulnsFirst = vulnsTicker ? setTimeout(() => void vulns.tick().catch((error: unknown) => console.warn("compliance vulns failed", error)), 3 * MINUTE_MS) : null;
+vulnsFirst?.unref();
+vulnsTicker?.start();
+console.log(vulnsTicker ? "compliance: Dependabot and code-scanning alerts become cards with deadlines, checked every 6 hours" : "compliance: alert triage off (MACHINE_VULN_TRIAGE=off)");
 const slaTicker = new Ticker(() => {
   void pipeline
     .list()
@@ -1021,6 +1229,14 @@ async function shutdown(): Promise<void> {
   jiraIntake?.stop();
   slaTicker.stop();
   graphTicker?.stop();
+  complianceTicker?.stop();
+  incidentTicker?.stop();
+  vulnsTicker?.stop();
+  if (vulnsFirst) clearTimeout(vulnsFirst);
+  if (complianceFirst) clearTimeout(complianceFirst);
+  accessTicker?.stop();
+  statusTicker?.stop();
+  if (accessFirst) clearTimeout(accessFirst);
   pulls.stop();
   slackInbox.stop();
   socket?.stop();

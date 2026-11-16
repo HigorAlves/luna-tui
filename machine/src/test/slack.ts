@@ -28,6 +28,7 @@ const METHODS: Array<keyof Slack> = [
   "mark",
   "openDm",
   "openSocket",
+  "downloadFile",
 ];
 
 export function fakeSlack(answers: Partial<{ [K in keyof Slack]: Methods[K] }> = {}): FakeSlack {

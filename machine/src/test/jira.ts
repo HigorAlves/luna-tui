@@ -1,6 +1,6 @@
 // A fake Jira port for tests: a handful of issues in memory, the transitions each status
 // allows, and a record of every write. Reads answer from memory; writes change it.
-import { type Jira, type JiraIssue, JiraNotFoundError, type JiraTransition } from "../application/jira.ts";
+import { type Jira, JiraError, type JiraIssue, JiraNotFoundError, type JiraTransition } from "../application/jira.ts";
 
 export interface FakeJiraOptions {
   site?: string;
@@ -9,6 +9,8 @@ export interface FakeJiraOptions {
   transitions?: Record<string, JiraTransition[]>;
   /** Makes a call fail: the method name to the error it throws. */
   failing?: Partial<Record<keyof Jira, Error>>;
+  /** Attachments by issue key, with their text by id. */
+  attachments?: Record<string, Array<{ id: string; name: string; mimetype: string; text: string }>>;
   me?: { accountId: string; displayName: string; email: string | null; timeZone: string | null };
 }
 
@@ -113,6 +115,17 @@ export function fakeJira(options: FakeJiraOptions = {}): FakeJira {
       issues.set(key, issueOf({ key, summary, description, issueType }, site));
       fake.writes.push(["createIssue", project, issueType, summary, description]);
       return { key, url: `${site}/browse/${key}` };
+    },
+    async attachments(key) {
+      fail("attachments");
+      find(key);
+      return (options.attachments?.[key] ?? []).map((f) => ({ id: f.id, name: f.name, mimetype: f.mimetype, size: Buffer.byteLength(f.text) }));
+    },
+    async downloadAttachment(id) {
+      fail("downloadAttachment");
+      const file = Object.values(options.attachments ?? {}).flat().find((f) => f.id === id);
+      if (!file) throw new JiraError(`no attachment ${id}`, 404);
+      return { name: file.name, mimetype: file.mimetype, text: file.text };
     },
     async statuses() {
       fail("statuses");

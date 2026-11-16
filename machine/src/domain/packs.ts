@@ -72,6 +72,28 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   chat_triage: [],
   // The foreman, run on demand by POST /foreman.
   foreman: [],
+  // Change management's exception explainer, run on demand by the compliance job.
+  change_exceptions: [],
+  // The compliance lead, run by the PR review and by Verify as a sub-run when the repo declares a regime; never a stage of its own.
+  compliance_review: [],
+  // The quarterly access review, run on demand by the access review job.
+  access_review: [],
+  // The incident job asks it when an incident starts and when it resolves.
+  breach_assess: [],
+  // The weekly status job asks it before it writes the report.
+  capacity_check: [],
+  // The weekly status report, run on demand by its job.
+  status_report: [],
+  // Writes the postmortem when an incident resolves.
+  postmortem: [],
+  // The docs-drift note, run by Verify as a sub-run when the repo has docs; advisory and never a stage of its own.
+  docs_drift: [],
+  // The questionnaire drafter, run on demand by the questionnaire job.
+  questionnaire: [],
+  // The vulnerability triage, run on demand by the vulns job: one call for each new alert.
+  vuln_triage: [],
+  // The release writer, run on demand by POST /compliance/release-notes.
+  release_notes: [],
 };
 
 /** The task states in which the pipeline runs the pack. */

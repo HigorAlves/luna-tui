@@ -54,8 +54,8 @@ export type VariableKind = "machine" | "line" | "block";
 // Only what the machine alone writes (a constant, a count, an enum, a hash, a path it chose). Traced one by one: the checks and QA targets
 // are the repository's own text, the scenario tests and the video's narration and sheets carry names a model or a tool wrote, the coverage
 // report lists paths from a report the container wrote, and a classification holds labels a model answered: all foreign.
-const machine = ["agent", "attempt", "skills", "plan.risk", "context.plan.risk", "context.baseCommit", "context.testsCommit", "context.docsOnly", "context.unlockedTests.note", "context.browserScenarios", "context.plan.docsOnly", "context.graph", "context.chat.source", "context.jira.repoPath", "plan.fallback", "context.video.budgetS", "context.conversation.relation", "context.conversation.note", "context.foreman.now", "context.foreman.truncated", "context.foreman.packs"];
-const line = ["task.title", "task.branch", "task.goal", "task.classification", "context.jira.classification", "context.slack.me", "context.chat.me", "context.eval.pack", "context.eval.case"];
+const machine = ["agent", "attempt", "skills", "plan.risk", "context.plan.risk", "context.baseCommit", "context.testsCommit", "context.docsOnly", "context.unlockedTests.note", "context.browserScenarios", "context.plan.docsOnly", "context.graph", "context.chat.source", "context.jira.repoPath", "plan.fallback", "context.video.budgetS", "context.conversation.relation", "context.conversation.note", "context.foreman.now", "context.foreman.truncated", "context.foreman.packs", "context.exceptions.repo", "context.exceptions.period", "context.status.week", "context.status.from", "context.status.to", "context.status.metrics", "context.status.capacity", "context.vulns.repo", "context.vulns.today", "context.release.repo", "context.release.tag", "context.release.since", "context.compliance.repo", "context.questionnaire.repo", "context.compliance.regimes", "context.access.org", "context.access.period", "context.postmortem.breach", "context.docsDrift.repo", "context.questionnaire.source"];
+const line = ["task.title", "task.branch", "task.goal", "task.classification", "context.jira.classification", "context.slack.me", "context.chat.me", "context.questionnaire.requester", "context.questionnaire.name", "context.eval.pack", "context.eval.case"];
 const block = [
   "task.description", "task.criteria", "task.record", "task.evidence", "plan.brief", "plan.criteria", "plan.criteria.ids", "plan.assumptions", "plan.slices",
   "context.plan.map", "context.plan.shortlist", "context.plan.replan", "context.plan.coverageNotes", "context.plan.gaps", "context.plan.review", "context.plan.cases", "context.plan.council",
@@ -64,6 +64,10 @@ const block = [
   "context.video.scenarios", "context.video.steps", "context.video.chapters", "context.video.target", "context.video.timeline", "context.video.report", "context.video.transcript", "context.video.fixCards",
   "context.slack.watches", "context.slack.rules", "context.slack.items", "context.chat.rules", "context.chat.items",
   "context.foreman.question", "context.foreman.history", "context.foreman.cards", "context.foreman.pending",
+  "context.exceptions.controls", "context.exceptions.items", "context.vulns.alert", "context.vulns.policy", "context.release.prs", "context.status.shipped", "context.status.inFlight", "context.status.blocked", "context.status.merged", "context.status.compliance", "context.compliance.controls", "context.access.flags", "context.access.removed",
+  "context.postmortem.incident",
+  "context.docsDrift.changedFiles", "context.docsDrift.docFiles",
+  "context.questionnaire.markdown", "context.questionnaire.policies", "context.questionnaire.bank",
   "context.split", "context.jira.issue", "context.jira.description", "context.jira.comments", "context.intake", "context.ticket", "context.check", "context.propose", "context.factCandidates",
   "context.conversation.thread", "context.conversation.card", "context.conversation.evidence", "context.conversation.docs", "context.conversation.tone",
   "context.eval.rubric", "context.eval.input", "context.eval.checks", "context.eval.answer",
@@ -144,6 +148,34 @@ export const CAPS: Readonly<Record<string, number>> = {
   "context.foreman.history": 24_000,
   "context.foreman.cards": 32_000,
   "context.foreman.pending": 4_000,
+  // The explainer reads the controls and up to two hundred exceptions of about 2,400 characters each (a PR body is capped at 2,000).
+  "context.exceptions.controls": 2_000,
+  "context.exceptions.items": 480_000,
+  // One alert's fields, and the company's policy page (the context caps it at 12,000 characters).
+  "context.vulns.alert": 8_000,
+  "context.vulns.policy": 14_000,
+  // Up to two hundred PRs of about 2,400 characters each (a body is capped at 2,000).
+  "context.release.prs": 480_000,
+  // The week's facts: forty shipped and forty in flight at about 260 characters each, thirty reasons, forty repos, and the compliance lists (about 260 characters an entry, 140 entries at most).
+  "context.status.shipped": 12_000,
+  "context.status.inFlight": 12_000,
+  "context.status.blocked": 12_000,
+  "context.status.merged": 12_000,
+  "context.status.compliance": 48_000,
+  // The wiki's control pages: at most 200,000 characters of text (the context schema), and a heading line for each of at most 40.
+  "context.compliance.controls": 204_000,
+  // The access reviewer reads up to three hundred flags of about 1,200 characters each and the names that left since the last signed review.
+  "context.access.flags": 360_000,
+  "context.access.removed": 100_000,
+  // The postmortem reads one incident: up to a hundred timeline lines of 300 characters and twenty signals of 700.
+  "context.postmortem.incident": 64_000,
+  // The docs-drift lists: at most 500 changed and 200 doc paths, a few hundred characters each.
+  "context.docsDrift.changedFiles": 160_000,
+  "context.docsDrift.docFiles": 64_000,
+  // The drafter reads the file (100,000 characters at most), up to twenty policy pages of 12,000 and a hundred bank pages of 2,000, each with its path.
+  "context.questionnaire.markdown": 100_000,
+  "context.questionnaire.policies": 250_000,
+  "context.questionnaire.bank": 210_000,
   // The video packs.
   "context.video.scenarios": 200_000,
   "context.video.steps": 32_000,

@@ -3,6 +3,7 @@
 // the seam live in this repository; `factory-contract.test.ts` holds them together.
 import { z } from "zod";
 
+import { ChangeExceptionKind, ComplianceRegime } from "./compliance.ts";
 import { EconomyInput, ProposeContext } from "./economy.ts";
 import { EngineBudgets, EngineId } from "./engines.ts";
 import { EffortId } from "./models.ts";
@@ -19,6 +20,10 @@ export type StageOutcome = z.infer<typeof StageOutcome>;
 export const TaskSource = z.discriminatedUnion("kind", [
   /** `labels` are the issue's own at intake: the card keeps them so a `security` label still knocks the priority out to P0 when triage reads the signals again. */
   z.object({ kind: z.literal("github"), repo: z.string(), number: z.number().int(), url: z.string(), labels: z.array(z.string()).optional(), authorAssociation: z.string().optional() }),
+  /** A Dependabot or code-scanning alert a vulnerability card stands for. `alert` is the alert's own number, a count apart from issues and PRs: nothing reads it as `#N`. `labels` carry `security` for a critical one, as an issue's do. */
+  z.object({ kind: z.literal("github_alert"), repo: z.string(), alert: z.number().int(), tool: z.enum(["dependabot", "code_scanning"]), url: z.string(), labels: z.array(z.string()).optional() }),
+  /** The breach-notification card of an incident (`id` is the incident's own id). `labels` carry `security`, as an issue's do, so triage reads the card as P0. */
+  z.object({ kind: z.literal("incident"), id: z.string(), labels: z.array(z.string()).optional() }),
   z.object({
     kind: z.literal("github_pr"),
     repo: z.string(),
@@ -209,6 +214,28 @@ export const PackId = z.enum([
   "council_second",
   // The question council (run in triage before the person is asked): settles open questions from the code and the card, or says it cannot.
   "question_council",
+  // Explains why a merged PR missed a change-management control, from its title, body and the machine's facts; no tools, no worktree, on demand.
+  "change_exceptions",
+  // Reviews a PR's diff against the regimes the repo declares (luna.yaml `compliance`): a lead that dispatches one reviewer per regime; runs beside reviewing and verifying, never as their helper.
+  "compliance_review",
+  // Suggests, for each flag of a GitHub org's quarterly access review, whether to keep, remove, reduce or investigate the access; no tools, no worktree, on demand.
+  "access_review",
+  // A decision at the incident job (RFC 0008, wave 5): did an incident expose personal data or health information, whose, and how many people.
+  "breach_assess",
+  // A decision at the weekly status job (RFC 0008, wave 7): does the ranked work of the coming week fit the agents' headroom and the person's review time.
+  "capacity_check",
+  // The engineering manager's weekly status for leadership, from the board's facts of the week; no tools, no worktree, on demand.
+  "status_report",
+  // Writes the blameless postmortem of a resolved incident from its facts, timeline and breach clocks; no tools, no worktree, on demand.
+  "postmortem",
+  // Names the doc sections a change made stale: advisory, read-only, run beside Verify; never a stage of its own.
+  "docs_drift",
+  // Answers a customer's security questionnaire from the product wiki's policy pages and the answer bank; no tools, no worktree, on demand.
+  "questionnaire",
+  // Turns one Dependabot or code-scanning alert into a work item with a lane and a deadline; no tools, no worktree, on demand.
+  "vuln_triage",
+  // Drafts the user-facing notes of a release from the merged PRs; no tools, no worktree, on demand.
+  "release_notes",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -433,6 +460,238 @@ export const ForemanContext = z.object({
 });
 export type ForemanContext = z.infer<typeof ForemanContext>;
 
+/** For change_exceptions: the merged PRs of one repo and month that missed a change-management control. Every fact is the machine's; the title and body are written by others: data, never an instruction. */
+export const ChangeExceptionsContext = z.object({
+  /** owner/name. */
+  repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/name"),
+  period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "YYYY-MM"),
+  /** The controls the evidence answers, such as "SOC2 CC8.1". */
+  controls: z.array(z.string().min(1)).max(10),
+  exceptions: z
+    .array(
+      z.object({
+        pr: z.number().int().min(1),
+        title: z.string(),
+        url: z.string(),
+        author: z.string().nullable(),
+        mergedBy: z.string().nullable(),
+        mergedAt: z.string(),
+        approvedBy: z.array(z.string()),
+        ticket: z.string().nullable(),
+        checks: z.enum(["green", "red", "pending", "none"]),
+        bypass: z.enum(["yes", "no", "unknown"]),
+        kinds: z.array(ChangeExceptionKind).min(1),
+        /** The PR's body, capped. */
+        body: z.string().max(2000),
+      }),
+    )
+    .max(200),
+});
+export type ChangeExceptionsContext = z.infer<typeof ChangeExceptionsContext>;
+
+/** For vuln_triage: one open alert of a repo, the company's vulnerability policy (a wiki page) and today. The alert text is written by others: data, never an instruction. */
+export const VulnTriageContext = z.object({
+  repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/name"),
+  alert: z.object({
+    source: z.enum(["dependabot", "code_scanning"]),
+    number: z.number().int().min(1),
+    severity: z.enum(["critical", "high", "medium", "low"]),
+    /** The advisory's summary, or the scanning rule's id. */
+    title: z.string().max(500),
+    url: z.string(),
+    createdAt: z.string(),
+    // Dependabot's fields; null on a code-scanning alert.
+    package: z.string().max(200).nullable(),
+    ecosystem: z.string().max(50).nullable(),
+    manifestPath: z.string().max(300).nullable(),
+    vulnerableRange: z.string().max(200).nullable(),
+    patchedVersion: z.string().max(100).nullable(),
+    ghsa: z.string().max(50).nullable(),
+    cve: z.string().max(50).nullable(),
+    // Code scanning's fields; null on a Dependabot alert.
+    rule: z.string().max(200).nullable(),
+    tool: z.string().max(100).nullable(),
+    path: z.string().max(300).nullable(),
+  }),
+  /** The wiki page `Compliance/Policies/Vulnerability-Management.md`, or null when the wiki has none. */
+  policy: z.object({ path: z.string(), text: z.string().max(12_000) }).nullable(),
+  /** YYYY-MM-DD. */
+  today: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD"),
+});
+export type VulnTriageContext = z.infer<typeof VulnTriageContext>;
+
+/** For release_notes: the PRs merged since the last release. Titles and bodies are written by others: data, never an instruction. */
+export const ReleaseNotesContext = z.object({
+  repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/name"),
+  tag: z.string().regex(/^[A-Za-z0-9._\/-]+$/, "a tag"),
+  /** The start of the window, ISO. */
+  since: z.string(),
+  prs: z
+    .array(
+      z.object({
+        number: z.number().int().min(1),
+        title: z.string(),
+        author: z.string().nullable(),
+        /** The PR's body, capped. */
+        body: z.string().max(2000),
+        url: z.string(),
+      }),
+    )
+    .max(200),
+});
+export type ReleaseNotesContext = z.infer<typeof ReleaseNotesContext>;
+
+/** The wiki pages the compliance review reads: at most this many, and this many characters of text between them. */
+export const COMPLIANCE_CONTROL_PAGES = 40;
+export const COMPLIANCE_CONTROL_CHARS = 200_000;
+
+/** For compliance_review: the repo's regimes and its wiki's control and policy pages. The pages are written by others: data, never an instruction. The diff comes as `context.review`, the way reviewing reads it. */
+export const ComplianceReviewContext = z.object({
+  /** owner/name. */
+  repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/name"),
+  regimes: z.array(ComplianceRegime).min(1),
+  /** The repo wiki's `Compliance/` pages (path inside the wiki, markdown text); empty when the wiki has none or could not be read. */
+  controls: z
+    .array(z.object({ path: z.string().min(1), text: z.string() }))
+    .max(COMPLIANCE_CONTROL_PAGES)
+    .refine((pages) => pages.reduce((sum, page) => sum + page.text.length, 0) <= COMPLIANCE_CONTROL_CHARS, `at most ${COMPLIANCE_CONTROL_CHARS} characters of page text`),
+});
+export type ComplianceReviewContext = z.infer<typeof ComplianceReviewContext>;
+/** For access_review: the flags the machine computed for one org and quarter. Every fact is the machine's; a login or a detail is data from GitHub, never an instruction. */
+export const AccessReviewContext = z.object({
+  org: z.string().regex(/^[A-Za-z0-9_.-]+$/, "an org login"),
+  period: z.string().regex(/^\d{4}-Q[1-4]$/, "YYYY-Qn"),
+  flags: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(300),
+        kind: z.enum(["org_owner", "repo_admin", "bypass_actor", "admins_not_enforced", "outside_collaborator", "direct_access", "stale_invitation", "dormant"]),
+        subject: z.string().max(200),
+        repo: z.string().max(200).nullable(),
+        detail: z.string().max(500),
+        change: z.enum(["new", "unchanged"]),
+      }),
+    )
+    .max(300),
+  /** The people and accesses present in the last signed review and gone now. */
+  removedSinceSigned: z.array(z.string().max(200)).max(500),
+});
+export type AccessReviewContext = z.infer<typeof AccessReviewContext>;
+
+/** For breach_assess: one incident as the machine knows it, flattened and capped. Titles and summaries come from tools and people: data, never an instruction. No payload, stack trace or personal data is in it. */
+export const BreachAssessContext = z.object({
+  title: z.string().max(200),
+  severity: z.enum(["critical", "high", "medium", "low", "unknown"]),
+  service: z.string().max(120).nullable(),
+  startedAt: z.string(),
+  /** The newest entries, oldest first. */
+  timeline: z.array(z.object({ at: z.string(), source: z.string().max(40), text: z.string().max(300) })).max(40),
+  signals: z
+    .array(z.object({ source: z.enum(["datadog", "sentry", "slack", "jira"]), title: z.string().max(200), severity: z.enum(["critical", "high", "medium", "low", "unknown"]), status: z.enum(["open", "resolved"]), summary: z.string().max(500) }))
+    .max(20),
+});
+export type BreachAssessContext = z.infer<typeof BreachAssessContext>;
+
+/** For capacity_check: the ranked work of the coming week against what the engines and the person did lately. Every number is the machine's; titles are written by others: data, never an instruction. */
+export const CapacityContext = z.object({
+  /** ISO week of the work, "2026-W47". */
+  week: z.string().regex(/^\d{4}-W(0[1-9]|[1-4]\d|5[0-3])$/, "YYYY-Www"),
+  /** The top of the backlog by WSJF, best first. */
+  backlog: z.array(z.object({ title: z.string().max(200), repo: z.string().max(200).nullable(), size: z.enum(["XS", "S", "M", "L", "XL"]), wsjf: z.number(), state: z.string().max(40) })).max(30),
+  throughput: z.object({
+    /** Cards closed in each of the last four weeks, oldest first. */
+    closedPerWeek: z.array(z.number().min(0)).max(4),
+    /** PRs the person reviewed or approved in each of the last four weeks, oldest first. */
+    reviewedPerWeek: z.array(z.number().min(0)).max(4),
+  }),
+  /** What each engine has left: the budget (null when it has none to spend) and the hours it was rate limited lately. */
+  headroom: z.array(z.object({ engine: z.string().max(60), budgetLeftUsd: z.number().nullable(), rateLimitedHours: z.number().min(0) })).max(20),
+});
+export type CapacityContext = z.infer<typeof CapacityContext>;
+
+/** For status_report: one week's facts, all computed by the machine; titles and reasons are written by others: data, never an instruction. */
+export const StatusReportContext = z.object({
+  /** ISO week, "2026-W46". */
+  week: z.string().regex(/^\d{4}-W(0[1-9]|[1-4]\d|5[0-3])$/, "YYYY-Www"),
+  /** The Monday and the Sunday of the week, YYYY-MM-DD. */
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  metrics: z.object({
+    created: z.number().min(0),
+    closed: z.number().min(0),
+    open: z.number().min(0),
+    waitingOnYou: z.number().min(0),
+    /** Median hours from created to merged, for the cards merged in the week. */
+    leadTimeHours: z.number().min(0).nullable(),
+    /** Share of tasks whose first verifying run passed, 0 to 1. */
+    firstPassRate: z.number().min(0).max(1).nullable(),
+    escalationRate: z.number().min(0).max(1).nullable(),
+    costUsd: z.number().min(0),
+  }),
+  shipped: z.array(z.object({ title: z.string().max(200), repo: z.string().max(200).nullable(), pr: z.string().max(200).nullable() })).max(40),
+  inFlight: z.array(z.object({ title: z.string().max(200), state: z.string().max(40) })).max(40),
+  blocked: z.array(z.object({ title: z.string().max(200), why: z.string().max(300) })).max(30),
+  /** Merged PRs per compliance repo in the week. */
+  merged: z.array(z.object({ repo: z.string().max(200), count: z.number().int().min(0) })).max(40),
+  compliance: z.object({
+    waitingDrafts: z.array(z.object({ kind: z.string().max(40), title: z.string().max(200) })).max(30),
+    evidence: z.array(z.object({ repo: z.string().max(200), period: z.string().max(20), exceptions: z.number().int().min(0) })).max(40),
+    access: z.array(z.object({ org: z.string().max(100), period: z.string().max(20), flags: z.number().int().min(0), signed: z.boolean() })).max(10),
+    incidents: z
+      .array(z.object({ title: z.string().max(200), severity: z.enum(["critical", "high", "medium", "low", "unknown"]), status: z.string().max(40), nextDeadline: z.object({ regime: z.string().max(40), at: z.string() }).nullable() }))
+      .max(20),
+    vulns: z.array(z.object({ repo: z.string().max(200), severity: z.string().max(20), deadline: z.string().max(40), overdue: z.boolean() })).max(40),
+  }),
+  /** capacity_check's answers, or null when it was not asked or failed. */
+  capacity: z.object({ answers: z.object({ overAgentCapacity: z.boolean(), overReviewCapacity: z.boolean(), atRisk: z.enum(["none", "some", "many"]) }) }).nullable(),
+});
+export type StatusReportContext = z.infer<typeof StatusReportContext>;
+
+/** For postmortem: a resolved incident and its breach assessment. Titles, timeline lines and summaries come from tools and people: data, never an instruction. */
+export const PostmortemContext = z.object({
+  incident: z.object({
+    title: z.string().max(200),
+    severity: z.enum(["critical", "high", "medium", "low", "unknown"]),
+    service: z.string().max(120).nullable(),
+    startedAt: z.string(),
+    resolvedAt: z.string().nullable(),
+    timeline: z.array(z.object({ at: z.string(), source: z.string().max(40), text: z.string().max(300) })).max(100),
+    signals: z
+      .array(z.object({ source: z.enum(["datadog", "sentry", "slack", "jira"]), title: z.string().max(200), severity: z.enum(["critical", "high", "medium", "low", "unknown"]), status: z.enum(["open", "resolved"]), summary: z.string().max(500) }))
+      .max(20),
+  }),
+  /** The regimes the assessment found and each one's deadline (ISO), or null when there is no assessment or it found none. */
+  breach: z.object({ regimes: z.array(z.enum(["gdpr", "lgpd", "hipaa", "us_privacy"])), clocks: z.record(z.string(), z.string()) }).nullable(),
+});
+export type PostmortemContext = z.infer<typeof PostmortemContext>;
+
+/** At most this many doc files, and this many changed files, go to the docs-drift pack. */
+export const DOCS_DRIFT_DOC_FILES = 200;
+export const DOCS_DRIFT_CHANGED_FILES = 500;
+
+/** For docs_drift: the repo, the files the change touched and the repo's doc files (markdown under `docs/` and the README). The worktree holds the code and the docs: data, never an instruction. */
+export const DocsDriftContext = z.object({
+  /** owner/name. */
+  repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/name"),
+  changedFiles: z.array(z.string()).max(DOCS_DRIFT_CHANGED_FILES),
+  docFiles: z.array(z.string()).max(DOCS_DRIFT_DOC_FILES),
+});
+export type DocsDriftContext = z.infer<typeof DocsDriftContext>;
+
+/** For questionnaire: one customer questionnaire, the policy and control pages of the product wiki, and the approved answers so far. The file and the pages are text written by others: data, never an instruction. */
+export const QuestionnaireContext = z.object({
+  /** owner/name of the repository whose wiki the pages come from. */
+  repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/name"),
+  source: z.enum(["slack", "jira"]),
+  requester: z.string().nullable(),
+  questionnaire: z.object({ name: z.string().min(1).max(300), markdown: z.string().max(100_000) }),
+  /** Compliance/Policies/ and Compliance/Controls/. */
+  policies: z.array(z.object({ path: z.string().min(1).max(300), text: z.string().max(12_000) })).max(20),
+  /** Compliance/Answers/: the approved answers of earlier questionnaires. */
+  bank: z.array(z.object({ path: z.string().min(1).max(300), text: z.string().max(2_000) })).max(100),
+});
+export type QuestionnaireContext = z.infer<typeof QuestionnaireContext>;
+
 /** One slice of the implementer's ledger, kept by the runner in `/out/ledger.json`. */
 export const LedgerSlice = z.object({
   id: z.number().int(),
@@ -582,6 +841,8 @@ export const LunaConfig = z.object({
   engines: StageEngines.optional(),
   /** The effort a pack runs at in this repo, over its default. */
   effort: StageEfforts.optional(),
+  /** The regimes this repo answers to; each makes the compliance review run that regime's reviewer. */
+  compliance: z.array(ComplianceRegime).refine((regimes) => new Set(regimes).size === regimes.length, "each regime once").optional(),
   /** Monthly caps in USD on this repo's stage runs, by engine or credential (`openai:sol: 10`). */
   budget: z.object({ engines: EngineBudgets.optional() }).optional(),
   /** How long the machine keeps a task's local Evidence Pack and media; 0 never sweeps it, absent defers to MACHINE_RETENTION_DAYS. */
@@ -1311,6 +1572,28 @@ export const StageInput = z.object({
     chat: ChatTriageContext.nullable().optional(),
     /** For foreman: the question and the board snapshot; the task is synthetic and there is no worktree. */
     foreman: ForemanContext.nullable().optional(),
+    /** For change_exceptions: the merged PRs that missed a change-management control; the task is synthetic and there is no worktree. */
+    exceptions: ChangeExceptionsContext.nullable().optional(),
+    /** For compliance_review: the repo's regimes and its wiki's control pages; the diff is `review`. */
+    compliance: ComplianceReviewContext.nullable().optional(),
+    /** For access_review: the flags of one org's quarterly access review; the task is synthetic and there is no worktree. */
+    access: AccessReviewContext.nullable().optional(),
+    /** For breach_assess: the incident to assess; the task is synthetic and there is no worktree. */
+    breach: BreachAssessContext.nullable().optional(),
+    /** For capacity_check: the ranked work, the throughput and the engines' headroom; the task is synthetic and there is no worktree. */
+    capacity: CapacityContext.nullable().optional(),
+    /** For status_report: one week's facts; the task is synthetic and there is no worktree. */
+    status: StatusReportContext.nullable().optional(),
+    /** For postmortem: the resolved incident and its breach clocks; the task is synthetic and there is no worktree. */
+    postmortem: PostmortemContext.nullable().optional(),
+    /** For docs_drift: the repo, the change's files and the repo's doc files; the worktree is the change. */
+    docsDrift: DocsDriftContext.nullable().optional(),
+    /** For questionnaire: the customer questionnaire, the policy pages and the answer bank; the task is synthetic and there is no worktree. */
+    questionnaire: QuestionnaireContext.nullable().optional(),
+    /** For vuln_triage: one security alert and the company's policy; the task is synthetic and there is no worktree. */
+    vulns: VulnTriageContext.nullable().optional(),
+    /** For release_notes: the PRs merged since the last release; the task is synthetic and there is no worktree. */
+    release: ReleaseNotesContext.nullable().optional(),
     /** For question_council: the open triage questions to settle from the code, the card and the answers so far. */
     questions: QuestionsContext.nullable().optional(),
     /** For verifying: the files the code graph says depend on what the change touched, to review first. */

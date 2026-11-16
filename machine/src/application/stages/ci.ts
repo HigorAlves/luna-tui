@@ -8,6 +8,7 @@ import type { CiContext, DecisionOverrides, Finding } from "@hardness/contracts"
 import { at } from "../../adapters/git/machine-repo.ts";
 import { HOST_GIT, type GitExec, type RebaseResult, isBranchName, originSlugOf, rebaseOntoDefault, stackOf } from "../../adapters/git/worktree.ts";
 import { exec } from "../../adapters/process/exec.ts";
+import { FAILED_CHECK_STATES, PENDING_CHECK_STATES } from "../../domain/check-states.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { type Check, type GitHub, messageOf } from "../github.ts";
 import { alreadyMerged } from "./already-merged.ts";
@@ -54,8 +55,8 @@ export interface CiDeps {
   sleep?: (ms: number) => Promise<void>;
 }
 
-const PENDING = new Set(["PENDING", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED", "EXPECTED"]);
-const FAILED = new Set(["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE", "ACTION_REQUIRED", "STALE"]);
+const PENDING = PENDING_CHECK_STATES;
+const FAILED = FAILED_CHECK_STATES;
 
 const parentOf = async (cwd: string): Promise<string | null> => {
   const parent = await exec("git", [...HOST_GIT, ...at(cwd), "rev-parse", "--verify", "-q", "HEAD~1"]).catch(() => null);

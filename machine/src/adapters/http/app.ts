@@ -2,6 +2,9 @@
 // updates. Shapes are defined in @hardness/contracts.
 import {
   AnswersInput,
+  ComplianceActInput,
+  ComplianceEditInput,
+  ComplianceRepoInput,
   type ApiError,
   CloneInput,
   ArchiveInput,
@@ -63,6 +66,15 @@ import { type Context, Hono } from "hono";
 import type { Economy } from "../../application/economy.ts";
 import { economyMetrics } from "../../domain/economy/metrics.ts";
 import { type Backlog, BacklogItemNotFoundError, NotSchedulableError } from "../../application/backlog.ts";
+import type { ChangeEvidence } from "../../application/change-evidence.ts";
+import type { AccessReview } from "../../application/access-review.ts";
+import type { StatusReport } from "../../application/status-report.ts";
+import { isoWeek } from "../../domain/status-report.ts";
+import type { IncidentJob } from "../../application/incidents.ts";
+import type { Questionnaires } from "../../application/questionnaires.ts";
+import type { Vulns } from "../../application/vulns.ts";
+import type { ReleaseNotes } from "../../application/release-notes.ts";
+import { type ComplianceDrafts, type CompliancePublisher, DraftNeedsRepoError, DraftNotFoundError, DraftRefusedError, DraftStatusError, StaleDraftError } from "../../application/compliance-drafts.ts";
 import { type TicketMachine, TicketNotFound, TicketRefusal } from "../../application/ticket-machine.ts";
 import { streamSSE } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
@@ -128,6 +140,8 @@ export interface AppDeps {
   backlog?: Backlog;
   /** The Ticket Machine; without it the `/tickets` routes are absent. */
   tickets?: TicketMachine;
+  /** The manager's drafts (RFC 0008): the store, the publisher an approve goes through, the monthly evidence job, the quarterly access review, the incidents and the `owner/name` of every repo the machine knows. Without it the `/compliance` routes answer 503. */
+  compliance?: { drafts: ComplianceDrafts; publisher: CompliancePublisher; evidence: Pick<ChangeEvidence, "buildMonth">; repos: () => Promise<string[]>; access?: Pick<AccessReview, "orgs" | "buildQuarter">; incidents: Pick<IncidentJob, "list">; vulns?: Pick<Vulns, "list">; releaseNotes?: Pick<ReleaseNotes, "draft">; questionnaires?: Pick<Questionnaires, "rerun">; status?: Pick<StatusReport, "build"> };
   /** Closes a task's herdr watch tab when it is deleted; closing it on `closed` is main.ts's job. */
   watcher?: Watcher;
   /** Enables `POST /dev/stubs` when the stub stages are in use. */
@@ -174,6 +188,15 @@ export interface AppDeps {
 const ForemanInput = z.object({ question: ForemanContext.shape.question, history: ForemanContext.shape.history.optional() });
 
 class BadRequest extends Error {}
+
+const ReleaseNotesRunInput = z.object({
+  repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/name"),
+  tag: z.string().regex(/^[A-Za-z0-9._\/-]+$/, "a tag"),
+  since: z.string().datetime().optional(),
+});
+const EvidenceRunInput = z.object({ repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/name"), period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "YYYY-MM") });
+const StatusRunInput = z.object({ week: z.string().regex(/^\d{4}-W(0[1-9]|[1-4]\d|5[0-3])$/, "an ISO week like 2026-W46").optional() });
+const AccessRunInput = z.object({ org: z.string().regex(/^[A-Za-z0-9-]+$/, "a GitHub org") });
 
 /** The window of a repo's own runs that a config proposal reads. */
 const SIGNAL_DAYS = 30;
@@ -222,7 +245,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], clock = () => new Date(), problems: problemsOf, sandboxPolicy }: AppDeps): Hono {
+export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, compliance, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], clock = () => new Date(), problems: problemsOf, sandboxPolicy }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -237,6 +260,11 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     if (error instanceof TaskBusyError) return fail(c, 409, "task_busy", error.message);
     if (error instanceof WorktreeUnpushedError) return fail(c, 409, "unpushed_commits", error.message);
     if (error instanceof IdempotencyConflictError) return c.json<ApiError>({ error: "idempotency_conflict", message: error.message, taskId: error.taskId }, 409);
+    if (error instanceof StaleDraftError) return fail(c, 409, "stale_draft", error.message);
+    if (error instanceof DraftStatusError) return fail(c, 409, "draft_not_waiting", error.message);
+    if (error instanceof DraftNotFoundError) return fail(c, 404, "not_found", error.message);
+    if (error instanceof DraftRefusedError) return fail(c, 422, "secret", error.message);
+    if (error instanceof DraftNeedsRepoError) return fail(c, 422, "needs_repository", error.message);
     if (error instanceof TicketNotFound) return fail(c, 404, "not_found", error.message);
     if (error instanceof TicketRefusal) return fail(c, 409, "ticket_refused", error.message);
     if (error instanceof BacklogItemNotFoundError) return fail(c, 404, "not_found", error.message);
@@ -684,6 +712,58 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
       const id = itemId(c);
       await backlog.decline(id);
       return c.json({ id });
+    });
+  }
+
+  {
+    // The manager's drafts: the board's Compliance view lists them and taps them. The id holds `:` and `/`, which the board percent-encodes; Hono decodes the segment.
+    const off = (c: Context) => fail(c, 503, "compliance_off", "this machine has no compliance drafts");
+    const id = (c: Context): string => c.req.param("id") ?? "";
+    app.get("/compliance/incidents", async (c) => (compliance ? c.json({ incidents: await compliance.incidents.list() }) : off(c)));
+    app.get("/compliance/drafts", async (c) => (compliance ? c.json({ drafts: await compliance.drafts.list() }) : off(c)));
+    app.post("/compliance/drafts/:id/approve", async (c) => (compliance ? c.json(await compliance.publisher.approve(id(c), (await body(c, ComplianceActInput)).hash, "board", tapOf("POST /compliance/drafts/:id/approve"))) : off(c)));
+    app.post("/compliance/drafts/:id/edit", async (c) => {
+      if (!compliance) return off(c);
+      const { hash, text } = await body(c, ComplianceEditInput);
+      return c.json(await compliance.drafts.edit(id(c), hash, text, "board"));
+    });
+    app.post("/compliance/drafts/:id/ignore", async (c) => (compliance ? c.json(await compliance.drafts.ignore(id(c), (await body(c, ComplianceActInput)).hash, "board")) : off(c)));
+    app.get("/compliance/repos", async (c) => (compliance ? c.json({ repos: await compliance.repos() }) : off(c)));
+    // A questionnaire answered again from another repository's wiki.
+    app.post("/compliance/drafts/:id/repo", async (c) => {
+      if (!compliance?.questionnaires) return off(c);
+      const { repo } = await body(c, ComplianceRepoInput);
+      if (!(await compliance.repos()).includes(repo)) return fail(c, 400, "unknown_repository", "the machine does not know that repository");
+      return c.json(await compliance.questionnaires.rerun(id(c), repo));
+    });
+    // The security alerts a card stands for, with each one's lane, deadline and whether it is overdue.
+    app.get("/compliance/vulns", async (c) => (compliance?.vulns ? c.json({ alerts: await compliance.vulns.list() }) : off(c)));
+    // Release notes for a tag, drafted from the PRs merged since the last release (or `since`); the person approves them onto the release.
+    app.post("/compliance/release-notes", async (c) => {
+      if (!compliance?.releaseNotes) return off(c);
+      const { repo, tag, since } = await body(c, ReleaseNotesRunInput);
+      if (!(await compliance.repos()).includes(repo)) return fail(c, 400, "unknown_repository", "the machine does not know that repository");
+      return c.json(await compliance.releaseNotes.draft({ repo, tag, ...(since ? { since } : {}) }));
+    });
+    // An on-demand rebuild of a month, for testing a past one: the same draft the monthly job opens.
+    app.post("/compliance/evidence/run", async (c) => {
+      if (!compliance) return off(c);
+      const { repo, period } = await body(c, EvidenceRunInput);
+      if (!(await compliance.repos()).includes(repo)) return fail(c, 400, "unknown_repository", "the machine does not know that repository");
+      return c.json(await compliance.evidence.buildMonth(repo, period));
+    });
+    // An on-demand build of a week's status report (the previous week when none is named): the same draft the weekly job opens.
+    app.post("/compliance/status/run", async (c) => {
+      if (!compliance?.status) return off(c);
+      const { week } = await body(c, StatusRunInput);
+      return c.json(await compliance.status.build(week ?? isoWeek(new Date(Date.now() - 7 * 86_400_000))));
+    });
+    // An on-demand rebuild of the current quarter's access review: the same draft the quarterly job opens.
+    app.post("/compliance/access/run", async (c) => {
+      if (!compliance?.access) return off(c);
+      const { org } = await body(c, AccessRunInput);
+      if (!(await compliance.access.orgs()).includes(org)) return fail(c, 400, "unknown_org", "the machine has no compliance repository in that organization");
+      return c.json(await compliance.access.buildQuarter(org));
     });
   }
 

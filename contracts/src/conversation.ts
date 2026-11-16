@@ -38,7 +38,7 @@ export const ConversationRelationType = z.enum(["related_to_in_progress", "relat
 export type ConversationRelationType = z.infer<typeof ConversationRelationType>;
 
 /** What kind of thing a thread is: the first question of `conversation_assess`. */
-export const ConversationKind = z.enum(["incident", "bug", "request", "question", "fyi", "chatter"]);
+export const ConversationKind = z.enum(["incident", "bug", "request", "question", "fyi", "chatter", "compliance_request"]);
 export type ConversationKind = z.infer<typeof ConversationKind>;
 
 export interface ConversationClassification {

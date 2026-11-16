@@ -4,7 +4,7 @@ import { GitHubError } from "../../application/github.ts";
 import { OctokitGitHub, type OctokitLike, checkRunState, slugFromRepositoryUrl } from "./octokit.ts";
 
 /** An Octokit-shaped stub: each endpoint answers from `answers`, every call is recorded. */
-function stub(answers: Record<string, unknown>) {
+function stub(answers: Record<string, unknown>, now?: () => Date) {
   const calls: Array<[string, unknown]> = [];
   const endpoint = (name: string) =>
     vi.fn(async (params: unknown) => {
@@ -34,6 +34,8 @@ function stub(answers: Record<string, unknown>) {
         getCombinedStatusForRef: endpoint("repos.getCombinedStatusForRef"),
         listReleases: endpoint("repos.listReleases"),
         createRelease: endpoint("repos.createRelease"),
+        updateRelease: endpoint("repos.updateRelease"),
+        getLatestRelease: endpoint("repos.getLatestRelease"),
         listReleaseAssets: "repos.listReleaseAssets",
         getContent: endpoint("repos.getContent"),
         uploadReleaseAsset: endpoint("repos.uploadReleaseAsset"),
@@ -64,7 +66,7 @@ function stub(answers: Record<string, unknown>) {
       return answers[String(method)] as unknown[];
     }),
   } as unknown as OctokitLike;
-  return { github: new OctokitGitHub(octokit), calls };
+  return { github: new OctokitGitHub(octokit, now), calls };
 }
 
 const item = (repo: string, number: number) => ({ number, repository_url: `https://api.github.com/repos/${repo}`, updated_at: "t" });
@@ -736,5 +738,187 @@ describe("reviewRule", () => {
   it("protection with no required reviews is none", async () => {
     const { github } = stub({ [RULES]: [], [BRANCH]: { protected: true }, [PROTECTION]: { required_status_checks: {} } });
     expect(await github.reviewRule("o/a", "main")).toEqual({ source: "none" });
+  });
+});
+
+describe("mergedPrs", () => {
+  const node = (number: number, mergedAt: string, over: Record<string, unknown> = {}) => ({
+    id: `PR_${number}`,
+    number,
+    title: `t${number}`,
+    url: `https://github.com/o/a/pull/${number}`,
+    body: "body",
+    author: { login: "ann" },
+    mergedBy: { login: "bob" },
+    mergedAt,
+    mergeCommit: { oid: `m${number}` },
+    baseRefName: "main",
+    headRefName: `f${number}`,
+    commits: { nodes: [{ commit: { oid: `h${number}` } }] },
+    closingIssuesReferences: { nodes: [{ number: 7, url: "https://github.com/o/a/issues/7" }] },
+    reviews: { nodes: [{ author: { login: "cy" }, state: "APPROVED", commit: { oid: `h${number}` }, submittedAt: "2026-01-02T00:00:00Z" }], pageInfo: { hasNextPage: false, endCursor: null } },
+    ...over,
+  });
+  const page = (nodes: unknown[], issueCount = nodes.length, next: string | null = null) => ({ search: { issueCount, pageInfo: { hasNextPage: next !== null, endCursor: next }, nodes } });
+
+  it("maps a merged PR with its last commit, closing issues and reviews", async () => {
+    const { github, calls } = stub({ graphql: () => page([node(1, "2026-01-05T00:00:00Z")]) });
+    expect(await github.mergedPrs("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z")).toEqual([
+      {
+        number: 1,
+        title: "t1",
+        url: "https://github.com/o/a/pull/1",
+        body: "body",
+        author: "ann",
+        mergedBy: "bob",
+        mergedAt: "2026-01-05T00:00:00Z",
+        mergeSha: "m1",
+        baseRef: "main",
+        headRef: "f1",
+        headSha: "h1",
+        closingIssues: [{ number: 7, url: "https://github.com/o/a/issues/7" }],
+        reviews: [{ author: "cy", state: "APPROVED", commitId: "h1", submittedAt: "2026-01-02T00:00:00Z" }],
+      },
+    ]);
+    expect((calls[0]![1] as { variables: { q: string } }).variables.q).toBe("repo:o/a is:pr is:merged merged:2026-01-01T00:00:00Z..2026-01-31T23:59:59Z");
+  });
+
+  it("follows the cursor and returns the PRs oldest first", async () => {
+    const { github, calls } = stub({
+      graphql: (_q: string, v: { after: string | null }) => (v.after === null ? page([node(2, "2026-01-09T00:00:00Z")], 2, "c1") : page([node(1, "2026-01-05T00:00:00Z")], 2)),
+    });
+    const prs = await github.mergedPrs("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z");
+    expect(prs.map((p) => p.number)).toEqual([1, 2]);
+    expect(calls.map((c) => (c[1] as { variables: { after: string | null } }).variables.after)).toEqual([null, "c1"]);
+  });
+
+  it("splits the window in halves when the search hits its 1000 result cap", async () => {
+    const { github, calls } = stub({
+      graphql: (_q: string, v: { q: string }) =>
+        v.q.includes("2026-01-01T00:00:00Z..2026-01-31T23:59:59Z") ? page([], 1500) : v.q.includes("..2026-01-16T11:59:59Z") ? page([node(1, "2026-01-05T00:00:00Z")]) : page([node(2, "2026-01-20T00:00:00Z")]),
+    });
+    const prs = await github.mergedPrs("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z");
+    expect(prs.map((p) => p.number)).toEqual([1, 2]);
+    expect(calls.map((c) => (c[1] as { variables: { q: string } }).variables.q.split("merged:")[1])).toEqual([
+      "2026-01-01T00:00:00Z..2026-01-31T23:59:59Z",
+      "2026-01-01T00:00:00Z..2026-01-16T11:59:59Z",
+      "2026-01-16T12:00:00Z..2026-01-31T23:59:59Z",
+    ]);
+  });
+
+  it("reads the reviews past the first page of a PR", async () => {
+    const more = { author: { login: "dee" }, state: "COMMENTED", commit: null, submittedAt: null };
+    const { github } = stub({
+      graphql: (q: string) =>
+        q.includes("node(id")
+          ? { node: { reviews: { nodes: [more], pageInfo: { hasNextPage: false, endCursor: null } } } }
+          : page([node(1, "2026-01-05T00:00:00Z", { reviews: { nodes: [], pageInfo: { hasNextPage: true, endCursor: "r1" } } })]),
+    });
+    const [pr] = await github.mergedPrs("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z");
+    expect(pr!.reviews).toEqual([{ author: "dee", state: "COMMENTED", commitId: null, submittedAt: null }]);
+  });
+
+  it("says GitHub's words when the search fails", async () => {
+    const { github } = stub({ graphql: new Error("boom") });
+    await expect(github.mergedPrs("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z")).rejects.toBeInstanceOf(GitHubError);
+  });
+});
+
+describe("ruleBypasses", () => {
+  const SUITES = "GET /repos/{owner}/{repo}/rulesets/rule-suites";
+  const suite = (id: number, pushedAt: string) => ({ id, actor_name: "ann", pushed_at: pushedAt, ref: "refs/heads/main", after_sha: `a${id}`, result: "bypass" });
+  const denied = (status: number) => Object.assign(new Error("denied"), { status });
+  const failing = (status: number) => new OctokitGitHub({ paginate: vi.fn(async () => Promise.reject(denied(status))) } as unknown as OctokitLike, () => new Date("2026-01-25T00:00:00Z"));
+
+  it("keeps the bypasses inside the window, asking GitHub for bypass results", async () => {
+    const { github, calls } = stub({ [SUITES]: [suite(1, "2025-12-31T23:59:59Z"), suite(2, "2026-01-10T00:00:00Z"), suite(3, "2026-02-01T00:00:00Z")] }, () => new Date("2026-01-25T00:00:00Z"));
+    expect(await github.ruleBypasses("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z")).toEqual([{ ref: "refs/heads/main", actor: "ann", at: "2026-01-10T00:00:00Z", afterSha: "a2", ruleSuiteId: 2 }]);
+    expect(calls[0]![1]).toMatchObject({ owner: "o", repo: "a", rule_suite_result: "bypass", time_period: "month", per_page: 100 });
+  });
+
+  it("is unknown when the asked window starts before the month the API reads: a gap is not 'no bypass'", async () => {
+    const { github, calls } = stub({ [SUITES]: [] }, () => new Date("2026-02-10T00:00:00Z"));
+    expect(await github.ruleBypasses("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z")).toBe("unknown");
+    expect(calls).toEqual([]);
+    expect(await github.ruleBypasses("o/a", "2026-01-25T00:00:00Z", "2026-02-09T00:00:00Z")).toEqual([]);
+  });
+
+  it("is unknown when the token cannot read rule suites", async () => {
+    expect(await failing(403).ruleBypasses("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z")).toBe("unknown");
+    expect(await failing(404).ruleBypasses("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z")).toBe("unknown");
+  });
+
+  it("any other failure is a GitHubError", async () => {
+    await expect(failing(500).ruleBypasses("o/a", "2026-01-01T00:00:00Z", "2026-01-31T23:59:59Z")).rejects.toBeInstanceOf(GitHubError);
+  });
+});
+
+describe("security alerts", () => {
+  const DEPENDABOT = "GET /repos/{owner}/{repo}/dependabot/alerts";
+  const SCANNING = "GET /repos/{owner}/{repo}/code-scanning/alerts";
+  const denied = (status: number) => Object.assign(new Error("denied"), { status });
+  const failing = (status: number) => new OctokitGitHub({ paginate: vi.fn(async () => Promise.reject(denied(status))) } as unknown as OctokitLike);
+  const dependabot = {
+    number: 7,
+    created_at: "2026-11-01T00:00:00Z",
+    html_url: "https://x/security/dependabot/7",
+    dependency: { package: { name: "lodash", ecosystem: "npm" }, manifest_path: "pnpm-lock.yaml" },
+    security_advisory: { ghsa_id: "GHSA-aaaa", cve_id: "CVE-2026-1", summary: "Prototype pollution", severity: "high" },
+    security_vulnerability: { vulnerable_version_range: "< 4.17.21", first_patched_version: { identifier: "4.17.21" } },
+  };
+
+  it("lists the open Dependabot alerts, every page, in the shape the triage reads", async () => {
+    const { github, calls } = stub({ [DEPENDABOT]: [dependabot, { ...dependabot, number: 8, security_advisory: { ghsa_id: "GHSA-bbbb", cve_id: null, summary: "s", severity: "critical" }, security_vulnerability: { vulnerable_version_range: "< 2", first_patched_version: null } }] });
+    expect(await github.dependabotAlerts("o/a")).toEqual([
+      { number: 7, package: "lodash", ecosystem: "npm", severity: "high", manifestPath: "pnpm-lock.yaml", vulnerableRange: "< 4.17.21", patchedVersion: "4.17.21", ghsa: "GHSA-aaaa", cve: "CVE-2026-1", summary: "Prototype pollution", url: "https://x/security/dependabot/7", createdAt: "2026-11-01T00:00:00Z" },
+      expect.objectContaining({ number: 8, severity: "critical", patchedVersion: null, cve: null }),
+    ]);
+    expect(calls[0]).toEqual([`paginate ${DEPENDABOT}`, { owner: "o", repo: "a", state: "open", per_page: 100 }]);
+  });
+
+  it("lists the open code-scanning alerts", async () => {
+    const { github, calls } = stub({ [SCANNING]: [{ number: 3, rule: { id: "js/sql-injection", security_severity_level: "critical", severity: "error" }, tool: { name: "CodeQL" }, most_recent_instance: { location: { path: "src/db.ts" } }, html_url: "https://x/security/code-scanning/3", created_at: "2026-11-02T00:00:00Z" }, { number: 4, rule: { id: "js/unused", severity: "note" }, tool: { name: "CodeQL" }, most_recent_instance: {}, html_url: "https://x/4", created_at: "2026-11-03T00:00:00Z" }] });
+    expect(await github.codeScanningAlerts("o/a")).toEqual([
+      { number: 3, rule: "js/sql-injection", severity: "critical", tool: "CodeQL", path: "src/db.ts", url: "https://x/security/code-scanning/3", createdAt: "2026-11-02T00:00:00Z" },
+      { number: 4, rule: "js/unused", severity: "low", tool: "CodeQL", path: "", url: "https://x/4", createdAt: "2026-11-03T00:00:00Z" },
+    ]);
+    expect(calls[0]).toEqual([`paginate ${SCANNING}`, { owner: "o", repo: "a", state: "open", per_page: 100 }]);
+  });
+
+  it("is unknown when the token cannot read the alerts (403 or 404), and any other failure is a GitHubError", async () => {
+    for (const status of [403, 404]) {
+      expect(await failing(status).dependabotAlerts("o/a")).toBe("unknown");
+      expect(await failing(status).codeScanningAlerts("o/a")).toBe("unknown");
+    }
+    await expect(failing(500).dependabotAlerts("o/a")).rejects.toBeInstanceOf(GitHubError);
+    await expect(failing(500).codeScanningAlerts("o/a")).rejects.toBeInstanceOf(GitHubError);
+  });
+});
+
+describe("release notes", () => {
+  it("replaces a release's body", async () => {
+    const { github, calls } = stub({ "repos.updateRelease": {} });
+    await github.updateReleaseBody("o/a", 11, "## Fixes");
+    expect(calls[0]).toEqual(["repos.updateRelease", { owner: "o", repo: "a", release_id: 11, body: "## Fixes" }]);
+  });
+
+  it("lists the published releases newest first, leaving out drafts", async () => {
+    const { github } = stub({
+      "repos.listReleases": [
+        { id: 1, tag_name: "v1.1.0", published_at: "2026-09-01T00:00:00Z", draft: false },
+        { id: 2, tag_name: "luna-evidence", published_at: null, draft: true },
+        { id: 3, tag_name: "v1.2.0", published_at: "2026-10-01T00:00:00Z", draft: false },
+      ],
+    });
+    expect(await github.recentReleases("o/a")).toEqual([{ tag: "v1.2.0", publishedAt: "2026-10-01T00:00:00Z" }, { tag: "v1.1.0", publishedAt: "2026-09-01T00:00:00Z" }]);
+  });
+
+  it("reads the latest published release, or null when there is none", async () => {
+    const { github } = stub({ "repos.getLatestRelease": { tag_name: "v1.2.0", published_at: "2026-10-01T00:00:00Z" } });
+    expect(await github.latestRelease("o/a")).toEqual({ tag: "v1.2.0", publishedAt: "2026-10-01T00:00:00Z" });
+    const none = stub({ "repos.getLatestRelease": Object.assign(new Error("Not Found"), { status: 404 }) });
+    expect(await none.github.latestRelease("o/a")).toBeNull();
+    const broken = stub({ "repos.getLatestRelease": Object.assign(new Error("boom"), { status: 500 }) });
+    await expect(broken.github.latestRelease("o/a")).rejects.toBeInstanceOf(GitHubError);
   });
 });

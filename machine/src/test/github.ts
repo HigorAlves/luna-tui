@@ -52,6 +52,11 @@ const METHODS: Array<keyof GitHub> = [
   "prHeadSha",
   "ensureRelease",
   "releaseAssets",
+  "updateReleaseBody",
+  "latestRelease",
+  "recentReleases",
+  "dependabotAlerts",
+  "codeScanningAlerts",
   "uploadReleaseAsset",
 ];
 

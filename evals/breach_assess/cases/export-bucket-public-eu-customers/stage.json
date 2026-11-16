@@ -1,0 +1,55 @@
+{
+  "schema": 3,
+  "stage": "breach_assess",
+  "pack": "breach_assess",
+  "attempt": 1,
+  "task": {
+    "id": "breach-assess",
+    "title": "Incident: Customer export bucket was public",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "breach": {
+      "title": "Customer export bucket was public",
+      "severity": "critical",
+      "service": "exports",
+      "startedAt": "2026-11-10T09:00:00.000Z",
+      "timeline": [
+        {
+          "at": "2026-11-10T09:00:00.000Z",
+          "source": "jira",
+          "text": "Jira signal: Customer export bucket was public"
+        },
+        {
+          "at": "2026-11-10T09:20:00.000Z",
+          "source": "slack",
+          "text": "On-call confirms the export bucket served the nightly customer export to anyone with the link for six hours. The export lists names and emails of customers in Germany and France."
+        }
+      ],
+      "signals": [
+        {
+          "source": "jira",
+          "title": "Customer export bucket was public",
+          "severity": "critical",
+          "status": "open",
+          "summary": "Jira OPS-31 Incident, Open."
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

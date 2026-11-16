@@ -1,0 +1,55 @@
+{
+  "schema": 3,
+  "stage": "breach_assess",
+  "pack": "breach_assess",
+  "attempt": 1,
+  "task": {
+    "id": "breach-assess",
+    "title": "Incident: Patient visit notes in the debug log",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "breach": {
+      "title": "Patient visit notes in the debug log",
+      "severity": "high",
+      "service": "clinic-api",
+      "startedAt": "2026-11-10T09:00:00.000Z",
+      "timeline": [
+        {
+          "at": "2026-11-10T09:00:00.000Z",
+          "source": "datadog",
+          "text": "datadog signal: Patient visit notes in the debug log"
+        },
+        {
+          "at": "2026-11-10T09:30:00.000Z",
+          "source": "slack",
+          "text": "A debug flag logged full visit notes, with the patient name and diagnosis, for US clinics. The log index is readable by every engineer. Forty patients between Monday and today."
+        }
+      ],
+      "signals": [
+        {
+          "source": "datadog",
+          "title": "Patient visit notes in the debug log",
+          "severity": "high",
+          "status": "open",
+          "summary": "Datadog incident SEV-2, active, customers impacted."
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

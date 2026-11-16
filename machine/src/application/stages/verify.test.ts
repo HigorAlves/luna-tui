@@ -48,6 +48,10 @@ function setup(opts: {
   counted?: { added: number; removed: number } | null;
   size?: { target_loc: [number, number]; hard_limit_loc: number; max_children: number; max_rounds: number; depth: number };
   approvals?: StageContext["approvals"];
+  /** The compliance review beside the review pack. */
+  compliance?: NonNullable<Parameters<typeof verifyRunner>[0]["compliance"]>;
+  /** The docs-drift note beside the review pack. */
+  docsDrift?: NonNullable<Parameters<typeof verifyRunner>[0]["docsDrift"]>;
   /** An exec that can open a session of checks sharing one set of services. */
   session?: () => Promise<{ exec: (command: string, args: string[], options?: unknown) => Promise<ExecResult>; close: () => Promise<void> }>;
 }) {
@@ -61,6 +65,8 @@ function setup(opts: {
   const run = verifyRunner({
     exec,
     runPack: opts.noPack ? null : runPack,
+    ...(opts.compliance ? { compliance: opts.compliance } : {}),
+    ...(opts.docsDrift ? { docsDrift: opts.docsDrift } : {}),
     stateDir,
     detect: async () => (opts.detected ?? { manager: "pnpm", test: ["pnpm", "run", "test"], lint: ["pnpm", "run", "lint"] }) as never,
     gitIdentity: async () => ("identity" in opts ? opts.identity! : { name: "Ada L", email: "ada@x.dev" }),
@@ -105,6 +111,107 @@ describe("verifying stage", () => {
       expect(passed.findings).toHaveLength(2);
       const hard = setup({ pack: answer([finding({ severity: "blocker", confidence: 0.9 })]) });
       expect((await hard.run(hard.context)).outcome).toBe("fail");
+    });
+  });
+
+  describe("the compliance review", () => {
+    const high = { path: "a.ts", line: 3, severity: "security", title: "Email in the log", body: "b", confidence: 0.9, regime: "gdpr", clause: "GDPR Art. 5(1)(c)", control: null };
+    const compliance = (regimes: string[], run: StageResult | Error) => ({
+      regimes: async () => regimes as never,
+      wiki: { readPages: async () => [], writePages: async () => ({ sha: "x" }) },
+      slugOf: async () => "o/a",
+      run: vi.fn(async () => {
+        if (run instanceof Error) throw run;
+        return run;
+      }),
+    });
+    const answered: StageResult = { outcome: "pass", detail: { answer: { summary: "One.", findings: [high], regimesRun: ["gdpr"] } } };
+
+    it("fails the review on a high finding when a regime is declared, with the clause in its title, before any check runs", async () => {
+      const deps = compliance(["gdpr"], answered);
+      const { run, context, exec } = setup({ compliance: deps });
+      const result = await run(context);
+      expect(deps.run).toHaveBeenCalledTimes(1);
+      expect(result.outcome).toBe("fail");
+      expect(exec).not.toHaveBeenCalled();
+      expect(result.findings).toEqual([expect.objectContaining({ severity: "security", title: "Email in the log [GDPR Art. 5(1)(c)]" })]);
+    });
+
+    it("adds the compliance sub-run's usage to the review's", async () => {
+      const deps = compliance(["gdpr"], { ...answered, usage: { turns: 3, costUsd: 1, tokens: { input: 200, output: 20 } } });
+      const { run, context } = setup({ compliance: deps, pack: { outcome: "pass", usage: { turns: 2, costUsd: 0.5, tokens: { input: 100, output: 10 } }, detail: { answer: { verdict: "pass", summary: "fine", findings: [] } } } });
+      expect((await run(context)).usage).toMatchObject({ turns: 5, costUsd: 1.5, tokens: { input: 300, output: 30 } });
+    });
+
+    it("does not run when no regime is declared, and a failed run never blocks", async () => {
+      const none = compliance([], answered);
+      const first = setup({ compliance: none });
+      expect((await first.run(first.context)).outcome).toBe("pass");
+      expect(none.run).not.toHaveBeenCalled();
+      const broken = compliance(["gdpr"], new Error("container died"));
+      const second = setup({ compliance: broken });
+      const result = await second.run(second.context);
+      expect(result.outcome).toBe("pass");
+      expect(broken.run).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("the docs-drift note", () => {
+    const stale = { doc: "docs/configuration.md", section: "Variables", why: "The change renamed MACHINE_PORT.", suggestion: "Rename the row." };
+    const docsDrift = (run: StageResult | Error, docs = ["docs/configuration.md"]) => ({
+      slugOf: async () => "o/a",
+      docFiles: async () => docs,
+      run: vi.fn(async () => {
+        if (run instanceof Error) throw run;
+        return run;
+      }),
+    });
+    const answered: StageResult = { outcome: "pass", detail: { answer: { stale: [stale] } } };
+
+    it("adds the docs-drift sub-run's usage to the review's", async () => {
+      const deps = docsDrift({ ...answered, usage: { turns: 3, costUsd: 1, tokens: { input: 200, output: 20 } } });
+      const { run, context } = setup({ docsDrift: deps, changed: ["src/config.ts"], pack: { outcome: "pass", usage: { turns: 2, costUsd: 0.5, tokens: { input: 100, output: 10 } }, detail: { answer: { verdict: "pass", summary: "fine", findings: [] } } } });
+      expect((await run(context)).usage).toMatchObject({ turns: 5, costUsd: 1.5, tokens: { input: 300, output: 30 } });
+    });
+
+    it("adds one nit per stale section, titled for it, and the verdict stays a pass", async () => {
+      const deps = docsDrift(answered);
+      const { run, context } = setup({ docsDrift: deps, changed: ["src/config.ts"] });
+      const result = await run(context);
+      expect(deps.run).toHaveBeenCalledTimes(1);
+      expect(result.outcome).toBe("pass");
+      expect(result.findings).toEqual([expect.objectContaining({ severity: "nit", path: "docs/configuration.md", title: "Docs drift: docs/configuration.md Variables" })]);
+    });
+
+    it("keeps a failing review failing and a passing one passing: its notes are never what decides", async () => {
+      const blocker = setup({ pack: { outcome: "pass", detail: { answer: { verdict: "fail", summary: "broken", findings: [finding()] } } }, docsDrift: docsDrift(answered), changed: ["src/config.ts"] });
+      const failed = await blocker.run(blocker.context);
+      expect(failed.outcome).toBe("fail");
+      expect(failed.findings).toEqual(expect.arrayContaining([expect.objectContaining({ title: "off by one", severity: "bug" }), expect.objectContaining({ severity: "nit" })]));
+      const clean = setup({ docsDrift: docsDrift(answered), changed: ["src/config.ts"] });
+      expect((await clean.run(clean.context)).outcome).toBe("pass");
+    });
+
+    it("does not run when the repo has no docs, or when the change touches only docs", async () => {
+      const noDocs = docsDrift(answered, []);
+      const first = setup({ docsDrift: noDocs, changed: ["src/config.ts"] });
+      expect((await first.run(first.context)).findings ?? []).toEqual([]);
+      expect(noDocs.run).not.toHaveBeenCalled();
+      const onlyDocs = docsDrift(answered);
+      const second = setup({ docsDrift: onlyDocs, changed: ["docs/configuration.md", "README.md"] });
+      expect((await second.run(second.context)).findings ?? []).toEqual([]);
+      expect(onlyDocs.run).not.toHaveBeenCalled();
+    });
+
+    it("never blocks when the pack fails, throws or answers badly", async () => {
+      for (const outcome of [new Error("container died"), { outcome: "fail" } as StageResult, { outcome: "pass", detail: { answer: { stale: "no" } } } as StageResult]) {
+        const deps = docsDrift(outcome);
+        const { run, context } = setup({ docsDrift: deps, changed: ["src/config.ts"] });
+        const result = await run(context);
+        expect(deps.run).toHaveBeenCalledTimes(1);
+        expect(result.outcome).toBe("pass");
+        expect(result.findings ?? []).toEqual([]);
+      }
     });
   });
 

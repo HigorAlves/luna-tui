@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,6 +9,7 @@ import { agentDefinitions } from "./agents.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const ROLES = join(ROOT, "roles");
+const defsFor = (role: string) => readFileSync(join(ROLES, role, "role.md"), "utf8");
 
 describe("agent definitions", () => {
   it("has a skill folder for every skill a pack names", () => {
@@ -19,7 +20,7 @@ describe("agent definitions", () => {
 
   it("gives reviewing a security reviewer it can dispatch, read-only, and addressing a reply drafter", () => {
     const review = agentDefinitions(PACKS.reviewing, ROLES, "claude-opus-5-5");
-    expect(Object.keys(review)).toEqual(["pr-reviewer", "security-reviewer"]);
+    expect(Object.keys(review)).toEqual(["pr-reviewer", "security-reviewer", "migration-reviewer", "iac-reviewer"]);
     expect(review["pr-reviewer"]!.tools).toBeUndefined();
     expect(review["pr-reviewer"]!.model).toBe("claude-opus-5-5");
     expect(review["pr-reviewer"]!.description).toMatch(/pull request/);
@@ -36,6 +37,22 @@ describe("agent definitions", () => {
     expect(drafter.model).toBe("claude-haiku-5-5");
     expect(drafter.tools).not.toEqual(expect.arrayContaining(["Edit", "Write", "Bash"]));
     expect(drafter.prompt).toMatch(/ACTION/);
+  });
+
+  it("gives reviewing and verifying a read-only migration and infrastructure reviewer, and names both with their globs in the prompts", () => {
+    for (const [pack, prompt, role] of [["reviewing", "reviewing.md", "pr-reviewer"], ["verifying", "verifying.md", "verifier"]] as const) {
+      const defs = agentDefinitions(PACKS[pack], ROLES, "claude-opus-5-5");
+      for (const helper of ["migration-reviewer", "iac-reviewer"]) {
+        expect(defs[helper]!.model, `${pack}: ${helper}`).toBe("claude-sonnet-5-5");
+        expect(defs[helper]!.tools).toEqual(["Read", "Glob", "Grep"]);
+      }
+      for (const file of [join(ROOT, "prompts", prompt), join(ROLES, role, "role.md")].filter((f) => pack === "verifying" || f.endsWith(prompt))) {
+        const text = readFileSync(file, "utf8");
+        for (const needle of ["`migration-reviewer`", "`iac-reviewer`", "`**/migrations/**`", "`*.sql`", "`**/prisma/schema.prisma`", "`*.tf`", "`**/k8s/**`", "`Dockerfile*`", "`docker-compose*.y*ml`", "AWSTemplateFormatVersion"]) expect(text, `${file}: ${needle}`).toContain(needle);
+      }
+    }
+    expect(defsFor("migration-reviewer")).toMatch(/CONCURRENTLY[\s\S]*GDPR Art\. 5\(1\)\(e\)/);
+    expect(defsFor("iac-reviewer")).toMatch(/0\.0\.0\.0\/0[\s\S]*SOC2 CC6\.6/);
   });
 
   it("a pack without helpers defines only its own role", () => {

@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type ChatTriageContext, type ForemanContext, type QuestionsContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type Effort, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type PrLinkContext, type ProposeContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
+import { type AccessReviewContext, ReleaseNotesContext, type PostmortemContext, type BreachAssessContext, type CapacityContext, type StatusReportContext, QuestionnaireContext, VulnTriageContext, type ChangeExceptionsContext, type ComplianceReviewContext, type DocsDriftContext, type ChatTriageContext, type ForemanContext, type QuestionsContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type Effort, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type PrLinkContext, type ProposeContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
 import { isDocsOnly } from "./docs-only.ts";
 
 export { PACK_LIMITS };
@@ -167,6 +167,10 @@ export function buildStageInput(opts: {
   history?: { ledger: Ledger | null; runs: RunSummary[] } | null;
   /** For reviewing (a PR task): the PR's diff and comments the host fetched. */
   review?: ReviewContext | null;
+  /** For compliance_review: the repo's regimes and its wiki's control pages; its diff is `review`. */
+  compliance?: ComplianceReviewContext | null;
+  /** For docs_drift: the repo, the change's files and the repo's doc files; the worktree is the change. */
+  docsDrift?: DocsDriftContext | null;
   /** For addressing (a PR task): the unresolved threads the host fetched. */
   threads?: ThreadsContext | null;
   /** For pr_reply: the thread and the pack the host built; for reviewing_memory: the retro facts. */
@@ -259,7 +263,9 @@ export function buildStageInput(opts: {
       ...((pack === "e2e" || pack === "recording") && opts.qaTargets ? { qaTargets: opts.qaTargets } : {}),
       ...(VIDEO_PACKS.has(pack) && opts.video ? { video: opts.video } : {}),
       ...((pack === "implementing" || pack === "verifying") && opts.checks ? { checks: opts.checks } : {}),
-      ...(pack === "reviewing" && opts.review ? { review: opts.review } : {}),
+      ...((pack === "reviewing" || pack === "compliance_review") && opts.review ? { review: opts.review } : {}),
+      ...(pack === "compliance_review" && opts.compliance ? { compliance: opts.compliance } : {}),
+      ...(pack === "docs_drift" && opts.docsDrift ? { docsDrift: opts.docsDrift } : {}),
       ...(pack === "addressing" && opts.threads ? { threads: opts.threads } : {}),
       ...((pack === "pr_reply" || pack === "reviewing_memory") && opts.ship ? { ship: opts.ship } : {}),
       ...(pack === "reviewing_memory" && opts.history ? { ledger: opts.history.ledger, runs: opts.history.runs } : {}),
@@ -329,6 +335,15 @@ export function buildContextPackInput(pack: ContextPackId, context: PackContext,
   const issue: IssueContext | null = "issue" in context ? context.issue : null;
   const chat: ChatTriageContext | null = "chat" in context ? context.chat : null;
   const foreman: ForemanContext | null = "foreman" in context ? context.foreman : null;
+  const exceptions: ChangeExceptionsContext | null = "exceptions" in context ? context.exceptions : null;
+  const access: AccessReviewContext | null = "access" in context ? context.access : null;
+  const breach: BreachAssessContext | null = "breach" in context ? context.breach : null;
+  const capacity: CapacityContext | null = "capacity" in context ? context.capacity : null;
+  const status: StatusReportContext | null = "status" in context ? context.status : null;
+  const postmortem: PostmortemContext | null = "postmortem" in context ? context.postmortem : null;
+  const questionnaire: QuestionnaireContext | null = "questionnaire" in context ? context.questionnaire : null;
+  const vulns: VulnTriageContext | null = "vulns" in context ? context.vulns : null;
+  const release: ReleaseNotesContext | null = "release" in context ? context.release : null;
   const plan: PlanContext | null = "plan" in context ? context.plan : null;
   const check: CheckContext | null = "check" in context ? context.check : null;
   const evidence: EvidenceContext | null = "evidence" in context ? context.evidence : null;
@@ -347,11 +362,11 @@ export function buildContextPackInput(pack: ContextPackId, context: PackContext,
     pack,
     ...(engine ? { engine } : {}),
     attempt: 1,
-    task: { id: pack.replace(/_/g, "-"), title: (ticket ? `${ticket.key}: ${ticket.title}` : null) ?? (conversation ? "Conversation" : null) ?? (prLink ? prLink.pr.title : null) ?? (propose ? `Facts of ${propose.repo}` : null) ?? (foreman ? "Foreman" : null) ?? issue?.title ?? dedup?.title ?? size?.title ?? split?.origin.title ?? plan?.brief.split("\n")[0] ?? (check ? checkTitle(check) : evidence ? evidenceTitle(evidence) : ship ? shipTitle(ship) : "Chat triage"), description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
+    task: { id: pack.replace(/_/g, "-"), title: (ticket ? `${ticket.key}: ${ticket.title}` : null) ?? (conversation ? "Conversation" : null) ?? (prLink ? prLink.pr.title : null) ?? (propose ? `Facts of ${propose.repo}` : null) ?? (foreman ? "Foreman" : null) ?? (exceptions ? `Change exceptions of ${exceptions.repo}, ${exceptions.period}` : null) ?? (access ? `Access review of ${access.org}, ${access.period}` : null) ?? (breach ? `Incident: ${breach.title}` : null) ?? (capacity ? `Capacity of ${capacity.week}` : null) ?? (status ? `Status of ${status.week}` : null) ?? (postmortem ? `Postmortem: ${postmortem.incident.title}` : null) ?? (questionnaire ? `Questionnaire for ${questionnaire.repo}` : null) ?? (vulns ? `Vulnerability alert of ${vulns.repo}` : null) ?? (release ? `Release notes of ${release.repo} ${release.tag}` : null) ?? issue?.title ?? dedup?.title ?? size?.title ?? split?.origin.title ?? plan?.brief.split("\n")[0] ?? (check ? checkTitle(check) : evidence ? evidenceTitle(evidence) : ship ? shipTitle(ship) : "Chat triage"), description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
     plan: null,
     decisions: [],
     priorFindings: [],
-    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}), ...(foreman ? { foreman } : {}), ...(plan ? { plan } : {}), ...(check ? { check } : {}), ...(evidence ? { evidence } : {}), ...(ship ? { ship } : {}), ...(dedup ? { dedup } : {}), ...(size ? { size } : {}), ...(split ? { split } : {}), ...(ticket ? { ticket } : {}), ...(conversation ? { conversation } : {}), ...(prLink ? { prLink } : {}), ...(propose ? { propose } : {}) },
+    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}), ...(foreman ? { foreman } : {}), ...(exceptions ? { exceptions } : {}), ...(access ? { access } : {}), ...(breach ? { breach } : {}), ...(capacity ? { capacity } : {}), ...(status ? { status } : {}), ...(postmortem ? { postmortem } : {}), ...(questionnaire ? { questionnaire } : {}), ...(vulns ? { vulns } : {}), ...(release ? { release } : {}), ...(plan ? { plan } : {}), ...(check ? { check } : {}), ...(evidence ? { evidence } : {}), ...(ship ? { ship } : {}), ...(dedup ? { dedup } : {}), ...(size ? { size } : {}), ...(split ? { split } : {}), ...(ticket ? { ticket } : {}), ...(conversation ? { conversation } : {}), ...(prLink ? { prLink } : {}), ...(propose ? { propose } : {}) },
     limits: { maxTurns, timeoutMs },
     env: { LUNA_FACTORY: "1" },
   };

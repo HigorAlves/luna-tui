@@ -1,0 +1,55 @@
+{
+  "schema": 3,
+  "stage": "breach_assess",
+  "pack": "breach_assess",
+  "attempt": 1,
+  "task": {
+    "id": "breach-assess",
+    "title": "Incident: Staging queue timeouts after the deploy",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "breach": {
+      "title": "Staging queue timeouts after the deploy",
+      "severity": "medium",
+      "service": "worker",
+      "startedAt": "2026-11-10T09:00:00.000Z",
+      "timeline": [
+        {
+          "at": "2026-11-10T09:00:00.000Z",
+          "source": "sentry",
+          "text": "sentry signal: Queue timeout in worker"
+        },
+        {
+          "at": "2026-11-10T09:15:00.000Z",
+          "source": "slack",
+          "text": "Staging workers time out on the job queue since the last deploy. No customer data is in staging; the queue is empty apart from test jobs."
+        }
+      ],
+      "signals": [
+        {
+          "source": "sentry",
+          "title": "Queue timeout in worker",
+          "severity": "medium",
+          "status": "open",
+          "summary": "Sentry WORKER-12: 310 events, 0 users."
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

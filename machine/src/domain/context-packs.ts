@@ -1,7 +1,7 @@
 // The context-only packs: those that run in no task state (packStates), so a client may run one
 // on data it sends (`POST /runs`). Each reads one key of the stage input's context, with that
 // key's schema. A context-only pack that is not for clients is on NOT_ON_DEMAND instead. Pure.
-import { ChatTriageContext, CheckContext, ConversationContext, DedupContext, ForemanContext, TicketContext, IssueContext, JiraIntakeContext, EvidenceContext, type PackId, PlanContext, PrLinkContext, ProposeContext, ShipContext, SizeContext, SlackTriageContext, SplitContext } from "@hardness/contracts";
+import { AccessReviewContext, ReleaseNotesContext, PostmortemContext, BreachAssessContext, CapacityContext, StatusReportContext, QuestionnaireContext, VulnTriageContext, ChangeExceptionsContext, ChatTriageContext, CheckContext, ConversationContext, DedupContext, ForemanContext, TicketContext, IssueContext, JiraIntakeContext, EvidenceContext, type PackId, PlanContext, PrLinkContext, ProposeContext, ShipContext, SizeContext, SlackTriageContext, SplitContext } from "@hardness/contracts";
 import { z } from "zod";
 
 import { packStates } from "./packs.ts";
@@ -12,6 +12,15 @@ export const CONTEXT_OF = {
   triage_signals: { key: "issue", schema: IssueContext },
   chat_triage: { key: "chat", schema: ChatTriageContext },
   foreman: { key: "foreman", schema: ForemanContext },
+  change_exceptions: { key: "exceptions", schema: ChangeExceptionsContext },
+  access_review: { key: "access", schema: AccessReviewContext },
+  breach_assess: { key: "breach", schema: BreachAssessContext },
+  capacity_check: { key: "capacity", schema: CapacityContext },
+  status_report: { key: "status", schema: StatusReportContext },
+  postmortem: { key: "postmortem", schema: PostmortemContext },
+  questionnaire: { key: "questionnaire", schema: QuestionnaireContext },
+  vuln_triage: { key: "vulns", schema: VulnTriageContext },
+  release_notes: { key: "release", schema: ReleaseNotesContext },
   risk_score: { key: "plan", schema: PlanContext },
   coverage_check: { key: "plan", schema: PlanContext },
   plan_check: { key: "plan", schema: PlanContext },
@@ -47,8 +56,8 @@ export const CONTEXT_OF = {
 
 export type ContextPackId = keyof typeof CONTEXT_OF;
 
-/** Context-only packs `POST /runs` never runs: eval_judge grades eval cases for the evals runner only. */
-export const NOT_ON_DEMAND: readonly PackId[] = ["eval_judge"];
+/** Context-only packs `POST /runs` never runs: eval_judge grades eval cases for the evals runner only; compliance_review and docs_drift read a change in a worktree. */
+export const NOT_ON_DEMAND: readonly PackId[] = ["eval_judge", "compliance_review", "docs_drift"];
 
 /** What a context-only pack reads: its one key of the stage input's context. */
 export type PackContext =
@@ -57,6 +66,15 @@ export type PackContext =
   | { issue: IssueContext }
   | { chat: ChatTriageContext }
   | { foreman: ForemanContext }
+  | { exceptions: ChangeExceptionsContext }
+  | { access: AccessReviewContext }
+  | { breach: BreachAssessContext }
+  | { capacity: CapacityContext }
+  | { status: StatusReportContext }
+  | { postmortem: PostmortemContext }
+  | { questionnaire: QuestionnaireContext }
+  | { vulns: VulnTriageContext }
+  | { release: ReleaseNotesContext }
   | { plan: PlanContext }
   | { check: CheckContext }
   | { evidence: EvidenceContext }

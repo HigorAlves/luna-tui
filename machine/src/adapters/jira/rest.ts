@@ -17,6 +17,7 @@ import {
   type JiraTransition,
   issueUrl,
 } from "../../application/jira.ts";
+import { TEXT_FILE_LIMIT, textFileRefusal } from "../../domain/text-file.ts";
 import { adfToMarkdown, markdownToAdf } from "./adf.ts";
 
 export interface JiraRestOptions {
@@ -64,6 +65,8 @@ const Fields = z
 const Issue = z.object({ key: z.string(), fields: Fields });
 const Transitions = z.object({ transitions: z.array(z.object({ id: z.string(), name: z.string(), to: Status.optional() })) });
 const SearchResults = z.object({ issues: z.array(Issue).default([]), nextPageToken: z.string().optional().nullable() });
+const Attachment = z.object({ id: z.string(), filename: z.string().default(""), mimeType: z.string().default(""), size: z.number().default(0) });
+const AttachmentList = z.object({ key: z.string(), fields: z.object({ attachment: z.array(Attachment).optional().nullable() }) });
 const Created = z.object({ key: z.string() });
 const Me = z.object({ accountId: z.string(), displayName: z.string().default(""), emailAddress: z.string().optional().nullable(), timeZone: z.string().optional().nullable() });
 const ProjectStatuses = z.array(z.object({ statuses: z.array(Status).default([]) }));
@@ -118,7 +121,7 @@ export function createJira(options: JiraRestOptions): Jira {
   const base = options.cloudId ? `https://api.atlassian.com/ex/jira/${options.cloudId}` : site;
   const auth = `Basic ${Buffer.from(`${options.email}:${options.token}`).toString("base64")}`;
 
-  async function call<T extends z.ZodType>(method: string, path: string, shape: T | null, body?: unknown, query?: Record<string, string>): Promise<z.infer<T>> {
+  async function call<T extends z.ZodType>(method: string, path: string, shape: T | null, body?: unknown, query?: Record<string, string>, raw = false): Promise<z.infer<T>> {
     const url = new URL(`${base}/rest/api/3/${path}`);
     for (const [k, v] of Object.entries(query ?? {})) url.searchParams.set(k, v);
     const request = (): Promise<Response> =>
@@ -153,6 +156,7 @@ export function createJira(options: JiraRestOptions): Jira {
     }
     if (response.status === 404) throw new JiraError(`${method} ${path}: ${describe(404, text)}`, 404);
     if (!response.ok) throw new JiraError(`${method} ${path}: ${describe(response.status, text)}`, response.status);
+    if (raw) return text as z.infer<T>;
     if (!shape) return undefined as z.infer<T>;
     let json: unknown;
     try {
@@ -215,6 +219,20 @@ export function createJira(options: JiraRestOptions): Jira {
         fields: { project: { key: project }, issuetype: { name: issueType }, summary, description: markdownToAdf(descriptionMarkdown) },
       });
       return { key: a.key, url: issueUrl(site, a.key) };
+    },
+
+    async attachments(key) {
+      const a = await call("GET", `issue/${encodeURIComponent(key)}`, AttachmentList, undefined, { fields: "attachment" }).catch(notFound(key));
+      return (a.fields.attachment ?? []).map((f) => ({ id: f.id, name: f.filename, mimetype: f.mimeType, size: f.size }));
+    },
+
+    async downloadAttachment(id) {
+      const meta = await call("GET", `attachment/${encodeURIComponent(id)}`, Attachment);
+      const refusal = textFileRefusal(meta.filename, meta.mimeType, meta.size);
+      if (refusal) throw new JiraError(`attachment ${id}: ${refusal}`);
+      const text = (await call("GET", `attachment/content/${encodeURIComponent(id)}`, null, undefined, undefined, true)) as string;
+      if (Buffer.byteLength(text) > TEXT_FILE_LIMIT) throw new JiraError(`attachment ${id}: ${meta.filename} is over 1 MB`);
+      return { name: meta.filename, mimetype: meta.mimeType, text };
     },
 
     async statuses(projectKey) {

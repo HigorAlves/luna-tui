@@ -5,6 +5,7 @@
 // cached for the process's life: names do not change by the minute.
 import { z } from "zod";
 
+import { TEXT_FILE_LIMIT, textFileRefusal } from "../../domain/text-file.ts";
 import {
   type ChannelInfo,
   type Conversation,
@@ -238,6 +239,25 @@ export function createSlack(token: string, options: WebApiOptions = {}): Slack {
     async openDm(userId) {
       const a = await call("conversations.open", { users: userId }, z.object({ channel: z.object({ id: z.string() }) }), { json: true });
       return a.channel.id;
+    },
+
+    async downloadFile(fileId) {
+      const a = await call(
+        "files.info",
+        { file: fileId },
+        z.object({ file: z.object({ name: z.string().optional(), title: z.string().optional(), mimetype: z.string().default(""), size: z.number().optional(), url_private: z.string().optional() }) }),
+      );
+      const name = a.file.name ?? a.file.title ?? fileId;
+      const refusal = textFileRefusal(name, a.file.mimetype, a.file.size ?? null);
+      if (refusal) throw new SlackError(`files.info: ${refusal}`);
+      if (!a.file.url_private) throw new SlackError(`files.info: ${name} has no download address`);
+      const host = new URL(a.file.url_private).hostname;
+      if (!(host === "slack.com" || host.endsWith(".slack.com"))) throw new SlackError(`files.info: ${name} is at ${host}, not a Slack address`);
+      const response = await doFetch(a.file.url_private, { headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) throw new SlackError(`download of ${name} answered HTTP ${response.status}`);
+      const text = await response.text();
+      if (Buffer.byteLength(text) > TEXT_FILE_LIMIT) throw new SlackError(`${name} is over 1 MB`);
+      return { name, mimetype: a.file.mimetype, text };
     },
 
     async openSocket(appToken) {

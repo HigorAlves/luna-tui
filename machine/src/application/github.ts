@@ -113,6 +113,77 @@ export interface PrReview {
   association: string | null;
 }
 
+/** A PR merged in a window, with the facts a change record is computed from. */
+export interface MergedPr {
+  number: number;
+  title: string;
+  url: string;
+  body: string;
+  author: string | null;
+  mergedBy: string | null;
+  mergedAt: string;
+  mergeSha: string | null;
+  baseRef: string;
+  headRef: string;
+  /** The PR's last commit; null when GitHub names none. */
+  headSha: string | null;
+  closingIssues: Array<{ number: number; url: string }>;
+  reviews: Array<{ author: string | null; state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | "PENDING"; commitId: string | null; submittedAt: string | null }>;
+}
+
+/** A push a ruleset evaluated and let through because the actor may bypass it. */
+export interface RuleBypass {
+  /** `refs/heads/<branch>` */
+  ref: string;
+  actor: string | null;
+  at: string;
+  afterSha: string | null;
+  ruleSuiteId: number;
+}
+
+export type RepoPermission = "admin" | "maintain" | "write" | "triage" | "read";
+
+/** One bypass entry of a repository's ruleset (its own or one inherited from the org). */
+export interface RulesetBypassActor {
+  ruleset: string;
+  /** GitHub's `actor_type`: `Team`, `Integration`, `RepositoryRole`, `OrganizationAdmin`, `DeployKey`. */
+  actorType: string;
+  actorId: number | null;
+  actorName: string | null;
+  /** `always` or `pull_request` (GitHub's `bypass_mode`). */
+  mode: string;
+}
+
+export type AlertSeverity = "critical" | "high" | "medium" | "low";
+
+/** An open Dependabot alert. */
+export interface DependabotAlert {
+  number: number;
+  package: string;
+  ecosystem: string;
+  severity: AlertSeverity;
+  manifestPath: string;
+  vulnerableRange: string;
+  /** The first version that fixes it; null when none does yet. */
+  patchedVersion: string | null;
+  ghsa: string;
+  cve: string | null;
+  summary: string;
+  url: string;
+  createdAt: string;
+}
+
+/** An open code-scanning alert. */
+export interface CodeScanningAlert {
+  number: number;
+  rule: string;
+  severity: AlertSeverity;
+  tool: string;
+  path: string;
+  url: string;
+  createdAt: string;
+}
+
 export interface GitHub {
   /** Who the token belongs to, and the slugs of their teams (empty when the token cannot read them). */
   viewer(): Promise<{ login: string; teams: string[] }>;
@@ -171,6 +242,27 @@ export interface GitHub {
   /** Changes the branch an open PR targets (a stacked card's PR, once its parent merged). */
   retargetPr(slug: string, number: number, base: string): Promise<void>;
   markPrReady(slug: string, number: number): Promise<void>;
+  /** The PRs of `slug` merged between `since` and `until` (ISO, inclusive), oldest first. */
+  mergedPrs(slug: string, since: string, until: string): Promise<MergedPr[]>;
+  /** The ruleset evaluations of `slug` that ended in a bypass in the window; "unknown" when the token cannot read rule suites (403 or 404). */
+  ruleBypasses(slug: string, since: string, until: string): Promise<RuleBypass[] | "unknown">;
+  /** The org's members with their role, owners and members, every page. */
+  orgMembers(org: string): Promise<Array<{ login: string; role: "admin" | "member" }>>;
+  outsideCollaborators(org: string): Promise<Array<{ login: string }>>;
+  /** The org's pending invitations (an invitee is a login or an email). */
+  orgInvitations(org: string): Promise<Array<{ login: string | null; email: string | null; role: string; createdAt: string; inviter: string | null }>>;
+  /** Everyone with access to the repository and their permission; `direct` is false for access that comes through an org role or a team. */
+  repoCollaborators(slug: string): Promise<Array<{ login: string; permission: RepoPermission; direct: boolean }>>;
+  /** Who may bypass the repository's rulesets; "unknown" when the token cannot read them (403 or 404). */
+  rulesetBypassActors(slug: string): Promise<RulesetBypassActor[] | "unknown">;
+  /** Whether branch protection on `branch` applies to admins too; "unknown" when the token cannot read it. */
+  adminsEnforced(slug: string, branch: string): Promise<boolean | "unknown">;
+  /** Whether each login made any contribution to the org's repos since `since` (ISO); a login GitHub does not know is false. */
+  memberActivity(org: string, logins: string[], since: string): Promise<Map<string, boolean>>;
+  /** The open Dependabot alerts of `slug`; "unknown" when the token cannot read them (403 or 404). */
+  dependabotAlerts(slug: string): Promise<DependabotAlert[] | "unknown">;
+  /** The open code-scanning alerts of `slug`; "unknown" when the token cannot read them (403 or 404). */
+  codeScanningAlerts(slug: string): Promise<CodeScanningAlert[] | "unknown">;
   /** Every check run and commit status on `ref`. */
   prChecks(slug: string, ref: string): Promise<Check[]>;
   /** The failed jobs' logs of a workflow run, joined. */
@@ -187,6 +279,12 @@ export interface GitHub {
    *  A draft has no tag and fires no release event, so no workflow of the repo runs because evidence was published. */
   ensureRelease(slug: string, tag: string, release: { name: string; prerelease: boolean }): Promise<{ id: number; url: string }>;
   releaseAssets(slug: string, releaseId: number): Promise<Array<{ id: number; name: string; url: string }>>;
+  /** Replaces a release's body. */
+  updateReleaseBody(slug: string, releaseId: number, body: string): Promise<void>;
+  /** The latest published release (never a draft or a pre-release), or null when the repo has none. */
+  latestRelease(slug: string): Promise<{ tag: string; publishedAt: string } | null>;
+  /** The published releases (never a draft), newest first; the first page only. */
+  recentReleases(slug: string): Promise<Array<{ tag: string; publishedAt: string }>>;
   /** Uploads a file to a release; `url` is the asset's download url. */
   uploadReleaseAsset(slug: string, releaseId: number, name: string, data: Buffer, contentType: string): Promise<{ url: string }>;
 }
@@ -228,6 +326,15 @@ export function noTokenGitHub(): GitHub {
     openPr: refuse,
     retargetPr: refuse,
     markPrReady: refuse,
+    mergedPrs: refuse,
+    ruleBypasses: refuse,
+    orgMembers: refuse,
+    outsideCollaborators: refuse,
+    orgInvitations: refuse,
+    repoCollaborators: refuse,
+    rulesetBypassActors: refuse,
+    adminsEnforced: refuse,
+    memberActivity: refuse,
     prChecks: refuse,
     failedRunLog: refuse,
     rerunFailedJobs: refuse,
@@ -237,6 +344,11 @@ export function noTokenGitHub(): GitHub {
     prHeadSha: refuse,
     ensureRelease: refuse,
     releaseAssets: refuse,
+    updateReleaseBody: refuse,
+    latestRelease: refuse,
+    recentReleases: refuse,
+    dependabotAlerts: refuse,
+    codeScanningAlerts: refuse,
     uploadReleaseAsset: refuse,
   };
 }

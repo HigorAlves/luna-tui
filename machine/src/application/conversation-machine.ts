@@ -28,7 +28,7 @@ export interface Assessed {
   shortlist: Enriched["shortlist"];
 }
 
-export const CATEGORY: Record<string, SlackTriage["category"]> = { incident: "blocker", bug: "request", request: "request", question: "question", fyi: "fyi", chatter: "social" };
+export const CATEGORY: Record<string, SlackTriage["category"]> = { incident: "blocker", bug: "request", request: "request", question: "question", fyi: "fyi", chatter: "social", compliance_request: "compliance_request" };
 
 export class ConversationMachine {
   constructor(private readonly deps: MachineDeps) {}

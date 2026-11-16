@@ -1,0 +1,263 @@
+import { mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { ComplianceDrafts, DraftNeedsRepoError, DraftNotFoundError, DraftRefusedError, DraftStatusError, StaleDraftError, complianceHash, publisher } from "./compliance-drafts.ts";
+import { tapOf } from "./slack-send.ts";
+import type { Wiki } from "./wiki.ts";
+import { WikiError } from "./wiki.ts";
+
+let stateDir: string;
+let clock: number;
+beforeEach(() => {
+  stateDir = mkdtempSync(join(tmpdir(), "compliance-drafts-"));
+  clock = Date.parse("2026-11-01T10:00:00Z");
+});
+const store = () => new ComplianceDrafts({ stateDir, now: () => new Date((clock += 1000)) });
+const fields = (over: Partial<Parameters<ComplianceDrafts["open"]>[0]> = {}) => ({
+  id: "change_evidence:acme/web:2026-10",
+  kind: "change_evidence" as const,
+  repo: "acme/web",
+  title: "Change management, acme/web, 2026-10",
+  period: "2026-10",
+  summary: "3 PRs, 1 with exceptions",
+  text: "# Page\n\nline two\n",
+  targets: [{ kind: "wiki" as const, repo: "acme/web", path: "Compliance/Change-Management/2026-10.md" }],
+  ...over,
+});
+
+describe("complianceHash", () => {
+  it("is the first 16 hex of the sha256", () => {
+    expect(complianceHash("abc")).toBe("ba7816bf8f01cfea");
+  });
+});
+
+describe("the drafts store", () => {
+  it("opens a new draft as waiting, owner-only on disk, and lists newest first", async () => {
+    const drafts = store();
+    const first = await drafts.open(fields());
+    await drafts.open(fields({ id: "change_evidence:acme/api:2026-10", repo: "acme/api" }));
+    expect(first.status).toBe("waiting");
+    expect(first.hash).toBe(complianceHash("# Page\n\nline two\n"));
+    expect((await drafts.list()).map((d) => d.repo)).toEqual(["acme/api", "acme/web"]);
+    const dir = join(stateDir, "compliance", "drafts");
+    const files = readdirSync(dir);
+    expect(files).toHaveLength(2);
+    expect(files.every((f) => /^[A-Za-z0-9._-]+\.json$/.test(f))).toBe(true);
+    expect(statSync(join(dir, files[0]!)).mode & 0o777).toBe(0o600);
+    expect(await store().get(first.id)).toEqual(first);
+  });
+
+  it("puts a draft left in posting by a crash back to waiting, or edited when the person edited it, with a failed entry", async () => {
+    const drafts = store();
+    const plain = await drafts.open(fields());
+    const other = await drafts.open(fields({ id: "change_evidence:acme/api:2026-10", repo: "acme/api" }));
+    const edited = await drafts.edit(other.id, other.hash, "# Mine\n", "person");
+    const idle = await drafts.open(fields({ id: "change_evidence:acme/x:2026-10", repo: "acme/x" }));
+    await drafts.claim(plain.id, plain.hash);
+    await drafts.claim(edited.id, edited.hash);
+    // A new process: the claims are still on disk, nobody is posting.
+    const restarted = store();
+    expect(await restarted.recoverPosting()).toBe(2);
+    expect(await restarted.get(plain.id)).toMatchObject({ status: "waiting", history: [{ did: "failed", from: "machine" }] });
+    expect(await restarted.get(edited.id)).toMatchObject({ status: "edited", history: [{ did: "edited" }, { did: "failed", from: "machine" }], error: "interrupted by a restart" });
+    expect((await restarted.get(idle.id))?.history).toEqual([]);
+    expect(await restarted.recoverPosting()).toBe(0);
+    await expect(restarted.claim(plain.id, plain.hash)).resolves.toMatchObject({ status: "posting" });
+  });
+
+  it("skips a damaged file with a warning", async () => {
+    const drafts = store();
+    await drafts.open(fields());
+    writeFileSync(join(stateDir, "compliance", "drafts", "broken.json"), "{not json");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await drafts.list()).toHaveLength(1);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("a re-run replaces the text and the original, resets to waiting and keeps history", async () => {
+    const drafts = store();
+    const d = await drafts.open(fields());
+    await drafts.edit(d.id, d.hash, "mine", "person");
+    const again = await drafts.open(fields({ text: "new machine text" }));
+    expect(again.status).toBe("waiting");
+    expect(again.text).toBe("new machine text");
+    expect(again.original).toBeUndefined();
+    expect(again.history.map((h) => h.did)).toEqual(["edited"]);
+    expect(again.createdAt).toBe(d.createdAt);
+  });
+
+  it("leaves a posted draft as it is", async () => {
+    const drafts = store();
+    const d = await drafts.open(fields());
+    await drafts.claim(d.id, d.hash);
+    await drafts.finish(d.id, "person");
+    const again = await drafts.open(fields({ text: "different" }));
+    expect(again.status).toBe("posted");
+    expect(again.text).toBe(d.text);
+  });
+
+  it("edit keeps the original and a history entry", async () => {
+    const drafts = store();
+    const d = await drafts.open(fields());
+    const edited = await drafts.edit(d.id, d.hash, "my words", "person");
+    expect(edited).toMatchObject({ status: "edited", text: "my words", original: d.text, hash: complianceHash("my words") });
+    expect(edited.history).toEqual([expect.objectContaining({ did: "edited", from: "person" })]);
+    const twice = await drafts.edit(d.id, edited.hash, "my words 2", "person");
+    expect(twice.original).toBe(d.text);
+  });
+
+  it("ignore marks it ignored, and the hash is checked", async () => {
+    const drafts = store();
+    const d = await drafts.open(fields());
+    await expect(drafts.ignore(d.id, "0000000000000000", "person")).rejects.toBeInstanceOf(StaleDraftError);
+    expect((await drafts.ignore(d.id, d.hash, "person")).status).toBe("ignored");
+  });
+
+  it("refuses a wrong hash, an unknown id and an untappable status", async () => {
+    const drafts = store();
+    const d = await drafts.open(fields());
+    await expect(drafts.edit(d.id, "0000000000000000", "x", "p")).rejects.toBeInstanceOf(StaleDraftError);
+    await expect(drafts.claim(d.id, "0000000000000000")).rejects.toBeInstanceOf(StaleDraftError);
+    await expect(drafts.claim("nope", d.hash)).rejects.toBeInstanceOf(DraftNotFoundError);
+    await drafts.claim(d.id, d.hash);
+    await expect(drafts.claim(d.id, d.hash)).rejects.toBeInstanceOf(DraftStatusError);
+    await expect(drafts.edit(d.id, d.hash, "x", "p")).rejects.toBeInstanceOf(DraftStatusError);
+  });
+
+  it("claims one approve at a time", async () => {
+    const drafts = store();
+    const d = await drafts.open(fields());
+    const results = await Promise.allSettled([drafts.claim(d.id, d.hash), drafts.claim(d.id, d.hash)]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+  });
+
+  it("fail puts it back to waiting, or edited, with the error", async () => {
+    const drafts = store();
+    const d = await drafts.open(fields());
+    await drafts.claim(d.id, d.hash);
+    const failed = await drafts.fail(d.id, "wiki is off");
+    expect(failed).toMatchObject({ status: "waiting", error: "wiki is off" });
+    expect(failed.history.at(-1)?.did).toBe("failed");
+    const e = await drafts.edit(d.id, failed.hash, "mine", "person");
+    expect(e.error).toBeUndefined();
+    await drafts.claim(d.id, e.hash);
+    expect((await drafts.fail(d.id, "again")).status).toBe("edited");
+  });
+
+  it("refuses text that carries a secret, the machine's or an edit, and stores nothing", async () => {
+    const drafts = store();
+    const secret = "token ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    await expect(drafts.open(fields({ text: secret }))).rejects.toBeInstanceOf(DraftRefusedError);
+    expect(await drafts.list()).toEqual([]);
+    const d = await drafts.open(fields());
+    await expect(drafts.edit(d.id, d.hash, secret, "p")).rejects.toBeInstanceOf(DraftRefusedError);
+    expect((await drafts.get(d.id))?.text).toBe(d.text);
+  });
+
+  it("keeps a multi-line page whole", async () => {
+    const d = await store().open(fields({ text: "# A\n\n- one\n- two\n" }));
+    expect(d.text).toBe("# A\n\n- one\n- two\n");
+  });
+});
+
+describe("publisher.approve", () => {
+  const wikiOf = (writePages: Wiki["writePages"]): Wiki => ({ readPages: async () => [], writePages });
+
+  it("writes each wiki target once and marks it posted", async () => {
+    const drafts = store();
+    const d = await drafts.open(
+      fields({
+        targets: [
+          { kind: "wiki", repo: "acme/web", path: "A/2026-10.md" },
+          { kind: "wiki", repo: "acme/api", path: "B/2026-10.md" },
+        ],
+      }),
+    );
+    const writePages = vi.fn(async () => ({ sha: "abc" }));
+    const done = await publisher({ drafts, wiki: wikiOf(writePages) }).approve(d.id, d.hash, "person");
+    expect(done.status).toBe("posted");
+    expect(writePages.mock.calls).toEqual([
+      ["acme/web", [{ path: "A/2026-10.md", text: d.text }], "Change management evidence 2026-10"],
+      ["acme/api", [{ path: "B/2026-10.md", text: d.text }], "Change management evidence 2026-10"],
+    ]);
+  });
+
+  it("fails back to waiting with the wiki's own words", async () => {
+    const drafts = store();
+    const d = await drafts.open(fields());
+    const done = await publisher({ drafts, wiki: wikiOf(async () => Promise.reject(new WikiError("the wiki is disabled"))) }).approve(d.id, d.hash, "person");
+    expect(done).toMatchObject({ status: "waiting", error: "the wiki is disabled" });
+  });
+
+  it("propagates a stale hash without writing", async () => {
+    const drafts = store();
+    const d = await drafts.open(fields());
+    const writePages = vi.fn(async () => ({ sha: "x" }));
+    await expect(publisher({ drafts, wiki: wikiOf(writePages) }).approve(d.id, "0000000000000000", "p")).rejects.toBeInstanceOf(StaleDraftError);
+    expect(writePages).not.toHaveBeenCalled();
+  });
+
+  it("hands each other target to the writer registered for its kind, in order", async () => {
+    const drafts = store();
+    const d = await drafts.open(
+      fields({
+        kind: "questionnaire",
+        id: "questionnaire:acme/web:C0123ABCD:1731772800.000100",
+        period: null,
+        targets: [
+          { kind: "slack_thread", channel: "C0123ABCD", ts: "1731772800.000100" },
+          { kind: "answer_bank", repo: "acme/web" },
+        ],
+      }),
+    );
+    const calls: string[] = [];
+    const handlers = {
+      slack_thread: vi.fn(async (draft: { id: string }, target: { channel: string }) => void calls.push(`thread ${target.channel} ${draft.id}`)),
+      answer_bank: vi.fn(async (_draft: unknown, target: { repo: string }) => void calls.push(`bank ${target.repo}`)),
+    };
+    const done = await publisher({ drafts, wiki: wikiOf(vi.fn()), handlers }).approve(d.id, d.hash, "person");
+    expect(done.status).toBe("posted");
+    expect(calls).toEqual([`thread C0123ABCD ${d.id}`, "bank acme/web"]);
+  });
+
+  it("hands the person's tap to each writer", async () => {
+    const drafts = store();
+    const d = await drafts.open(
+      fields({ kind: "questionnaire", id: "questionnaire:acme/web:C0123ABCD:1731772800.000100", period: null, targets: [{ kind: "slack_thread", channel: "C0123ABCD", ts: "1731772800.000100" }, { kind: "answer_bank", repo: "acme/web" }] }),
+    );
+    const slack_thread = vi.fn(async (_d: unknown, _t: unknown, _tap: unknown) => {});
+    const tap = tapOf("POST /compliance/drafts/:id/approve");
+    await publisher({ drafts, wiki: wikiOf(vi.fn()), handlers: { slack_thread, answer_bank: vi.fn(async () => {}) } }).approve(d.id, d.hash, "person", tap);
+    expect(slack_thread.mock.calls[0]![2]).toBe(tap);
+  });
+
+  it("fails a draft whose target has no writer, naming the kind", async () => {
+    const drafts = store();
+    const d = await drafts.open(fields({ targets: [{ kind: "github_release", repo: "acme/web", tag: "v1.0.0" }] }));
+    const done = await publisher({ drafts, wiki: wikiOf(vi.fn()) }).approve(d.id, d.hash, "person");
+    expect(done).toMatchObject({ status: "waiting", error: "no writer for github_release targets" });
+  });
+
+  it("refuses a questionnaire that still needs a repository, and writes nothing", async () => {
+    const drafts = store();
+    const d = await drafts.open(
+      fields({ kind: "questionnaire", id: "questionnaire:slack:C0123ABCD:1731772800.000100", period: null, summary: "pick a repository", targets: [{ kind: "slack_thread", channel: "C0123ABCD", ts: "1731772800.000100" }] }),
+    );
+    const slack_thread = vi.fn(async () => undefined);
+    await expect(publisher({ drafts, wiki: wikiOf(vi.fn()), handlers: { slack_thread } }).approve(d.id, d.hash, "person")).rejects.toBeInstanceOf(DraftNeedsRepoError);
+    expect(slack_thread).not.toHaveBeenCalled();
+    expect((await drafts.get(d.id))?.status).toBe("waiting");
+  });
+
+  it("names the commit after the draft's kind", async () => {
+    const drafts = store();
+    const d = await drafts.open(fields({ kind: "access_review", id: "access_review:acme:2026-Q4", period: "2026-Q4", targets: [{ kind: "wiki", repo: "acme/home", path: "Compliance/Access-Reviews/acme-2026-Q4.md" }] }));
+    const writePages = vi.fn<Wiki["writePages"]>(async () => ({ sha: "abc" }));
+    await publisher({ drafts, wiki: wikiOf(writePages) }).approve(d.id, d.hash, "person");
+    expect(writePages.mock.calls[0]?.[2]).toBe("Access review 2026-Q4");
+  });
+});

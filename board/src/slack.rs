@@ -232,7 +232,15 @@ pub fn blocker(item: &SlackItem, key: SlackKey) -> Option<&'static str> {
 }
 
 /// The kinds the machine knows, in the order `c` lists them.
-pub const KINDS: [&str; 6] = ["incident", "bug", "request", "question", "fyi", "chatter"];
+pub const KINDS: [&str; 7] = [
+    "incident",
+    "bug",
+    "request",
+    "question",
+    "fyi",
+    "chatter",
+    "compliance_request",
+];
 
 /// One line of the `L` picker: what it says, the relation it sets and its target (an id of the stored shortlist).
 #[derive(Clone, Debug, PartialEq)]

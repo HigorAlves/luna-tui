@@ -1,0 +1,41 @@
+{
+  "schema": 3,
+  "stage": "conversation_assess",
+  "pack": "conversation_assess",
+  "attempt": 1,
+  "task": {
+    "id": "conversation-assess",
+    "title": "Acme vendor security questionnaire",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "conversation": {
+      "channel": "sales",
+      "private": false,
+      "thread": [
+        "dana: Acme's security team sent us a vendor questionnaire, 82 questions on encryption, access control and incident response. Can you get it filled in before Friday? I attached the xlsx export as a csv"
+      ],
+      "latest": "dana: Acme's security team sent us a vendor questionnaire, 82 questions on encryption, access control and incident response. Can you get it filled in before Friday? I attached the xlsx export as a csv",
+      "author": {
+        "profile": "member",
+        "title": null
+      },
+      "candidates": []
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

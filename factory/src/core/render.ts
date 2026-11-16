@@ -161,6 +161,162 @@ const foremanText = (foreman: StageInput["context"]["foreman"]) => {
   };
 };
 
+/** The exceptions, as change_exceptions reads them: one line of the machine's facts and the PR's title per exception, then its body indented under it. The title and body are written by others, so the whole block is quoted data. */
+const exceptionsText = (exceptions: StageInput["context"]["exceptions"]) => {
+  if (!exceptions) return { repo: NONE, period: NONE, controls: NONE, items: NONE };
+  const items = exceptions.exceptions.map((e) => {
+    const head = [
+      `#${e.pr}`,
+      e.kinds.join(", "),
+      `author ${e.author ?? "(unknown)"}`,
+      `merged by ${e.mergedBy ?? "(unknown)"} at ${e.mergedAt}`,
+      `approved by ${e.approvedBy.length > 0 ? e.approvedBy.join(", ") : "(nobody)"}`,
+      `ticket ${e.ticket ?? NONE}`,
+      `checks ${e.checks}`,
+      `bypass ${e.bypass}`,
+      e.title,
+    ].join(" · ");
+    const body = e.body.trim() === "" ? [] : e.body.split("\n").map((line) => `   ${line}`);
+    return [head, ...body].join("\n");
+  });
+  return {
+    repo: exceptions.repo,
+    period: exceptions.period,
+    controls: exceptions.controls.length > 0 ? exceptions.controls.join("\n") : NONE,
+    items: items.length > 0 ? items.join("\n") : NONE,
+  };
+};
+
+/** The changed files and the doc files, as docs_drift reads them: one path per line. Paths come from the repository, so both lists are quoted data. */
+const docsDriftText = (docsDrift: StageInput["context"]["docsDrift"]) => {
+  if (!docsDrift) return { repo: NONE, changedFiles: NONE, docFiles: NONE };
+  return {
+    repo: docsDrift.repo,
+    changedFiles: docsDrift.changedFiles.length > 0 ? docsDrift.changedFiles.join("\n") : NONE,
+    docFiles: docsDrift.docFiles.length > 0 ? docsDrift.docFiles.join("\n") : NONE,
+  };
+};
+
+/** The regimes and the wiki's control pages, as compliance_review reads them: each page under its path as a heading. The pages are written by others, so the block is quoted data. */
+const complianceText = (compliance: StageInput["context"]["compliance"]) => {
+  if (!compliance) return { repo: NONE, regimes: NONE, controls: NONE };
+  return {
+    repo: compliance.repo,
+    regimes: compliance.regimes.join(", "),
+    controls: compliance.controls.length > 0 ? compliance.controls.map((page) => `## ${page.path}\n${page.text}`).join("\n") : NONE,
+  };
+};
+
+/** The flags, as access_review reads them: one line per flag, the id and kind and change as the machine wrote them, then the subject, repo and detail from GitHub. The whole block is quoted data. */
+const accessText = (access: StageInput["context"]["access"]) => {
+  if (!access) return { org: NONE, period: NONE, flags: NONE, removed: NONE };
+  const flags = access.flags.map((f) => [f.id, f.kind, f.change, f.subject, ...(f.repo ? [f.repo] : []), f.detail].join(" · "));
+  return {
+    org: access.org,
+    period: access.period,
+    flags: flags.length > 0 ? flags.join("\n") : NONE,
+    removed: access.removedSinceSigned.length > 0 ? access.removedSinceSigned.join("\n") : NONE,
+  };
+};
+
+/** The incident, as postmortem reads it: the facts, the timeline and each signal's own summary (written by tools and people, so quoted data), and the breach clocks the machine computed. */
+const postmortemText = (postmortem: StageInput["context"]["postmortem"]) => {
+  if (!postmortem) return { incident: NONE, breach: NONE };
+  const { incident, breach } = postmortem;
+  return {
+    incident: [
+      `Title: ${incident.title}`,
+      `Severity: ${incident.severity}`,
+      `Service: ${incident.service ?? "unknown"}`,
+      `Started: ${incident.startedAt}`,
+      `Resolved: ${incident.resolvedAt ?? "not yet"}`,
+      "Timeline:",
+      ...incident.timeline.map((t) => `${t.at} [${t.source}] ${t.text}`),
+      "Signals:",
+      ...incident.signals.map((s) => `${s.source} (${s.severity}, ${s.status}): ${s.title} | ${s.summary}`),
+    ].join("\n"),
+    breach: breach && breach.regimes.length > 0 ? breach.regimes.map((r) => `${r}: notify by ${breach.clocks[r] ?? "(no deadline)"}`).join("\n") : "No regime applies, or no assessment was made.",
+  };
+};
+
+/** The questionnaire, as the drafter reads it: the file, then each wiki page under a `## <path>` header the answers cite. Everything but the repo and source is written by others, so it is quoted data. */
+const questionnaireText = (q: StageInput["context"]["questionnaire"]) => {
+  if (!q) return { repo: NONE, source: NONE, requester: NONE, name: NONE, markdown: NONE, policies: NONE, bank: NONE };
+  const pages = (list: Array<{ path: string; text: string }>) => (list.length > 0 ? list.map((p) => `## ${p.path}\n${p.text}`).join("\n\n") : NONE);
+  return { repo: q.repo, source: q.source, requester: q.requester ?? NONE, name: q.questionnaire.name, markdown: q.questionnaire.markdown, policies: pages(q.policies), bank: pages(q.bank) };
+};
+
+/** The alert and policy, as vuln_triage reads them: the alert's fields one to a line, the policy page under its path. Both are written by others, so the blocks are quoted data. */
+const vulnsText = (vulns: StageInput["context"]["vulns"]) => {
+  if (!vulns) return { repo: NONE, today: NONE, alert: NONE, policy: NONE };
+  const a = vulns.alert;
+  const fields: Array<[string, string | number | null]> = [
+    ["source", a.source],
+    ["number", a.number],
+    ["severity", a.severity],
+    ["title", a.title],
+    ["created", a.createdAt],
+    ["url", a.url],
+    ["package", a.package],
+    ["ecosystem", a.ecosystem],
+    ["manifest", a.manifestPath],
+    ["vulnerable range", a.vulnerableRange],
+    ["patched version", a.patchedVersion],
+    ["ghsa", a.ghsa],
+    ["cve", a.cve],
+    ["rule", a.rule],
+    ["tool", a.tool],
+    ["path", a.path],
+  ];
+  return {
+    repo: vulns.repo,
+    today: vulns.today,
+    alert: fields.filter(([, value]) => value !== null).map(([key, value]) => `${key}: ${value}`).join("\n"),
+    policy: vulns.policy ? `${vulns.policy.path}\n${vulns.policy.text}` : NONE,
+  };
+};
+
+/** The PRs, as release_notes reads them: one line (number, author, title) and the body indented under it. The titles and bodies are written by others, so the block is quoted data. */
+const releaseText = (release: StageInput["context"]["release"]) => {
+  if (!release) return { repo: NONE, tag: NONE, since: NONE, prs: NONE };
+  const prs = release.prs.map((pr) => {
+    const head = `#${pr.number} · ${pr.author ?? "(unknown)"} · ${pr.title}`;
+    const body = pr.body.trim() === "" ? [] : pr.body.split("\n").map((line) => `   ${line}`);
+    return [head, ...body].join("\n");
+  });
+  return { repo: release.repo, tag: release.tag, since: release.since, prs: prs.length > 0 ? prs.join("\n") : NONE };
+};
+
+/** The week's facts, as status_report reads them. Every number and date is the machine's; each title and reason was written by others, so those blocks are quoted data. */
+const statusText = (status: StageInput["context"]["status"]) => {
+  if (!status) return { week: NONE, from: NONE, to: NONE, metrics: NONE, shipped: NONE, inFlight: NONE, blocked: NONE, merged: NONE, compliance: NONE, capacity: NONE };
+  const list = (lines: string[]) => (lines.length > 0 ? lines.join("\n") : NONE);
+  const m = status.metrics;
+  const pct = (n: number | null) => (n === null ? "unknown" : `${Math.round(n * 100)}%`);
+  const c = status.compliance;
+  const yes = (b: boolean) => (b ? "yes" : "no");
+  const section = (heading: string, lines: string[]) => (lines.length > 0 ? [`${heading}:`, ...lines] : []);
+  const compliance = [
+    ...section("Drafts waiting for the person", c.waitingDrafts.map((d) => `- ${d.kind}: ${d.title}`)),
+    ...section("Change evidence", c.evidence.map((e) => `- ${e.repo} ${e.period}: ${e.exceptions} exceptions`)),
+    ...section("Access review", c.access.map((a) => `- ${a.org} ${a.period}: ${a.flags} flags, ${a.signed ? "signed" : "not signed"}`)),
+    ...section("Incidents", c.incidents.map((i) => `- [${i.severity}, ${i.status}] ${i.title}${i.nextDeadline ? `; next deadline ${i.nextDeadline.regime} ${i.nextDeadline.at}` : ""}`)),
+    ...section("Vulnerabilities", c.vulns.map((v) => `- ${v.repo} ${v.severity}, due ${v.deadline}, ${v.overdue ? "overdue" : "not overdue"}`)),
+  ];
+  return {
+    week: status.week,
+    from: status.from,
+    to: status.to,
+    metrics: `created ${m.created}, closed ${m.closed}, open ${m.open}, waiting on you ${m.waitingOnYou}, lead time ${m.leadTimeHours === null ? "unknown" : `${m.leadTimeHours} h`}, first pass ${pct(m.firstPassRate)}, escalation rate ${pct(m.escalationRate)}, cost $${m.costUsd.toFixed(2)}`,
+    shipped: list(status.shipped.map((s) => `- ${s.title} (${s.repo ?? "no repo"}, ${s.pr ?? "no PR"})`)),
+    inFlight: list(status.inFlight.map((s) => `- ${s.title} [${s.state}]`)),
+    blocked: list(status.blocked.map((b) => `- ${b.title}: ${b.why}`)),
+    merged: list(status.merged.map((x) => `- ${x.repo}: ${x.count} merged PRs`)),
+    compliance: list(compliance),
+    capacity: status.capacity ? `over agent capacity: ${yes(status.capacity.answers.overAgentCapacity)}\nover review capacity: ${yes(status.capacity.answers.overReviewCapacity)}\nat risk: ${status.capacity.answers.atRisk}` : "not assessed",
+  };
+};
+
 /** The issue, as jira_intake reads it: one header line, the description, the comments, the repo. */
 const jiraText = (jira: StageInput["context"]["jira"]) => {
   if (!jira) return { issue: NONE, description: NONE, comments: NONE, repoPath: NONE, classification: NONE };
@@ -487,6 +643,15 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
   const judged = evalText(input.context.eval);
   const chat = chatText(input.context.chat);
   const foreman = foremanText(input.context.foreman);
+  const exceptions = exceptionsText(input.context.exceptions);
+  const status = statusText(input.context.status);
+  const vulns = vulnsText(input.context.vulns);
+  const release = releaseText(input.context.release);
+  const compliance = complianceText(input.context.compliance);
+  const access = accessText(input.context.access);
+  const postmortem = postmortemText(input.context.postmortem);
+  const docsDrift = docsDriftText(input.context.docsDrift);
+  const questionnaire = questionnaireText(input.context.questionnaire);
   const questions = questionsText(input.context.questions);
   const video = videoText(input.context.video);
   const subs: Record<string, string> = {
@@ -600,6 +765,47 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.foreman.truncated}}": foreman.truncated,
     "{{context.foreman.pending}}": foreman.pending,
     "{{context.foreman.packs}}": foreman.packs,
+    "{{context.exceptions.repo}}": exceptions.repo,
+    "{{context.exceptions.period}}": exceptions.period,
+    "{{context.exceptions.controls}}": exceptions.controls,
+    "{{context.exceptions.items}}": exceptions.items,
+    "{{context.vulns.repo}}": vulns.repo,
+    "{{context.vulns.today}}": vulns.today,
+    "{{context.vulns.alert}}": vulns.alert,
+    "{{context.vulns.policy}}": vulns.policy,
+    "{{context.release.repo}}": release.repo,
+    "{{context.release.tag}}": release.tag,
+    "{{context.release.since}}": release.since,
+    "{{context.release.prs}}": release.prs,
+    "{{context.status.week}}": status.week,
+    "{{context.status.from}}": status.from,
+    "{{context.status.to}}": status.to,
+    "{{context.status.metrics}}": status.metrics,
+    "{{context.status.shipped}}": status.shipped,
+    "{{context.status.inFlight}}": status.inFlight,
+    "{{context.status.blocked}}": status.blocked,
+    "{{context.status.merged}}": status.merged,
+    "{{context.status.compliance}}": status.compliance,
+    "{{context.status.capacity}}": status.capacity,
+    "{{context.compliance.repo}}": compliance.repo,
+    "{{context.compliance.regimes}}": compliance.regimes,
+    "{{context.compliance.controls}}": compliance.controls,
+    "{{context.access.org}}": access.org,
+    "{{context.access.period}}": access.period,
+    "{{context.access.flags}}": access.flags,
+    "{{context.access.removed}}": access.removed,
+    "{{context.postmortem.incident}}": postmortem.incident,
+    "{{context.postmortem.breach}}": postmortem.breach,
+    "{{context.docsDrift.repo}}": docsDrift.repo,
+    "{{context.docsDrift.changedFiles}}": docsDrift.changedFiles,
+    "{{context.docsDrift.docFiles}}": docsDrift.docFiles,
+    "{{context.questionnaire.repo}}": questionnaire.repo,
+    "{{context.questionnaire.source}}": questionnaire.source,
+    "{{context.questionnaire.requester}}": questionnaire.requester,
+    "{{context.questionnaire.name}}": questionnaire.name,
+    "{{context.questionnaire.markdown}}": questionnaire.markdown,
+    "{{context.questionnaire.policies}}": questionnaire.policies,
+    "{{context.questionnaire.bank}}": questionnaire.bank,
     "{{context.jira.issue}}": jira.issue,
     "{{context.jira.description}}": jira.description,
     "{{context.jira.comments}}": jira.comments,
