@@ -1,7 +1,7 @@
 import type { Effort, EngineId, PackId } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { CALM, type Candidate, type ConfigChange, CHEAPER, DECLINE_DAYS, GAIN, MAX_CHANGES, MIN_CASES, MIN_RUNS, type ProposalInput, type RepoSignal, TOLERANCE, TROUBLE, proposeConfig, renderProposal } from "./config-proposal.ts";
+import { CALM, type Candidate, type ConfigChange, CHEAPER, DECLINE_DAYS, GAIN, MAX_CHANGES, MIN_CASES, MIN_RUNS, type ProposalInput, type RepoSignal, TOLERANCE, TROUBLE, proposeConfig, proposalSkips, renderProposal } from "./config-proposal.ts";
 
 const NOW = "2026-11-16T12:00:00.000Z";
 const candidate = (engine: EngineId, effort: Effort | null, quality: number, costPerCase: number, n = 5): Candidate => ({ engine, effort, n, quality, costPerCase, at: "2026-11-01" });
@@ -13,6 +13,48 @@ const base = (over: Partial<ProposalInput> = {}): ProposalInput => ({ current: {
 describe("the rule's constants", () => {
   it("are the plan's numbers", () => {
     expect([MIN_CASES, MIN_RUNS, TOLERANCE, CHEAPER, TROUBLE, CALM, GAIN, DECLINE_DAYS, MAX_CHANGES]).toEqual([3, 10, 0.05, 0.7, 0.25, 0.1, 0.1, 30, 3]);
+  });
+});
+
+describe("the engine a pack ran on", () => {
+  const withEngines = (engines: RepoSignal["engines"], runs = 10, escalations = 4): RepoSignal => ({ runs, escalations, stuck: 0, costUsd: 1, engines });
+
+  it("is the baseline when it differs from the default", () => {
+    // plan defaults to claude:opus; the repo ran it on codex:sol, so codex:sol is the current pair.
+    const input = base({
+      candidates: { plan: [candidate("claude:opus", "high", 0.9, 1), candidate("codex:sol", "high", 0.5, 1), candidate("claude:opus", "medium", 0.8, 1)] },
+      signals: { plan: withEngines({ "codex:sol": 10 }) },
+    });
+    const changes = proposeConfig(input);
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({ engine: { from: "codex:sol", to: "claude:opus" }, effort: null });
+    expect(changes[0]!.evidence.current).toMatchObject({ engine: "codex:sol", quality: 0.5 });
+  });
+
+  it("wins over the configured engine too", () => {
+    const input = base({
+      current: { engines: { plan: "claude:opus" }, effort: {} },
+      candidates: { plan: [candidate("claude:opus", "high", 0.55, 1), candidate("codex:sol", "high", 0.5, 1), candidate("codex:sol", "medium", 0.8, 1)] },
+      signals: { plan: withEngines({ "codex:sol": 9, "claude:opus": 1 }) },
+    });
+    expect(proposeConfig(input)[0]).toMatchObject({ engine: null, effort: { from: "high", to: "medium" } });
+  });
+
+  it("keeps the configured baseline when it ran at least 80% of the runs", () => {
+    const input = base({
+      candidates: { plan: [candidate("claude:opus", "high", 0.5, 1), candidate("codex:sol", "high", 0.9, 1)] },
+      signals: { plan: withEngines({ "claude:opus": 8, "codex:sol": 2 }) },
+    });
+    expect(proposeConfig(input)[0]).toMatchObject({ engine: { from: "claude:opus", to: "codex:sol" } });
+  });
+
+  it("skips a pack when no engine ran 80% of its runs, and says why", () => {
+    const input = base({
+      candidates: { plan: [candidate("claude:opus", "high", 0.5, 1), candidate("codex:sol", "high", 0.9, 1)] },
+      signals: { plan: withEngines({ "claude:opus": 7, "codex:sol": 3 }) },
+    });
+    expect(proposeConfig(input)).toEqual([]);
+    expect(proposalSkips(input)).toEqual([{ pack: "plan", reason: "plan ran on mixed engines: claude:opus 7 of 10 runs, under 80%" }]);
   });
 });
 

@@ -96,6 +96,13 @@ describe("POST /repos/proposals", () => {
     expect(task).toMatchObject({ route: "config", state: "awaiting_setup" });
   });
 
+  it("says which pack it skipped because no engine ran most of its runs", async () => {
+    const repoSignals: RepoSignals = { forRepo: async () => ({ plan: { runs: 12, escalations: 4, stuck: 0, costUsd: 3, engines: { "claude:opus": 7, "codex:sol": 5 } } }) };
+    const app = createApp({ db, pipeline: pipeline(), bus: new Bus(), repoSignals, knownRepos });
+    const res = await app.request("/repos/proposals", post({ repo: repo(), candidates }));
+    expect(await res.json()).toEqual({ changes: [], taskId: null, skipped: [{ pack: "plan", reason: "plan ran on mixed engines: claude:opus 7 of 12 runs, under 80%" }] });
+  });
+
   it("does not propose again what the person declined", async () => {
     const p = pipeline();
     const repoSignals: RepoSignals = { forRepo: async () => ({ plan: { runs: 12, escalations: 4, stuck: 0, costUsd: 3 } }) };

@@ -81,7 +81,7 @@ import { EngineBudgetWatch } from "../../application/engine-gates.ts";
 import { type Credentials, machineCredentials } from "../credentials/index.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import { checkLunaConfigText } from "../../domain/luna-config.ts";
-import { proposeConfig } from "../../domain/config-proposal.ts";
+import { proposalSkips, proposeConfig } from "../../domain/config-proposal.ts";
 import { PolicyParseError } from "../../domain/policy.ts";
 import { type RepoSignals, noRepoSignals } from "../../application/repo-signals.ts";
 import { type ConfigProofs, ConfigProofError } from "../../application/config-proofs.ts";
@@ -586,11 +586,15 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     const at = now ? new Date(now) : new Date();
     try {
       const [current, signals, declined] = await Promise.all([pipeline.configChoices(repo), repoSignals.forRepo(repo, new Date(at.getTime() - SIGNAL_DAYS * DAY_MS)), pipeline.declinedConfigChanges(repo, at)]);
-      const changes = proposeConfig({ current, candidates, signals, declined, now: at.toISOString() });
-      if (changes.length === 0) return c.json({ changes, taskId: null });
+      const input = { current, candidates, signals, declined, now: at.toISOString() };
+      const changes = proposeConfig(input);
+      // A pack left out for mixed engines is named, so a person knows why it got no proposal.
+      const skipped = proposalSkips(input);
+      const extra = skipped.length > 0 ? { skipped } : {};
+      if (changes.length === 0) return c.json({ changes, taskId: null, ...extra });
       const task = await serialize(await pipeline.proposeConfig(repo, changes));
       bus.publish({ type: "task.updated", task, seq: task.seq });
-      return c.json({ changes, taskId: task.id });
+      return c.json({ changes, taskId: task.id, ...extra });
     } catch (error) {
       if (error instanceof PolicyParseError) return fail(c, 422, "invalid_config", error.message);
       throw error;

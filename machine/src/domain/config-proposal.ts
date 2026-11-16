@@ -21,6 +21,8 @@ export const TROUBLE = 0.25;
 export const CALM = 0.1;
 /** How much quality a stronger candidate must add. */
 export const GAIN = 0.1;
+/** The share of a pack's runs one engine must have for it to count as the engine the repo runs. */
+export const ENGINE_SHARE = 0.8;
 /** Days a declined change stays out of new proposals. */
 export const DECLINE_DAYS = 30;
 /** Most changes in one proposal. */
@@ -45,6 +47,8 @@ export interface RepoSignal {
   /** The loop guard's stops. Evidence only: `escalations` is read from the event log, where the pipeline escalates each stop, so they are already in it. Said in `why`, not counted again. */
   stuck: number;
   costUsd: number;
+  /** Runs per engine (`stage_runs.engine`; a run with no engine recorded is left out). Absent: the engine is taken from the config. */
+  engines?: Partial<Record<EngineId, number>>;
 }
 
 export interface ProposalInput {
@@ -84,10 +88,32 @@ export function proposeConfig(input: ProposalInput): ConfigChange[] {
   return drafted.slice(0, MAX_CHANGES).map((d) => d.change);
 }
 
+/** The engine a pack ran on most in the repo, when one ran at least `ENGINE_SHARE` of its runs. `skip` says why none did. */
+function observedEngine(pack: PackId, signal: RepoSignal | undefined): { engine: EngineId | null; skip: string | null } {
+  const counts = Object.entries(signal?.engines ?? {}) as Array<[EngineId, number]>;
+  if (!signal || counts.length === 0) return { engine: null, skip: null };
+  const [top, n] = counts.sort((a, b) => b[1] - a[1])[0]!;
+  if (n / signal.runs < ENGINE_SHARE) return { engine: null, skip: `${pack} ran on mixed engines: ${top} ${n} of ${signal.runs} runs, under ${ENGINE_SHARE * 100}%` };
+  return { engine: top, skip: null };
+}
+
+/** The packs the rule left out because no single engine ran most of their runs, with the reason. */
+export function proposalSkips(input: ProposalInput): Array<{ pack: PackId; reason: string }> {
+  const out: Array<{ pack: PackId; reason: string }> = [];
+  for (const pack of Object.keys(input.candidates) as PackId[]) {
+    const { skip } = observedEngine(pack, input.signals[pack]);
+    if (skip) out.push({ pack, reason: skip });
+  }
+  return out;
+}
+
 function draftFor(pack: PackId, input: ProposalInput): Drafted | null {
   const def = PACKS[pack];
   const isDecision = def.kind === "decision";
-  const engine = input.current.engines[pack] ?? def.engines.default;
+  const observed = observedEngine(pack, input.signals[pack]);
+  if (observed.skip) return null;
+  // The engine the repo really ran beats the config and the default: a reviewer may run on codex:sol while the pack defaults to claude:opus.
+  const engine = observed.engine ?? input.current.engines[pack] ?? def.engines.default;
   const effort: Effort | null = isDecision ? null : (input.current.effort[pack] ?? (def as { effort: Effort }).effort);
   const all = input.candidates[pack] ?? [];
 

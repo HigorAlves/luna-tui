@@ -88,6 +88,17 @@ describe("pgRepoSignals", () => {
     expect(got.question_council).toBeUndefined();
   });
 
+  it("counts a pack's runs per engine, and leaves out a run that recorded none", async () => {
+    const mine = await save("/r/app");
+    const run = (engine: string | null) => db.getRepository(StageRunEntity).save({ taskId: mine.id, stage: "verifying", attempt: 1, status: "passed", outcome: "pass", costUsd: "1.0000", engine, startedAt: new Date() });
+    await run("codex:sol");
+    await run("codex:sol");
+    await run("claude:opus");
+    await run(null);
+    const got = await pgRepoSignals(db, economy([], [])).forRepo("/r/app", new Date(Date.now() - DAY));
+    expect(got.verifying).toEqual({ runs: 4, escalations: 0, stuck: 0, costUsd: 4, engines: { "codex:sol": 2, "claude:opus": 1 } });
+  });
+
   it("is empty for a repo with no runs", async () => {
     expect(await pgRepoSignals(db, economy([], [])).forRepo("/r/none", new Date(0))).toEqual({});
   });
