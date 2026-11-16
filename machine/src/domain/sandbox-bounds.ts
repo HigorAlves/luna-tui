@@ -19,18 +19,20 @@ export interface SandboxBounds {
   splitCache: boolean;
 }
 
-const hostOf = (pattern: string): string => pattern.toLowerCase().split(":")[0]!;
+/** The name as the proxy compares it: trimmed, lowercased, no port, no trailing dot. */
+const hostOf = (pattern: string): string => pattern.trim().toLowerCase().split(":")[0]!.replace(/\.+$/, "");
 
-/** Whether the deny entry covers the repo's entry: a name, or a `*.suffix` (and every subdomain under a deny's `*.suffix`). Ports are ignored. */
-function denies(deny: string, entry: string): boolean {
+/** Whether the deny entry covers the repo's entry: a name, or a `*.suffix` (and every subdomain under a deny's `*.suffix`). A repo `*.S` is covered too when the deny's
+ *  name (without its `*.`) is `S` or sits under it, because the wildcard would let that name through. Ports and trailing dots are ignored. */
+export function denies(deny: string, entry: string): boolean {
   const d = hostOf(deny);
   const e = hostOf(entry);
   const entrySuffix = e.startsWith("*.") ? e.slice(2) : null;
-  if (d.startsWith("*.")) {
-    const suffix = d.slice(2);
-    return entrySuffix === null ? e.endsWith(`.${suffix}`) : entrySuffix === suffix || entrySuffix.endsWith(`.${suffix}`);
+  const denySuffix = d.startsWith("*.") ? d.slice(2) : null;
+  if (denySuffix !== null) {
+    return entrySuffix === null ? e.endsWith(`.${denySuffix}`) : entrySuffix === denySuffix || entrySuffix.endsWith(`.${denySuffix}`) || denySuffix.endsWith(`.${entrySuffix}`);
   }
-  return entrySuffix === null ? e === d : entrySuffix === d;
+  return entrySuffix === null ? e === d : d === entrySuffix || d.endsWith(`.${entrySuffix}`);
 }
 
 const plural = (count: number): string => `${count} host${count === 1 ? "" : "s"}`;

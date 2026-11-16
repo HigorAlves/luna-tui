@@ -37,6 +37,19 @@ describe("boundSandbox", () => {
     expect(out.bounds.egress[0]).toBe('sandbox.egress.allow: "files.pastebin.com" dropped, it matches egress.deny "*.pastebin.com" in the machine\'s sandbox policy');
   });
 
+  describe("a repo wildcard against a narrower deny", () => {
+    const bound = (allow: string[], deny: string[]) => boundSandbox(sandbox({ egress: { allow, registries: "always" } }), policy({ egress: { deny } })).sandbox.egress.allow;
+    it("drops a wildcard over a denied exact host", () => expect(bound(["*.githubusercontent.com", "ok.example.com"], ["gist.githubusercontent.com"])).toEqual(["ok.example.com"]));
+    it("drops a wildcard over a denied exact host one level below", () => expect(bound(["*.example.com"], ["a.b.example.com"])).toEqual([]));
+    it("drops a wildcard over a denied wildcard", () => expect(bound(["*.githubusercontent.com"], ["*.gist.githubusercontent.com"])).toEqual([]));
+    it("drops a wildcard whose suffix is the denied host itself", () => expect(bound(["*.pastebin.com"], ["pastebin.com"])).toEqual([]));
+    it("keeps a wildcard the deny does not sit under", () => expect(bound(["*.gist.example.com", "*.example.org"], ["example.com", "gist.example.org.evil.com"])).toEqual(["*.gist.example.com", "*.example.org"]));
+    it("compares case-insensitively", () => expect(bound(["*.GitHubUserContent.com"], ["Gist.githubusercontent.COM"])).toEqual([]));
+    it("ignores a trailing dot on the repo's entry", () => expect(bound(["*.githubusercontent.com.", "pastebin.com."], ["gist.githubusercontent.com", "pastebin.com"])).toEqual([]));
+    it("ignores a port on either side", () => expect(bound(["*.githubusercontent.com:8443"], ["gist.githubusercontent.com"])).toEqual([]));
+    it("ignores a port on the deny", () => expect(bound(["*.githubusercontent.com"], ["gist.githubusercontent.com:443"])).toEqual([]));
+  });
+
   it("repo_hosts: deny drops every repo host, with one reason", () => {
     const out = boundSandbox(sandbox({ egress: { allow: ["a.example.com", "b.example.com"], registries: "install" } }), policy({ egress: { repo_hosts: "deny" } }));
     expect(out.sandbox.egress).toEqual({ allow: [], registries: "install" });
