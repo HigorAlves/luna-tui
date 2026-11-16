@@ -3,11 +3,13 @@
 // sandbox. Roles and packs are static, so every agent is compiled and `eve build` run at image
 // build (build.ts); a run only starts the built server and sends the prompt. The model is the
 // engine's, read when the server starts (agent/model.ts), so one build serves every eve engine.
-import { type Access, type AgentPack, PACKS, type Pack } from "@hardness/contracts";
+// A helper on an eve engine is the agent's native subagent (agent/subagents/<role>/), reached
+// through the `delegate` workflow tool.
+import { type Access, type AgentPack, type AgentRole, type EngineId, HELPER_LIMITS, PACKS, type Pack, answerJsonSchema, helperPack, helpersOn, resolveEngine } from "@hardness/contracts";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
-import { DELEGATE, delegateTool, delegatedHelpers } from "../../core/delegate.ts";
+import { DELEGATE, delegateTool } from "../../core/delegate.ts";
 import { LUNA_TOOLS } from "../../core/luna-tools.ts";
 import { EVE_TOOL_NAMES, factoryRules } from "../../core/render.ts";
 import { readRole } from "../../core/roles.ts";
@@ -76,6 +78,106 @@ export function instructionParts(pack: AgentPack, factoryRoot: string): { body: 
   return { body, rules: factoryRules(EVE_TOOL_NAMES), addendum };
 }
 
+/** The helpers of an eve stage that run as its native subagents: the ones on an eve engine. The
+ *  rest are `delegate`'s over the bridge. */
+export const eveSubagents = (pack: AgentPack): Array<{ role: AgentRole; engine: EngineId }> => helpersOn(pack, "eve").filter((h) => resolveEngine(h.engine).runtime === "eve");
+
+/** One tool file per tool, by path under `dir`, importing the runtime's tools from `lib`; a native
+ *  subagent's guarded tools (`readOnly` its child run's commands) approve against its own read-only policy. */
+function toolFiles(dir: string, tools: string[], fromTools: (file: string) => string, { readOnly, scripted = false }: { readOnly?: string[]; scripted?: boolean } = {}): Record<string, string> {
+  // The conformance fake's `bash` runs through its scripted executor (fake.ts).
+  const fake = scripted ? `import { scriptedExec } from "${fromTools("fake.ts")}";\n` : "";
+  const exec = scripted ? ", scriptedExec" : "";
+  return Object.fromEntries(
+    tools.map((tool) => {
+      const body = GUARDED.has(tool)
+        ? readOnly
+          ? `import { readOnlyTools } from "${fromTools("agent/tools.ts")}";\n${tool === "bash" ? fake : ""}\nexport default readOnlyTools(${JSON.stringify(readOnly)}${tool === "bash" ? exec : ""}).${tool};\n`
+          : tool === "bash" && scripted
+            ? `import { bashTool } from "${fromTools("agent/tools.ts")}";\n${fake}\nexport default bashTool(scriptedExec);\n`
+            : `export { ${tool} as default } from "${fromTools("agent/tools.ts")}";\n`
+        : tool in LUNA_TOOLS
+          ? `import { lunaTool } from "${fromTools("agent/tools.ts")}";\n\nexport default lunaTool("${tool}");\n`
+          : `export { default } from "eve/tools/${tool}";\n`;
+      return [`${dir}/${tool}.ts`, body];
+    }),
+  );
+}
+
+/** The files of a helper's native subagent, under agent/subagents/<role>/: its role as the
+ *  instructions, its engine's model, the read-only tools of its child run, and the parent's sandbox. */
+function subagentFiles(pack: AgentPack, helper: { role: AgentRole; engine: EngineId }, options: CompileOptions, app: string, scripted: boolean): Record<string, string> {
+  const lib = join(options.factoryRoot, "src", "runtimes", "eve");
+  const dir = join("agent", "subagents", helper.role);
+  const from = (sub: string) => (file: string) => importPath(join(app, dir, sub), join(lib, file));
+  const child = helperPack(pack, helper);
+  const model = scripted
+    ? { line: `import { scriptedModel } from "${from("")("fake.ts")}";`, expr: `scriptedModel("${helper.role}")` }
+    : { line: `import { engineModel } from "${from("")("agent/model.ts")}";`, expr: `engineModel("${helper.engine}")` };
+  const agent = [
+    `// ${GENERATED} Pack ${pack.id}, helper ${helper.role} on ${helper.engine}.`,
+    `import { defineAgent } from "eve";`,
+    model.line,
+    "",
+    "export default defineAgent({",
+    `  description: ${JSON.stringify(readRole(join(options.factoryRoot, "roles"), helper.role).description)},`,
+    `  model: ${model.expr},`,
+    `  reasoning: "${child.effort}",`,
+    "  defaultTools: false,",
+    "  tool: false,",
+    `  limits: { sessionUsage: ${usageLimit({ maxTurns: HELPER_LIMITS.maxTurns })} },`,
+    "});",
+    "",
+  ].join("\n");
+  const { body, rules, addendum } = instructionParts(child, options.factoryRoot);
+  return {
+    [`${dir}/agent.ts`]: agent,
+    [`${dir}/instructions.md`]: `${body}\n\n${rules}\n${addendum}`,
+    [`${dir}/sandbox.ts`]: `import { defineParentSandbox } from "eve/sandbox";\n\nexport default defineParentSandbox();\n`,
+    ...toolFiles(`${dir}/tools`, eveTools(child.access), from("tools"), { readOnly: child.access.commands, scripted }),
+  };
+}
+
+/** The `delegate` workflow tool: a native subagent's helper goes through `ctx.agent`, answering in
+ *  the helper schema, the rest through the bridge, each call out of the server a step. What it needs is written in as literals, the
+ *  schema as JSON: the workflow bundle cannot import the contracts (they read files), and sees
+ *  plain values, no closure. */
+function delegateToolFile(description: string, roles: AgentRole[], subagents: AgentRole[], answer: Record<string, unknown>, fromTools: (file: string) => string): string {
+  return [
+    `import { defineWorkflowTool } from "eve/tools";`,
+    `import { type DelegateInput, delegateInput, delegateOverBridge, startHelper } from "${fromTools("agent/delegate.ts")}";`,
+    "",
+    `const SUBAGENTS: string[] = ${JSON.stringify(subagents)};`,
+    `const HELPER_ANSWER = ${JSON.stringify(answer)};`,
+    "",
+    "// Steps are found only in modules under the app, so they are declared here.",
+    "async function helperStart(input: DelegateInput) {",
+    `  "use step";`,
+    "  return await startHelper(input);",
+    "}",
+    "async function viaBridge(input: DelegateInput) {",
+    `  "use step";`,
+    "  return await delegateOverBridge(input);",
+    "}",
+    "",
+    "export default defineWorkflowTool({",
+    `  description: ${JSON.stringify(description)},`,
+    `  inputSchema: delegateInput(${JSON.stringify(roles)}),`,
+    "  async execute(input, ctx) {",
+    `    "use workflow";`,
+    "    if (!SUBAGENTS.includes(input.helper)) return await viaBridge(input);",
+    "    const start = await helperStart(input);",
+    `    if ("error" in start) throw new Error(start.error);`,
+    "    const response = await ctx.agent(input.helper).send(start.prompt, { outputSchema: HELPER_ANSWER, signal: ctx.abortSignal });",
+    "    const { data, status } = await response.result();",
+    '    if (status !== "completed" || !data) throw new Error(`${input.helper} gave no answer (${status}). Go on without it.`);',
+    "    return data;",
+    "  },",
+    "});",
+    "",
+  ].join("\n");
+}
+
 /** Every file of the pack's agent app but its skills, by path relative to the app. */
 export function agentFiles(pack: AgentPack, options: CompileOptions): Record<string, string> {
   if (!pack.agent) throw new Error(`pack ${pack.id} has no agent to compile`);
@@ -107,26 +209,15 @@ export function agentFiles(pack: AgentPack, options: CompileOptions): Record<str
   const { body, rules, addendum } = instructionParts(pack, options.factoryRoot);
   const instructions = `${body}\n\n${rules}\n${addendum}`;
 
-  const tools = Object.fromEntries(
-    eveTools(pack.access).map((tool) => {
-      const body =
-        tool === "bash" && options.model === "scripted"
-          ? `import { bashTool } from "${fromTools("agent/tools.ts")}";\nimport { scriptedExec } from "${fromTools("fake.ts")}";\n\nexport default bashTool(scriptedExec);\n`
-          : GUARDED.has(tool)
-        ? `export { ${tool} as default } from "${fromTools("agent/tools.ts")}";\n`
-        : tool in LUNA_TOOLS
-          ? `import { lunaTool } from "${fromTools("agent/tools.ts")}";\n\nexport default lunaTool("${tool}");\n`
-          : `export { default } from "eve/tools/${tool}";\n`;
-      return [`agent/tools/${tool}.ts`, body];
-    }),
-  );
-  // `delegate`, when the pack hands work to helpers: eve runs every helper as a child of the stage.
-  const helpers = delegatedHelpers(pack, "eve");
+  const tools = toolFiles("agent/tools", eveTools(pack.access), fromTools, { scripted: options.model === "scripted" });
+  // `delegate`, when the pack hands work to helpers: a native subagent for each on an eve engine, the bridge for the rest.
+  const helpers = helpersOn(pack, "eve");
+  const subagents = eveSubagents(pack);
   if (helpers.length > 0) {
     const { description } = delegateTool(helpers, join(options.factoryRoot, "roles"));
-    tools[`agent/tools/${DELEGATE}.ts`] =
-      `import { delegateTool } from "${fromTools("agent/tools.ts")}";\n\nexport default delegateTool(${JSON.stringify(description)}, ${JSON.stringify(helpers.map((h) => h.role))});\n`;
+    tools[`agent/tools/${DELEGATE}.ts`] = delegateToolFile(description, helpers.map((h) => h.role), subagents.map((h) => h.role), answerJsonSchema(helperPack(pack, helpers[0]!)), fromTools);
   }
+  const subagentApps = Object.assign({}, ...subagents.map((h) => subagentFiles(pack, h, options, app, options.model === "scripted")));
 
   return {
     "package.json": `${JSON.stringify({ name: `luna-${name.replaceAll("_", "-")}`, private: true, type: "module", description: GENERATED, dependencies: { eve: EVE_VERSION } }, null, 2)}\n`,
@@ -136,6 +227,7 @@ export function agentFiles(pack: AgentPack, options: CompileOptions): Record<str
     "agent/sandbox.ts": `export { default, environment } from "${fromAgent("sandbox.ts")}";\n`,
     "agent/instrumentation/laminar.ts": `export { default } from "${fromInstrumentation("agent/laminar.ts")}";\n`,
     ...tools,
+    ...subagentApps,
   };
 }
 

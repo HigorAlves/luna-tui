@@ -13,15 +13,18 @@ function policy(): GuardContext {
   }
 }
 
-/** Why one call may not run, or null. */
-export function refusal(tool: GuardedCall["tool"], input: unknown): string | null {
-  const decision = checkCall({ tool, input }, policy());
+/** How a native subagent's policy differs from the stage's: its child run is read-only, with its own commands. */
+export type Narrowing = Pick<GuardContext, "writable" | "commands">;
+
+/** Why one call may not run, or null; a native subagent's call is checked against the stage's policy narrowed to its own. */
+export function refusal(tool: GuardedCall["tool"], input: unknown, narrow?: Narrowing): string | null {
+  const decision = checkCall({ tool, input }, { ...policy(), ...narrow });
   return decision.allow ? null : decision.reason;
 }
 
 /** The approval for one call: run it, or refuse it with the reason. */
-export function approve(tool: GuardedCall["tool"], input: unknown): ApprovalStatus {
-  const reason = refusal(tool, input);
+export function approve(tool: GuardedCall["tool"], input: unknown, narrow?: Narrowing): ApprovalStatus {
+  const reason = refusal(tool, input, narrow);
   return reason === null ? "not-applicable" : { type: "denied", reason };
 }
 

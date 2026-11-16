@@ -4,7 +4,7 @@
 // Claude token. Each credential once. The stage's own is required as before; a helper's that is
 // missing, held back (a disabled runtime, a monthly cap) or busy past a short wait is left out
 // with a note, and the helper's call then fails inside the stage while the agent goes on.
-import { type EngineId, type Pack, credentialOwner } from "@hardness/contracts";
+import { type EngineId, type Pack, credentialOwner, helpersOn, resolveEngine } from "@hardness/contracts";
 
 import { CredentialWaitError, type Credentials, NoCredentialError, type PrepareWait, type RunCredential } from "../../adapters/credentials/index.ts";
 
@@ -24,7 +24,7 @@ export async function prepareStageCredentials(credentials: Credentials, pack: Pa
   const { repo, note, ...wait } = options;
   const prepared = [await credentials.prepare(engine, runDir, wait)];
   const owners = new Set([credentialOwner(engine)]);
-  const helpers = pack.kind === "decision" ? [] : pack.helpers;
+  const helpers = helpersOn(pack, resolveEngine(engine).runtime);
   try {
     for (const helper of helpers) {
       const owner = credentialOwner(helper.engine);
