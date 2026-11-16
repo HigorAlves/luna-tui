@@ -44,7 +44,7 @@ describe("a task snapshot's lastRun and gate", () => {
     await pipeline.start(task.id);
     const snapshot = await one(task.id);
     expect(snapshot.lastRun).toEqual({ stage: "test_design", engine: null, outcome: "pass", summary: "Adds an error to the login form", at: expect.any(String) });
-    expect(snapshot.gate).toEqual({ state: "awaiting_approval", requested: expect.objectContaining({ summary: "Adds an error to the login form", brief: "b" }) });
+    expect(snapshot.gate).toEqual({ id: expect.any(String), state: "awaiting_approval", requested: expect.objectContaining({ summary: "Adds an error to the login form", brief: "b" }) });
     expect((await all())[0]).toMatchObject({ lastRun: snapshot.lastRun, gate: snapshot.gate });
   });
 

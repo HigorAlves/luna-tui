@@ -1213,7 +1213,7 @@ describe("the triage record: a correction and its ground truth", () => {
     await p.start(task.id);
     const row = await p.get(task.id);
     expect(row.state).toBe("awaiting_approval");
-    expect(row.record?.qa).toEqual([{ question: expect.stringContaining("bug or a feature"), answer: "bug", by: "council", evidence: ["src/a.ts:1"] }]);
+    expect(row.record?.qa).toEqual([{ question: expect.stringContaining("bug or a feature"), answer: "bug", by: "council", field: "kind", evidence: ["src/a.ts:1"] }]);
     expect(learned).toEqual([]);
   });
 
@@ -1325,6 +1325,16 @@ describe("the triage record: a correction and its ground truth", () => {
     await second.p.decide(second.id, "approved", undefined, undefined, { approver: "ana" });
     const withEdit = second.learned.filter((l) => l.source === "plan_approved").at(-1)!;
     expect(withEdit.label).toMatchObject({ kind: { choice: "chore" }, size: { choice: "S" } });
+  });
+
+  it("leaves out a field the council settled: a person who approved the plan did not read it as theirs", async () => {
+    const { p, id, learned } = await setup();
+    const task = await p.get(id);
+    await new PgTaskStore(db).updateTask(id, { record: { ...task.record!, qa: [{ question: "What kind of change is this?", answer: "bug", by: "council", field: "kind", evidence: ["src/app.ts:12"] }] } });
+    await p.decide(id, "approved", undefined, undefined, { approver: "ana" });
+    const confirmed = learned.find((l) => l.source === "plan_approved" && l.pack === "triage_signals")!;
+    expect(confirmed.label).not.toHaveProperty("kind");
+    expect(confirmed.label).toMatchObject({ size: { choice: "S" }, risk_prelim: { choice: "medium" } });
   });
 
   it("writes the outcome's truth when a reply or an archive gate is approved or sent back", async () => {

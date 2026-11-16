@@ -11,7 +11,10 @@ use crate::{
         origin_lines, plain, pr_for, pr_url, record_group, run_error, ship_risk_is_high,
         slice_progress,
     },
-    model::{Approval, PullRequest, Task, TaskDetail, criteria_summary, questions_of, settled_by_council_of},
+    model::{
+        Approval, PullRequest, Task, TaskDetail, criteria_summary, questions_of,
+        settled_by_council_of,
+    },
     reference::{Page, RefGroup},
     text::{self, ellipsis, truncate_middle},
     theme,
@@ -250,8 +253,15 @@ fn council_section(r: &Value, width: usize) -> Vec<Line<'static>> {
         .filter_map(|m| turns.iter().rfind(|t| t["member"].as_str() == Some(m)))
         .map(|t| t["findings"].as_array().map_or(0, Vec::len))
         .sum();
+    let silent = turns.iter().any(|t| {
+        t["summary"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("did not answer"))
+    });
     let head = if council["passed"].as_bool() == Some(true) {
         "Council: passed".to_string()
+    } else if silent {
+        "Council: a member did not answer".to_string()
     } else {
         format!("Council: {open} finding(s) open")
     };
@@ -2105,6 +2115,20 @@ mod approver_tests {
     }
 
     #[test]
+    fn a_member_that_did_not_answer_is_said_instead_of_a_zero_count() {
+        let council = serde_json::json!({"passed": false, "rounds": 2, "transcript": [
+            {"member": "security", "round": 1, "summary": "a gap", "findings": []},
+            {"member": "security", "round": 2, "summary": "did not answer: engine down", "findings": []},
+        ]});
+        let screen = with_council(Some(council), &["council.security"]);
+        assert!(
+            screen.contains("Council: a member did not answer"),
+            "{screen}"
+        );
+        assert!(!screen.contains("0 finding(s) open"), "{screen}");
+    }
+
+    #[test]
     fn a_plan_with_no_council_has_no_council_section() {
         let screen = with_council(None, &[]);
         assert!(!screen.contains("Council"), "{screen}");
@@ -2160,8 +2184,8 @@ mod first_page_tests {
     use crate::{
         detail::Section,
         testkit::{
-            council_questions_app, escalated_app, plan_gate_app, questions_app, release_question_app, render,
-            running_build_app, ship_stage_app,
+            council_questions_app, escalated_app, plan_gate_app, questions_app,
+            release_question_app, render, running_build_app, ship_stage_app,
         },
     };
 

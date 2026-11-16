@@ -370,7 +370,7 @@ describe("withTriageSignals and the question council", () => {
     expect(issues.map((i) => i.answers ?? [])).toEqual([[], [{ question: KIND, answer: "bug" }]]);
     expect(decisions).toEqual([[expect.objectContaining({ answers: { [KIND]: "bug" } })]]);
     const record = TriageRecord.parse(saved.find((p) => p.record)!.record);
-    expect(record.qa).toEqual([{ question: KIND, answer: "bug", by: "council", evidence: ["src/app.ts:12"] }]);
+    expect(record.qa).toEqual([{ question: KIND, answer: "bug", by: "council", field: "kind", evidence: ["src/app.ts:12"] }]);
   });
 
   it("asks only what is left, and tells the person what the council settled so they can overrule it", async () => {
@@ -418,6 +418,21 @@ describe("withTriageSignals and the question council", () => {
     const onlyPerson = await withTriageSignals(async () => agentPass(), { classify: async () => reading({ who: { answer: 1, confidence: 0.3 } }), council: councilOf({}, seen), save: async () => {} })(context());
     expect(seen).toHaveLength(1);
     expect(onlyPerson.outcome).toBe("needs_input");
+  });
+
+  it("asks the machine's questions the council did not settle when the re-run's classifier fails: urgency still reaches the person", async () => {
+    const open = reading({ kind: { answer: "bug", confidence: 0.5 }, who: { answer: 1, confidence: 0.3 } });
+    let calls = 0;
+    const classify = async () => {
+      if (++calls > 1) throw new Error("classifier down");
+      return open;
+    };
+    const council = councilOf({ [KIND]: { answer: "bug", confidence: 0.95, evidence: ["a.ts:1"] } });
+    const result = await withTriageSignals(async () => agentPass(), { classify: classify as never, council, save: async () => {} })(context());
+    expect(calls).toBe(2);
+    expect(result.outcome).toBe("needs_input");
+    expect(result.needsInput?.map((q) => q.question)).toEqual([expect.stringContaining("urgent")]);
+    expect(result.detail).toMatchObject({ settledByCouncil: [{ question: KIND }] });
   });
 
   it("asks the person when the answer is under the bar: the field's own bar for a machine question, the council's for the agent's", async () => {

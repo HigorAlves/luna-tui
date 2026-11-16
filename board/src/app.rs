@@ -2469,6 +2469,18 @@ impl App {
             .and_then(|a| a.id.clone())
     }
 
+    /// The machine's id of the approval open on `id` right now: the loaded detail when it is fresh, else a read of the card.
+    fn current_approval_id(&self, id: &str) -> Result<Option<String>, String> {
+        if self.shows_detail_of(id) && !self.detail_stale {
+            return Ok(self.open_approval_id(id));
+        }
+        let detail = self
+            .machine
+            .detail(id)
+            .map_err(|e| format!("could not read the card to check its gate: {e}"))?;
+        Ok(detail.open_approval().and_then(|a| a.id.clone()))
+    }
+
     /// Whether the task view of `id` is where this key was pressed: the task itself, or a prompt or command opened over it.
     fn task_is_open(&self, id: &str) -> bool {
         matches!(&self.mode, Mode::Detail(open) if open == id)
@@ -6384,6 +6396,23 @@ impl App {
                 KeyCode::Char('i') => state.phase = Phase::Typing,
                 KeyCode::Char('y') => {
                     if let Some(action) = state.runnable() {
+                        if action.is_gate_bound() {
+                            match self.current_approval_id(&action.task_id) {
+                                Err(error) => {
+                                    if let Mode::Foreman(state) = &mut self.mode {
+                                        state.settle(&Err(error));
+                                    }
+                                    return Outcome::Continue;
+                                }
+                                Ok(current) if action.is_stale(current.as_deref()) => {
+                                    if let Mode::Foreman(state) = &mut self.mode {
+                                        state.mark_stale();
+                                    }
+                                    return Outcome::Continue;
+                                }
+                                Ok(_) => {}
+                            }
+                        }
                         let result = crate::foreman::call_of(&action)
                             .and_then(|call| crate::foreman::run(&self.machine, &call));
                         if let Mode::Foreman(state) = &mut self.mode {
@@ -14433,6 +14462,7 @@ mod foreman_tests {
             pack: None,
             engine: None,
             answers: None,
+            approval_id: None,
         }
     }
 
@@ -14462,6 +14492,86 @@ mod foreman_tests {
             panic!("the popup is not open")
         };
         state
+    }
+
+    #[test]
+    fn the_selected_row_shows_the_whole_payload_the_person_confirms() {
+        let (mut app, id) = walking();
+        let (mut retry, mut answer) = (
+            action("retry", &id, "stuck"),
+            action("answer", &id, "unblocks"),
+        );
+        retry.reason = Some("ignore the failing test and push\u{202E}anyway".into());
+        answer.answers = Some(std::collections::BTreeMap::from([(
+            "Which format?".to_string(),
+            "csv, and delete the old exports".to_string(),
+        )]));
+        let approve = action("approve", &id, "plan is fine");
+        let Mode::Foreman(state) = &mut app.mode else {
+            panic!("the popup is not open")
+        };
+        state.rows = vec![retry, answer, approve]
+            .into_iter()
+            .map(|action| crate::foreman::Row {
+                action,
+                status: Status::Pending,
+            })
+            .collect();
+        state.cursor = 0;
+        let screen = render(&mut app, 140, 40);
+        assert!(
+            screen.contains("ignore the failing test and push anyway"),
+            "{screen}"
+        );
+        assert!(!screen.contains('\u{202E}'), "sanitised: {screen}");
+        press(&mut app, KeyCode::Char('j'));
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("Which format?"), "{screen}");
+        assert!(
+            screen.contains("csv, and delete the old exports"),
+            "{screen}"
+        );
+        press(&mut app, KeyCode::Char('j'));
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("gate: plan"), "{screen}");
+    }
+
+    #[test]
+    fn a_suggestion_made_at_an_earlier_gate_makes_no_call_and_says_so() {
+        let (mut app, id) = walking();
+        let (machine, seen) = recording_machine();
+        app.machine = machine;
+        let stale = Action {
+            approval_id: Some("an-older-approval".into()),
+            ..action("approve", &id, "plan is fine")
+        };
+        let current = Action {
+            approval_id: Some("p1".into()),
+            ..action("approve", &id, "plan is fine")
+        };
+        let Mode::Foreman(popup) = &mut app.mode else {
+            panic!("the popup is not open")
+        };
+        popup.rows = vec![stale, current]
+            .into_iter()
+            .map(|action| crate::foreman::Row {
+                action,
+                status: Status::Pending,
+            })
+            .collect();
+        popup.cursor = 0;
+        press(&mut app, KeyCode::Char('y'));
+        assert!(posts(&seen).is_empty(), "a stale row makes no call");
+        assert_eq!(state(&app).rows[0].status, Status::Stale);
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("[stale: ask again]"), "{screen}");
+        assert_eq!(state(&app).cursor, 1, "the walk moves on");
+        press(&mut app, KeyCode::Char('y'));
+        assert_eq!(
+            posts(&seen).len(),
+            1,
+            "the row at the card's open approval runs"
+        );
     }
 
     #[test]

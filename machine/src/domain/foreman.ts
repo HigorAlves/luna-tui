@@ -11,6 +11,8 @@ const SUMMARY_MAX = 200;
 
 /** A card's open approval: the gate it waits at and what the machine asked there. */
 export interface OpenGate {
+  /** The approval's id. */
+  id?: string;
   state: string;
   requested: Record<string, unknown>;
 }
@@ -34,6 +36,13 @@ function summaryOf(gate: OpenGate | undefined, questions: number): string | null
   return text === undefined ? null : flat(text, SUMMARY_MAX);
 }
 
+/** What the open gate decides beyond the plan: triage's outcome, or the release question. */
+function outcomeOf(gate: OpenGate | undefined): string | null {
+  if (!gate) return null;
+  if (typeof gate.requested.outcome === "string") return gate.requested.outcome;
+  return gate.requested.gate === "ship_approval" ? "ship_approval" : null;
+}
+
 export function buildForemanBoard(
   tasks: readonly TaskRow[],
   gates: ReadonlyMap<string, OpenGate>,
@@ -55,6 +64,9 @@ export function buildForemanBoard(
         column: columnOf(t.state, t.resumeTo),
         gate: gate?.state ?? null,
         gateSummary: summaryOf(gate, questions.length),
+        gateOutcome: outcomeOf(gate),
+        approvalId: gate?.id ?? null,
+        route: t.route,
         escalation: t.state === "escalated" ? (t.reason ?? "escalated") : null,
         questions,
         engines: t.stages ?? {},

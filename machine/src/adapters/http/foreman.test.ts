@@ -68,7 +68,7 @@ describe("POST /foreman", () => {
     willAnswer({ reply: "Do both.", actions: [good, noGate, ghost] });
     const body = await (await ask({ question: "go" })).json();
     expect(body.reply).toBe("Do both.");
-    expect(body.actions).toEqual([good]);
+    expect(body.actions).toEqual([{ ...good, approvalId: null }]);
     expect(body.dropped).toEqual([
       { action: noGate, problem: `card ${task.id} has no gate to approve` },
       { action: ghost, problem: "card nope is not on the board" },
@@ -86,7 +86,18 @@ describe("POST /foreman", () => {
     willAnswer({ reply: "Answered.", actions: [{ kind: "answer", taskId: task.id, why: "recommended", answers: { q1: "csv" } }] });
     const body = await (await ask({ question: "answer it" })).json();
     expect(body.dropped).toEqual([]);
-    expect(body.actions).toEqual([{ kind: "answer", taskId: task.id, why: "recommended", answers: { "Which format?": "csv" } }]);
+    expect(body.actions).toEqual([{ kind: "answer", taskId: task.id, why: "recommended", answers: { "Which format?": "csv" }, approvalId: expect.any(String) }]);
+  });
+
+  it("stamps every action with the open approval id of the card it names, as the snapshot saw it", async () => {
+    const { pipeline, ask, willAnswer } = setup({});
+    const task = await pipeline.createTask({ title: "Needs answers" });
+    await db.query("update tasks set state = 'awaiting_answers' where id = $1", [task.id]);
+    const [row] = (await db.query("insert into approvals (task_id, kind, requested) values ($1, 'awaiting_answers', $2) returning id", [task.id, JSON.stringify({ questions: [{ question: "Which format?", recommended: "csv" }] })])) as { id: string }[];
+    const plain = await pipeline.createTask({ title: "A draft" });
+    willAnswer({ reply: "", actions: [{ kind: "answer", taskId: task.id, why: "w", answers: { q1: "csv" } }, { kind: "start", taskId: plain.id, why: "w" }] });
+    const body = await (await ask({ question: "go" })).json();
+    expect(body.actions.map((a: { taskId: string; approvalId: string | null }) => [a.taskId, a.approvalId])).toEqual([[task.id, row!.id], [plain.id, null]]);
   });
 
   it("rejects a body with no question, a long history or a bad turn", async () => {

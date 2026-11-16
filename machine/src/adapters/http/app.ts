@@ -55,7 +55,7 @@ import {
   type RepoHealth,
 } from "@hardness/contracts";
 import { EconomyApproveInput, type EconomyConfig, EconomyRepoInput, EconomyRestoreInput } from "@hardness/contracts";
-import { ForemanAnswer, ForemanContext, foremanActionProblem, isTerminal } from "@hardness/contracts";
+import { ForemanAnswer, type ForemanSuggestion, ForemanContext, foremanActionProblem, isTerminal } from "@hardness/contracts";
 import { buildForemanBoard } from "../../domain/foreman.ts";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import { type Context, Hono } from "hono";
@@ -346,7 +346,7 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
       if (error instanceof ZodError) return fail(c, 502, "foreman_failed", "the foreman gave no valid answer");
       throw error;
     }
-    const actions: ForemanAnswer["actions"] = [];
+    const actions: ForemanSuggestion[] = [];
     const dropped: Array<{ action: ForemanAnswer["actions"][number]; problem: string }> = [];
     for (const action of answer.actions) {
       const problem = foremanActionProblem(action, board);
@@ -354,13 +354,14 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
         dropped.push({ action, problem });
         continue;
       }
+      const approvalId = board.cards.find((card) => card.id === action.taskId)?.approvalId ?? null;
       // `POST /tasks/:id/answers` keys an answer by the question's text; the model keyed it by the id the snapshot gave.
       if (action.kind === "answer") {
         const asked = board.cards.find((card) => card.id === action.taskId)?.questions ?? [];
-        actions.push({ ...action, answers: Object.fromEntries(Object.entries(action.answers).map(([id, text]) => [asked.find((q) => q.id === id)?.question ?? id, text])) });
+        actions.push({ ...action, answers: Object.fromEntries(Object.entries(action.answers).map(([id, text]) => [asked.find((q) => q.id === id)?.question ?? id, text])), approvalId });
         continue;
       }
-      actions.push(action);
+      actions.push({ ...action, approvalId });
     }
     return c.json({ reply: answer.reply, actions, dropped });
   });

@@ -391,6 +391,12 @@ export const ForemanCard = z.object({
   gate: z.string().nullable(),
   /** What the open gate asks the person. */
   gateSummary: z.string().max(200).nullable(),
+  /** What the open gate decides, when it is more than the plan: triage's outcome (`conversation`, `archive`, `split`, `split_failed`) or `ship_approval` for the release question. */
+  gateOutcome: z.string().nullable(),
+  /** The card's route; a `config` card's approval writes a file. */
+  route: z.string(),
+  /** The id of the open approval; the board compares it with the card's current one before it acts, so a suggestion made at an earlier gate makes no call. */
+  approvalId: z.string().nullable(),
   /** Why the card is escalated, when it is. */
   escalation: z.string().nullable(),
   /** The open questions of a card that waits at awaiting_answers; empty otherwise. */
@@ -650,8 +656,8 @@ export const TriageRecord = z.object({
   /** What each decision question answered and how sure it was, by question name. */
   signals: z.record(z.string(), z.object({ answer: z.union([z.string(), z.number(), z.boolean(), z.null()]), confidence: z.number().min(0).max(1) })),
   /** Questions asked of the person who filed it, and what they said. */
-  /** Who answered each question: absent means a person; `council` is the question council, with the places it read. */
-  qa: z.array(z.object({ question: z.string(), answer: z.string().nullable(), by: z.enum(["person", "council"]).optional(), evidence: z.array(z.string()).optional() })),
+  /** Who answered each question: absent means a person; `council` is the question council, with the places it read and the machine field (`kind`, `size`, `risk`) it settled, when the question was the machine's. */
+  qa: z.array(z.object({ question: z.string(), answer: z.string().nullable(), by: z.enum(["person", "council"]).optional(), evidence: z.array(z.string()).optional(), field: z.string().optional() })),
   decision: z.enum(["plan", "fast_lane", "conversation", "archive"]),
   reason: z.string(),
   at: z.string(),

@@ -105,7 +105,7 @@ export interface ClaimOptions {
 /** What a task snapshot's `lastRun` and `gate` are made from. */
 export interface GlanceRows {
   runs: Array<{ taskId: string; stage: TaskState; engine: EngineId | null; outcome: string | null; status: StageRunStatus; endedAt: Date; finished: Record<string, unknown> | null }>;
-  gates: Array<{ taskId: string; kind: TaskState; requested: Record<string, unknown> }>;
+  gates: Array<{ id: string; taskId: string; kind: TaskState; requested: Record<string, unknown> }>;
 }
 
 /** One change past a sequence number: a task as it is now, or a task deleted since. */
