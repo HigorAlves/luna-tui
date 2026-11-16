@@ -58,7 +58,7 @@ import { type CardHit, sourceKindOf } from "../../domain/card-search.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { prepareStageCredentials } from "./stage-credentials.ts";
 import { PACK_LIMITS, approvedScenarios, buildStageInput } from "../../domain/stage-input.ts";
-import { reviewerEngine } from "../../domain/engine-choice.ts";
+import { chooseEffort, reviewerEngine } from "../../domain/engine-choice.ts";
 import { pickEngine } from "../engine.ts";
 import type { Economy } from "../economy.ts";
 import type { Graph } from "../graph.ts";
@@ -387,7 +387,12 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     const other = reviewerEngine(PACKS.verifying, implementer, (e) => ready.has(e));
     if (other) choice = { engine: other.engine, reason: other.reason };
   }
-  const engineEvents = choice.reason ? [{ at: new Date().toISOString(), kind: "engine", payload: { pack, engine: choice.engine, reason: choice.reason } }] : [];
+  // The repo's effort for the pack, when the engine that runs can serve it; else the pack's own, with why.
+  const effortChoice = chooseEffort({ pack: PACKS[pack], engine: choice.engine, config: policy.effort });
+  const engineEvents = [
+    ...(choice.reason ? [{ at: new Date().toISOString(), kind: "engine", payload: { pack, engine: choice.engine, reason: choice.reason } }] : []),
+    ...(effortChoice.reason ? [{ at: new Date().toISOString(), kind: "engine", payload: { pack, engine: choice.engine, reason: effortChoice.reason } }] : []),
+  ];
   if (!resume) await context.started?.({ container, inputCommit, engine: choice.engine });
   // An engine asked for that gave way to the default is said on the task as it starts, not only in the run's events.
   if (choice.note) await context.note?.(choice.note).catch(() => {});
@@ -417,6 +422,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     pack,
     ...(extra.plan ? { plan: extra.plan } : {}),
     engine: choice.engine,
+    ...(effortChoice.source === "config" ? { effort: effortChoice.effort } : {}),
     attempt: context.attempt,
     approvals: context.approvals,
     priorFindings: pack === "implementing" ? (context.priorFindings ?? []) : [],

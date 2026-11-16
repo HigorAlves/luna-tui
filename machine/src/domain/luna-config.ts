@@ -3,7 +3,7 @@
 import { FACTORY_DEFAULTS, type JiraConfig, LunaConfig, RUNNING, type SlaConfig, TaskState, factoryConfigOf, hostPatternProblem, normalizeHostPattern } from "@hardness/contracts";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 
-import { stagesProblem } from "./engine-choice.ts";
+import { effortsProblem, stagesProblem } from "./engine-choice.ts";
 import { branchPatternProblem } from "./jira-link.ts";
 import { DEFAULT_JIRA_BRANCH, DEFAULT_JIRA_COMMENTS, DEFAULT_POLICY, type JiraPolicy, type Policy, PolicyParseError } from "./policy.ts";
 import { type SlaTargets, parseDuration } from "./sla.ts";
@@ -27,6 +27,8 @@ export function validateLunaConfig(raw: unknown, warn: Warn = quiet): LunaConfig
   if (parsed.data.checks?.some((check) => check.name === "luna-app")) throw new PolicyParseError("checks: a check may not be named luna-app (the machine's name for the app it starts)");
   const engines = stagesProblem(parsed.data.engines ?? {});
   if (engines) throw new PolicyParseError(`engines.${engines}`);
+  const effort = effortsProblem(parsed.data.effort ?? {});
+  if (effort) throw new PolicyParseError(`effort.${effort}`);
   return parsed.data;
 }
 
@@ -49,7 +51,7 @@ function legacyEgress(raw: unknown, warn: Warn): unknown {
 /** The file text for a config, sections in the order people read them, empty ones left out. */
 export function renderLunaConfig(config: LunaConfig): string {
   const ordered: Record<string, unknown> = {};
-  for (const key of ["checks", "services", "toolchains", "policy", "qa_targets", "jira", "sla", "engines", "budget", "evidence", "freeze", "dedup", "backlog", "tickets", "conversation", "triage", "scoring", "fast_lane", "plan", "size", "build", "sandbox", "verify", "ship"] as const) {
+  for (const key of ["checks", "services", "toolchains", "policy", "qa_targets", "jira", "sla", "engines", "effort", "budget", "evidence", "freeze", "dedup", "backlog", "tickets", "conversation", "triage", "scoring", "fast_lane", "plan", "size", "build", "sandbox", "verify", "ship"] as const) {
     const value = config[key];
     if (value === undefined) continue;
     if (Array.isArray(value) ? value.length === 0 : typeof value === "object" && Object.keys(value as object).length === 0) continue;
@@ -226,7 +228,7 @@ function lowerAllow(factory: Policy["factory"]): Policy["factory"] {
 
 /** The policy a validated config means. */
 export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
-  const { policy = {}, qa_targets = [], checks, services = {}, toolchains = {}, jira, sla, engines = {}, budget, evidence, freeze = [] } = config;
+  const { policy = {}, qa_targets = [], checks, services = {}, toolchains = {}, jira, sla, engines = {}, effort, budget, evidence, freeze = [] } = config;
   return {
     qa: policy.qa ?? DEFAULT_POLICY.qa,
     monthlyBudgetUsd: policy.monthly_budget_usd ?? null,
@@ -241,6 +243,7 @@ export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
     jira: jira ? jiraPolicyOf(jira, warn) : null,
     sla: sla ? slaTargetsOf(sla, warn) : {},
     engines,
+    ...(effort ? { effort } : {}),
     engineBudgets: budget?.engines ?? {},
     decisions: (policy.decisions ?? {}) as Policy["decisions"],
     evidenceRetentionDays: evidence?.retention_days ?? null,

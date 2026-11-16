@@ -168,6 +168,12 @@ describe("parseLunaConfig", () => {
     expect(parseLunaConfig("checks:\n  - name: t\n    run: make test\n    coverage: coverage/lcov.info\n").checks).toEqual([{ name: "t", run: "make test", coverage: "coverage/lcov.info" }]);
   });
 
+  it("reads an effort per pack into the policy, and keeps it through a render", () => {
+    const config = validateLunaConfig({ effort: { triage: "low" } });
+    expect(policyOf(config).effort).toEqual({ triage: "low" });
+    expect(renderLunaConfig(config)).toContain("effort:\n  triage: low");
+  });
+
   it("refuses a value it cannot read, naming where", () => {
     expect(() => parseLunaConfig("policy:\n  qa: mobile\n")).toThrow(/policy\.qa/);
     expect(() => parseLunaConfig("policy:\n  max_concurrent: 0\n")).toThrow(/policy\.max_concurrent/);
@@ -180,6 +186,9 @@ describe("parseLunaConfig", () => {
     expect(() => parseLunaConfig("checks: [\n")).toThrow(/yaml/i);
     expect(() => parseLunaConfig("engines:\n  triage: gpt-6\n")).toThrow(/engines\.triage/);
     expect(() => parseLunaConfig("engines:\n  nope: claude:opus\n")).toThrow(/engines/);
+    expect(() => parseLunaConfig("effort:\n  triage: max\n")).toThrow(/effort\.triage/);
+    expect(() => parseLunaConfig("effort:\n  nope: low\n")).toThrow(/effort/);
+    expect(() => parseLunaConfig("effort:\n  risk_score: low\n")).toThrow(/^effort\.risk_score: risk_score is a decision pack and takes no effort/);
   });
 
   it("refuses a monthly engine cap on Claude, on no engine, or below zero, naming the key", () => {

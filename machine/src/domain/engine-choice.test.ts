@@ -1,7 +1,7 @@
 import { type EngineId, PACKS } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { chooseEngine, engineProblem, fallbackCandidates, reviewerEngine, stagesProblem } from "./engine-choice.ts";
+import { chooseEffort, chooseEngine, engineProblem, fallbackCandidates, reviewerEngine, stagesProblem } from "./engine-choice.ts";
 
 // No pack allows two engines yet, so the choice is proved on one that does.
 const triage = { id: "triage" as const, engines: { default: "claude:opus" as EngineId, allowed: ["claude:opus", "codex:sol", "openai:sol"] as EngineId[] } };
@@ -94,5 +94,28 @@ describe("reviewerEngine", () => {
   it("runs as today (null) with only one family's credential, or when the pack allows one family", () => {
     expect(reviewerEngine(pack, "claude:sonnet", (e) => e.startsWith("claude"))).toBeNull();
     expect(reviewerEngine(PACKS.implementing, "claude:sonnet", () => true)).toBeNull();
+  });
+});
+
+describe("chooseEffort", () => {
+  // Triage's own effort is "high", so a repo that asks for "low" is told apart from the default.
+  const pack = PACKS.triage;
+
+  it("gives the pack's own effort when luna.yaml has no entry for it", () => {
+    expect(chooseEffort({ pack, engine: "claude:opus" })).toEqual({ effort: "high", source: "default", reason: null });
+    expect(chooseEffort({ pack, engine: "claude:opus", config: { verifying: "low" } })).toEqual({ effort: "high", source: "default", reason: null });
+  });
+
+  it("takes luna.yaml's effort over the pack's", () => {
+    expect(chooseEffort({ pack, engine: "claude:opus", config: { triage: "low" } })).toEqual({ effort: "low", source: "config", reason: null });
+  });
+
+  it("falls back to the pack's effort, with why, when the engine that runs lacks the one asked for", () => {
+    // A decision engine supports no effort at all.
+    expect(chooseEffort({ pack, engine: "jev", config: { triage: "low" } })).toEqual({
+      effort: "high",
+      source: "default",
+      reason: "luna.yaml's effort low for triage: jev does not support effort low (supports: none); ignored",
+    });
   });
 });

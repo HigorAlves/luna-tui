@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type ChatTriageContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type PrLinkContext, type ProposeContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
+import { type ChatTriageContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type Effort, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type PrLinkContext, type ProposeContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
 import { isDocsOnly } from "./docs-only.ts";
 
 export { PACK_LIMITS };
@@ -134,6 +134,8 @@ export function buildStageInput(opts: {
   plan?: PlanContext | null;
   /** The engine engine-choice picked; absent, the factory runs the pack's default. */
   engine?: EngineId;
+  /** The effort a repo's luna.yaml set for the pack; absent, the factory runs the pack's own. */
+  effort?: Effort;
   attempt: number;
   approvals: ApprovalRow[];
   priorFindings: Finding[];
@@ -200,6 +202,7 @@ export function buildStageInput(opts: {
     stage,
     pack,
     ...(opts.engine ? { engine: opts.engine } : {}),
+    ...(opts.effort ? { effort: opts.effort } : {}),
     attempt,
     task: {
       id: task.id,
