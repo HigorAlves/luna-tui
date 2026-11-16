@@ -8,7 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Candidate, ConfigChange } from "../domain/config-proposal.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import { previewOn } from "../test/policies.ts";
-import { Pipeline } from "./pipeline.ts";
+import { ConfigRebuildError, Pipeline } from "./pipeline.ts";
 import { StubStages } from "./stages/stubs.ts";
 
 let db: DataSource;
@@ -61,6 +61,37 @@ describe("pipeline.proposeConfig", () => {
     expect(closed.state).toBe("closed");
     expect(readFileSync(join(dir, "luna.yaml"), "utf8")).toContain("plan: codex:sol");
     expect((await p.events(task.id)).map((e) => e.kind)).toContain("config.written");
+  });
+
+  it("approving writes the stored text when the file is unchanged since the card was made", async () => {
+    const p = make();
+    const dir = repo();
+    const task = await p.proposeConfig(dir, [toSol]);
+    const stored = (await p.approvals(task.id))[0]!.requested.config;
+    await p.decide(task.id, "approved");
+    expect(readFileSync(join(dir, "luna.yaml"), "utf8")).toBe(stored);
+  });
+
+  it("approving keeps an edit made to the file since the card was made, and applies the changes over it", async () => {
+    const p = make();
+    const dir = repo();
+    const task = await p.proposeConfig(dir, [toSol]);
+    writeFileSync(join(dir, "luna.yaml"), "# edited\nchecks:\n  - { name: unit, run: pnpm test, timeout: 5 }\nengines:\n  plan: claude:opus\nlearning:\n  records: false\n");
+    await p.decide(task.id, "approved");
+    const written = readFileSync(join(dir, "luna.yaml"), "utf8");
+    expect(written).toContain("# edited");
+    expect(written).toContain("learning:\n  records: false");
+    expect(written).toContain("plan: codex:sol");
+  });
+
+  it("refuses to approve when the edited file cannot take the changes, and leaves the card and the file", async () => {
+    const p = make();
+    const dir = repo();
+    const task = await p.proposeConfig(dir, [toSol]);
+    writeFileSync(join(dir, "luna.yaml"), "engines: [not, a, map\n");
+    await expect(p.decide(task.id, "approved")).rejects.toBeInstanceOf(ConfigRebuildError);
+    expect(readFileSync(join(dir, "luna.yaml"), "utf8")).toBe("engines: [not, a, map\n");
+    expect((await p.get(task.id)).state).toBe("awaiting_setup");
   });
 
   it("rejecting archives the card, keeps the changes and leaves the file alone", async () => {

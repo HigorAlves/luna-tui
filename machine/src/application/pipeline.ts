@@ -167,6 +167,14 @@ export class UnknownRepositoryError extends Error {
   }
 }
 
+/** A config proposal cannot be approved: the repo's luna.yaml changed since the card was made, and the changes do not apply to the new text. */
+export class ConfigRebuildError extends Error {
+  constructor(detail: string) {
+    super(`luna.yaml changed since this proposal was made and the changes no longer apply to it (${detail}): fix the file or reject the card`);
+    this.name = "ConfigRebuildError";
+  }
+}
+
 /** The states before Build: a card here has no workspace and no PR, so merging it loses nothing. */
 const BEFORE_BUILD: ReadonlySet<TaskState> = new Set<TaskState>(["draft", "setup", "awaiting_setup", "triage", "awaiting_answers", "test_design", "awaiting_approval", "awaiting_test_check"]);
 
@@ -2591,8 +2599,20 @@ export class Pipeline {
   /** The luna.yaml the open setup gate proposes, into the checkout, logged. */
   private async writeApprovedConfig(task: TaskRow): Promise<void> {
     const open = (await this.approvals(task.id)).find((a) => a.kind === "awaiting_setup" && a.decision === null);
-    const text = open?.requested.config;
-    if (!task.repoPath || typeof text !== "string") throw new Error("no proposed luna.yaml to write");
+    const proposed = open?.requested.config;
+    if (!task.repoPath || typeof proposed !== "string") throw new Error("no proposed luna.yaml to write");
+    let text: string = proposed;
+    // A config proposal was built over the file as it was; a file edited since is rebuilt, so the edit is not lost.
+    if (task.route === "config" && typeof open?.requested.previous === "string") {
+      const current = await this.currentConfigText(task.repoPath);
+      if (current !== open.requested.previous) {
+        try {
+          text = renderProposal(current, Array.isArray(open.requested.changes) ? (open.requested.changes as ConfigChange[]) : []);
+        } catch (error) {
+          throw new ConfigRebuildError(error instanceof Error ? error.message : String(error));
+        }
+      }
+    }
     await this.writeConfig(task.repoPath, text);
     await this.log(task.id, "config.written", { path: join(task.repoPath, CONFIG_FILE), bytes: text.length });
   }

@@ -74,6 +74,18 @@ describe("POST /repos/proposals", () => {
     expect(await (await app.request("/repos/proposals", post({ repo: dir, candidates }))).json()).toEqual({ changes: [], taskId: null });
   });
 
+  it("answers 409 config_changed when approving a card whose file was edited into something the changes do not fit", async () => {
+    const p = pipeline();
+    const repoSignals: RepoSignals = { forRepo: async () => ({ plan: { runs: 12, escalations: 4, stuck: 0, costUsd: 3 } }) };
+    const app = createApp({ db, pipeline: p, bus: new Bus(), repoSignals });
+    const dir = repo();
+    const made = (await (await app.request("/repos/proposals", post({ repo: dir, candidates }))).json()) as { taskId: string };
+    writeFileSync(join(dir, "luna.yaml"), "engines: [broken\n");
+    const res = await app.request(`/tasks/${made.taskId}/decision`, post({ decision: "approved" }));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: "config_changed" });
+  });
+
   it("answers 400 to a body without a repo or with a bad candidate", async () => {
     const app = createApp({ db, pipeline: pipeline(), bus: new Bus() });
     expect((await app.request("/repos/proposals", post({ candidates }))).status).toBe(400);
