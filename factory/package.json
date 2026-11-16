@@ -13,7 +13,7 @@
     "@hardness/contracts": "workspace:*",
     "@lmnr-ai/lmnr": "^0.8.58",
     "@typesafe-ai/sdk": "0.7.0",
-    "ai": "7.0.161",
+    "ai": "7.0.172",
     "eve": "1.0.0",
     "zod": "^4.6.7"
   },
