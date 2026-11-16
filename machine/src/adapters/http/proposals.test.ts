@@ -29,15 +29,47 @@ const candidates = { plan: [row("claude:opus", "high", 0.67, 1), row("codex:sol"
 
 describe("POST /repos/proposals", () => {
   const pipeline = () => new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn });
+  const known: string[] = [];
+  const knownRepos = async () => known;
   const repo = () => {
     const dir = mkdtempSync(join(tmpdir(), "proposals-"));
     writeFileSync(join(dir, "luna.yaml"), "engines:\n  plan: claude:opus\n");
+    known.push(dir);
     return dir;
   };
 
+  it("reads a repo given with a trailing slash as the repo without it", async () => {
+    const p = pipeline();
+    const asked: string[] = [];
+    const repoSignals: RepoSignals = {
+      forRepo: async (r) => {
+        asked.push(r);
+        return { plan: { runs: 12, escalations: 4, stuck: 0, costUsd: 3 } };
+      },
+    };
+    const app = createApp({ db, pipeline: p, bus: new Bus(), repoSignals, knownRepos });
+    const dir = repo();
+    const res = await app.request("/repos/proposals", post({ repo: `${dir}/`, candidates }));
+    const out = (await res.json()) as { taskId: string | null };
+    expect(asked).toEqual([dir]);
+    expect(out.taskId).toEqual(expect.any(String));
+    expect(await p.get(out.taskId!)).toMatchObject({ repoPath: dir });
+  });
+
+  it("answers 404 unknown_repo to a repo the machine does not know, and makes no card", async () => {
+    const p = pipeline();
+    const repoSignals: RepoSignals = { forRepo: async () => ({ plan: { runs: 12, escalations: 4, stuck: 0, costUsd: 3 } }) };
+    const app = createApp({ db, pipeline: p, bus: new Bus(), repoSignals, knownRepos });
+    const stranger = mkdtempSync(join(tmpdir(), "stranger-"));
+    const res = await app.request("/repos/proposals", post({ repo: stranger, candidates }));
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ error: "unknown_repo" });
+    expect((await p.list()).filter((t) => t.route === "config")).toEqual([]);
+  });
+
   it("proposes nothing while no signals are backed (the no-op port), and creates no card", async () => {
     const p = pipeline();
-    const app = createApp({ db, pipeline: p, bus: new Bus() });
+    const app = createApp({ db, pipeline: p, bus: new Bus(), knownRepos });
     const res = await app.request("/repos/proposals", post({ repo: repo(), candidates }));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ changes: [], taskId: null });
@@ -53,7 +85,7 @@ describe("POST /repos/proposals", () => {
         return { plan: { runs: 12, escalations: 4, stuck: 0, costUsd: 3 } };
       },
     };
-    const app = createApp({ db, pipeline: p, bus: new Bus(), repoSignals });
+    const app = createApp({ db, pipeline: p, bus: new Bus(), repoSignals, knownRepos });
     const dir = repo();
     const res = await app.request("/repos/proposals", post({ repo: dir, candidates, now: "2026-11-16T12:00:00.000Z" }));
     const out = (await res.json()) as { changes: Array<{ pack: string; engine: { to: string } }>; taskId: string | null };
@@ -67,7 +99,7 @@ describe("POST /repos/proposals", () => {
   it("does not propose again what the person declined", async () => {
     const p = pipeline();
     const repoSignals: RepoSignals = { forRepo: async () => ({ plan: { runs: 12, escalations: 4, stuck: 0, costUsd: 3 } }) };
-    const app = createApp({ db, pipeline: p, bus: new Bus(), repoSignals });
+    const app = createApp({ db, pipeline: p, bus: new Bus(), repoSignals, knownRepos });
     const dir = repo();
     const first = (await (await app.request("/repos/proposals", post({ repo: dir, candidates }))).json()) as { taskId: string };
     await p.decide(first.taskId, "rejected");
@@ -77,7 +109,7 @@ describe("POST /repos/proposals", () => {
   it("answers 409 config_changed when approving a card whose file was edited into something the changes do not fit", async () => {
     const p = pipeline();
     const repoSignals: RepoSignals = { forRepo: async () => ({ plan: { runs: 12, escalations: 4, stuck: 0, costUsd: 3 } }) };
-    const app = createApp({ db, pipeline: p, bus: new Bus(), repoSignals });
+    const app = createApp({ db, pipeline: p, bus: new Bus(), repoSignals, knownRepos });
     const dir = repo();
     const made = (await (await app.request("/repos/proposals", post({ repo: dir, candidates }))).json()) as { taskId: string };
     writeFileSync(join(dir, "luna.yaml"), "engines: [broken\n");
@@ -87,7 +119,7 @@ describe("POST /repos/proposals", () => {
   });
 
   it("answers 400 to a body without a repo or with a bad candidate", async () => {
-    const app = createApp({ db, pipeline: pipeline(), bus: new Bus() });
+    const app = createApp({ db, pipeline: pipeline(), bus: new Bus(), knownRepos });
     expect((await app.request("/repos/proposals", post({ candidates }))).status).toBe(400);
     expect((await app.request("/repos/proposals", post({ repo: "/r", candidates: { plan: [{ engine: "nope" }] } }))).status).toBe(400);
   });

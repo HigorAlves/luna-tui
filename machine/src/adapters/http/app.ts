@@ -57,7 +57,7 @@ import {
 import { EconomyApproveInput, type EconomyConfig, EconomyRepoInput, EconomyRestoreInput } from "@hardness/contracts";
 import { ForemanAnswer, ForemanContext, foremanActionProblem, isTerminal } from "@hardness/contracts";
 import { buildForemanBoard } from "../../domain/foreman.ts";
-import { isAbsolute } from "node:path";
+import { isAbsolute, resolve as resolvePath } from "node:path";
 import { type Context, Hono } from "hono";
 import type { Economy } from "../../application/economy.ts";
 import { economyMetrics } from "../../domain/economy/metrics.ts";
@@ -159,6 +159,8 @@ export interface AppDeps {
   configProofs?: ConfigProofs;
   /** The repo's own run signals for `POST /repos/proposals`; defaults to none, so no proposal is made until an adapter backs it. */
   repoSignals?: RepoSignals;
+  /** Every checkout the machine knows, for `POST /repos/proposals`; without it no repo is known and the route answers 404 `unknown_repo`. */
+  knownRepos?: () => Promise<string[]>;
   /** What keeps the machine from doing its job (`readinessProblems`), read on each `GET /health`; absent, `/health` is always ok. */
   problems?: () => Promise<string[]> | string[];
 }
@@ -215,7 +217,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), problems: problemsOf }: AppDeps): Hono {
+export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], problems: problemsOf }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -571,8 +573,11 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
   // A config proposal: the scorecards come in the body, the repo's luna.yaml and its own run signals are read here, a fixed rule picks the
   // changes (domain/config-proposal.ts), and a non-empty result waits at the setup gate as a `config` card.
   app.post("/repos/proposals", async (c) => {
-    const { repo, candidates, now } = await body(c, ProposalsInput);
-    if (!isAbsolute(repo)) throw new BadRequest("repo must be an absolute path");
+    const { repo: given, candidates, now } = await body(c, ProposalsInput);
+    if (!isAbsolute(given)) throw new BadRequest("repo must be an absolute path");
+    // Approving the card writes luna.yaml into this path, so it is the normalised path of a repo the machine knows.
+    const repo = resolvePath(given);
+    if (!(await knownRepos()).some((known) => resolvePath(known) === repo)) return fail(c, 404, "unknown_repo", "the machine does not know that repository");
     const at = now ? new Date(now) : new Date();
     try {
       const [current, signals, declined] = await Promise.all([pipeline.configChoices(repo), repoSignals.forRepo(repo, new Date(at.getTime() - SIGNAL_DAYS * DAY_MS)), pipeline.declinedConfigChanges(repo, at)]);
