@@ -498,6 +498,18 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     if (!(error instanceof NoCredentialError || error instanceof CredentialWaitError)) throw error;
     return { outcome: "fail", detail: { error: error.message }, ...(engineEvents.length ? { events: engineEvents } : {}) };
   }
+  // From here to the container's end the credential is released whatever throws: the real token (`<runDir>/relay/anthropic`) or a secret file is never left for the prune.
+  const releaseOnce = credential.release.bind(credential);
+  let released: Promise<void> | null = null;
+  credential = { ...credential, release: () => (released ??= Promise.resolve(releaseOnce()).then(() => {})) };
+  const guard = async <T>(step: () => Promise<T>): Promise<T> => {
+    try {
+      return await step();
+    } catch (error) {
+      await credential.release().catch(() => {});
+      throw error;
+    }
+  };
   // What the run commits comes back as bundles in /out/bundles, read like a fetch from an untrusted server: the host never reads the agent's own repository.
   const importer = extra.checkout
     ? null
@@ -523,7 +535,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   let pushing: Promise<void> = Promise.resolve();
   // Where the scope is measured from (see the comment below), moved past default-branch history the branch merged since (`scopeStartOf`).
   const scopeFrom = input.plan != null ? (extra.scopeBase ?? context.firstInputCommit ?? (context.attempt === 1 ? inputCommit : null)) : inputCommit;
-  const scopeStart = scopeFrom && input.plan != null && task.repoPath && pack === "implementing" && !extra.checkout ? await scopeStartOf(workspace.path, task.repoPath, scopeFrom) : scopeFrom;
+  const scopeStart = scopeFrom && input.plan != null && task.repoPath && pack === "implementing" && !extra.checkout ? await guard(() => scopeStartOf(workspace.path, task.repoPath!, scopeFrom)) : scopeFrom;
   // The machine's side of the checks the implementer asks for: a red slice and the change's scope.
   const checks =
     pack === "implementing" && !extra.checkout
@@ -616,7 +628,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     });
   };
   // The agent starts with a git repository of its own in the folder, made by the machine from the card's: the one the host never reads.
-  if (!extra.checkout && !resume) await refreshScratch(workspace.path, workspace.branch);
+  if (!extra.checkout && !resume) await guard(() => refreshScratch(workspace.path, workspace.branch));
   // The machine installs the card's dependencies from its lockfile, no credential in that container: the agent then works with them.
   if (deps.install && limits.writable && !extra.checkout && !resume) {
     let installed: InstallOutcome;
@@ -640,7 +652,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   if (deps.secrets && (pack === "e2e" || pack === "recording")) {
     const names = [...new Set((pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : e2eTarget ? [e2eTarget] : []).flatMap((t) => (t.credential?.startsWith("env:") ? [t.credential.slice(4)] : [])))];
     if (names.length > 0) {
-      const loaded = await deps.secrets.load(task.repoPath, names);
+      const loaded = await guard(() => deps.secrets!.load(task.repoPath!, names));
       if (loaded.missing.length > 0) {
         credential.release();
         return { outcome: "escalated", detail: new SecretsMissingError(loaded.missing, deps.secrets.folder(task.repoPath)).detail };
@@ -653,8 +665,9 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const found = PACKS[pack];
   const owners = [credentialOwner(choice.engine), ...(found.kind === "decision" ? [] : helpersOn(found, resolveEngine(choice.engine).runtime).map((h) => credentialOwner(h.engine)))];
   const egress = deps.egress
-    ? await deps.egress.for({ repoPath: task.repoPath, kind: egressKindOf(found), owners: [...new Set(owners)], ...(credential.relay ? { relayed: ["claude" as const] } : {}), targets: found.kind !== "decision" && found.network === "full" && (pack === "e2e" || pack === "recording") ? targetHosts(input.context.qaTargets ?? []) : [] })
+    ? await guard(() => deps.egress!.for({ repoPath: task.repoPath, kind: egressKindOf(found), owners: [...new Set(owners)], ...(credential.relay ? { relayed: ["claude" as const] } : {}), targets: found.kind !== "decision" && found.network === "full" && (pack === "e2e" || pack === "recording") ? targetHosts(input.context.qaTargets ?? []) : [] }))
     : undefined;
+  const identity = limits.writable ? await guard(() => gitIdentity(task.repoPath!)) : null;
   let sandbox: SandboxResult;
   try {
   sandbox = await (deps.sandbox ?? runSandbox)({
@@ -674,7 +687,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     writable: limits.writable,
     gitDir,
     limits: size,
-    gitIdentity: limits.writable ? await gitIdentity(task.repoPath) : null,
+    gitIdentity: identity,
     // The repo's services run beside every stage that runs its code; a read-only stage only reads.
     services: limits.writable ? policy.services : {},
     input: input as unknown as Record<string, unknown>,
