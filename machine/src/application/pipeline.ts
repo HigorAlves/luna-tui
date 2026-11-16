@@ -9,11 +9,12 @@ import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAl
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
+import type { ShipGateProbe } from "./ship-gate-probe.ts";
 import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource, FindingNotFoundError, NoEvidenceError, NotReleaseOwnerError, WorktreeUnpushedError } from "../domain/task.ts";
-import { type CardFields, type ContextMissing, type DedupContext, contextComplete } from "@hardness/contracts";
+import { ApproverRequiredError, CoverageGapsError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource, FindingNotFoundError, NoEvidenceError, NotReleaseOwnerError, WorktreeUnpushedError } from "../domain/task.ts";
+import { type CardFields, type ContextMissing, type DedupContext, type ReviewLinks, contextComplete } from "@hardness/contracts";
 import { type ContextDeps, contextSetup, correctionsOf } from "./context-setup.ts";
 import { type DedupAnswer, checkDuplicates } from "./intake-dedup.ts";
 import type { Candidate } from "../domain/similarity.ts";
@@ -63,7 +64,7 @@ import { type OwnersFound, type OwnersState, applyRiskOverride, approvalRule, ou
 import { bareLink } from "../domain/jira-link.ts";
 import { findJiraKey, issueUrl } from "./jira.ts";
 
-export { ApproverRequiredError, FindingNotFoundError, NoEvidenceError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "../domain/task.ts";
+export { ApproverRequiredError, CoverageGapsError, FindingNotFoundError, NoEvidenceError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "../domain/task.ts";
 
 /** A reset time as epoch seconds: the runner writes a number; older runners wrote a string (epoch or ISO). */
 export function resetSeconds(value: unknown): number | null {
@@ -206,8 +207,8 @@ export interface PipelineOptions {
     knows(task: TaskRow): Promise<{ tool: string; key: string } | null>;
     create(task: TaskRow, children: SplitChild[], gateId: string, floor: "low" | "medium" | "high"): Promise<{ keys: string[] }>;
   };
-  /** Looks at an open release question (the ship approval) against GitHub: `merged` closes it as an automatic approval, `withdraw` takes it back so the watch asks again, `keep` leaves it. Nothing polls while a person is asked, so `tick` calls it at most once per `shipProbeMs`. */
-  shipGateProbe?: (task: TaskRow, gate: ApprovalRow) => Promise<"merged" | "closed" | "withdraw" | "keep">;
+  /** Looks at an open release question (the ship approval) against GitHub: `merged` closes it as an automatic approval, `{ approvedBy, head }` names the reviewers whose approving review of the PR counts (the first the approver rules allow approves the release), `withdraw` takes it back so the watch asks again, `keep` leaves it. Nothing polls while a person is asked, so `tick` calls it at most once per `shipProbeMs`. */
+  shipGateProbe?: ShipGateProbe;
   /** The shortest time between two probes of one card's release question (the repository's poll interval); 0 probes on every tick. */
   shipProbeMs?: number | null;
   /** Ends a card's kept sandbox (its extra folders) when the card is resumed or closed. Never throws into the pipeline. */
@@ -364,6 +365,18 @@ function casesOf(detail: Record<string, unknown> | undefined): StageRunCase[] | 
 const HOST_POLLERS: ReadonlySet<TaskState> = new Set<TaskState>(["ci_watch", "awaiting_ship", "shipping"]);
 
 const objectOf = (value: unknown): Record<string, unknown> | undefined => (value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined);
+
+/** What a failed run of a retry loop's stage was, for the escalation that names the loop's failures: its kind (the step Verify failed at, `unanswered` for a run
+ *  that gave no answer, else the stage) and one line of why. Nothing when the run said nothing about itself. */
+function failureOf(stage: TaskState, result: StageResult): { failure: { kind: string; line: string } } | Record<string, never> {
+  if (stage !== "verifying" && stage !== "e2e" && stage !== "ci_watch") return {};
+  const detail = result.detail ?? {};
+  const unanswered = stage === "verifying" && detail.runFailed === true && (result.findings ?? []).length === 0;
+  const said = [detail.summary, detail.reason, detail.error, result.findings?.[0]?.title].find((v): v is string => typeof v === "string" && v.trim() !== "");
+  if (!said) return {};
+  const kind = unanswered ? "unanswered" : typeof detail.step === "string" && detail.step !== "" ? detail.step : stage === "ci_watch" ? "ci" : stage === "verifying" ? "verify" : stage;
+  return { failure: { kind, line: said.replace(/\s+/g, " ").trim().slice(0, 120) } };
+}
 
 /** Coverage of a revised list of criteria by the scenarios on the gate: the stored report (the shape the plan stage writes), what is open, and the bar.
  *  Null for a gate with no scenarios. A scenario tied by id to a criterion the edit removed is named: it proves nothing now. */
@@ -873,6 +886,16 @@ export class Pipeline {
   /** Logs a fact about a task from outside the engine (e.g. the thread it is reported in). */
   record(taskId: string, kind: string, payload: Record<string, unknown>): Promise<void> {
     return this.log(taskId, kind, payload);
+  }
+
+  /** A passed review's links, as the review stage found them: kept on the review's own card (`card.reviewLinks`), and each linked card logs
+   *  `card.pr_reviewed` with the PR's address and number and the review's id, so its activity shows it. A card that cannot be written to is skipped. */
+  async recordReview(taskId: string, links: ReviewLinks, pr: { url: string; number: number; repo: string }): Promise<void> {
+    const task = await this.get(taskId);
+    await this.store.updateTask(taskId, { card: { ...cardOf(task), reviewLinks: links } });
+    for (const linked of links.cards) {
+      await this.log(linked.id, "card.pr_reviewed", { prUrl: pr.url, number: pr.number, taskId }).catch((error: unknown) => console.warn(`review: could not log the review on card ${linked.id}`, error));
+    }
   }
 
   /** The task created from this external issue (or, with `github_pr`, the latest from this PR), if any. */
@@ -1602,6 +1625,11 @@ export class Pipeline {
     // "Build's budget is spent: a person decides": a person who approves has decided the card goes on, so it goes on with a fresh budget.
     // Without one, the next Build reads the same spent budget and escalates again, and approving can never move the card.
     if (escalated && wanted === "approved" && budgetWasSpent(escalated.requested)) await this.log(id, "build.budget_reset", { reason: "a person approved the card past its spent budget" });
+    // A person approving a plan made after Build already ran has decided the card builds that plan: its Build counts from a fresh budget.
+    // Otherwise the runs spent on the old plan (and its bounces) escalate the new one before it starts, and the stronger model's one run is burnt.
+    if (before.state === "awaiting_approval" && wanted === "approved" && !options.auto && (await this.events(id)).some((e) => e.kind === "stage.finished" && e.payload.stage === "implementing")) {
+      await this.log(id, "build.budget_reset", { reason: "a person approved a new plan" });
+    }
     const moved = await this.decideNow(id, wanted, reason, response, options);
     if (escalated) await this.keepEscalationTruth(moved, escalated.id);
     if (escalated) await this.confirmEscalationReason(id, escalated);
@@ -1655,6 +1683,7 @@ export class Pipeline {
     let answered = response;
     let guard: Extra["guard"];
     if (decision === "approved" && open && outcome === undefined) {
+      await this.settleCoverage(id, response?.untestable);
       const ruleOf = (requested: Record<string, unknown>) => this.planRuleOf(task, requested);
       const prior = await this.store.withTaskLock(id, async (_task, tx) => {
         const fresh = await tx.findOpenApproval(id);
@@ -1686,19 +1715,12 @@ export class Pipeline {
         if (rule.outside === "required" && !outsideSatisfied(names, owners)) throw new OutsideApproverRequiredError(id, names.at(-1) ?? "");
       };
     }
-    // The release question (the watch asks it after readiness): a High-risk card ships only on the word of someone who is none of the plan's approvers and,
-    // when the gate names release owners, one of them. Team handles cannot be checked here: the name is an attestation. Nothing a model wrote picks them.
+    // The release question (the watch asks it after readiness): a High-risk card ships, when the repo asks two people of a High-risk plan, only on the word
+    // of someone who is none of the plan's approvers and, when the gate names release owners, one of them. Team handles cannot be checked here: the name is an attestation. Nothing a model wrote picks them.
     const release = task.state === "awaiting_ship" && task.route !== "review" ? (await this.approvals(id)).find((a) => a.kind === "awaiting_ship" && a.decision === null && a.requested.gate === "ship_approval") : undefined;
     if (release && decision === "sent_back") throw new TransitionError(task, { type: "sent_back" });
     if (release && decision === "approved") {
-      if (release.requested.risk === "high" || task.evidence?.risk === "high") {
-        const plan = (await this.approvals(id)).findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved")?.response;
-        const planNames = [...(Array.isArray(plan?.approvers) ? plan.approvers.map(String) : []), ...(typeof plan?.approver === "string" ? [plan.approver] : [])];
-        if (!approver) throw new ApproverRequiredError(id, "ship");
-        if (planNames.some((n) => sameName(n, approver))) throw new SameApproverError(id, approver, "ship");
-        const owners = Array.isArray(release.requested.releaseOwners) ? release.requested.releaseOwners.map(String) : [];
-        if (owners.length > 0 && !owners.some((o) => sameName(o, approver))) throw new NotReleaseOwnerError(id, approver);
-      }
+      await this.checkReleaseApprover(task, release, approver);
       if (typeof release.requested.head === "string") answered = { ...answered, head: release.requested.head };
     }
     if (approver) answered = { ...answered, approver };
@@ -1727,6 +1749,34 @@ export class Pipeline {
     if (decision === "sent_back" && open && isSplitOutcome(outcome)) await this.archiveSplitLeftovers(id, open);
     if (gate) await this.learnFromGate(id, gate, decision, response);
     return moved;
+  }
+
+  /** A plan gate is approved only when every criterion has a scenario or a person excused it: Build's entry contract refuses the rest, so the approval would
+   *  bounce the card to the planner and ask for a second approval. The criteria the person names on this approval are excused (kept on the gate's coverage report
+   *  and listed in its flags, which Verify and the board read); any other gap refuses the approval. */
+  private async settleCoverage(id: string, excusing: unknown): Promise<void> {
+    const named = Array.isArray(excusing) ? excusing.map(String) : [];
+    await this.store.withTaskLock(id, async (_task, tx) => {
+      const gate = await tx.findOpenApproval(id);
+      if (!gate || gate.kind !== "awaiting_approval" || gate.requested.outcome !== undefined) return;
+      const report = objectOf(gate.requested.coverageReport);
+      if (!report) return;
+      const strings = (value: unknown): string[] => (Array.isArray(value) ? value.map(String) : []);
+      const excused = strings(report.untestable);
+      const openGaps = strings(report.gaps).filter((g) => !excused.includes(g));
+      if (openGaps.length === 0) return;
+      const left = openGaps.filter((g) => !named.includes(g));
+      if (left.length > 0) throw new CoverageGapsError(id, left);
+      const text = new Map(criteriaOf(strings(gate.requested.criteria)).map((c) => [c.id, c.text] as const));
+      const planned = Plan.safeParse(gate.requested.plan);
+      if (planned.success) for (const c of planned.data.acceptance_criteria) text.set(c.id, c.text);
+      const now = openGaps.map((g) => `${g} (${text.get(g) ?? g})`);
+      await tx.updateApprovalRequested(gate, {
+        ...gate.requested,
+        coverageReport: { ...report, untestable: [...excused, ...openGaps], open: strings(report.open).filter((o) => !openGaps.some((g) => o.startsWith(`${g} has no scenario`))) },
+        flagged: [...strings(gate.requested.flagged), `coverage: excused as untestable by the approver, not covered: ${now.join(", ")}`],
+      });
+    });
   }
 
   /** What the outside-approver rule reads for a gate: CODEOWNERS' owners for the map's change and test files and the plan's step files. Never a model's owners. */
@@ -2215,6 +2265,43 @@ export class Pipeline {
     await this.fillSlots();
   }
 
+  /** Who may answer a High-risk release question, from the board or from GitHub: someone other than the plan's approvers where the repo asks two people of a High-risk
+   *  plan (`plan.approvers.high` above 1), and one of the release owners the gate names. With one operator (the default) the person who approved the plan approves the release.
+   *  Throws when `approver` may not. Team handles cannot be checked here: the name is an attestation. */
+  private async checkReleaseApprover(task: TaskRow, release: ApprovalRow, approver: string | undefined): Promise<void> {
+    if (release.requested.risk !== "high" && task.evidence?.risk !== "high") return;
+    const id = task.id;
+    const separate = (await this.policyFor(task.repoPath)).factory.plan.approvers.high > 1;
+    const owners = Array.isArray(release.requested.releaseOwners) ? release.requested.releaseOwners.map(String) : [];
+    if (!separate && owners.length === 0) return;
+    if (!approver) throw new ApproverRequiredError(id, "ship", separate ? 2 : 1);
+    if (separate) {
+      const plan = (await this.approvals(id)).findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved")?.response;
+      const planNames = [...(Array.isArray(plan?.approvers) ? plan.approvers.map(String) : []), ...(typeof plan?.approver === "string" ? [plan.approver] : [])];
+      if (planNames.some((n) => sameName(n, approver))) throw new SameApproverError(id, approver, "ship");
+    }
+    // CODEOWNERS names come with an `@`, a GitHub login and a typed name without one.
+    if (owners.length > 0 && !owners.some((o) => sameName(o.replace(/^@/, ""), approver.replace(/^@/, "")))) throw new NotReleaseOwnerError(id, approver);
+  }
+
+  /** The probe saw approving reviews, or `/ship` comments, on the PR at the head the question was asked about. The first login the approver rules allow approves the release
+   *  (a GitHub review or comment is an attestation, like a name typed on the board, so it is logged with how it came); none allowed leaves the question for the board. */
+  private async approveOnGitHub(task: TaskRow, gate: ApprovalRow, seen: { approvedBy: string[]; head: string; byComment?: string[] }): Promise<void> {
+    if (typeof gate.requested.head === "string" && gate.requested.head !== seen.head) return;
+    for (const login of seen.approvedBy) {
+      try {
+        await this.checkReleaseApprover(task, gate, login);
+      } catch (error) {
+        if (error instanceof ApproverRequiredError || error instanceof SameApproverError || error instanceof NotReleaseOwnerError) continue;
+        throw error;
+      }
+      const how = seen.byComment?.includes(login) ? "comment" : "review";
+      await this.dispatch(task.id, { type: "approved", gate: "ship_approval" }, { decision: { decision: "approved", reason: `approved on GitHub by ${login}${how === "comment" ? " (/ship)" : ""}`, response: { approver: login, head: seen.head, github: true } }, onlyFrom: new Set<TaskState>(["awaiting_ship"]) });
+      await this.log(task.id, "release.approved_on_github", { approver: login, head: seen.head, how });
+      return;
+    }
+  }
+
   private readonly shipProbedAt = new Map<string, number>();
 
   /** An open release question is looked at against GitHub, at most once per interval: a PR merged on GitHub closes it as an automatic approval (no name
@@ -2238,6 +2325,7 @@ export class Pipeline {
         const seen = await probe(task, gate);
         if (seen === "merged") await this.dispatch(task.id, { type: "approved", gate: "ship_approval" }, { decision: { decision: "approved", reason: "merged on GitHub", response: { auto: true } }, onlyFrom: new Set<TaskState>(["awaiting_ship"]) });
         else if (seen === "closed") await this.archive(task.id, "pr_closed", { onlyFrom: new Set<TaskState>(["awaiting_ship"]) });
+        else if (typeof seen === "object") await this.approveOnGitHub(task, gate, seen);
         else if (seen === "withdraw") await this.dispatch(task.id, { type: "sent_back", from: "plan", gate: "ship_approval" }, { decision: { decision: "sent_back", reason: "the PR changed: asked again when it is ready" }, onlyFrom: new Set<TaskState>(["awaiting_ship"]) });
       } catch (error) {
         console.error(`could not probe the release question of task ${task.id}`, error);
@@ -2488,7 +2576,8 @@ export class Pipeline {
 
   /** The task's PR when the last shipping run ended in a merge (the monitor's `detail.merged`), else null. */
   private async mergedPr(id: string): Promise<{ prUrl: string; number: number } | null> {
-    const detail = (await this.latestStageFinish(id, "shipping"))?.detail;
+    // A card Deliver or CI found already merged never reached shipping: its merge is on that stage's finish row.
+    const detail = (await this.latestStageFinish(id, "shipping"))?.detail ?? [(await this.latestStageFinish(id, "delivering"))?.detail, (await this.latestStageFinish(id, "ci_watch"))?.detail].find((d) => d?.alreadyMerged === true);
     return detail?.merged && typeof detail.prUrl === "string" && typeof detail.number === "number" ? { prUrl: detail.prUrl, number: detail.number } : null;
   }
 
@@ -2706,7 +2795,9 @@ export class Pipeline {
           return;
         }
         // A merged PR closes the loop: one event the board and the places the task came from react to.
-        if (stage === "shipping" && result.outcome === "pass" && result.detail?.merged) {
+        // The same when Deliver or CI found the card's own PR already merged: the card shipped.
+        const shippedEarly = (stage === "delivering" || stage === "ci_watch") && result.outcome === "pass" && result.detail?.alreadyMerged === true && !!result.detail.merged;
+        if ((stage === "shipping" && result.outcome === "pass" && result.detail?.merged) || shippedEarly) {
           const shipped = shippedEvent(await this.get(id), result.detail);
           if (shipped) await this.log(id, "ship.merged", shipped);
         }
@@ -2739,10 +2830,12 @@ export class Pipeline {
                 ...(EscalationReason.safeParse(result.detail?.escalation).success ? { escalation: result.detail!.escalation as EscalationReason } : {}),
                 // Verify's own run failed with no verdict and no finding: it is asked again, Build has nothing to fix.
                 ...(stage === "verifying" && result.outcome === "fail" && result.detail?.runFailed === true && (result.findings ?? []).length === 0 ? { unanswered: true as const } : {}),
+                ...(result.outcome === "fail" ? failureOf(stage, result) : {}),
                 ...(await this.blockerSet(id, stage, result)),
                 ...(await this.loopCap(id, stage, result)),
                 // The merge that did not happen because the PR is not ready; a fix that changed what a scenario shows (media from a new browser run).
                 ...(stage === "shipping" && result.detail?.notReady === true ? { notReady: true as const } : {}),
+                ...(shippedEarly ? { merged: true as const } : {}),
                 // The retro has something for a person (rules, prompt updates, graph misses): it waits for an answer; otherwise the card closes.
                 ...(stage === "reviewing_memory" && result.outcome === "pass" && result.detail?.rules != null ? { proposals: true as const } : {}),
                 ...(result.detail?.refresh === "media" || result.detail?.refresh === "verify" ? { refresh: result.detail.refresh } : {}),
@@ -2937,7 +3030,7 @@ export class Pipeline {
         await tx.insertApproval({
           taskId: id,
           kind: step.effect.gate,
-          requested: { ...extra.detail, ...(BEFORE_BUILD.has(step.effect.gate as TaskState) && cardOf(task).ticketChanged ? { ticketChanged: cardOf(task).ticketChanged } : {}), ...(step.reason ? { reason: step.reason } : {}), ...(step.escalation ? { escalation: step.escalation } : {}) },
+          requested: { ...extra.detail, ...(BEFORE_BUILD.has(step.effect.gate as TaskState) && cardOf(task).ticketChanged ? { ticketChanged: cardOf(task).ticketChanged } : {}), ...(step.reason ? { reason: step.reason } : {}), ...(step.escalation ? { escalation: step.escalation } : {}), ...(step.failures ? { failures: step.failures } : {}) },
         });
       }
       return { step, logged };
@@ -3017,6 +3110,12 @@ export class Pipeline {
       const message = error instanceof Error ? error.message : String(error);
       return `could not revert verifying's tests ${verifying.outputCommit}: ${message}`;
     }
+  }
+
+  /** The numbers of the PRs the machine opened for the card (its `pr.opened` rows), oldest first, so a stage can tell that one of them merged. */
+  private async recordedPrs(id: string): Promise<number[]> {
+    const numbers = (await this.store.listEvents(id)).flatMap((e) => (e.kind === "stage.pr.opened" && Number.isInteger(e.payload.number) ? [e.payload.number as number] : []));
+    return [...new Set(numbers)];
   }
 
   /** What the draft PR's body is fed: the rows of the stages that ran before Deliver. */
@@ -3279,6 +3378,7 @@ export class Pipeline {
         approvals,
         priorFindings,
         ...(stage === "delivering" ? { prFacts: await this.prFacts(id) } : {}),
+        ...((stage === "delivering" || stage === "ci_watch") && task.route === "feature" ? { recordedPrs: await this.recordedPrs(id) } : {}),
         ...(replan ? { replan } : {}),
         ...(budgetMinutes !== undefined ? { budgetMinutes } : {}),
         ...(testsCommit ? { testsCommit } : {}),

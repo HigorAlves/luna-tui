@@ -9,6 +9,10 @@ On 2026-10-28 three more roles (security-reviewer, reply-drafter, code-fixer)
 and two more skills (inline-review, receiving-code-review) were copied from the
 same repository at its 0.31.0 release and adapted the same way.
 
+On 2026-11-12 the pr-reviewer role was rebuilt from orc's orc-pr-reviewer agent
+at its 0.32.0 release, and the verdict rule of review-contract and inline-review
+was brought back to that release's contract.
+
 Individual skills keep their own upstream attribution in the `metadata.source`
 line of their SKILL.md frontmatter where one was present.
 

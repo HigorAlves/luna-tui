@@ -87,7 +87,8 @@ describe("factory main (dry run)", () => {
     expect(options.settings).toEqual({ attribution: false, includeCoAuthoredBy: false });
     // A helper on another runtime is reached through `delegate`, beside the pack's own tools.
     const delegating = def.helpers.some((h) => resolveEngine(h.engine).runtime !== "claude") ? ["mcp__luna__delegate"] : [];
-    const { tools, allowedTools } = claudeTools(def.access);
+    const { tools, allowedTools } = claudeTools(def.access, options.cwd);
+    expect(options.additionalDirectories).toHaveLength(3);
     expect(options).toMatchObject({ tools: [...tools, ...delegating], allowedTools: [...allowedTools, ...delegating] });
     if (pack === "verifying") expect(options.allowedTools).toContain("mcp__luna__delegate");
     expect(options.tools.every((t: string) => !t.includes("("))).toBe(true);

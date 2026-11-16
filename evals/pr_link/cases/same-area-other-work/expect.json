@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "match.choice",
+      "value": "none"
+    }
+  ],
+  "rubric": "Same component, but the ticket asks for another change.",
+  "label": {
+    "match": {
+      "choice": "none"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "match": "no candidate is the work this PR does"
+    },
+    "why": "The ticket is about a missing signature header in the same sender; the PR adds retries. Landing the PR does not implement or fix that ticket.",
+    "second": {
+      "label": {
+        "match": {
+          "choice": "none"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

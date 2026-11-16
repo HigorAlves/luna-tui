@@ -83,6 +83,23 @@ describe("POST /tasks/:id/decision with an approver", () => {
   });
 });
 
+describe("POST /tasks/:id/decision at a plan gate with criteria no scenario names", () => {
+  const atGapGate = async () => {
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["a", "b"], assumptions: [], coverageReport: { score: 0.5, bar: 0.85, gaps: ["C2"], thin: [], untestable: [], open: ["C2 has no scenario: b"], per: [] }, flagged: ["coverage"] } });
+    const task = await pipeline.createTask({ title: "Gap" });
+    await pipeline.start(task.id);
+    return task.id;
+  };
+
+  it("answers 409 coverage_gaps naming the criteria, and takes `untestable` as the approver's excuse", async () => {
+    const id = await atGapGate();
+    expect(await decide(id, { decision: "approved" })).toMatchObject({ status: 409, body: { error: "coverage_gaps", gaps: ["C2"] } });
+    expect((await pipeline.get(id)).state).toBe("awaiting_approval");
+    expect((await decide(id, { decision: "approved", untestable: ["C2"] })).status).toBe(200);
+    expect((await pipeline.approvals(id)).find((a) => a.kind === "awaiting_approval")).toMatchObject({ decision: "approved", response: { untestable: ["C2"] } });
+  });
+});
+
 describe("POST /tasks/:id/decision at a split gate", () => {
   const over = { verdict: "over", estLoc: 4000, planned: null, limit: { target: [1000, 2000], hard: 2500 }, by: "decision" };
   const child = (n: number) => ({ title: `Part ${n}`, goal: "do part", acceptance_criteria: ["works"], covers: [`C${n}`], files_hint: [], est_loc: 400, depends_on: [], order: n });

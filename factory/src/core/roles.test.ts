@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +17,14 @@ describe("roles", () => {
       expect(description.length, role).toBeGreaterThan(20);
       expect(body.startsWith("---"), role).toBe(false);
       expect(body.length, role).toBeGreaterThan(200);
+    }
+  });
+
+  it("names a revision for git shortlog: with none it reads stdin and the owners come back empty", () => {
+    const prompt = readFileSync(join(ROLES, "..", "prompts", "code_map.md"), "utf8");
+    for (const text of [readRole(ROLES, "code-mapper").body, prompt]) {
+      expect(text).toContain("git shortlog -sn --since=6.months HEAD -- <files>");
+      expect(text).not.toMatch(/shortlog[^`]*months -- /);
     }
   });
 

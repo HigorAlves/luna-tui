@@ -23,8 +23,17 @@ describe("access as Claude tools", () => {
   });
 
   it("gives `tools` bare names only: a scoped rule such as Bash(git add:*) would drop Bash", () => {
-    expect(claudeTools({ ...NO_ACCESS, read: true, commands: ["git add", "npm"] })).toEqual({ tools: ["Read", "Glob", "Grep", "Bash"], allowedTools: ["Read", "Glob", "Grep", "Bash(git add:*)", "Bash(npm:*)"] });
+    expect(claudeTools({ ...NO_ACCESS, read: true, commands: ["git add", "npm"] })).toEqual({ tools: ["Read", "Glob", "Grep", "Bash"], allowedTools: ["Read", "Glob", "Grep", "Bash(git add:*)", "Bash(git -C /work add:*)", "Bash(npm:*)"] });
     expect(claudeTools(NO_ACCESS)).toEqual({ tools: [], allowedTools: [] });
+  });
+});
+
+describe("git -C on Claude", () => {
+  it("allows each listed git command in the form `git -C /work <sub>` too, and only for the worktree", () => {
+    const { allowedTools } = claudeTools({ ...NO_ACCESS, read: true, commands: ["git log", "git branch --show-current", "npm", "gh pr view"] });
+    expect(allowedTools).toEqual(expect.arrayContaining(["Bash(git log:*)", "Bash(git -C /work log:*)", "Bash(git -C /work branch --show-current:*)"]));
+    expect(allowedTools.filter((t) => t.includes("-C"))).toHaveLength(2);
+    expect(claudeTools({ ...NO_ACCESS, commands: ["git log"] }, "/w").allowedTools).toEqual(["Bash(git log:*)", "Bash(git -C /w log:*)"]);
   });
 });
 

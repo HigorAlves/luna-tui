@@ -71,6 +71,43 @@ describe("CallJoin", () => {
   });
 });
 
+describe("CallJoin denials", () => {
+  const REASON = "Permission to use Bash has been denied because Claude Code is running in don't ask mode";
+
+  it("records a call the runtime refused after the guard let it pass as refused, with the reason, and puts the reason on its result", () => {
+    const { events, calls } = join();
+    calls.requested("1", "Bash", { command: "git -C /work status" });
+    calls.denied("1", REASON);
+    calls.settled("1", false);
+    expect(events).toEqual([
+      { kind: "tool_call", payload: { id: "1", tool: "Bash", target: "git -C /work status", allowed: false, reason: REASON } },
+      { kind: "tool_result", payload: { id: "1", tool: "Bash", ok: false, error: REASON } },
+    ]);
+  });
+
+  it("overrides a guard's allow that arrives after the denial, and keeps the guard's own reason when it refused", () => {
+    const { events, calls } = join();
+    calls.denied("1", REASON);
+    calls.decided("1", "Bash", { command: "ls" }, ALLOW);
+    calls.requested("1", "Bash", { command: "ls" });
+    calls.requested("2", "Bash", { command: "rm -rf /" });
+    calls.decided("2", "Bash", { command: "rm -rf /" }, DENY);
+    calls.denied("2", REASON);
+    expect(events).toEqual([
+      { kind: "tool_call", payload: { id: "1", tool: "Bash", target: "ls", allowed: false, reason: REASON } },
+      { kind: "tool_call", payload: { id: "2", tool: "Bash", target: "rm -rf /", allowed: false, reason: DENY.reason } },
+    ]);
+  });
+
+  it("gives a result the text the stream gave it before the denial's", () => {
+    const { events, calls } = join();
+    calls.requested("1", "Bash", { command: "ls" });
+    calls.denied("1", "other");
+    calls.settled("1", false, "the tool's own error");
+    expect(events.at(-1)).toMatchObject({ payload: { error: "the tool's own error" } });
+  });
+});
+
 describe("CallJoin observations", () => {
   const OBSERVATION = { intent: "test" as const, failure: "abcdef0123" };
 

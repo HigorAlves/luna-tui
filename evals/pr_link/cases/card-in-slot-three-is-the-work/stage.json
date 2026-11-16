@@ -1,0 +1,62 @@
+{
+  "schema": 3,
+  "stage": "pr_link",
+  "pack": "pr_link",
+  "attempt": 1,
+  "task": {
+    "id": "pr-link",
+    "title": "Fix the dead Pay button on checkout",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "prLink": {
+      "pr": {
+        "title": "Fix the dead Pay button on checkout",
+        "branch": "fix/pay-button",
+        "body": "The click handler was bound to the old form id, so Pay did nothing since the redesign.",
+        "files": [
+          "src/checkout/PayButton.tsx",
+          "src/checkout/PayButton.test.tsx"
+        ]
+      },
+      "candidates": [
+        {
+          "slot": 1,
+          "kind": "jira",
+          "id": "DISC-12",
+          "title": "Update the footer copy",
+          "excerpt": "The footer still says 2024."
+        },
+        {
+          "slot": 2,
+          "kind": "jira",
+          "id": "DISC-18",
+          "title": "Dark mode for the settings page",
+          "excerpt": ""
+        },
+        {
+          "slot": 3,
+          "kind": "card",
+          "id": "b21e77c0",
+          "title": "Pay button does nothing on checkout",
+          "excerpt": "Clicking Pay on the checkout page has no effect since Tuesday; no error shows."
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

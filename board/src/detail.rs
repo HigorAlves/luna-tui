@@ -7,23 +7,24 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::model::{
+    Approval, Artifact, CriterionRow, EngineCatalog, PullRequest, StageRun, Task, TaskDetail,
+    TaskDiff, TaskSource, Tone, age, criteria_summary, now_secs, plan_history, questions_of,
+};
+use crate::reference::{self, Page, RefGroup, RefState, SIDE_FROM, SIDE_WIDTH};
+use crate::text::{cells, ellipsis, truncate_middle};
+use crate::theme;
+use crate::ui::{
+    ACCENT, GREEN, MUTED, PEACH, RED, SUBTEXT0, YELLOW, bullets, c, centered, continues_line,
+    describe, evidence_lines, json_list, look_color, look_glyph, look_style, proof_lines,
+    rules_lines, truncate,
+};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Style, Stylize},
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Clear, Padding, Paragraph, Wrap},
-};
-use crate::model::{
-    Approval, Artifact, CriterionRow, EngineCatalog, PullRequest, StageRun, Task, TaskDetail, TaskDiff, TaskSource, Tone, age, criteria_summary, now_secs,
-    plan_history, questions_of,
-};
-use crate::reference::{self, Page, RefGroup, RefState, SIDE_FROM, SIDE_WIDTH};
-use crate::text::{cells, ellipsis, truncate_middle};
-use crate::theme;
-use crate::ui::{
-    ACCENT, GREEN, MUTED, PEACH, RED, SUBTEXT0, YELLOW, bullets, c, centered, continues_line, describe, evidence_lines,
-    json_list, look_color, look_glyph, look_style, proof_lines, rules_lines, truncate,
 };
 
 /// The sections of the workspace, in rail order. `1`…`9` jump to them.
@@ -125,7 +126,10 @@ impl Section {
 
     /// Sections where `j`/`k` pick a row instead of scrolling the text.
     pub fn has_cursor(self) -> bool {
-        matches!(self, Section::Runs | Section::Diff | Section::Evidence | Section::Engines)
+        matches!(
+            self,
+            Section::Runs | Section::Diff | Section::Evidence | Section::Engines
+        )
     }
 }
 
@@ -161,22 +165,33 @@ pub struct DetailView<'a> {
 
 /// A card that ended without shipping: the machine escalated it, a run failed or was aborted, or the usage window paused it.
 fn is_stopped(task: &Task) -> bool {
-    matches!(task.state.as_str(), "escalated" | "failed" | "aborted" | "paused_rate_limit")
+    matches!(
+        task.state.as_str(),
+        "escalated" | "failed" | "aborted" | "paused_rate_limit"
+    )
 }
 
 /// A card at or past shipping, or finished. `ci_watch` is not: the machine is still watching the PR's checks, in the Verify column.
 fn is_result(task: &Task) -> bool {
-    matches!(task.state.as_str(), "awaiting_ship" | "shipping" | "reviewing_memory" | "closed" | "archived" | "done")
+    matches!(
+        task.state.as_str(),
+        "awaiting_ship" | "shipping" | "reviewing_memory" | "closed" | "archived" | "done"
+    )
 }
 
 /// A card whose open gate asks a question the plan gate and the test check do not: answers, setup, intake.
 fn is_question(task: &Task) -> bool {
-    matches!(task.state.as_str(), "awaiting_setup" | "awaiting_answers") || (task.state == "draft" && task.waiting_on_you)
+    matches!(task.state.as_str(), "awaiting_setup" | "awaiting_answers")
+        || (task.state == "draft" && task.waiting_on_you)
 }
 
 /// A card a stage is working on or waits to work on, and no other page claims.
 fn is_running(task: &Task) -> bool {
-    (task.running || task.queued || task.state == "ci_watch") && task.state != "awaiting_approval" && !is_stopped(task) && !is_result(task) && !is_question(task)
+    (task.running || task.queued || task.state == "ci_watch")
+        && task.state != "awaiting_approval"
+        && !is_stopped(task)
+        && !is_result(task)
+        && !is_question(task)
 }
 
 /// The sections the rail lists for `task`, in order. At the plan gate Review stands in for Plan and Tests; Now, Stopped,
@@ -199,14 +214,22 @@ pub fn order(task: &Task) -> Vec<Section> {
 }
 
 /// Whether `section` has anything to show yet: a plan, cases, runs, a diff, a PR, evidence, events.
-fn has_content(section: Section, task: &Task, detail: &TaskDetail, has_diff: bool, prs: &[PullRequest]) -> bool {
+fn has_content(
+    section: Section,
+    task: &Task,
+    detail: &TaskDetail,
+    has_diff: bool,
+    prs: &[PullRequest],
+) -> bool {
     match section {
         Section::Plan => detail.latest_approval("awaiting_approval").is_some(),
         Section::Tests => detail.cases_approval().is_some(),
         Section::Runs => !detail.stage_runs.is_empty(),
         Section::Diff => has_diff,
         Section::Evidence => !detail.artifacts.is_empty() || task.evidence.is_some(),
-        Section::Pr => pr_for(task, prs).is_some() || pr_url(detail).is_some() || detail.ship.is_some(),
+        Section::Pr => {
+            pr_for(task, prs).is_some() || pr_url(detail).is_some() || detail.ship.is_some()
+        }
         Section::Activity => !detail.events.is_empty(),
         _ => true,
     }
@@ -214,10 +237,18 @@ fn has_content(section: Section, task: &Task, detail: &TaskDetail, has_diff: boo
 
 /// The rail's two groups: the sections with content, numbered for the `1`-`9` keys, and the ones with nothing yet, listed under
 /// `later` and reached with `h`/`l`. Without the card's detail nothing is held back.
-pub fn rail(task: &Task, detail: Option<&TaskDetail>, has_diff: bool, prs: &[PullRequest]) -> (Vec<Section>, Vec<Section>) {
+pub fn rail(
+    task: &Task,
+    detail: Option<&TaskDetail>,
+    has_diff: bool,
+    prs: &[PullRequest],
+) -> (Vec<Section>, Vec<Section>) {
     let all = order(task);
-    let Some(detail) = detail.filter(|d| d.task.id == task.id) else { return (all, Vec::new()) };
-    all.into_iter().partition(|s| has_content(*s, task, detail, has_diff, prs))
+    let Some(detail) = detail.filter(|d| d.task.id == task.id) else {
+        return (all, Vec::new());
+    };
+    all.into_iter()
+        .partition(|s| has_content(*s, task, detail, has_diff, prs))
 }
 
 /// A terminal this wide or wider lays the rail beside the pane; narrower, the rail becomes a
@@ -238,10 +269,25 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
         .padding(Padding::new(1, 1, 0, 0))
         .title(Line::from(vec![
             Span::from(format!(" #{} ", task.short_id())).bold(),
-            Span::from(task.source.as_ref().and_then(TaskSource::notch_tag).map(|t| format!("{t} ")).unwrap_or_default()).style(theme::label()),
+            Span::from(
+                task.source
+                    .as_ref()
+                    .and_then(TaskSource::notch_tag)
+                    .map(|t| format!("{t} "))
+                    .unwrap_or_default(),
+            )
+            .style(theme::label()),
             Span::from(format!("{} ", crate::model::plain(&task.title, 400))).bold(),
         ]))
-        .title_bottom(Line::from(format!(" {} · {} ago ", task.column, age(&task.updated_at, now))).style(theme::label()).right_aligned());
+        .title_bottom(
+            Line::from(format!(
+                " {} · {} ago ",
+                task.column,
+                age(&task.updated_at, now)
+            ))
+            .style(theme::label())
+            .right_aligned(),
+        );
 
     frame.render_widget(Clear, area);
     let inner = block.inner(area);
@@ -250,37 +296,88 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
     // The frame is three rows of layers: the decision bar (never scrolls), a rule that joins the
     // border, and the body. The body is a rail beside the pane (a tab strip above it when narrow);
     // a reference side pane attaches by splitting `pane_area` below, before `viewport` is set.
-    let [bar_area, rule_area, body] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(0)]).areas(inner);
+    let [bar_area, rule_area, body] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .areas(inner);
     let wide = inner.width >= RAIL_FROM;
     let status = bar_status(task, detail, now);
-    frame.render_widget(Paragraph::new(bar_line(bar_area.width as usize, &status.text, status.style, view.actions, &status.note)), bar_area);
+    frame.render_widget(
+        Paragraph::new(bar_line(
+            bar_area.width as usize,
+            &status.text,
+            status.style,
+            view.actions,
+            &status.note,
+        )),
+        bar_area,
+    );
     let tee = wide.then_some((inner.x - area.x + RAIL_WIDTH) as usize);
-    let rule = Rect { x: area.x, width: area.width, ..rule_area };
-    frame.render_widget(Paragraph::new(rule_line(area.width as usize, tee).style(Style::new().fg(c(look_color(look))))), rule);
+    let rule = Rect {
+        x: area.x,
+        width: area.width,
+        ..rule_area
+    };
+    frame.render_widget(
+        Paragraph::new(
+            rule_line(area.width as usize, tee).style(Style::new().fg(c(look_color(look)))),
+        ),
+        rule,
+    );
 
-    let (shown, later) = rail(task, detail, view.diff.is_some() || task.diff.is_some(), view.prs);
+    let (shown, later) = rail(
+        task,
+        detail,
+        view.diff.is_some() || task.diff.is_some(),
+        view.prs,
+    );
     let cell = |s: &Section| (*s, s.label().to_string(), rail_status(*s, view, detail));
     let cells: Vec<(Section, String, Span<'static>)> = shown.iter().map(cell).collect();
     let later_cells: Vec<(Section, String, Span<'static>)> = later.iter().map(cell).collect();
     let pane_area = if wide {
-        let [rail_area, sep, pane_area] =
-            Layout::horizontal([Constraint::Length(RAIL_WIDTH), Constraint::Length(2), Constraint::Min(0)]).areas(body);
+        let [rail_area, sep, pane_area] = Layout::horizontal([
+            Constraint::Length(RAIL_WIDTH),
+            Constraint::Length(2),
+            Constraint::Min(0),
+        ])
+        .areas(body);
         render_rail(frame, rail_area, &cells, &later_cells, view.section);
-        let rule: Vec<Line> = (0..sep.height).map(|_| Line::from(Span::from("│ ").fg(c(MUTED)))).collect();
+        let rule: Vec<Line> = (0..sep.height)
+            .map(|_| Line::from(Span::from("│ ").fg(c(MUTED))))
+            .collect();
         frame.render_widget(Paragraph::new(rule), sep);
         pane_area
     } else {
-        let [strip, rule, pane_area] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(0)]).areas(body);
+        let [strip, rule, pane_area] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(0),
+        ])
+        .areas(body);
         render_strip(frame, strip, &cells, later_cells.len(), view.section);
-        frame.render_widget(Paragraph::new(Line::from(Span::from("─".repeat(rule.width as usize)).fg(c(MUTED)))), rule);
+        frame.render_widget(
+            Paragraph::new(Line::from(
+                Span::from("─".repeat(rule.width as usize)).fg(c(MUTED)),
+            )),
+            rule,
+        );
         pane_area
     };
 
     // A section with reference groups gives them a side pane when the popup is wide enough.
     let side = wide && inner.width >= SIDE_FROM && has_groups(view.section);
     let (pane_area, side_area) = if side {
-        let [main, sep, side_area] = Layout::horizontal([Constraint::Min(0), Constraint::Length(1), Constraint::Length(SIDE_WIDTH)]).areas(pane_area);
-        let rule: Vec<Line> = (0..sep.height).map(|_| Line::from(Span::styled("│", theme::dim()))).collect();
+        let [main, sep, side_area] = Layout::horizontal([
+            Constraint::Min(0),
+            Constraint::Length(1),
+            Constraint::Length(SIDE_WIDTH),
+        ])
+        .areas(pane_area);
+        let rule: Vec<Line> = (0..sep.height)
+            .map(|_| Line::from(Span::styled("│", theme::dim())))
+            .collect();
         frame.render_widget(Paragraph::new(rule), sep);
         (main, Some(side_area))
     } else {
@@ -290,7 +387,11 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
     let height = pane_area.height as usize;
     let width = pane_area.width as usize;
     // Reference lines wrap to the side pane, or to the text's width when they are folded under it.
-    let ref_width = if side { SIDE_WIDTH as usize - 2 } else { width.saturating_sub(2) };
+    let ref_width = if side {
+        SIDE_WIDTH as usize - 2
+    } else {
+        width.saturating_sub(2)
+    };
     view.viewport.set(pane_area.height);
     view.hits.borrow_mut().clear();
     let mut lines: Vec<Line> = Vec::new();
@@ -316,19 +417,40 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
             None => lines.push(muted("  loading the patch…".into())),
         }
         lines.extend(head.tail);
-        frame.render_widget(Paragraph::new(Text::from(lines)).scroll(((offset - body_from) as u16, 0)), pane_area);
+        frame.render_widget(
+            Paragraph::new(Text::from(lines)).scroll(((offset - body_from) as u16, 0)),
+            pane_area,
+        );
         scroll_markers(frame, pane_area, offset, total);
         return;
     }
 
     let mut evidence_hits: Vec<(usize, EvidenceHit)> = Vec::new();
     let (page, cursor_row) = match view.section {
-        Section::Overview => (Page::of(overview_lines(task, detail, width, now, view.tasks)), None),
-        Section::Review => (crate::pages::review_page(task, detail, width, ref_width), None),
-        Section::Now => (crate::pages::now_page(task, detail, width, ref_width, now), None),
-        Section::Stopped => (crate::pages::stopped_page(task, detail, view.can, width, ref_width), None),
-        Section::Result => (crate::pages::result_page(task, detail, view.prs, width, ref_width, now), None),
-        Section::Gate => (crate::pages::gate_page(task, detail, width, ref_width, now), None),
+        Section::Overview => (
+            Page::of(overview_lines(task, detail, width, now, view.tasks)),
+            None,
+        ),
+        Section::Review => (
+            crate::pages::review_page(task, detail, width, ref_width),
+            None,
+        ),
+        Section::Now => (
+            crate::pages::now_page(task, detail, width, ref_width, now),
+            None,
+        ),
+        Section::Stopped => (
+            crate::pages::stopped_page(task, detail, view.can, width, ref_width),
+            None,
+        ),
+        Section::Result => (
+            crate::pages::result_page(task, detail, view.prs, width, ref_width, now),
+            None,
+        ),
+        Section::Gate => (
+            crate::pages::gate_page(task, detail, width, ref_width, now),
+            None,
+        ),
         Section::Plan => (plan_page(task, detail, width, ref_width, now), None),
         Section::Tests => (Page::of(tests_lines(task, detail, width, now)), None),
         Section::Runs => {
@@ -357,29 +479,72 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
     if !page.groups.is_empty() {
         match side_area {
             Some(area) => {
-                let (rows, headers) = reference::layout(&page.groups, view.section, view.refs, true, area.width as usize);
+                let (rows, headers) = reference::layout(
+                    &page.groups,
+                    view.section,
+                    view.refs,
+                    true,
+                    area.width as usize,
+                );
                 // Lines wrap in the pane, so a group's place is counted in rows, not lines.
-                let row_heights: Vec<usize> = rows.iter().map(|l| Paragraph::new(l.clone()).wrap(Wrap { trim: false }).line_count(area.width).max(1)).collect();
+                let row_heights: Vec<usize> = rows
+                    .iter()
+                    .map(|l| {
+                        Paragraph::new(l.clone())
+                            .wrap(Wrap { trim: false })
+                            .line_count(area.width)
+                            .max(1)
+                    })
+                    .collect();
                 let row_of = |line: usize| row_heights.iter().take(line).sum::<usize>();
                 let total: usize = row_heights.iter().sum();
-                let spans: Vec<(usize, usize)> = headers.iter().enumerate().map(|(i, h)| (row_of(*h), row_of(headers.get(i + 1).copied().unwrap_or(rows.len())))).collect();
+                let spans: Vec<(usize, usize)> = headers
+                    .iter()
+                    .enumerate()
+                    .map(|(i, h)| {
+                        (
+                            row_of(*h),
+                            row_of(headers.get(i + 1).copied().unwrap_or(rows.len())),
+                        )
+                    })
+                    .collect();
                 let pane = area.height as usize;
                 let mut offset = view.refs.side_offset.get();
                 // The focus moved to a header, or a group opened: bring its header into the rows no marker covers.
-                if view.refs.reveal.replace(false) && view.refs.focus && let Some((start, _)) = spans.get(view.refs.cursor.min(spans.len().saturating_sub(1))) {
+                if view.refs.reveal.replace(false)
+                    && view.refs.focus
+                    && let Some((start, _)) =
+                        spans.get(view.refs.cursor.min(spans.len().saturating_sub(1)))
+                {
                     offset = keep_visible(offset, *start, pane, total);
                 }
                 let offset = offset.min(total.saturating_sub(pane));
                 view.refs.side_offset.set(offset);
-                *view.refs.side.borrow_mut() = Some(reference::SideShape { height: pane, total, spans });
-                frame.render_widget(Paragraph::new(Text::from(rows)).wrap(Wrap { trim: false }).scroll((offset as u16, 0)), area);
+                *view.refs.side.borrow_mut() = Some(reference::SideShape {
+                    height: pane,
+                    total,
+                    spans,
+                });
+                frame.render_widget(
+                    Paragraph::new(Text::from(rows))
+                        .wrap(Wrap { trim: false })
+                        .scroll((offset as u16, 0)),
+                    area,
+                );
                 scroll_markers(frame, area, offset, total);
             }
             None => {
                 lines.push(Line::default());
-                lines.push(Line::from(Span::styled(format!("── reference {}", "─".repeat(width.saturating_sub(13))), theme::dim())));
-                let (rows, headers) = reference::layout(&page.groups, view.section, view.refs, false, width);
-                if view.refs.focus && let Some(row) = headers.get(view.refs.cursor.min(headers.len().saturating_sub(1))) {
+                lines.push(Line::from(Span::styled(
+                    format!("── reference {}", "─".repeat(width.saturating_sub(13))),
+                    theme::dim(),
+                )));
+                let (rows, headers) =
+                    reference::layout(&page.groups, view.section, view.refs, false, width);
+                if view.refs.focus
+                    && let Some(row) =
+                        headers.get(view.refs.cursor.min(headers.len().saturating_sub(1)))
+                {
                     cursor_row = Some(lines.len() + row);
                 }
                 lines.extend(rows);
@@ -389,7 +554,15 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
 
     let heights: Vec<usize> = match evidence_hits.is_empty() {
         true => Vec::new(),
-        false => lines.iter().map(|l| Paragraph::new(l.clone()).wrap(Wrap { trim: false }).line_count(pane_area.width).max(1)).collect(),
+        false => lines
+            .iter()
+            .map(|l| {
+                Paragraph::new(l.clone())
+                    .wrap(Wrap { trim: false })
+                    .line_count(pane_area.width)
+                    .max(1)
+            })
+            .collect(),
     };
     // One paragraph: counted at this width, then clamped so j/k never scroll past the end.
     let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
@@ -405,18 +578,36 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
     // Rows are one line each and `lines` is the page itself, so a hit's screen row is its wrapped height above it, less the scroll.
     for (line, hit) in evidence_hits {
         let above: usize = heights.iter().take(line).sum();
-        let Some(y) = above.checked_sub(offset).filter(|y| *y < height) else { continue };
+        let Some(y) = above.checked_sub(offset).filter(|y| *y < height) else {
+            continue;
+        };
         // A scroll marker replaces the first or last row it covers.
-        if (offset > 0 && y == 0) || (total.saturating_sub(offset + height) > 0 && y + 1 == height) {
+        if (offset > 0 && y == 0) || (total.saturating_sub(offset + height) > 0 && y + 1 == height)
+        {
             continue;
         }
-        view.hits.borrow_mut().push((Rect { y: pane_area.y + y as u16, height: 1, ..pane_area }, hit));
+        view.hits.borrow_mut().push((
+            Rect {
+                y: pane_area.y + y as u16,
+                height: 1,
+                ..pane_area
+            },
+            hit,
+        ));
     }
 }
 
 /// Whether a section hands its reference over as groups (a side pane when wide, folds under the text when narrow).
 fn has_groups(section: Section) -> bool {
-    matches!(section, Section::Review | Section::Now | Section::Stopped | Section::Result | Section::Gate | Section::Plan)
+    matches!(
+        section,
+        Section::Review
+            | Section::Now
+            | Section::Stopped
+            | Section::Result
+            | Section::Gate
+            | Section::Plan
+    )
 }
 
 /// `▲ N above` over the pane's first row once it is scrolled, `▼ N more` over its last while
@@ -428,9 +619,16 @@ fn scroll_markers(frame: &mut Frame, pane: Rect, offset: usize, total: usize) {
         return;
     }
     let mut mark = |y: u16, text: String| {
-        let row = Rect { y, height: 1, ..pane };
+        let row = Rect {
+            y,
+            height: 1,
+            ..pane
+        };
         frame.render_widget(Clear, row);
-        frame.render_widget(Paragraph::new(Line::from(Span::from(text).style(theme::dim())).right_aligned()), row);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::from(text).style(theme::dim())).right_aligned()),
+            row,
+        );
     };
     if offset > 0 {
         mark(pane.y, format!("▲ {} above", offset + 1));
@@ -460,7 +658,11 @@ fn keep_visible(offset: usize, row: usize, height: usize, total: usize) -> usize
         row.saturating_sub(1)
     } else if row + usize::from(offset + h < total) >= offset + h {
         let next = row + 2 - h;
-        if next + h < total { next } else { total.saturating_sub(h) }
+        if next + h < total {
+            next
+        } else {
+            total.saturating_sub(h)
+        }
     } else {
         offset
     }
@@ -479,8 +681,16 @@ fn patch_line(line: &str) -> Line<'static> {
 
 /// The rail: one row per section with content, the active one marked, its status glyph right-aligned; then the sections with nothing yet
 /// under a dim `later`. The marker is bold text, and the accent only where the section waits for the person.
-fn render_rail(frame: &mut Frame, area: Rect, cells: &[(Section, String, Span<'static>)], later: &[(Section, String, Span<'static>)], active: Section) {
-    let row = |n: Option<usize>, (section, label, status): &(Section, String, Span<'static>), dimmed: bool| {
+fn render_rail(
+    frame: &mut Frame,
+    area: Rect,
+    cells: &[(Section, String, Span<'static>)],
+    later: &[(Section, String, Span<'static>)],
+    active: Section,
+) {
+    let row = |n: Option<usize>,
+               (section, label, status): &(Section, String, Span<'static>),
+               dimmed: bool| {
         let on = *section == active;
         // The digit that jumps here, for the first nine rows of the list `1`-`9` index; the `later` group has none.
         let label = &match n {
@@ -489,11 +699,31 @@ fn render_rail(frame: &mut Frame, area: Rect, cells: &[(Section, String, Span<'s
         };
         let waits = status.style.fg == theme::needs_you().fg || status.style.fg == theme::flag().fg;
         let width = RAIL_WIDTH as usize - 1 - status.width();
-        let name = Span::styled(format!("{label:<width$}"), if on { theme::heading() } else if dimmed { theme::dim() } else { theme::text() });
-        let marker = Span::styled(if on { "▌" } else { " " }, if waits { theme::needs_you() } else { theme::heading() });
+        let name = Span::styled(
+            format!("{label:<width$}"),
+            if on {
+                theme::heading()
+            } else if dimmed {
+                theme::dim()
+            } else {
+                theme::text()
+            },
+        );
+        let marker = Span::styled(
+            if on { "▌" } else { " " },
+            if waits {
+                theme::needs_you()
+            } else {
+                theme::heading()
+            },
+        );
         Line::from(vec![marker, name, status.clone()])
     };
-    let mut lines: Vec<Line> = cells.iter().enumerate().map(|(i, c)| row(Some(i), c, false)).collect();
+    let mut lines: Vec<Line> = cells
+        .iter()
+        .enumerate()
+        .map(|(i, c)| row(Some(i), c, false))
+        .collect();
     if !later.is_empty() {
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(" later", theme::dim())));
@@ -503,7 +733,13 @@ fn render_rail(frame: &mut Frame, area: Rect, cells: &[(Section, String, Span<'s
 }
 
 /// The narrow form of the rail: `Overview │ Plan ✓ │▌Tests 5 ✓│ … +2 later`, the sections with content only, cut to the width.
-fn render_strip(frame: &mut Frame, area: Rect, cells: &[(Section, String, Span<'static>)], later: usize, active: Section) {
+fn render_strip(
+    frame: &mut Frame,
+    area: Rect,
+    cells: &[(Section, String, Span<'static>)],
+    later: usize,
+    active: Section,
+) {
     let build = |pad: &str, label_w: usize| -> Vec<Span<'static>> {
         let mut spans = Vec::new();
         for (i, (section, label, status)) in cells.iter().enumerate() {
@@ -513,9 +749,21 @@ fn render_strip(frame: &mut Frame, area: Rect, cells: &[(Section, String, Span<'
             let on = *section == active;
             let status_text = status.content.trim().to_string();
             let label = truncate(label, label_w);
-            let label = if i < 9 { format!("{} {label}", i + 1) } else { label };
-            let text = if status_text.is_empty() { format!("{pad}{label}{pad}") } else { format!("{pad}{label} {status_text}{pad}") };
-            spans.push(if on { Span::styled(text, theme::heading().underlined()) } else { Span::from(text) });
+            let label = if i < 9 {
+                format!("{} {label}", i + 1)
+            } else {
+                label
+            };
+            let text = if status_text.is_empty() {
+                format!("{pad}{label}{pad}")
+            } else {
+                format!("{pad}{label} {status_text}{pad}")
+            };
+            spans.push(if on {
+                Span::styled(text, theme::heading().underlined())
+            } else {
+                Span::from(text)
+            });
         }
         if later > 0 {
             spans.push(Span::styled(format!(" +{later} later"), theme::dim()));
@@ -542,12 +790,18 @@ fn rail_status(section: Section, view: &DetailView, detail: Option<&TaskDetail>)
         match approval {
             None => dim("–".to_string()),
             Some(a) if a.decision.is_none() => Span::from(format!("{count}⏸")).style(theme::flag()),
-            Some(a) if a.decision.as_deref() == Some("sent_back") => Span::from(format!("{count}↩")).style(theme::flag()),
+            Some(a) if a.decision.as_deref() == Some("sent_back") => {
+                Span::from(format!("{count}↩")).style(theme::flag())
+            }
             Some(_) => Span::from(format!("{count}✓")).style(theme::done()),
         }
     };
     let Some(d) = detail else {
-        return if matches!(section, Section::Overview) { Span::raw("") } else { dim("…".to_string()) };
+        return if matches!(section, Section::Overview) {
+            Span::raw("")
+        } else {
+            dim("…".to_string())
+        };
     };
     match section {
         Section::Overview => Span::raw(""),
@@ -562,7 +816,10 @@ fn rail_status(section: Section, view: &DetailView, detail: Option<&TaskDetail>)
         Section::Gate => Span::styled("⏸", theme::flag()),
         Section::Tests => {
             let cases = d.cases();
-            gate(d.cases_approval(), (!cases.is_empty()).then_some(cases.len()))
+            gate(
+                d.cases_approval(),
+                (!cases.is_empty()).then_some(cases.len()),
+            )
         }
         Section::Runs => match d.stage_runs.last() {
             None => dim("–".to_string()),
@@ -572,7 +829,10 @@ fn rail_status(section: Section, view: &DetailView, detail: Option<&TaskDetail>)
             }
         },
         Section::Diff => match (view.diff, view.task.diff) {
-            (Some(diff), _) => dim(format!("+{}", diff.files.iter().map(|f| f.added).sum::<u64>())),
+            (Some(diff), _) => dim(format!(
+                "+{}",
+                diff.files.iter().map(|f| f.added).sum::<u64>()
+            )),
             (None, Some(diff)) => dim(format!("+{}", diff.added)),
             (None, None) if view.task.branch.is_some() => dim("…".to_string()),
             _ => dim("–".to_string()),
@@ -607,12 +867,23 @@ fn rail_status(section: Section, view: &DetailView, detail: Option<&TaskDetail>)
 
 /// One row per pack the task runs: the engine it is set to (yours, else the default) and, once
 /// it ran, the engine it ran on. `E` on the selected row opens the picker.
-fn engines_lines(task: &Task, detail: Option<&TaskDetail>, catalog: Option<&Result<EngineCatalog, String>>, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
-    let mut lines = vec![heading("Engines · what each stage runs on, for this ticket"), Line::default()];
+fn engines_lines(
+    task: &Task,
+    detail: Option<&TaskDetail>,
+    catalog: Option<&Result<EngineCatalog, String>>,
+    cursor: usize,
+) -> (Vec<Line<'static>>, Option<usize>) {
+    let mut lines = vec![
+        heading("Engines · what each stage runs on, for this ticket"),
+        Line::default(),
+    ];
     let catalog = match catalog {
         Some(Ok(catalog)) => catalog,
         Some(Err(why)) => {
-            lines.extend([muted("  this machine does not offer engines".into()), muted(format!("  ({why})"))]);
+            lines.extend([
+                muted("  this machine does not offer engines".into()),
+                muted(format!("  ({why})")),
+            ]);
             return (lines, None);
         }
         None => {
@@ -623,14 +894,24 @@ fn engines_lines(task: &Task, detail: Option<&TaskDetail>, catalog: Option<&Resu
     let packs = catalog.task_packs();
     let selected = cursor.min(packs.len().saturating_sub(1));
     let cursor_row = lines.len() + 1 + selected;
-    lines.push(muted(format!("    {:<16} {:<24} {}", "stage", "engine", "ran on")));
+    lines.push(muted(format!(
+        "    {:<16} {:<24} {}",
+        "stage", "engine", "ran on"
+    )));
     for (i, pack) in packs.iter().enumerate() {
         let (engine, color) = match task.stages.get(&pack.id) {
             Some(engine) => (engine.clone(), PEACH),
             None => (format!("default: {}", pack.engines.default), SUBTEXT0),
         };
-        let ran = detail.and_then(|d| d.last_run_of(pack)).map(|r| r.engine.clone().unwrap_or_else(|| "–".into())).unwrap_or_default();
-        let missing = task.stages.get(&pack.id).and_then(|id| catalog.engines.iter().find(|e| e.id == *id && !e.available)).map_or("", |_| "  no credential here");
+        let ran = detail
+            .and_then(|d| d.last_run_of(pack))
+            .map(|r| r.engine.clone().unwrap_or_else(|| "–".into()))
+            .unwrap_or_default();
+        let missing = task
+            .stages
+            .get(&pack.id)
+            .and_then(|id| catalog.engines.iter().find(|e| e.id == *id && !e.available))
+            .map_or("", |_| "  no credential here");
         lines.push(Line::from(vec![
             Span::from(if i == selected { "  ▌ " } else { "    " }).style(theme::border_focus()),
             Span::from(format!("{:<16} ", truncate(&pack.id, 16))).bold(),
@@ -640,7 +921,9 @@ fn engines_lines(task: &Task, detail: Option<&TaskDetail>, catalog: Option<&Resu
         ]));
     }
     lines.push(Line::default());
-    lines.push(muted("E picks the selected stage's engine · a stage that ran keeps its engine".into()));
+    lines.push(muted(
+        "E picks the selected stage's engine · a stage that ran keeps its engine".into(),
+    ));
     (lines, (!packs.is_empty()).then_some(cursor_row))
 }
 
@@ -664,20 +947,39 @@ pub fn gate_question(task: &Task, detail: Option<&TaskDetail>) -> Option<String>
     let gate = open.filter(|a| a.kind_or_guess() == "awaiting_approval");
     let plan = match gate {
         Some(a) if a.outcome() == Some("archive") => "archive this ticket?".to_string(),
-        Some(a) if a.outcome() == Some("conversation") => "post the reply and close the ticket?".to_string(),
-        Some(a) if a.outcome() == Some("split_failed") => "the split failed: keep it whole, send back or reject?".to_string(),
+        Some(a) if a.outcome() == Some("conversation") => {
+            "post the reply and close the ticket?".to_string()
+        }
+        Some(a) if a.outcome() == Some("split_failed") => {
+            "the split failed: keep it whole, send back or reject?".to_string()
+        }
         Some(a) if a.outcome() == Some("split") => {
             let n = a.split_children().len();
-            let what = if a.requested["split"]["via"].as_str() == Some("tickets") { format!("{n} ticket{}", if n == 1 { "" } else { "s" }) } else { format!("{n} card{}", if n == 1 { "" } else { "s" }) };
+            let what = if a.requested["split"]["via"].as_str() == Some("tickets") {
+                format!("{n} ticket{}", if n == 1 { "" } else { "s" })
+            } else {
+                format!("{n} card{}", if n == 1 { "" } else { "s" })
+            };
             let who = match a.names_needed() {
                 1 => String::new(),
-                needed => format!(" · {} different people", if needed == 2 { "two".to_string() } else { needed.to_string() }),
+                needed => format!(
+                    " · {} different people",
+                    if needed == 2 {
+                        "two".to_string()
+                    } else {
+                        needed.to_string()
+                    }
+                ),
             };
             format!("approve the split ({what})?{who}")
         }
         Some(a) if a.names_needed() > 1 => {
             let needed = a.names_needed();
-            let word = if needed == 2 { "two".to_string() } else { needed.to_string() };
+            let word = if needed == 2 {
+                "two".to_string()
+            } else {
+                needed.to_string()
+            };
             let who = match a.approvers().len() as u64 {
                 0 => format!("first of {word} approvers; set LUNA_APPROVER"),
                 have if have + 1 == needed => format!("last of {word} approvers"),
@@ -688,7 +990,8 @@ pub fn gate_question(task: &Task, detail: Option<&TaskDetail>) -> Option<String>
         _ => "approve the plan?".to_string(),
     };
     let release = open.filter(|a| a.is_ship_approval());
-    let high = release.is_some_and(|a| a.requested["risk"].as_str() == Some("high")) || (release.is_some() && ship_risk_is_high(detail));
+    let high = release.is_some_and(|a| a.requested["risk"].as_str() == Some("high"))
+        || (release.is_some() && ship_risk_is_high(detail));
     Some(match task.state.as_str() {
         "awaiting_approval" => plan,
         "awaiting_test_check" => "approve the tests?".to_string(),
@@ -698,9 +1001,13 @@ pub fn gate_question(task: &Task, detail: Option<&TaskDetail>) -> Option<String>
             _ => "answer the questions".to_string(),
         },
         "awaiting_ship" if task.route == "review" => "post the verdict?".to_string(),
-        "awaiting_ship" if release.is_some() && high => "approve the release? · high risk: a release owner, not one of the plan's approvers".to_string(),
+        "awaiting_ship" if release.is_some() && high => {
+            "approve the release? · high risk".to_string()
+        }
         "awaiting_ship" if release.is_some() => "approve the release?".to_string(),
-        "awaiting_ship" if ship_risk_is_high(detail) => "ship this PR? · high risk: a release owner is asked after the checks".to_string(),
+        "awaiting_ship" if ship_risk_is_high(detail) => {
+            "ship this PR? · high risk: the release is asked after the checks".to_string()
+        }
         "awaiting_ship" => "ship this PR?".to_string(),
         "reviewing_memory" => "apply the memory rules?".to_string(),
         _ => return None,
@@ -719,7 +1026,13 @@ pub struct BarStatus {
 pub(crate) fn slice_progress(detail: Option<&TaskDetail>) -> Option<String> {
     let scenarios = &detail?.build_progress.as_ref()?.scenarios;
     let green = scenarios.iter().filter(|s| s.state == "green").count();
-    (!scenarios.is_empty()).then(|| format!("S{} of {}", (green + 1).min(scenarios.len()), scenarios.len()))
+    (!scenarios.is_empty()).then(|| {
+        format!(
+            "S{} of {}",
+            (green + 1).min(scenarios.len()),
+            scenarios.len()
+        )
+    })
 }
 
 /// An escalation reason in plain words: the machine's enum (`escalation.ts`) never reaches the screen as a code word.
@@ -738,7 +1051,13 @@ pub(crate) fn escalation_words(reason: &str) -> String {
 
 /// The reason the open escalated gate was decided with: the machine's enum word.
 pub(crate) fn escalation_reason(detail: Option<&TaskDetail>) -> Option<&str> {
-    detail?.approvals.iter().rev().find(|a| a.kind_or_guess() == "escalated" && a.decision.is_none())?.requested["escalationDecision"]["reason"].as_str()
+    detail?
+        .approvals
+        .iter()
+        .rev()
+        .find(|a| a.kind_or_guess() == "escalated" && a.decision.is_none())?
+        .requested["escalationDecision"]["reason"]
+        .as_str()
 }
 
 /// The bar's content for a card: the gate's question, `escalated · why`, or what runs
@@ -747,7 +1066,9 @@ pub fn bar_status(task: &Task, detail: Option<&TaskDetail>, now: u64) -> BarStat
     let look = task.look();
     let words = if task.state == "escalated" {
         // The reason in words; the machine's sentence when it decided no enum.
-        let why = escalation_reason(detail).map(escalation_words).or_else(|| task.reason.as_deref().map(plain));
+        let why = escalation_reason(detail)
+            .map(escalation_words)
+            .or_else(|| task.reason.as_deref().map(plain));
         match why {
             Some(why) => format!("escalated · {}", ellipsis(&why, 80)),
             None => "escalated".to_string(),
@@ -755,35 +1076,78 @@ pub fn bar_status(task: &Task, detail: Option<&TaskDetail>, now: u64) -> BarStat
     } else if let Some(question) = gate_question(task, detail) {
         question
     } else if task.running || task.queued {
-        let started = detail.and_then(|d| d.stage_runs.iter().rev().find(|r| r.status == "running")).and_then(|r| r.started_at.as_deref()).map(|at| age(at, now));
-        let cost = detail.and_then(TaskDetail::spent_usd).or(task.spent_usd).map(|usd| format!("${usd:.2}"));
-        let stage = task.status_label() + &detail.and_then(TaskDetail::running_engine).map(|e| format!(" on {}", plain(e))).unwrap_or_default();
-        let parts = [Some(stage), slice_progress(detail), cost, started.filter(|a| !a.is_empty())];
+        let started = detail
+            .and_then(|d| d.stage_runs.iter().rev().find(|r| r.status == "running"))
+            .and_then(|r| r.started_at.as_deref())
+            .map(|at| age(at, now));
+        let cost = detail
+            .and_then(TaskDetail::spent_usd)
+            .or(task.spent_usd)
+            .map(|usd| format!("${usd:.2}"));
+        let stage = task.status_label()
+            + &detail
+                .and_then(TaskDetail::running_engine)
+                .map(|e| format!(" on {}", plain(e)))
+                .unwrap_or_default();
+        let parts = [
+            Some(stage),
+            slice_progress(detail),
+            cost,
+            started.filter(|a| !a.is_empty()),
+        ];
         parts.into_iter().flatten().collect::<Vec<_>>().join(" · ")
     } else {
         task.status_label()
     };
     let mut notes = Vec::new();
     if task.state == "awaiting_approval" {
-        let flagged = detail.and_then(|d| d.latest_approval("awaiting_approval")).map_or(0, |a| a.checks().iter().filter(|(_, verdict)| verdict == "flag").count());
+        let flagged = detail
+            .and_then(|d| d.latest_approval("awaiting_approval"))
+            .map_or(0, |a| {
+                a.checks()
+                    .iter()
+                    .filter(|(_, verdict)| verdict == "flag")
+                    .count()
+            });
         if flagged > 0 {
-            notes.push(format!("{flagged} check{} flagged", if flagged == 1 { "" } else { "s" }));
+            notes.push(format!(
+                "{flagged} check{} flagged",
+                if flagged == 1 { "" } else { "s" }
+            ));
         }
-        if detail.and_then(|d| d.open_approval()).and_then(|a| a.outcome()).is_some_and(|o| matches!(o, "split" | "split_failed")) {
+        if detail
+            .and_then(|d| d.open_approval())
+            .and_then(|a| a.outcome())
+            .is_some_and(|o| matches!(o, "split" | "split_failed"))
+        {
             notes.push(":whole keeps it one card".to_string());
         }
     }
-    BarStatus { text: format!("{} {}", look_glyph(look), plain(&words)), style: look_style(look).add_modifier(ratatui::style::Modifier::BOLD), note: notes.join(" · ") }
+    BarStatus {
+        text: format!("{} {}", look_glyph(look), plain(&words)),
+        style: look_style(look).add_modifier(ratatui::style::Modifier::BOLD),
+        note: notes.join(" · "),
+    }
 }
 
 /// The bar row: the status first, then the keys that apply (the key in bold), the note right-aligned.
 /// Too wide, it drops keys from the lowest priority, then the note, and never the status (which is
 /// cut with an ellipsis only when it alone is wider than the row).
-pub fn bar_line(width: usize, status: &str, style: Style, keys: &[(String, String)], note: &str) -> Line<'static> {
+pub fn bar_line(
+    width: usize,
+    status: &str,
+    style: Style,
+    keys: &[(String, String)],
+    note: &str,
+) -> Line<'static> {
     const MAX_KEYS: usize = 5;
     let key_w = |(key, label): &(String, String)| cells(key) + 1 + cells(label);
     let needed = |keys: &[(String, String)], note: &str| {
-        let keys_w = if keys.is_empty() { 0 } else { 4 + keys.iter().map(key_w).sum::<usize>() + 3 * (keys.len() - 1) };
+        let keys_w = if keys.is_empty() {
+            0
+        } else {
+            4 + keys.iter().map(key_w).sum::<usize>() + 3 * (keys.len() - 1)
+        };
         cells(status) + keys_w + if note.is_empty() { 0 } else { 2 + cells(note) }
     };
     let mut shown: Vec<(String, String)> = keys.iter().take(MAX_KEYS).cloned().collect();
@@ -796,7 +1160,11 @@ pub fn bar_line(width: usize, status: &str, style: Style, keys: &[(String, Strin
             note.clear();
         }
     }
-    let status = if cells(status) > width { ellipsis(status, width) } else { status.to_string() };
+    let status = if cells(status) > width {
+        ellipsis(status, width)
+    } else {
+        status.to_string()
+    };
     let mut spans = vec![Span::from(status.clone()).style(style)];
     let mut used = cells(&status);
     if !shown.is_empty() {
@@ -813,7 +1181,9 @@ pub fn bar_line(width: usize, status: &str, style: Style, keys: &[(String, Strin
         used += key_w(&(key.clone(), label.clone()));
     }
     if !note.is_empty() {
-        spans.push(Span::raw(" ".repeat(width.saturating_sub(used + cells(&note)))));
+        spans.push(Span::raw(
+            " ".repeat(width.saturating_sub(used + cells(&note))),
+        ));
         spans.push(Span::from(note).style(theme::flag()));
     }
     Line::from(spans)
@@ -836,12 +1206,16 @@ fn rule_line(width: usize, tee: Option<usize>) -> Line<'static> {
     Line::from(text)
 }
 
-/// Whether the ship gate's Evidence Pack is High risk: shipping then needs an approver who did not approve the plan.
+/// Whether the ship gate's Evidence Pack is High risk: the release is then asked after the checks (and, when the repo asks two people of a High-risk plan, of someone who did not approve it).
 pub(crate) fn ship_risk_is_high(detail: Option<&TaskDetail>) -> bool {
     // The open or last gate's pack, else the task's own: the same source the Evidence section shows.
     detail.is_some_and(|d| match d.latest_approval("awaiting_ship") {
         Some(a) => a.requested["evidence"]["risk"].as_str() == Some("high"),
-        None => d.task.evidence.as_ref().is_some_and(|p| p["risk"].as_str() == Some("high")),
+        None => d
+            .task
+            .evidence
+            .as_ref()
+            .is_some_and(|p| p["risk"].as_str() == Some("high")),
     })
 }
 
@@ -856,19 +1230,41 @@ pub(crate) fn fact_row(label: &str, value: &str, width: usize) -> Vec<Line<'stat
     crate::text::wrap(&value, room, 0)
         .into_iter()
         .enumerate()
-        .map(|(i, part)| Line::from(vec![Span::styled(format!("{:<11}", if i == 0 { label } else { "" }), theme::label()), Span::raw(part.trim_start().to_string())]))
+        .map(|(i, part)| {
+            Line::from(vec![
+                Span::styled(
+                    format!("{:<11}", if i == 0 { label } else { "" }),
+                    theme::label(),
+                ),
+                Span::raw(part.trim_start().to_string()),
+            ])
+        })
         .collect()
 }
 
 /// The Triage Record, as reference: the summary, the kind, the type of work, the size, the priority with its five sub-scores, the
 /// preliminary risk, the signals the plan gate flags and who decided. None until triage has written one.
-pub(crate) fn record_group(task: &Task, requested: &serde_json::Value, width: usize) -> Option<RefGroup> {
+pub(crate) fn record_group(
+    task: &Task,
+    requested: &serde_json::Value,
+    width: usize,
+) -> Option<RefGroup> {
     let record = task.record.as_ref()?;
     let who = match record.decision_by.as_deref() {
-        Some("person") => format!("corrected by a person ({})", if record.edited_fields.is_empty() { "record".to_string() } else { plain(&record.edited_fields.join(", ")) }),
+        Some("person") => format!(
+            "corrected by a person ({})",
+            if record.edited_fields.is_empty() {
+                "record".to_string()
+            } else {
+                plain(&record.edited_fields.join(", "))
+            }
+        ),
         _ => "decided by the machine".to_string(),
     };
-    let mut lines = vec![Line::from(Span::styled(format!("Triage record v{} · {who}", record.version.unwrap_or(1)), theme::label()))];
+    let mut lines = vec![Line::from(Span::styled(
+        format!("Triage record v{} · {who}", record.version.unwrap_or(1)),
+        theme::label(),
+    ))];
     if let Some(summary) = record.summary.as_deref().filter(|s| !s.trim().is_empty()) {
         lines.extend(plain(summary).lines().map(|l| Line::from(l.to_string())));
     }
@@ -879,14 +1275,25 @@ pub(crate) fn record_group(task: &Task, requested: &serde_json::Value, width: us
     lines.extend(fact_row("Size", &record.size, width));
     if let Some(u) = &record.urgency_detail {
         let s = &u.sub_scores;
-        lines.extend(fact_row("Priority", &format!("{} (who {}, what {}, impact {}, time {}, demand {})", u.priority, s.who, s.what, s.impact, s.time, s.demand), width));
+        lines.extend(fact_row(
+            "Priority",
+            &format!(
+                "{} (who {}, what {}, impact {}, time {}, demand {})",
+                u.priority, s.who, s.what, s.impact, s.time, s.demand
+            ),
+            width,
+        ));
     }
     if let Some(r) = &record.risk_prelim {
         lines.extend(fact_row("Risk", r, width));
     }
     let flagged = triage_flags(requested);
     if !flagged.is_empty() {
-        lines.extend(fact_row("Flagged", &format!("{} (T corrects the record)", flagged.join(", ")), width));
+        lines.extend(fact_row(
+            "Flagged",
+            &format!("{} (T corrects the record)", flagged.join(", ")),
+            width,
+        ));
     }
     let size = format!("{} · {}", plain(&record.kind), plain(&record.size));
     Some(RefGroup::new("record", "Record", size, lines))
@@ -894,7 +1301,16 @@ pub(crate) fn record_group(task: &Task, requested: &serde_json::Value, width: us
 
 /// The triage fields the plan gate flags (`triage.size` is `size`).
 pub(crate) fn triage_flags(requested: &serde_json::Value) -> Vec<String> {
-    requested["flagged"].as_array().map(|a| a.iter().filter_map(|v| v.as_str()).filter_map(|v| v.strip_prefix("triage.")).map(plain).collect()).unwrap_or_default()
+    requested["flagged"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .filter_map(|v| v.strip_prefix("triage."))
+                .map(plain)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The code map a plan stage opened with, as reference: components, files by role (a plain string is a file to change), entry points,
@@ -905,8 +1321,17 @@ pub(crate) fn map_group(requested: &serde_json::Value, width: usize) -> Option<R
     }
     let map = &requested["map"];
     if !map.is_object() {
-        let why = plain(requested["mapNote"].as_str().unwrap_or("the plan was written without one"));
-        return Some(RefGroup::new("map", "Code map", "none", fact_row("", &format!("no code map: {why}"), width)));
+        let why = plain(
+            requested["mapNote"]
+                .as_str()
+                .unwrap_or("the plan was written without one"),
+        );
+        return Some(RefGroup::new(
+            "map",
+            "Code map",
+            "none",
+            fact_row("", &format!("no code map: {why}"), width),
+        ));
     }
     let row = |label: &str, value: String| fact_row(label, &value, width);
     let list = |v: &serde_json::Value| -> String { json_list(v).join(", ") };
@@ -916,23 +1341,47 @@ pub(crate) fn map_group(requested: &serde_json::Value, width: usize) -> Option<R
         for file in map["files"].as_array().into_iter().flatten() {
             let (path, file_role) = match file.as_str() {
                 Some(path) => (Some(path), "change"),
-                None => (file["path"].as_str(), file["role"].as_str().unwrap_or("change")),
+                None => (
+                    file["path"].as_str(),
+                    file["role"].as_str().unwrap_or("change"),
+                ),
             };
             if let Some(path) = path.filter(|_| file_role == role) {
                 files += 1;
-                lines.push(Line::from(vec![Span::styled(format!("{role:<7}"), theme::label()), Span::raw(truncate_middle(&plain(path), width.saturating_sub(7)))]));
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{role:<7}"), theme::label()),
+                    Span::raw(truncate_middle(&plain(path), width.saturating_sub(7))),
+                ]));
             }
         }
     }
-    if map["entry_points"].as_array().is_some_and(|a| !a.is_empty()) {
+    if map["entry_points"]
+        .as_array()
+        .is_some_and(|a| !a.is_empty())
+    {
         lines.extend(row("Entry", list(&map["entry_points"])));
     }
-    lines.extend(row("Owners", if map["owners"].as_array().is_some_and(|a| !a.is_empty()) { list(&map["owners"]) } else { "none found".to_string() }));
+    lines.extend(row(
+        "Owners",
+        if map["owners"].as_array().is_some_and(|a| !a.is_empty()) {
+            list(&map["owners"])
+        } else {
+            "none found".to_string()
+        },
+    ));
     if map["stale"].as_bool() == Some(true) {
-        let behind = map["behind"].as_u64().map(|n| n.to_string()).unwrap_or_else(|| "many".into());
+        let behind = map["behind"]
+            .as_u64()
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "many".into());
         lines.extend(fact_row("", &format!("stale: the graph is {behind} commits behind the default branch; treat the map as a lead"), width));
     }
-    Some(RefGroup::new("map", "Code map", format!("{files} file{}", if files == 1 { "" } else { "s" }), lines))
+    Some(RefGroup::new(
+        "map",
+        "Code map",
+        format!("{files} file{}", if files == 1 { "" } else { "s" }),
+        lines,
+    ))
 }
 
 /// The plan's assumptions, as reference.
@@ -941,13 +1390,41 @@ pub(crate) fn assumptions_group(requested: &serde_json::Value, width: usize) -> 
     if items.is_empty() {
         return None;
     }
-    let lines = items.iter().flat_map(|item| crate::text::wrap(item, width.saturating_sub(4).max(8), 0).into_iter().enumerate().map(|(i, l)| Line::from(format!("{}{}", if i == 0 { "• " } else { "  " }, l.trim_start())))).collect();
-    Some(RefGroup::new("assumptions", "Assumptions", items.len().to_string(), lines))
+    let lines = items
+        .iter()
+        .flat_map(|item| {
+            crate::text::wrap(item, width.saturating_sub(4).max(8), 0)
+                .into_iter()
+                .enumerate()
+                .map(|(i, l)| {
+                    Line::from(format!(
+                        "{}{}",
+                        if i == 0 { "• " } else { "  " },
+                        l.trim_start()
+                    ))
+                })
+        })
+        .collect();
+    Some(RefGroup::new(
+        "assumptions",
+        "Assumptions",
+        items.len().to_string(),
+        lines,
+    ))
 }
 
 /// Where the card lives: its repo, branch, tracker link, SLA and the engines it was told to use.
-pub(crate) fn card_group(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64) -> RefGroup {
-    let mut lines = fact_row("Repo", task.repo_path.as_deref().unwrap_or("none (R sets one)"), width);
+pub(crate) fn card_group(
+    task: &Task,
+    detail: Option<&TaskDetail>,
+    width: usize,
+    now: u64,
+) -> RefGroup {
+    let mut lines = fact_row(
+        "Repo",
+        task.repo_path.as_deref().unwrap_or("none (R sets one)"),
+        width,
+    );
     if let Some(branch) = &task.branch {
         lines.extend(fact_row("Branch", branch, width));
     }
@@ -961,14 +1438,36 @@ pub(crate) fn card_group(task: &Task, detail: Option<&TaskDetail>, width: usize,
     if crate::app::issue_link(task).is_some() {
         lines.extend(fact_row("Issue", "i opens the linked issue", width));
     }
-    let engines: Vec<String> = task.stages.iter().map(|(pack, engine)| format!("{pack} {engine}")).collect();
-    let running = detail.and_then(TaskDetail::running_engine).map(|e| format!("running on {e}"));
+    let engines: Vec<String> = task
+        .stages
+        .iter()
+        .map(|(pack, engine)| format!("{pack} {engine}"))
+        .collect();
+    let running = detail
+        .and_then(TaskDetail::running_engine)
+        .map(|e| format!("running on {e}"));
     match (engines.is_empty(), running) {
         (true, None) => {}
         (true, Some(running)) => lines.extend(fact_row("Engines", &running, width)),
-        (false, running) => lines.extend(fact_row("Engines", &[Some(engines.join(", ")), running].into_iter().flatten().collect::<Vec<_>>().join(" · "), width)),
+        (false, running) => lines.extend(fact_row(
+            "Engines",
+            &[Some(engines.join(", ")), running]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" · "),
+            width,
+        )),
     }
-    RefGroup::new("card", "Card", task.repo_path.as_deref().map(|r| plain(r.rsplit('/').next().unwrap_or(r))).unwrap_or_default(), lines)
+    RefGroup::new(
+        "card",
+        "Card",
+        task.repo_path
+            .as_deref()
+            .map(|r| plain(r.rsplit('/').next().unwrap_or(r)))
+            .unwrap_or_default(),
+        lines,
+    )
 }
 
 pub(crate) fn proposal_heading(text: &str) -> Line<'static> {
@@ -992,8 +1491,15 @@ pub fn ticket_changed_line(requested: &serde_json::Value) -> Option<String> {
     if words.is_empty() {
         return None;
     }
-    let at = changed.get("at").and_then(|a| a.as_str()).map(|a| format!(" ({})", plain(a))).unwrap_or_default();
-    Some(format!("Ticket     the ticket changed since this was written: {}{at}", words.join(", ")))
+    let at = changed
+        .get("at")
+        .and_then(|a| a.as_str())
+        .map(|a| format!(" ({})", plain(a)))
+        .unwrap_or_default();
+    Some(format!(
+        "Ticket     the ticket changed since this was written: {}{at}",
+        words.join(", ")
+    ))
 }
 
 pub(crate) fn muted(text: String) -> Line<'static> {
@@ -1001,7 +1507,13 @@ pub(crate) fn muted(text: String) -> Line<'static> {
 }
 
 /// `Plan · triage #2 · approved 2h ago`: which run produced a gate's content and what you did.
-pub(crate) fn gate_header(title: &str, stage: &str, approval: Option<&Approval>, detail: Option<&TaskDetail>, now: u64) -> Line<'static> {
+pub(crate) fn gate_header(
+    title: &str,
+    stage: &str,
+    approval: Option<&Approval>,
+    detail: Option<&TaskDetail>,
+    now: u64,
+) -> Line<'static> {
     let Some(approval) = approval else {
         return heading(title);
     };
@@ -1015,7 +1527,10 @@ pub(crate) fn gate_header(title: &str, stage: &str, approval: Option<&Approval>,
         (Some("sent_back"), None) => ("sent back".to_string(), PEACH),
         (Some("rejected"), Some(at)) => (format!("rejected {} ago", age(at, now)), RED),
         (Some("rejected"), None) => ("rejected".to_string(), RED),
-        (Some(decision), Some(at)) => (format!("{} {} ago", decision.replace('_', " "), age(at, now)), GREEN),
+        (Some(decision), Some(at)) => (
+            format!("{} {} ago", decision.replace('_', " "), age(at, now)),
+            GREEN,
+        ),
         (Some(decision), None) => (decision.replace('_', " "), GREEN),
     };
     Line::from(vec![
@@ -1031,7 +1546,12 @@ pub(crate) fn criteria_table(rows: &[CriterionRow], width: usize) -> Vec<Line<'s
     if rows.is_empty() {
         return Vec::new();
     }
-    let name_w = rows.iter().map(|r| r.criterion.chars().count()).max().unwrap_or(8).clamp(8, width.saturating_sub(28).max(8));
+    let name_w = rows
+        .iter()
+        .map(|r| r.criterion.chars().count())
+        .max()
+        .unwrap_or(8)
+        .clamp(8, width.saturating_sub(28).max(8));
     let mut lines = vec![Line::from(vec![
         Span::from(format!("{:<w$}", "Criteria", w = name_w + 2)).style(theme::heading()),
         Span::from("  plan   cases   verify").style(theme::label()),
@@ -1050,12 +1570,20 @@ pub(crate) fn criteria_table(rows: &[CriterionRow], width: usize) -> Vec<Line<'s
         let verify = match row.verify {
             Some((ok, total)) if ok == total => Span::from("✓").style(theme::done()),
             Some((ok, total)) => Span::from(format!("✗ {ok} of {total}")).style(theme::lost()),
-            None if row.planned == Some(false) => Span::from("–    not in the plan").style(theme::label()),
-            None if row.cases == 0 && row.planned.is_some() => Span::from("–    no case proves it").style(theme::label()),
+            None if row.planned == Some(false) => {
+                Span::from("–    not in the plan").style(theme::label())
+            }
+            None if row.cases == 0 && row.planned.is_some() => {
+                Span::from("–    no case proves it").style(theme::label())
+            }
             None => Span::from("–").style(theme::label()),
         };
         lines.push(Line::from(vec![
-            Span::from(format!("  {:<w$}", truncate(&plain(&row.criterion), name_w), w = name_w)),
+            Span::from(format!(
+                "  {:<w$}",
+                truncate(&plain(&row.criterion), name_w),
+                w = name_w
+            )),
             plan,
             cases,
             verify,
@@ -1070,11 +1598,19 @@ pub(crate) fn criteria_table(rows: &[CriterionRow], width: usize) -> Vec<Line<'s
 /// open Intake gate's missing list with the command that answers it. Every text is a stranger's, so each goes through `plain` and a cap.
 pub(crate) fn origin_lines(task: &Task, detail: Option<&TaskDetail>) -> Vec<Line<'static>> {
     const LISTED: usize = 5;
-    let text = |v: &serde_json::Value, key: &str| v.get(key).and_then(|x| x.as_str()).map(|s| truncate(&plain(s), 60));
+    let text = |v: &serde_json::Value, key: &str| {
+        v.get(key)
+            .and_then(|x| x.as_str())
+            .map(|s| truncate(&plain(s), 60))
+    };
     let mut lines = Vec::new();
     for s in task.sources.iter().take(LISTED) {
         let line = match text(s, "kind").or_else(|| text(s, "type")).as_deref() {
-            Some("github") | Some("github_pr") => format!("GitHub {}#{}", text(s, "repo").unwrap_or_default(), s.get("number").and_then(|n| n.as_u64()).unwrap_or(0)),
+            Some("github") | Some("github_pr") => format!(
+                "GitHub {}#{}",
+                text(s, "repo").unwrap_or_default(),
+                s.get("number").and_then(|n| n.as_u64()).unwrap_or(0)
+            ),
             Some("jira") => format!("Jira {}", text(s, "key").unwrap_or_default()),
             Some(other) => other.to_string(),
             None => "unknown source".to_string(),
@@ -1082,27 +1618,57 @@ pub(crate) fn origin_lines(task: &Task, detail: Option<&TaskDetail>) -> Vec<Line
         lines.push(muted(format!("Source     {line}")));
     }
     if task.sources.len() > LISTED {
-        lines.push(muted(format!("Source     … and {} more", task.sources.len() - LISTED)));
+        lines.push(muted(format!(
+            "Source     … and {} more",
+            task.sources.len() - LISTED
+        )));
     }
     if let Some(r) = &task.reporter {
-        let channel = text(r, "channel").map(|c| format!(" ({c})")).unwrap_or_default();
-        lines.push(muted(format!("Reporter   {}{channel}", text(r, "name").or_else(|| text(r, "id")).unwrap_or_default())));
+        let channel = text(r, "channel")
+            .map(|c| format!(" ({c})"))
+            .unwrap_or_default();
+        lines.push(muted(format!(
+            "Reporter   {}{channel}",
+            text(r, "name")
+                .or_else(|| text(r, "id"))
+                .unwrap_or_default()
+        )));
     }
-    let list = |items: &[String]| items.iter().take(LISTED).map(|s| truncate(&plain(s), 40)).collect::<Vec<_>>().join(", ");
+    let list = |items: &[String]| {
+        items
+            .iter()
+            .take(LISTED)
+            .map(|s| truncate(&plain(s), 40))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     if !task.followers.is_empty() {
         lines.push(muted(format!("Followers  {}", list(&task.followers))));
     }
     if let Some(project) = &task.project {
-        lines.push(muted(format!("Project    {}", truncate(&plain(project), 40))));
+        lines.push(muted(format!(
+            "Project    {}",
+            truncate(&plain(project), 40)
+        )));
     }
     if !task.owners.is_empty() {
         lines.push(muted(format!("Owners     {}", list(&task.owners))));
     }
     for a in task.attachments.iter().take(LISTED) {
-        lines.push(muted(format!("Attached   {}", text(a, "name").unwrap_or_default())));
+        lines.push(muted(format!(
+            "Attached   {}",
+            text(a, "name").unwrap_or_default()
+        )));
     }
     if !task.merged.is_empty() {
-        let ids = task.merged.iter().take(LISTED).filter_map(|m| text(m, "id")).map(|id| id.chars().take(8).collect::<String>()).collect::<Vec<_>>().join(", ");
+        let ids = task
+            .merged
+            .iter()
+            .take(LISTED)
+            .filter_map(|m| text(m, "id"))
+            .map(|id| id.chars().take(8).collect::<String>())
+            .collect::<Vec<_>>()
+            .join(", ");
         lines.push(muted(format!("Merged     {ids}")));
     }
     let short = |id: &str| plain(id).chars().take(8).collect::<String>();
@@ -1110,9 +1676,20 @@ pub(crate) fn origin_lines(task: &Task, detail: Option<&TaskDetail>) -> Vec<Line
         lines.push(muted(format!("Merged into  {}", short(into))));
     }
     if !task.related.is_empty() {
-        lines.push(muted(format!("Related    {}", task.related.iter().take(LISTED).map(|id| short(id)).collect::<Vec<_>>().join(", "))));
+        lines.push(muted(format!(
+            "Related    {}",
+            task.related
+                .iter()
+                .take(LISTED)
+                .map(|id| short(id))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
     }
-    if let Some(line) = detail.and_then(|d| d.open_approval()).and_then(|a| ticket_changed_line(&a.requested)) {
+    if let Some(line) = detail
+        .and_then(|d| d.open_approval())
+        .and_then(|a| ticket_changed_line(&a.requested))
+    {
         lines.push(muted(line));
     }
     lines
@@ -1122,11 +1699,21 @@ pub(crate) fn origin_lines(task: &Task, detail: Option<&TaskDetail>) -> Vec<Line
 /// command that gives it. Empty at any other gate.
 pub(crate) fn intake_gate_lines(detail: Option<&TaskDetail>) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    if let Some(gate) = detail.and_then(|d| d.open_approval()).filter(|a| a.requested.get("kind").and_then(|k| k.as_str()) == Some("dedup")) {
+    if let Some(gate) = detail
+        .and_then(|d| d.open_approval())
+        .filter(|a| a.requested.get("kind").and_then(|k| k.as_str()) == Some("dedup"))
+    {
         lines.push(muted("Intake     could this be a duplicate? pick with :dedup duplicate <slot> | related <slots> | neither".to_string()));
-        lines.extend(crate::intake::candidates(&gate.requested).iter().map(|c| muted(format!("           {}", plain(&c.line())))));
+        lines.extend(
+            crate::intake::candidates(&gate.requested)
+                .iter()
+                .map(|c| muted(format!("           {}", plain(&c.line())))),
+        );
     }
-    if let Some(gate) = detail.and_then(|d| d.open_approval()).filter(|a| a.requested.get("kind").and_then(|k| k.as_str()) == Some("context")) {
+    if let Some(gate) = detail
+        .and_then(|d| d.open_approval())
+        .filter(|a| a.requested.get("kind").and_then(|k| k.as_str()) == Some("context"))
+    {
         let words = gate
             .requested
             .get("missing")
@@ -1146,7 +1733,10 @@ pub(crate) fn intake_gate_lines(detail: Option<&TaskDetail>) -> Vec<Line<'static
             })
             .unwrap_or_default();
         lines.push(muted(format!("Intake     waiting for: {words}")));
-        lines.push(muted("           give it with :context repo <path> · project <KEY> · text <more>".to_string()));
+        lines.push(muted(
+            "           give it with :context repo <path> · project <KEY> · text <more>"
+                .to_string(),
+        ));
     }
     lines
 }
@@ -1157,28 +1747,49 @@ pub(crate) fn gate_blocks(approval: &Approval, width: usize) -> Vec<Line<'static
     let mut lines = Vec::new();
     let requested = &approval.requested;
     if let Some(error) = requested["error"].as_str() {
-        lines.extend([Line::default(), Line::from(Span::from("Error").style(theme::lost()).bold())]);
-        lines.extend(plain(error).lines().map(|l| Line::from(format!("  {l}")).style(theme::lost())));
+        lines.extend([
+            Line::default(),
+            Line::from(Span::from("Error").style(theme::lost()).bold()),
+        ]);
+        lines.extend(
+            plain(error)
+                .lines()
+                .map(|l| Line::from(format!("  {l}")).style(theme::lost())),
+        );
     }
     if let Some(note) = requested["note"].as_str() {
         lines.push(muted(plain(note)));
     }
     let rules = rules_lines(&requested["rules"], width.saturating_sub(4).max(20));
     if !rules.is_empty() {
-        lines.extend([Line::default(), proposal_heading("Proposed rules (a applies, A skips)")]);
+        lines.extend([
+            Line::default(),
+            proposal_heading("Proposed rules (a applies, A skips)"),
+        ]);
         lines.extend(rules.iter().map(|l| Line::from(format!("  {l}"))));
     }
     if let Some(config) = requested["config"].as_str() {
-        lines.extend([Line::default(), proposal_heading("Proposed luna.yaml (a writes it to the repo, r sends it back)")]);
+        lines.extend([
+            Line::default(),
+            proposal_heading("Proposed luna.yaml (a writes it to the repo, r sends it back)"),
+        ]);
         lines.extend(plain(config).lines().map(|l| Line::from(format!("  {l}"))));
         // The base image, singled out of the long proposal: it runs the stage's process, and approving the setup does not approve it.
         if let Some(base) = requested["sandboxBase"].as_str() {
-            lines.extend([Line::default(), proposal_heading("Base image (not approved by this gate)")]);
-            lines.push(Line::from(format!("  {}", crate::model::plain(base, 400))).style(theme::lost()));
+            lines.extend([
+                Line::default(),
+                proposal_heading("Base image (not approved by this gate)"),
+            ]);
+            lines.push(
+                Line::from(format!("  {}", crate::model::plain(base, 400))).style(theme::lost()),
+            );
         }
         let proof = proof_lines(&requested["proof"]);
         if !proof.is_empty() {
-            lines.extend([Line::default(), proposal_heading("Proof (each check run once)")]);
+            lines.extend([
+                Line::default(),
+                proposal_heading("Proof (each check run once)"),
+            ]);
             for (ok, text) in proof {
                 lines.push(Line::from(format!("  {text}")).fg(c(if ok { GREEN } else { RED })));
             }
@@ -1192,9 +1803,19 @@ pub(crate) fn gate_blocks(approval: &Approval, width: usize) -> Vec<Line<'static
     lines
 }
 
-fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64, tasks: &[Task]) -> Vec<Line<'static>> {
+fn overview_lines(
+    task: &Task,
+    detail: Option<&TaskDetail>,
+    width: usize,
+    now: u64,
+    tasks: &[Task],
+) -> Vec<Line<'static>> {
     let look = task.look();
-    let mut status = vec![Span::from(format!("{} {}", look_glyph(look), task.status_label())).fg(c(look_color(look))).bold()];
+    let mut status = vec![
+        Span::from(format!("{} {}", look_glyph(look), task.status_label()))
+            .fg(c(look_color(look)))
+            .bold(),
+    ];
     if let Some(run) = detail.and_then(|d| d.stage_runs.last()) {
         status.push(Span::from(format!(" #{}", run.attempt)).style(theme::label()));
     }
@@ -1202,7 +1823,11 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
         status.push(Span::from(format!(" · run {} of 3", task.retries.total)).style(theme::flag()));
     }
     if task.retries.stronger > 0 {
-        let note = if task.retries.stronger_next { " · stronger engine next" } else { " · stronger engine used" };
+        let note = if task.retries.stronger_next {
+            " · stronger engine next"
+        } else {
+            " · stronger engine used"
+        };
         status.push(Span::from(note).style(theme::flag()));
     }
     if let Some(spent) = detail.and_then(TaskDetail::spent_usd).or(task.spent_usd) {
@@ -1220,7 +1845,10 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
     }
 
     lines.push(Line::default());
-    lines.push(muted(format!("Repo       {}", task.repo_path.as_deref().unwrap_or("none (R sets one)"))));
+    lines.push(muted(format!(
+        "Repo       {}",
+        task.repo_path.as_deref().unwrap_or("none (R sets one)")
+    )));
     if let Some(branch) = &task.branch {
         lines.push(muted(format!("Branch     {branch}")));
     }
@@ -1230,24 +1858,38 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
     lines.extend(jira_lines(task, now));
     lines.extend(origin_lines(task, detail));
     if let Some(stage) = &task.resume_to {
-        lines.push(muted(format!("Continues  {}", continues_line(&task.state, stage).trim_start_matches("Continues at: "))));
+        lines.push(muted(format!(
+            "Continues  {}",
+            continues_line(&task.state, stage).trim_start_matches("Continues at: ")
+        )));
     }
     lines.extend(stack_lines(task, detail, tasks));
     if let Some(reason) = &task.archive_reason {
-        lines.push(muted(if reason == "split" { "Archived   split into smaller changes".to_string() } else { format!("Archived   {reason}") }));
+        lines.push(muted(if reason == "split" {
+            "Archived   split into smaller changes".to_string()
+        } else {
+            format!("Archived   {reason}")
+        }));
     } else if let Some(reason) = &task.reason {
         lines.push(Line::from(format!("Why        {reason}")).fg(look_color(look)));
     }
     if task.retries.total > 0 {
         let r = &task.retries;
-        lines.push(muted(format!("Failures   verify {} · e2e {} · ci {}", r.verify, r.e2e, r.ci)));
+        lines.push(muted(format!(
+            "Failures   verify {} · e2e {} · ci {}",
+            r.verify, r.e2e, r.ci
+        )));
     }
 
     lines.extend([Line::default(), heading("Description")]);
     if task.description.trim().is_empty() {
         lines.push(muted("  (none yet, e adds one)".into()));
     } else {
-        lines.extend(plain(&task.description).lines().map(|l| Line::from(format!("  {l}"))));
+        lines.extend(
+            plain(&task.description)
+                .lines()
+                .map(|l| Line::from(format!("  {l}"))),
+        );
     }
     lines.extend([Line::default(), heading("Acceptance criteria")]);
     if task.criteria.is_empty() {
@@ -1266,9 +1908,16 @@ fn jira_lines(task: &Task, now: u64) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     match &task.jira {
         Some(jira) => {
-            lines.push(Line::from(vec![Span::from("Jira       ").style(theme::label()), Span::from(jira.summary(now))]));
+            lines.push(Line::from(vec![
+                Span::from("Jira       ").style(theme::label()),
+                Span::from(jira.summary(now)),
+            ]));
             if let Some(blocked) = &jira.blocked {
-                lines.push(Line::from(Span::from(format!("           ⚠ blocked: {}", blocked.line())).style(theme::lost()).bold()));
+                lines.push(Line::from(
+                    Span::from(format!("           ⚠ blocked: {}", blocked.line()))
+                        .style(theme::lost())
+                        .bold(),
+                ));
             }
         }
         None => lines.push(muted("Jira       —  J links an issue".to_string())),
@@ -1301,14 +1950,34 @@ pub(crate) fn plain(text: &str) -> String {
 /// Plan: the latest triage plan, decided or not, then what happened to it. The page reads like the Review page: the brief, each
 /// criterion once with its id, the steps with their size and files, rollback, out of scope and migration. The outcome and risk,
 /// the triage record, the checks, the code map, the assumptions and the card's facts are reference.
-pub(crate) fn plan_page(task: &Task, detail: Option<&TaskDetail>, width: usize, ref_width: usize, now: u64) -> Page {
+pub(crate) fn plan_page(
+    task: &Task,
+    detail: Option<&TaskDetail>,
+    width: usize,
+    ref_width: usize,
+    now: u64,
+) -> Page {
     let approval = detail.and_then(|d| d.latest_approval("awaiting_approval"));
     // A gate that carries triage's outcome came from triage; the plan stage's has a lane or a risk.
-    let stage = if approval.is_some_and(|a| a.outcome().is_none() && (a.requested["lane"].is_string() || a.requested["risk"].is_object())) { "test_design" } else { "triage" };
+    let stage = if approval.is_some_and(|a| {
+        a.outcome().is_none()
+            && (a.requested["lane"].is_string() || a.requested["risk"].is_object())
+    }) {
+        "test_design"
+    } else {
+        "triage"
+    };
     let mut lines = vec![gate_header("Plan", stage, approval, detail, now)];
     let Some(approval) = approval else {
         lines.push(Line::default());
-        lines.push(muted(if detail.is_none() { "  loading…" } else { "  no plan yet: triage and the planner write one once the ticket starts" }.into()));
+        lines.push(muted(
+            if detail.is_none() {
+                "  loading…"
+            } else {
+                "  no plan yet: triage and the planner write one once the ticket starts"
+            }
+            .into(),
+        ));
         return Page::of(lines);
     };
     let requested = &approval.requested;
@@ -1317,13 +1986,27 @@ pub(crate) fn plan_page(task: &Task, detail: Option<&TaskDetail>, width: usize, 
         lines.push(Line::default());
         lines.extend(facts);
     }
+    lines.extend(coverage_gap_lines(task, approval, width));
     if let Some(reply) = approval.reply() {
-        lines.extend([Line::default(), proposal_heading("Reply (a posts it where the ticket came from and closes it)")]);
+        lines.extend([
+            Line::default(),
+            proposal_heading("Reply (a posts it where the ticket came from and closes it)"),
+        ]);
         lines.extend(plain(&reply).lines().map(|l| Line::from(format!("  {l}"))));
     }
     if approval.outcome() == Some("archive") {
-        lines.extend([Line::default(), proposal_heading("Archive (a archives the ticket)")]);
-        lines.push(Line::from(format!("  {}", plain(&approval.archive_reason().unwrap_or_else(|| "no reason given".into())))));
+        lines.extend([
+            Line::default(),
+            proposal_heading("Archive (a archives the ticket)"),
+        ]);
+        lines.push(Line::from(format!(
+            "  {}",
+            plain(
+                &approval
+                    .archive_reason()
+                    .unwrap_or_else(|| "no reason given".into())
+            )
+        )));
     }
     // The scenarios that prove each criterion are the Tests section's.
     let (material, _) = crate::pages::plan_material(task, approval, detail, width, false);
@@ -1343,8 +2026,48 @@ pub(crate) fn plan_page(task: &Task, detail: Option<&TaskDetail>, width: usize, 
         },
     ));
     let width = ref_width;
-    let groups = [gate_ref_group(approval, width), record_group(task, requested, width), checks_group(approval), map_group(requested, width), assumptions_group(requested, width), Some(card_group(task, detail, width, now))];
-    Page { main: lines, groups: groups.into_iter().flatten().collect() }
+    let groups = [
+        gate_ref_group(approval, width),
+        record_group(task, requested, width),
+        checks_group(approval),
+        map_group(requested, width),
+        assumptions_group(requested, width),
+        Some(card_group(task, detail, width, now)),
+    ];
+    Page {
+        main: lines,
+        groups: groups.into_iter().flatten().collect(),
+    }
+}
+
+/// The criteria no scenario names and nobody excused, at a plan gate that waits for you: the machine refuses an approval over them,
+/// so the page says so and where the way out is (`u`). Nothing at any other gate, or when there is no gap.
+fn coverage_gap_lines(task: &Task, approval: &Approval, width: usize) -> Vec<Line<'static>> {
+    let gaps = crate::pages::open_coverage_gaps(approval, task);
+    if gaps.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![
+        Line::default(),
+        proposal_heading("Open coverage gaps (no scenario names them)"),
+    ];
+    for (id, text) in &gaps {
+        lines.extend(crate::pages::hanging(
+            vec![
+                Span::raw("  "),
+                Span::styled(format!("{id:<4}"), theme::label()),
+            ],
+            text,
+            width,
+        ));
+    }
+    let hint = "a is refused while these are open · u picks the ones to excuse as untestable and approves · r sends the plan back";
+    lines.extend(
+        crate::text::wrap(hint, width.saturating_sub(2).max(20), 0)
+            .into_iter()
+            .map(|part| muted(format!("  {}", part.trim_start()))),
+    );
+    lines
 }
 
 /// The gate's outcome, its risk with the three scores, what raised or overrode it, as reference. None for a gate that says none of it.
@@ -1366,7 +2089,14 @@ pub(crate) fn gate_ref_group(approval: &Approval, width: usize) -> Option<RefGro
     if let Some(rule) = approval.rule_line() {
         lines.extend(fact_row("Rule", &rule, width));
     }
-    (!lines.is_empty()).then(|| RefGroup::new("risk", "Risk", level.unwrap_or_else(|| "see gate".into()), lines))
+    (!lines.is_empty()).then(|| {
+        RefGroup::new(
+            "risk",
+            "Risk",
+            level.unwrap_or_else(|| "see gate".into()),
+            lines,
+        )
+    })
 }
 
 /// The plan stage's checks, one line each with its verdict: `✓` proceeds, `⚑` is flagged, `?` is unsure.
@@ -1375,7 +2105,10 @@ pub(crate) fn checks_group(approval: &Approval) -> Option<RefGroup> {
     if checks.is_empty() {
         return None;
     }
-    let flagged = checks.iter().filter(|(_, verdict)| matches!(verdict.as_str(), "flag" | "ask")).count();
+    let flagged = checks
+        .iter()
+        .filter(|(_, verdict)| matches!(verdict.as_str(), "flag" | "ask"))
+        .count();
     let lines = checks
         .iter()
         .map(|(name, verdict)| {
@@ -1388,7 +2121,11 @@ pub(crate) fn checks_group(approval: &Approval) -> Option<RefGroup> {
             Line::from(format!("{glyph} {name} {}", plain(verdict)))
         })
         .collect();
-    let summary = if flagged == 0 { "all clear".to_string() } else { format!("{flagged} flagged") };
+    let summary = if flagged == 0 {
+        "all clear".to_string()
+    } else {
+        format!("{flagged} flagged")
+    };
     Some(RefGroup::new("checks", "Checks", summary, lines))
 }
 
@@ -1415,39 +2152,94 @@ fn split_facts(approval: &Approval) -> Vec<Line<'static>> {
     let size = &r["size"];
     let loc = size["planned"].as_f64().or_else(|| size["estLoc"].as_f64());
     if let (Some(loc), Some(hard)) = (loc, size["limit"]["hard"].as_f64()) {
-        lines.push(Line::from(vec![label("Size"), Span::from(format!("about {loc:.0} lines, over the limit of {hard:.0} by {:.0}", (loc - hard).max(0.0))).style(theme::flag())]));
+        lines.push(Line::from(vec![
+            label("Size"),
+            Span::from(format!(
+                "about {loc:.0} lines, over the limit of {hard:.0} by {:.0}",
+                (loc - hard).max(0.0)
+            ))
+            .style(theme::flag()),
+        ]));
     }
     if let Some(reason) = r["reason"].as_str() {
-        lines.push(Line::from(vec![label("Reason"), Span::from(plain(reason)).style(theme::lost())]));
+        lines.push(Line::from(vec![
+            label("Reason"),
+            Span::from(plain(reason)).style(theme::lost()),
+        ]));
     }
-    for issue in r["split"]["issues"].as_array().into_iter().flatten().filter_map(|i| i.as_str()) {
-        lines.push(Line::from(vec![label("Issue"), Span::from(plain(issue)).style(theme::flag())]));
+    for issue in r["split"]["issues"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|i| i.as_str())
+    {
+        lines.push(Line::from(vec![
+            label("Issue"),
+            Span::from(plain(issue)).style(theme::flag()),
+        ]));
     }
     for (i, child) in approval.split_children().iter().enumerate() {
-        let after: Vec<String> = child["depends_on"].as_array().into_iter().flatten().filter_map(|d| d.as_u64()).map(|d| d.to_string()).collect();
-        let criteria = child["acceptance_criteria"].as_array().map_or(0, |a| a.len());
-        let mut text = format!("{}. {} · about {} lines", i + 1, plain(child["title"].as_str().unwrap_or("")), child["est_loc"].as_u64().unwrap_or(0));
+        let after: Vec<String> = child["depends_on"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|d| d.as_u64())
+            .map(|d| d.to_string())
+            .collect();
+        let criteria = child["acceptance_criteria"]
+            .as_array()
+            .map_or(0, |a| a.len());
+        let mut text = format!(
+            "{}. {} · about {} lines",
+            i + 1,
+            plain(child["title"].as_str().unwrap_or("")),
+            child["est_loc"].as_u64().unwrap_or(0)
+        );
         if !after.is_empty() {
             text.push_str(&format!(" · after {}", after.join(", ")));
         }
-        text.push_str(&format!(" · {criteria} criteri{}", if criteria == 1 { "on" } else { "a" }));
-        lines.push(Line::from(vec![label(if i == 0 { "Children" } else { "" }), Span::from(text)]));
+        text.push_str(&format!(
+            " · {criteria} criteri{}",
+            if criteria == 1 { "on" } else { "a" }
+        ));
+        lines.push(Line::from(vec![
+            label(if i == 0 { "Children" } else { "" }),
+            Span::from(text),
+        ]));
     }
     if r["outcome"].as_str() == Some("split") {
-        let via = if r["split"]["via"].as_str() == Some("tickets") { "creates tickets in the tracker" } else { "creates cards" };
-        let judged = if r["split"]["judged"].as_bool() == Some(true) { "judged by split_check" } else { "checked by script only" };
-        lines.push(Line::from(vec![label("Approving"), Span::from(format!("{via} · {judged}"))]));
+        let via = if r["split"]["via"].as_str() == Some("tickets") {
+            "creates tickets in the tracker"
+        } else {
+            "creates cards"
+        };
+        let judged = if r["split"]["judged"].as_bool() == Some(true) {
+            "judged by split_check"
+        } else {
+            "checked by script only"
+        };
+        lines.push(Line::from(vec![
+            label("Approving"),
+            Span::from(format!("{via} · {judged}")),
+        ]));
     }
     lines
 }
 
 /// What the machine says the card waits for: the `text` of its latest `card.held` event, unless a `card.released` came after it.
 fn held_text(detail: Option<&TaskDetail>) -> Option<String> {
-    let last = detail?.events.iter().rev().find(|e| e.kind == "card.held" || e.kind == "card.released")?;
+    let last = detail?
+        .events
+        .iter()
+        .rev()
+        .find(|e| e.kind == "card.held" || e.kind == "card.released")?;
     if last.kind != "card.held" {
         return None;
     }
-    last.payload["text"].as_str().filter(|t| !t.trim().is_empty()).map(String::from)
+    last.payload["text"]
+        .as_str()
+        .filter(|t| !t.trim().is_empty())
+        .map(String::from)
 }
 
 /// A card's place in a split or a stack: where it came from, what it waits for, what it is built on, what it was split into. Nothing for a card with none of them.
@@ -1456,49 +2248,112 @@ fn stack_lines(task: &Task, detail: Option<&TaskDetail>, tasks: &[Task]) -> Vec<
     let find = |id: &str| tasks.iter().find(|t| t.id == id);
     let mut lines = Vec::new();
     if let (Some(from), Some(part)) = (&task.split_from, &task.split_part) {
-        let title = find(from).map(|o| format!(" {}", plain(&o.title))).unwrap_or_default();
-        lines.push(muted(format!("Stack      Part {} of {} of {}{}", part.n, part.of, short(from), title)));
+        let title = find(from)
+            .map(|o| format!(" {}", plain(&o.title)))
+            .unwrap_or_default();
+        lines.push(muted(format!(
+            "Stack      Part {} of {} of {}{}",
+            part.n,
+            part.of,
+            short(from),
+            title
+        )));
     }
     for dep in &task.depends_on {
         lines.push(muted(format!("Stack      Depends on {}", short(dep))));
     }
     if let Some(base) = &task.base {
-        lines.push(muted(format!("Stack      Stacked on {} ({})", short(&base.card), plain(&base.branch))));
+        lines.push(muted(format!(
+            "Stack      Stacked on {} ({})",
+            short(&base.card),
+            plain(&base.branch)
+        )));
     }
-    if let Some(floor) = task.risk_floor.as_deref().filter(|_| task.split_from.is_some()) {
-        lines.push(muted(format!("Stack      Risk floor {} (its origin's: a part is never lower)", plain(floor))));
+    if let Some(floor) = task
+        .risk_floor
+        .as_deref()
+        .filter(|_| task.split_from.is_some())
+    {
+        lines.push(muted(format!(
+            "Stack      Risk floor {} (its origin's: a part is never lower)",
+            plain(floor)
+        )));
     }
     if task.start_when_ready && task.state == "draft" {
         match held_text(detail) {
-            Some(text) => lines.push(muted(format!("Stack      {}", plain(&text).replace('\n', " ")))),
-            None => lines.push(muted("Stack      Waiting: held until its dependencies have an open PR or have merged".to_string())),
+            Some(text) => lines.push(muted(format!(
+                "Stack      {}",
+                plain(&text).replace('\n', " ")
+            ))),
+            None => lines.push(muted(
+                "Stack      Waiting: held until its dependencies have an open PR or have merged"
+                    .to_string(),
+            )),
         }
     }
-    let (known, missing): (Vec<&String>, Vec<&String>) = task.split_into.iter().partition(|i| find(i).is_some());
+    let (known, missing): (Vec<&String>, Vec<&String>) =
+        task.split_into.iter().partition(|i| find(i).is_some());
     for id in known {
         let kid = find(id).expect("partitioned as present");
-        let part = kid.split_part.as_ref().map(|p| format!("part {}/{} ", p.n, p.of)).unwrap_or_default();
-        lines.push(muted(format!("Stack      Split into {} {}{} ({})", short(id), part, plain(&kid.title), kid.status_label())));
+        let part = kid
+            .split_part
+            .as_ref()
+            .map(|p| format!("part {}/{} ", p.n, p.of))
+            .unwrap_or_default();
+        lines.push(muted(format!(
+            "Stack      Split into {} {}{} ({})",
+            short(id),
+            part,
+            plain(&kid.title),
+            kid.status_label()
+        )));
     }
     if !missing.is_empty() {
-        lines.push(muted(format!("Stack      Split into {}", missing.iter().map(|i| short(i)).collect::<Vec<_>>().join(", "))));
+        lines.push(muted(format!(
+            "Stack      Split into {}",
+            missing
+                .iter()
+                .map(|i| short(i))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
     }
     lines
 }
 
 /// Tests: the scenarios under the criterion each proves (id, type, layer, title), with verifying's verdict on each.
-fn tests_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64) -> Vec<Line<'static>> {
+fn tests_lines(
+    task: &Task,
+    detail: Option<&TaskDetail>,
+    width: usize,
+    now: u64,
+) -> Vec<Line<'static>> {
     let approval = detail.and_then(|d| d.cases_approval());
     let mut lines = vec![gate_header("Tests", "test_design", approval, detail, now)];
     let Some(d) = detail.filter(|_| approval.is_some()) else {
         lines.push(Line::default());
-        lines.push(muted(if detail.is_none() { "  loading…" } else { "  no cases yet: test_design writes them with the plan" }.into()));
+        lines.push(muted(
+            if detail.is_none() {
+                "  loading…"
+            } else {
+                "  no cases yet: test_design writes them with the plan"
+            }
+            .into(),
+        ));
         return lines;
     };
     let results = d.cases();
-    let verdict = |title: &str| results.iter().find(|c| c.title == title).and_then(|c| c.result);
+    let verdict = |title: &str| {
+        results
+            .iter()
+            .find(|c| c.title == title)
+            .and_then(|c| c.result)
+    };
     // Criteria in first-seen order, the ones that name none last; the plan's ids where it lists them.
-    let ids: Vec<(String, String)> = d.latest_approval("awaiting_approval").map(|a| crate::pages::criteria(a, task)).unwrap_or_default();
+    let ids: Vec<(String, String)> = d
+        .latest_approval("awaiting_approval")
+        .map(|a| crate::pages::criteria(a, task))
+        .unwrap_or_default();
     let mut groups: Vec<(String, Vec<crate::pages::Scenario>)> = Vec::new();
     let mut loose = Vec::new();
     for s in crate::pages::scenarios(detail) {
@@ -1514,17 +2369,38 @@ fn tests_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64)
         groups.push(("(no criterion)".to_string(), loose));
     }
     let total: usize = groups.iter().map(|(_, mine)| mine.len()).sum();
-    let judged: Vec<bool> = groups.iter().flat_map(|(_, mine)| mine.iter().filter_map(|s| verdict(&s.title))).collect();
-    let mut summary = format!("{total} case{} over {} criteri{}", if total == 1 { "" } else { "s" }, groups.len(), if groups.len() == 1 { "on" } else { "a" });
+    let judged: Vec<bool> = groups
+        .iter()
+        .flat_map(|(_, mine)| mine.iter().filter_map(|s| verdict(&s.title)))
+        .collect();
+    let mut summary = format!(
+        "{total} case{} over {} criteri{}",
+        if total == 1 { "" } else { "s" },
+        groups.len(),
+        if groups.len() == 1 { "on" } else { "a" }
+    );
     if !judged.is_empty() {
-        summary.push_str(&format!(" · verifying {}/{}", judged.iter().filter(|ok| **ok).count(), judged.len()));
+        summary.push_str(&format!(
+            " · verifying {}/{}",
+            judged.iter().filter(|ok| **ok).count(),
+            judged.len()
+        ));
     }
-    if let Some(run) = d.stage_runs.iter().rev().find(|r| r.stage == "verifying" && !r.cases.is_empty()) {
+    if let Some(run) = d
+        .stage_runs
+        .iter()
+        .rev()
+        .find(|r| r.stage == "verifying" && !r.cases.is_empty())
+    {
         let (glyph, _) = run_glyph(run);
         summary.push_str(&format!(" {glyph}"));
     }
     lines.push(muted(summary));
-    let tag_w = groups.iter().flat_map(|(_, mine)| mine.iter().map(|s| s.tag().chars().count())).max().unwrap_or(2);
+    let tag_w = groups
+        .iter()
+        .flat_map(|(_, mine)| mine.iter().map(|s| s.tag().chars().count()))
+        .max()
+        .unwrap_or(2);
     let title_w = groups
         .iter()
         .flat_map(|(_, mine)| mine.iter().map(|s| s.title.chars().count()))
@@ -1533,21 +2409,53 @@ fn tests_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64)
         .clamp(10, width.saturating_sub(tag_w + 30).max(10));
     for (criterion, mine) in &groups {
         lines.push(Line::default());
-        let id = ids.iter().find(|(_, text)| text == &plain(criterion)).map(|(id, _)| id.clone()).unwrap_or_default();
-        let prefix = if id.is_empty() { Vec::new() } else { vec![Span::styled(format!("{id:<4}"), theme::label())] };
+        let id = ids
+            .iter()
+            .find(|(_, text)| text == &plain(criterion))
+            .map(|(id, _)| id.clone())
+            .unwrap_or_default();
+        let prefix = if id.is_empty() {
+            Vec::new()
+        } else {
+            vec![Span::styled(format!("{id:<4}"), theme::label())]
+        };
         let mut head = crate::pages::hanging(prefix, criterion, width);
         if let Some(last) = head.last_mut() {
-            last.spans.push(Span::from(format!("   {} case{}", mine.len(), if mine.len() == 1 { "" } else { "s" })).style(theme::label()));
+            last.spans.push(
+                Span::from(format!(
+                    "   {} case{}",
+                    mine.len(),
+                    if mine.len() == 1 { "" } else { "s" }
+                ))
+                .style(theme::label()),
+            );
         }
-        lines.extend(head.into_iter().map(|l| Line::from(l.spans.into_iter().map(|s| if s.style == Style::default() { Span::styled(s.content, theme::heading()) } else { s }).collect::<Vec<_>>())));
+        lines.extend(head.into_iter().map(|l| {
+            Line::from(
+                l.spans
+                    .into_iter()
+                    .map(|s| {
+                        if s.style == Style::default() {
+                            Span::styled(s.content, theme::heading())
+                        } else {
+                            s
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        }));
         for s in mine {
             lines.push(case_line(s, verdict(&s.title), tag_w, title_w));
         }
     }
     lines.push(Line::default());
     lines.push(muted(
-        if matches!(task.state.as_str(), "awaiting_test_check" | "awaiting_approval") {
-            "e edits the cases while they wait for your check · the implementer never sees them".to_string()
+        if matches!(
+            task.state.as_str(),
+            "awaiting_test_check" | "awaiting_approval"
+        ) {
+            "e edits the cases while they wait for your check · the implementer never sees them"
+                .to_string()
         } else {
             "read-only · each case carries what verifying found".to_string()
         },
@@ -1555,7 +2463,12 @@ fn tests_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64)
     lines
 }
 
-fn case_line(case: &crate::pages::Scenario, result: Option<bool>, tag_w: usize, title_w: usize) -> Line<'static> {
+fn case_line(
+    case: &crate::pages::Scenario,
+    result: Option<bool>,
+    tag_w: usize,
+    title_w: usize,
+) -> Line<'static> {
     let (glyph, color) = match result {
         Some(true) => ("✓", GREEN),
         Some(false) => ("✗", RED),
@@ -1564,30 +2477,52 @@ fn case_line(case: &crate::pages::Scenario, result: Option<bool>, tag_w: usize, 
     Line::from(vec![
         Span::from(format!("  {glyph} ")).fg(c(color)),
         Span::styled(format!("{:<w$}  ", case.tag(), w = tag_w), theme::label()),
-        Span::from(format!("{:<w$}", truncate(&case.title, title_w), w = title_w)),
+        Span::from(format!(
+            "{:<w$}",
+            truncate(&case.title, title_w),
+            w = title_w
+        )),
         Span::from(format!("   {}", case.approach)).style(theme::label()),
     ])
 }
 
 /// Runs: a table of stage runs, then the selected run's error and files. With the index of
 /// the selected row, so the pane can keep it in view.
-fn runs_lines(task: &Task, detail: Option<&TaskDetail>, cursor: usize, width: usize, now: u64) -> (Vec<Line<'static>>, Option<usize>) {
+fn runs_lines(
+    task: &Task,
+    detail: Option<&TaskDetail>,
+    cursor: usize,
+    width: usize,
+    now: u64,
+) -> (Vec<Line<'static>>, Option<usize>) {
     let Some(d) = detail else {
-        return (vec![heading("Runs"), Line::default(), muted("  loading…".into())], None);
+        return (
+            vec![heading("Runs"), Line::default(), muted("  loading…".into())],
+            None,
+        );
     };
-    let mut head = vec![Span::from("Runs").style(theme::heading()), Span::from(format!(" · {}", d.stage_runs.len())).style(theme::label())];
+    let mut head = vec![
+        Span::from("Runs").style(theme::heading()),
+        Span::from(format!(" · {}", d.stage_runs.len())).style(theme::label()),
+    ];
     if let Some(spent) = d.spent_usd() {
         head.push(Span::from(format!(" · ${spent:.2} spent")).style(theme::label()));
     }
     if let Some(worked) = task.worked_ms {
-        head.push(Span::from(format!(" · {} worked", crate::model::fmt_ms(Some(worked)))).style(theme::label()));
+        head.push(
+            Span::from(format!(" · {} worked", crate::model::fmt_ms(Some(worked))))
+                .style(theme::label()),
+        );
     }
     let mut lines = vec![Line::from(head), Line::default()];
     if d.stage_runs.is_empty() {
         lines.push(muted("  nothing has run yet".into()));
         return (lines, None);
     }
-    lines.push(muted(format!("    {:<14} {:>2}  {:<8} {:>6}  {:>7}  {:>5}", "stage", "#", "status", "took", "cost", "turns")));
+    lines.push(muted(format!(
+        "    {:<14} {:>2}  {:<8} {:>6}  {:>7}  {:>5}",
+        "stage", "#", "status", "took", "cost", "turns"
+    )));
     let selected = cursor.min(d.stage_runs.len() - 1);
     let cursor_row = lines.len() + selected;
     for (i, run) in d.stage_runs.iter().enumerate() {
@@ -1595,7 +2530,12 @@ fn runs_lines(task: &Task, detail: Option<&TaskDetail>, cursor: usize, width: us
         let on = i == selected;
         lines.push(Line::from(vec![
             Span::from(if on { "  ▌ " } else { "    " }).style(theme::border_focus()),
-            Span::from(format!("{:<14} {:>2}  ", truncate(&run.stage, 14), run.attempt)).bold(),
+            Span::from(format!(
+                "{:<14} {:>2}  ",
+                truncate(&run.stage, 14),
+                run.attempt
+            ))
+            .bold(),
             Span::from(format!("{:<8}", run.status)).fg(c(color)),
             Span::from(format!(
                 " {:>6}  {:>7}  {:>5}",
@@ -1613,25 +2553,53 @@ fn runs_lines(task: &Task, detail: Option<&TaskDetail>, cursor: usize, width: us
         Span::from("─".repeat(width.saturating_sub(run.stage.chars().count() + 8))).fg(c(MUTED)),
     ]));
     match run_error(d, run) {
-        Some(error) => lines.extend(plain(&error).lines().take(8).map(|l| Line::from(format!("  {l}")).style(theme::lost()))),
-        None if run.status == "running" => lines.push(muted("  running · f follows its container in herdr".into())),
+        Some(error) => lines.extend(
+            plain(&error)
+                .lines()
+                .take(8)
+                .map(|l| Line::from(format!("  {l}")).style(theme::lost())),
+        ),
+        None if run.status == "running" => {
+            lines.push(muted("  running · f follows its container in herdr".into()))
+        }
         None => lines.push(muted("  no error recorded".into())),
     }
     if !run.cases.is_empty() {
         lines.push(Line::default());
         for case in &run.cases {
-            let (glyph, color) = if case.ok { ("✓", GREEN) } else { ("✗", RED) };
-            lines.push(Line::from(vec![Span::from(format!("  {glyph} ")).fg(c(color)), Span::from(plain(&case.title))]));
+            let (glyph, color) = if case.ok {
+                ("✓", GREEN)
+            } else {
+                ("✗", RED)
+            };
+            lines.push(Line::from(vec![
+                Span::from(format!("  {glyph} ")).fg(c(color)),
+                Span::from(plain(&case.title)),
+            ]));
         }
     }
-    let files: Vec<&crate::model::Artifact> = d.artifacts.iter().filter(|a| a.stage_run_id.is_some() && a.stage_run_id == run.id).collect();
+    let files: Vec<&crate::model::Artifact> = d
+        .artifacts
+        .iter()
+        .filter(|a| a.stage_run_id.is_some() && a.stage_run_id == run.id)
+        .collect();
     if !files.is_empty() {
         lines.push(Line::default());
-        lines.push(muted(format!("  {} file{}", files.len(), if files.len() == 1 { "" } else { "s" })));
-        lines.extend(files.iter().map(|a| muted(format!("    {} {}", plain(&a.kind), plain(&a.path)))));
+        lines.push(muted(format!(
+            "  {} file{}",
+            files.len(),
+            if files.len() == 1 { "" } else { "s" }
+        )));
+        lines.extend(
+            files
+                .iter()
+                .map(|a| muted(format!("    {} {}", plain(&a.kind), plain(&a.path)))),
+        );
     }
     lines.push(Line::default());
-    lines.push(muted("j/k pick a run · J/K scroll · f follows the running one in herdr".into()));
+    lines.push(muted(
+        "j/k pick a run · J/K scroll · f follows the running one in herdr".into(),
+    ));
     (lines, Some(cursor_row))
 }
 
@@ -1639,9 +2607,16 @@ fn runs_lines(task: &Task, detail: Option<&TaskDetail>, cursor: usize, width: us
 pub(crate) fn run_error(detail: &TaskDetail, run: &StageRun) -> Option<String> {
     detail.events.iter().rev().find_map(|e| {
         let p = &e.payload;
-        (e.kind == "stage.finished" && p["stage"].as_str() == Some(run.stage.as_str()) && p["attempt"].as_u64() == Some(u64::from(run.attempt)))
-            .then(|| p["error"].as_str().or_else(|| p["detail"]["error"].as_str()).map(str::to_string))
-            .flatten()
+        (e.kind == "stage.finished"
+            && p["stage"].as_str() == Some(run.stage.as_str())
+            && p["attempt"].as_u64() == Some(u64::from(run.attempt)))
+        .then(|| {
+            p["error"]
+                .as_str()
+                .or_else(|| p["detail"]["error"].as_str())
+                .map(str::to_string)
+        })
+        .flatten()
     })
 }
 
@@ -1656,20 +2631,44 @@ struct DiffHead<'a> {
 }
 
 /// Diff: the branch's files with their counts, then the selected file's patch.
-fn diff_head<'a>(task: &Task, diff: Option<&'a TaskDiff>, cursor: usize, width: usize) -> DiffHead<'a> {
-    let none = |lines| DiffHead { lines, cursor_row: None, patch: Some(""), tail: Vec::new() };
+fn diff_head<'a>(
+    task: &Task,
+    diff: Option<&'a TaskDiff>,
+    cursor: usize,
+    width: usize,
+) -> DiffHead<'a> {
+    let none = |lines| DiffHead {
+        lines,
+        cursor_row: None,
+        patch: Some(""),
+        tail: Vec::new(),
+    };
     let Some(branch) = &task.branch else {
-        return none(vec![heading("Diff"), Line::default(), muted("  no branch yet: Build creates one".into())]);
+        return none(vec![
+            heading("Diff"),
+            Line::default(),
+            muted("  no branch yet: Build creates one".into()),
+        ]);
     };
     let Some(diff) = diff else {
-        return none(vec![heading("Diff"), Line::default(), muted(format!("  loading {branch}…"))]);
+        return none(vec![
+            heading("Diff"),
+            Line::default(),
+            muted(format!("  loading {branch}…")),
+        ]);
     };
     let added: u64 = diff.files.iter().map(|f| f.added).sum();
     let removed: u64 = diff.files.iter().map(|f| f.removed).sum();
     let mut lines = vec![Line::from(vec![
         Span::from("Diff").style(theme::heading()),
-        Span::from(format!(" · {} against {} · {} file{} · ", plain(&diff.head), plain(&diff.base), diff.files.len(), if diff.files.len() == 1 { "" } else { "s" }))
-            .style(theme::label()),
+        Span::from(format!(
+            " · {} against {} · {} file{} · ",
+            plain(&diff.head),
+            plain(&diff.base),
+            diff.files.len(),
+            if diff.files.len() == 1 { "" } else { "s" }
+        ))
+        .style(theme::label()),
         Span::from(format!("+{added}")).style(theme::done()),
         Span::from(format!(" −{removed}")).style(theme::lost()),
     ])];
@@ -1680,7 +2679,13 @@ fn diff_head<'a>(task: &Task, diff: Option<&'a TaskDiff>, cursor: usize, width: 
     }
     let selected = cursor.min(diff.files.len() - 1);
     let cursor_row = lines.len() + selected;
-    let path_w = diff.files.iter().map(|f| f.path.chars().count()).max().unwrap_or(10).clamp(10, width.saturating_sub(22).max(10));
+    let path_w = diff
+        .files
+        .iter()
+        .map(|f| f.path.chars().count())
+        .max()
+        .unwrap_or(10)
+        .clamp(10, width.saturating_sub(22).max(10));
     for (i, file) in diff.files.iter().enumerate() {
         let on = i == selected;
         lines.push(Line::from(vec![
@@ -1690,7 +2695,11 @@ fn diff_head<'a>(task: &Task, diff: Option<&'a TaskDiff>, cursor: usize, width: 
                 "D" => RED,
                 _ => YELLOW,
             })),
-            Span::from(format!("{:<w$}", truncate(&plain(&file.path), path_w), w = path_w)),
+            Span::from(format!(
+                "{:<w$}",
+                truncate(&plain(&file.path), path_w),
+                w = path_w
+            )),
             Span::from(format!("  +{:<4}", file.added)).style(theme::done()),
             Span::from(format!(" −{}", file.removed)).style(theme::lost()),
         ]));
@@ -1701,25 +2710,43 @@ fn diff_head<'a>(task: &Task, diff: Option<&'a TaskDiff>, cursor: usize, width: 
         Span::from(format!("─ {} ", plain(&file.path))).style(theme::heading()),
         Span::from("─".repeat(width.saturating_sub(file.path.chars().count() + 4))).fg(c(MUTED)),
     ]));
-    let patch = diff.patch.as_deref().filter(|_| diff.file.as_deref() == Some(file.path.as_str()));
+    let patch = diff
+        .patch
+        .as_deref()
+        .filter(|_| diff.file.as_deref() == Some(file.path.as_str()));
     let mut tail = Vec::new();
     if patch.is_some() && diff.truncated {
-        tail.push(muted("  … truncated: the machine sends at most 512 KB of a patch".into()));
+        tail.push(muted(
+            "  … truncated: the machine sends at most 512 KB of a patch".into(),
+        ));
     }
     tail.push(Line::default());
     tail.push(muted("j/k pick a file · J/K scroll · o opens it".into()));
-    DiffHead { lines, cursor_row: Some(cursor_row), patch, tail }
+    DiffHead {
+        lines,
+        cursor_row: Some(cursor_row),
+        patch,
+        tail,
+    }
 }
 
 /// Verify's report: the open findings by level, each with where it is and the plan criterion it is about, then the browser run by scenario.
 /// Every text is the reviewer's or a container's, so it goes through `plain`.
 fn verify_report_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
-    let Some(report) = detail.reports.as_ref().and_then(|r| r.verify.as_ref()) else { return Vec::new() };
+    let Some(report) = detail.reports.as_ref().and_then(|r| r.verify.as_ref()) else {
+        return Vec::new();
+    };
     let mut lines = Vec::new();
-    let open: Vec<_> = report.findings.iter().filter(|f| f.resolution.is_none()).collect();
+    let open: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|f| f.resolution.is_none())
+        .collect();
     if !open.is_empty() {
         lines.push(Line::default());
-        lines.push(Line::from(Span::from("Verify findings").style(theme::heading())));
+        lines.push(Line::from(
+            Span::from("Verify findings").style(theme::heading()),
+        ));
         for level in ["blocker", "should_fix", "nit"] {
             let at: Vec<_> = open.iter().filter(|f| f.level() == level).collect();
             if at.is_empty() {
@@ -1730,11 +2757,25 @@ fn verify_report_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
                 "should_fix" => YELLOW,
                 _ => SUBTEXT0,
             };
-            lines.push(Line::from(vec![Span::from(format!("  {level}")).fg(c(color)).bold(), Span::from(format!("  {}", at.len())).style(theme::label())]));
+            lines.push(Line::from(vec![
+                Span::from(format!("  {level}")).fg(c(color)).bold(),
+                Span::from(format!("  {}", at.len())).style(theme::label()),
+            ]));
             for f in at.iter().take(30) {
-                let place = if f.path.is_empty() { String::new() } else { format!("  {}:{}", truncate(&plain(&f.path), 60), f.line) };
-                let criterion = f.criterion_ref.as_deref().map(|r| format!("  {}", truncate(&plain(r), 20))).unwrap_or_default();
-                lines.push(Line::from(format!("    {}{place}{criterion}", truncate(&plain(&f.title), 100))));
+                let place = if f.path.is_empty() {
+                    String::new()
+                } else {
+                    format!("  {}:{}", truncate(&plain(&f.path), 60), f.line)
+                };
+                let criterion = f
+                    .criterion_ref
+                    .as_deref()
+                    .map(|r| format!("  {}", truncate(&plain(r), 20)))
+                    .unwrap_or_default();
+                lines.push(Line::from(format!(
+                    "    {}{place}{criterion}",
+                    truncate(&plain(&f.title), 100)
+                )));
             }
         }
     }
@@ -1742,7 +2783,11 @@ fn verify_report_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
         lines.push(Line::default());
         lines.push(Line::from(vec![
             Span::from("Browser run").style(theme::heading()),
-            Span::from(format!("  {}", plain(e2e.verdict.as_deref().unwrap_or("no verdict")))).style(theme::label()),
+            Span::from(format!(
+                "  {}",
+                plain(e2e.verdict.as_deref().unwrap_or("no verdict"))
+            ))
+            .style(theme::label()),
         ]));
         for row in e2e.rows.iter().take(40) {
             let (glyph, color) = match row.result.as_str() {
@@ -1751,11 +2796,23 @@ fn verify_report_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
                 "partial" => ("◐", YELLOW),
                 _ => ("○", SUBTEXT0),
             };
-            let seen = if row.seen.is_empty() { String::new() } else { format!("  {}", truncate(&plain(&row.seen), 80)) };
-            let artifacts = if row.artifacts.is_empty() { String::new() } else { format!("  {}", truncate(&plain(&row.artifacts.join(", ")), 80)) };
+            let seen = if row.seen.is_empty() {
+                String::new()
+            } else {
+                format!("  {}", truncate(&plain(&row.seen), 80))
+            };
+            let artifacts = if row.artifacts.is_empty() {
+                String::new()
+            } else {
+                format!("  {}", truncate(&plain(&row.artifacts.join(", ")), 80))
+            };
             lines.push(Line::from(vec![
                 Span::from(format!("  {glyph} ")).fg(c(color)),
-                Span::from(format!("{}  {}{seen}{artifacts}", truncate(&plain(&row.scenario), 12), truncate(&plain(&row.title), 80))),
+                Span::from(format!(
+                    "{}  {}{seen}{artifacts}",
+                    truncate(&plain(&row.scenario), 12),
+                    truncate(&plain(&row.title), 80)
+                )),
             ]));
         }
     }
@@ -1780,7 +2837,11 @@ pub fn ordered_artifacts(d: &TaskDetail) -> Vec<&Artifact> {
         .iter()
         .map(|a| {
             let id = a.stage_run_id.as_deref();
-            let rank = match d.stage_runs.iter().position(|r| id.is_some() && r.id.as_deref() == id) {
+            let rank = match d
+                .stage_runs
+                .iter()
+                .position(|r| id.is_some() && r.id.as_deref() == id)
+            {
                 Some(at) => at,
                 None => {
                     let key = id.unwrap_or("");
@@ -1801,8 +2862,16 @@ pub fn ordered_artifacts(d: &TaskDetail) -> Vec<&Artifact> {
 /// The group header of a run's artifacts: `verifying · run 2`, or `other files` when the run is not listed.
 fn run_heading(d: &TaskDetail, artifact: &Artifact) -> String {
     let id = artifact.stage_run_id.as_deref();
-    match d.stage_runs.iter().find(|r| id.is_some() && r.id.as_deref() == id) {
-        Some(run) => format!("{} · run {}", crate::model::plain(&run.stage.replace('_', " "), 40), run.attempt),
+    match d
+        .stage_runs
+        .iter()
+        .find(|r| id.is_some() && r.id.as_deref() == id)
+    {
+        Some(run) => format!(
+            "{} · run {}",
+            crate::model::plain(&run.stage.replace('_', " "), 40),
+            run.attempt
+        ),
         None => "other files".to_string(),
     }
 }
@@ -1814,7 +2883,12 @@ fn common_folder<'a>(paths: impl Iterator<Item = &'a str>) -> Option<PathBuf> {
         let parts: Vec<std::path::Component> = Path::new(path).parent()?.components().collect();
         common = Some(match common {
             None => parts,
-            Some(have) => have.into_iter().zip(parts).take_while(|(a, b)| a == b).map(|(a, _)| a).collect(),
+            Some(have) => have
+                .into_iter()
+                .zip(parts)
+                .take_while(|(a, b)| a == b)
+                .map(|(a, _)| a)
+                .collect(),
         });
     }
     let folder: PathBuf = common?.into_iter().collect();
@@ -1828,30 +2902,70 @@ pub fn evidence_folder(d: &TaskDetail, focus: Option<usize>) -> Option<PathBuf> 
     let key = |a: &&Artifact| a.stage_run_id.clone();
     let mut runs: Vec<Option<String>> = files.iter().map(key).collect();
     runs.dedup();
-    let of_run = |run: &Option<String>| common_folder(files.iter().filter(|a| a.stage_run_id == *run).map(|a| a.path.as_str()));
+    let of_run = |run: &Option<String>| {
+        common_folder(
+            files
+                .iter()
+                .filter(|a| a.stage_run_id == *run)
+                .map(|a| a.path.as_str()),
+        )
+    };
     let folders: Vec<Option<PathBuf>> = runs.iter().map(of_run).collect();
     if folders.windows(2).all(|w| w[0] == w[1]) {
         return folders.into_iter().next().flatten();
     }
-    let run = focus.and_then(|i| files.get(i)).map(key).unwrap_or_else(|| runs.last().cloned().flatten());
+    let run = focus
+        .and_then(|i| files.get(i))
+        .map(key)
+        .unwrap_or_else(|| runs.last().cloned().flatten());
     of_run(&run)
 }
 /// Evidence: the QA verdict from the ship gate and every artifact the stages produced, by run, under the folder they live in.
 /// With the index of the selected row, so the pane can keep it in view, and each clickable line's index with what it opens.
-fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize, width: usize) -> (Vec<Line<'static>>, Option<usize>, Vec<(usize, EvidenceHit)>) {
+fn evidence_section_lines(
+    detail: Option<&TaskDetail>,
+    cursor: usize,
+    width: usize,
+) -> (Vec<Line<'static>>, Option<usize>, Vec<(usize, EvidenceHit)>) {
     let Some(d) = detail else {
-        return (vec![heading("Evidence"), Line::default(), muted("  loading…".into())], None, Vec::new());
+        return (
+            vec![
+                heading("Evidence"),
+                Line::default(),
+                muted("  loading…".into()),
+            ],
+            None,
+            Vec::new(),
+        );
     };
     let mut lines = vec![heading("Evidence")];
     // The release question first: the checklist as it was when it was asked, then the pack it is about.
     if let Some(a) = d.open_approval().filter(|a| a.is_ship_approval()) {
         lines.push(Line::default());
-        lines.push(Line::from(Span::from(format!("  {}", plain(a.requested["question"].as_str().unwrap_or("safe to release now?")))).bold()));
+        lines.push(Line::from(
+            Span::from(format!(
+                "  {}",
+                plain(
+                    a.requested["question"]
+                        .as_str()
+                        .unwrap_or("safe to release now?")
+                )
+            ))
+            .bold(),
+        ));
         for item in a.requested["checklist"].as_array().into_iter().flatten() {
             let ok = item["ok"].as_bool().unwrap_or(false);
             lines.push(Line::from(vec![
-                Span::from(format!("    {} ", if ok { "✓" } else { "✗" })).fg(c(if ok { GREEN } else { RED })),
-                Span::from(plain(item["detail"].as_str().unwrap_or(item["id"].as_str().unwrap_or("")))),
+                Span::from(format!("    {} ", if ok { "✓" } else { "✗" })).fg(c(if ok {
+                    GREEN
+                } else {
+                    RED
+                })),
+                Span::from(plain(
+                    item["detail"]
+                        .as_str()
+                        .unwrap_or(item["id"].as_str().unwrap_or("")),
+                )),
             ]));
         }
     }
@@ -1860,11 +2974,20 @@ fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize, width: usi
     // The pack from the open or last awaiting_ship gate when there is one, else the task's own (Evidence publishes with no gate).
     let verdict = match d.latest_approval("awaiting_ship") {
         Some(a) => evidence_lines(&a.requested["evidence"]),
-        None => d.task.evidence.as_ref().map(crate::ui::pack_lines).unwrap_or_default(),
+        None => d
+            .task
+            .evidence
+            .as_ref()
+            .map(crate::ui::pack_lines)
+            .unwrap_or_default(),
     };
     if !verdict.is_empty() {
         after.push(Line::default());
-        after.extend(verdict.iter().map(|l| Line::from(format!("  {}", plain(l)))));
+        after.extend(
+            verdict
+                .iter()
+                .map(|l| Line::from(format!("  {}", plain(l)))),
+        );
         if d.task.evidence.is_some() {
             after.push(muted("  y useful · n not useful (with a note)".into()));
         }
@@ -1874,7 +2997,10 @@ fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize, width: usi
     let files = ordered_artifacts(d);
     if files.is_empty() {
         lines.push(muted("  no evidence yet".into()));
-        lines.push(Line::from(Span::styled("  screenshots, a recording and the manifest appear here once Verify and E2E have run", theme::dim())));
+        lines.push(Line::from(Span::styled(
+            "  screenshots, a recording and the manifest appear here once Verify and E2E have run",
+            theme::dim(),
+        )));
         lines.extend(after);
         return (lines, None, Vec::new());
     }
@@ -1883,7 +3009,13 @@ fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize, width: usi
     if let Some(folder) = evidence_folder(d, Some(selected)) {
         hits.push((lines.len(), EvidenceHit::Folder));
         let room = width.saturating_sub("Folder  ".len());
-        lines.push(Line::from(vec![Span::styled("Folder  ", theme::label()), Span::raw(truncate_middle(&crate::model::plain(&folder.to_string_lossy(), 1_000), room))]));
+        lines.push(Line::from(vec![
+            Span::styled("Folder  ", theme::label()),
+            Span::raw(truncate_middle(
+                &crate::model::plain(&folder.to_string_lossy(), 1_000),
+                room,
+            )),
+        ]));
         lines.push(Line::default());
     }
     let mut cursor_row = None;
@@ -1906,7 +3038,14 @@ fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize, width: usi
     }
     lines.push(Line::default());
     let open = crate::open::opener().is_some();
-    lines.push(muted(format!("j/k pick a file · J/K scroll{} · r send back with a note", if open { " · enter opens it · o opens the folder" } else { "" })));
+    lines.push(muted(format!(
+        "j/k pick a file · J/K scroll{} · r send back with a note",
+        if open {
+            " · enter opens it · o opens the folder"
+        } else {
+            ""
+        }
+    )));
     lines.extend(after);
     (lines, cursor_row, hits)
 }
@@ -1916,7 +3055,10 @@ fn artifact_row(artifact: &Artifact, on: bool, width: usize) -> Line<'static> {
     const KIND: usize = 11;
     let kind = truncate_middle(&crate::model::plain(&artifact.kind, 40), KIND - 1);
     let label_room = width.saturating_sub(2 + KIND + 2) / 2;
-    let label = truncate_middle(&crate::model::plain(&artifact.label, 400), label_room.max(8));
+    let label = truncate_middle(
+        &crate::model::plain(&artifact.label, 400),
+        label_room.max(8),
+    );
     let left = 2 + KIND + cells(&label);
     let path = crate::model::plain(&artifact.path, 1_000);
     let mut spans = vec![
@@ -1925,10 +3067,17 @@ fn artifact_row(artifact: &Artifact, on: bool, width: usize) -> Line<'static> {
         Span::styled(label, theme::heading()),
     ];
     if let Some(room) = width.checked_sub(left + 2).filter(|room| *room >= 8) {
-        spans.push(Span::styled(format!("  {}", truncate_middle(&path, room)), theme::label()));
+        spans.push(Span::styled(
+            format!("  {}", truncate_middle(&path, room)),
+            theme::label(),
+        ));
     }
     let line = Line::from(spans);
-    if on { line.style(theme::selection()) } else { line }
+    if on {
+        line.style(theme::selection())
+    } else {
+        line
+    }
 }
 
 /// The PR for this ticket's branch, if the inbox has it.
@@ -1939,7 +3088,9 @@ pub fn pr_for<'a>(task: &Task, prs: &'a [PullRequest]) -> Option<&'a PullRequest
 
 /// The URL the ship gate reported, when the inbox has no row for the PR (not yours, closed).
 pub(crate) fn pr_url(detail: &TaskDetail) -> Option<String> {
-    detail.latest_approval("awaiting_ship").and_then(|a| a.requested["prUrl"].as_str().map(str::to_string))
+    detail
+        .latest_approval("awaiting_ship")
+        .and_then(|a| a.requested["prUrl"].as_str().map(str::to_string))
 }
 
 /// PR: the branch's pull request as the inbox sees it, or what the ship gate said.
@@ -1948,18 +3099,49 @@ pub(crate) fn pr_url(detail: &TaskDetail) -> Option<String> {
 pub(crate) fn ship_lines(ship: &crate::model::ShipView, now: u64) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(vec![
         Span::from("Watching  ").style(theme::label()),
-        Span::from(if ship.ready { "✓ every item passes" } else { "◐ waiting on the items below" }).fg(c(if ship.ready { GREEN } else { YELLOW })),
+        Span::from(if ship.ready {
+            "✓ every item passes"
+        } else {
+            "◐ waiting on the items below"
+        })
+        .fg(c(if ship.ready { GREEN } else { YELLOW })),
     ])];
     for item in &ship.checklist {
-        let (glyph, color) = if item.ok { ("✓", GREEN) } else { ("✗", RED) };
-        lines.push(Line::from(vec![Span::from(format!("  {glyph} ")).fg(c(color)), Span::from(format!("{:<16}", plain(&item.id).replace('_', " "))), Span::from(plain(&item.detail)).style(theme::label())]));
+        let (glyph, color) = if item.ok {
+            ("✓", GREEN)
+        } else {
+            ("✗", RED)
+        };
+        lines.push(Line::from(vec![
+            Span::from(format!("  {glyph} ")).fg(c(color)),
+            Span::from(format!("{:<16}", plain(&item.id).replace('_', " "))),
+            Span::from(plain(&item.detail)).style(theme::label()),
+        ]));
         if !item.ok && matches!(item.id.as_str(), "freeze" | "blocked" | "stack") {
-            lines.push(muted(format!("    the machine keeps waiting and goes on when it ends: {}", plain(&item.detail))));
+            lines.push(muted(format!(
+                "    the machine keeps waiting and goes on when it ends: {}",
+                plain(&item.detail)
+            )));
         }
     }
     lines.push(Line::from(vec![
         Span::from("Merge      ").style(theme::label()),
-        Span::from(if ship.auto_merge.allowed { format!("✓ the machine will merge: {}", plain(&ship.auto_merge.reason)) } else { format!("a person merges, or the machine waits: {}", plain(&ship.auto_merge.reason)) }).fg(c(if ship.auto_merge.allowed { GREEN } else { YELLOW })),
+        Span::from(if ship.auto_merge.allowed {
+            format!(
+                "✓ the machine will merge: {}",
+                plain(&ship.auto_merge.reason)
+            )
+        } else {
+            format!(
+                "a person merges, or the machine waits: {}",
+                plain(&ship.auto_merge.reason)
+            )
+        })
+        .fg(c(if ship.auto_merge.allowed {
+            GREEN
+        } else {
+            YELLOW
+        })),
     ]));
     let review = match (ship.review.required, ship.review.by.as_deref()) {
         (Some(true), Some(by)) => format!("required by {}", plain(by)),
@@ -1967,25 +3149,56 @@ pub(crate) fn ship_lines(ship: &crate::model::ShipView, now: u64) -> Vec<Line<'s
         (Some(false), _) => "not required here: the machine never merges without one".to_string(),
         (None, _) => "unreadable: a person merges".to_string(),
     };
-    lines.push(Line::from(vec![Span::from("Review     ").style(theme::label()), Span::from(review)]));
-    let mut clocks = vec![format!("{} fix round{}", ship.fix_rounds, if ship.fix_rounds == 1 { "" } else { "s" })];
+    lines.push(Line::from(vec![
+        Span::from("Review     ").style(theme::label()),
+        Span::from(review),
+    ]));
+    let mut clocks = vec![format!(
+        "{} fix round{}",
+        ship.fix_rounds,
+        if ship.fix_rounds == 1 { "" } else { "s" }
+    )];
     if ship.queued {
         clocks.push("in the merge queue".to_string());
     }
-    if let Some(since) = ship.quiet_since.as_deref().and_then(crate::model::unix_secs) {
+    if let Some(since) = ship
+        .quiet_since
+        .as_deref()
+        .and_then(crate::model::unix_secs)
+    {
         let days = now.saturating_sub(since) / 86_400;
-        clocks.push(format!("quiet {}", if days == 0 { "today".to_string() } else { format!("{days} day{}", if days == 1 { "" } else { "s" }) }));
+        clocks.push(format!(
+            "quiet {}",
+            if days == 0 {
+                "today".to_string()
+            } else {
+                format!("{days} day{}", if days == 1 { "" } else { "s" })
+            }
+        ));
     }
     if let Some(event) = &ship.last_event {
-        clocks.push(format!("last event: {}", plain(&event.class).replace('_', " ")));
+        clocks.push(format!(
+            "last event: {}",
+            plain(&event.class).replace('_', " ")
+        ));
     }
-    lines.push(Line::from(vec![Span::from("Clocks     ").style(theme::label()), Span::from(clocks.join(" · "))]));
+    lines.push(Line::from(vec![
+        Span::from("Clocks     ").style(theme::label()),
+        Span::from(clocks.join(" · ")),
+    ]));
     lines.push(muted("  a reminder after two quiet days, the release owners named after five; neither merges or archives".to_string()));
-    lines.push(muted("  :dismiss <finding id> [reason] · :finding <blocker|should_fix|nit> <title>".to_string()));
+    lines.push(muted(
+        "  :dismiss <finding id> [reason] · :finding <blocker|should_fix|nit> <title>".to_string(),
+    ));
     lines
 }
 
-fn pr_lines(task: &Task, detail: Option<&TaskDetail>, prs: &[PullRequest], now: u64) -> Vec<Line<'static>> {
+fn pr_lines(
+    task: &Task,
+    detail: Option<&TaskDetail>,
+    prs: &[PullRequest],
+    now: u64,
+) -> Vec<Line<'static>> {
     let mut lines = vec![heading("PR"), Line::default()];
     if let Some(ship) = detail.and_then(|d| d.ship.as_ref()) {
         lines.extend(ship_lines(ship, now));
@@ -2003,12 +3216,21 @@ fn pr_lines(task: &Task, detail: Option<&TaskDetail>, prs: &[PullRequest], now: 
                     .and_then(|d| d.latest_approval("awaiting_ship"))
                     .is_some_and(|a| a.requested["reused"].as_bool().unwrap_or(false));
                 lines.push(Line::from(vec![
-                    Span::from(if reused { "PR (already open)  " } else { "PR opened  " }).style(theme::label()),
+                    Span::from(if reused {
+                        "PR (already open)  "
+                    } else {
+                        "PR opened  "
+                    })
+                    .style(theme::label()),
                     Span::from(plain(&url)).style(theme::border_focus()),
                 ]));
-                lines.push(muted("  not in your inbox: o opens it in the browser".into()));
+                lines.push(muted(
+                    "  not in your inbox: o opens it in the browser".into(),
+                ));
             }
-            None if task.branch.is_some() => lines.push(muted("  no PR yet: Deliver opens a draft once Verify passes".into())),
+            None if task.branch.is_some() => lines.push(muted(
+                "  no PR yet: Deliver opens a draft once Verify passes".into(),
+            )),
             None => lines.push(muted("  no branch yet".into())),
         },
     }
@@ -2025,15 +3247,29 @@ pub fn pr_widget(pr: &PullRequest, now: u64) -> Vec<Line<'static>> {
         _ => SUBTEXT0,
     };
     let mut lines = vec![
-        Line::from(vec![Span::from(format!("{}  ", pr.key())).style(theme::label()), Span::from(crate::model::plain(&pr.title, 400)).bold()]),
-        muted(format!("@{} · {} → {}{} · {} ago", plain(&pr.author), plain(&pr.head_ref), plain(&pr.base_ref), if pr.from_fork { " (fork)" } else { "" }, age(&pr.updated_at, now))),
+        Line::from(vec![
+            Span::from(format!("{}  ", pr.key())).style(theme::label()),
+            Span::from(crate::model::plain(&pr.title, 400)).bold(),
+        ]),
+        muted(format!(
+            "@{} · {} → {}{} · {} ago",
+            plain(&pr.author),
+            plain(&pr.head_ref),
+            plain(&pr.base_ref),
+            if pr.from_fork { " (fork)" } else { "" },
+            age(&pr.updated_at, now)
+        )),
         muted(plain(&pr.url)),
         Line::default(),
         Line::from(vec![
             Span::from("Checks     ").style(theme::label()),
             Span::from(match pr.checks.state.as_str() {
                 "none" => "no checks".to_string(),
-                "failure" => format!("✗ {} of {} failed", pr.checks.failed.len().max(1), pr.checks.total),
+                "failure" => format!(
+                    "✗ {} of {} failed",
+                    pr.checks.failed.len().max(1),
+                    pr.checks.total
+                ),
                 "pending" => format!("◐ {} of {} done", pr.checks.passed, pr.checks.total),
                 _ => format!("✓ {} of {} passed", pr.checks.passed, pr.checks.total),
             })
@@ -2041,9 +3277,17 @@ pub fn pr_widget(pr: &PullRequest, now: u64) -> Vec<Line<'static>> {
         ]),
     ];
     let all: Vec<(&str, &str)> = if pr.checks.all.is_empty() {
-        pr.checks.failed.iter().map(|ch| (ch.name.as_str(), "FAILURE")).collect()
+        pr.checks
+            .failed
+            .iter()
+            .map(|ch| (ch.name.as_str(), "FAILURE"))
+            .collect()
     } else {
-        pr.checks.all.iter().map(|ch| (ch.name.as_str(), ch.state.as_str())).collect()
+        pr.checks
+            .all
+            .iter()
+            .map(|ch| (ch.name.as_str(), ch.state.as_str()))
+            .collect()
     };
     for (name, state) in all {
         let (glyph, color) = match state {
@@ -2051,19 +3295,39 @@ pub fn pr_widget(pr: &PullRequest, now: u64) -> Vec<Line<'static>> {
             "FAILURE" | "ERROR" | "TIMED_OUT" | "CANCELLED" => ("✗", RED),
             _ => ("◐", YELLOW),
         };
-        lines.push(Line::from(vec![Span::from(format!("  {glyph} ")).fg(c(color)), Span::from(plain(name))]));
+        lines.push(Line::from(vec![
+            Span::from(format!("  {glyph} ")).fg(c(color)),
+            Span::from(plain(name)),
+        ]));
     }
     let mut review = pr.review_label().to_string();
     if pr.unresolved_threads > 0 {
-        review.push_str(&format!(" · {} unresolved thread{}", pr.unresolved_threads, if pr.unresolved_threads == 1 { "" } else { "s" }));
+        review.push_str(&format!(
+            " · {} unresolved thread{}",
+            pr.unresolved_threads,
+            if pr.unresolved_threads == 1 { "" } else { "s" }
+        ));
     }
-    lines.push(Line::from(vec![Span::from("Review     ").style(theme::label()), Span::from(review).fg(c(crate::ui::LAVENDER))]));
+    lines.push(Line::from(vec![
+        Span::from("Review     ").style(theme::label()),
+        Span::from(review).fg(c(crate::ui::LAVENDER)),
+    ]));
     match (&pr.task, pr.local_path.is_some()) {
         (Some(task), _) => lines.push(Line::from(vec![
             Span::from("Task       ").style(theme::label()),
-            Span::from(format!("⚙ {} · {} · #{}", task.route.replace('_', " "), task.state.replace('_', " "), crate::model::short_id(&task.id))).style(theme::working()),
+            Span::from(format!(
+                "⚙ {} · {} · #{}",
+                task.route.replace('_', " "),
+                task.state.replace('_', " "),
+                crate::model::short_id(&task.id)
+            ))
+            .style(theme::working()),
         ])),
-        (None, false) => lines.push(Line::from(vec![Span::from("Checkout   ").style(theme::label()), Span::from("none on this machine · a dispatch asks where to clone").style(theme::label())])),
+        (None, false) => lines.push(Line::from(vec![
+            Span::from("Checkout   ").style(theme::label()),
+            Span::from("none on this machine · a dispatch asks where to clone")
+                .style(theme::label()),
+        ])),
         _ => {}
     }
     lines
@@ -2072,15 +3336,29 @@ pub fn pr_widget(pr: &PullRequest, now: u64) -> Vec<Line<'static>> {
 /// Activity: every event, oldest first.
 fn activity_lines(detail: Option<&TaskDetail>) -> Vec<Line<'static>> {
     let Some(d) = detail else {
-        return vec![heading("Activity"), Line::default(), muted("  loading…".into())];
+        return vec![
+            heading("Activity"),
+            Line::default(),
+            muted("  loading…".into()),
+        ];
     };
-    let mut lines = vec![Line::from(vec![Span::from("Activity").style(theme::heading()), Span::from(format!(" · {}", d.events.len())).style(theme::label())]), Line::default()];
+    let mut lines = vec![
+        Line::from(vec![
+            Span::from("Activity").style(theme::heading()),
+            Span::from(format!(" · {}", d.events.len())).style(theme::label()),
+        ]),
+        Line::default(),
+    ];
     if d.events.is_empty() {
         lines.push(muted("  nothing yet".into()));
     }
     lines.extend(d.events.iter().map(|e| {
         let text = plain(&describe(e));
-        let color = if text.contains(" failed") || e.kind == "loop.crashed" { RED } else { SUBTEXT0 };
+        let color = if text.contains(" failed") || e.kind == "loop.crashed" {
+            RED
+        } else {
+            SUBTEXT0
+        };
         Line::from(Span::from(format!("  {text}")).fg(c(color)))
     }));
     lines
@@ -2088,7 +3366,11 @@ fn activity_lines(detail: Option<&TaskDetail>) -> Vec<Line<'static>> {
 
 /// The popup's rectangle: most of the terminal, or all of it after `+`.
 pub fn popup_area(frame: Rect, full: bool) -> Rect {
-    if full { frame } else { centered(frame, frame.width * 9 / 10, frame.height * 8 / 10) }
+    if full {
+        frame
+    } else {
+        centered(frame, frame.width * 9 / 10, frame.height * 8 / 10)
+    }
 }
 
 #[cfg(test)]
@@ -2130,7 +3412,14 @@ mod tests {
         )
     }
 
-    fn render(width: u16, height: u16, task: &Task, detail: Option<&TaskDetail>, section: Section, cursor: usize) -> Vec<String> {
+    fn render(
+        width: u16,
+        height: u16,
+        task: &Task,
+        detail: Option<&TaskDetail>,
+        section: Section,
+        cursor: usize,
+    ) -> Vec<String> {
         render_with(width, height, task, detail, section, cursor, (&[], None))
     }
 
@@ -2143,25 +3432,95 @@ mod tests {
         cursor: usize,
         (prs, diff): (&[PullRequest], Option<&TaskDiff>),
     ) -> Vec<String> {
-        draw(width, height, task, detail, section, cursor, (prs, diff), &RefState::default())
+        draw(
+            width,
+            height,
+            task,
+            detail,
+            section,
+            cursor,
+            (prs, diff),
+            &RefState::default(),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn draw(width: u16, height: u16, task: &Task, detail: Option<&TaskDetail>, section: Section, cursor: usize, (prs, diff): (&[PullRequest], Option<&TaskDiff>), refs: &RefState) -> Vec<String> {
+    fn draw(
+        width: u16,
+        height: u16,
+        task: &Task,
+        detail: Option<&TaskDetail>,
+        section: Section,
+        cursor: usize,
+        (prs, diff): (&[PullRequest], Option<&TaskDiff>),
+        refs: &RefState,
+    ) -> Vec<String> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let scroll = Cell::new(0);
-        let view = DetailView { task, detail, section, cursor, scroll: &scroll, prs, diff, viewport: &Cell::new(0), follow: &Cell::new(false), engines: None, tasks: &[], actions: &[], can: &[], refs, hits: &RefCell::new(Vec::new()) };
-        terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
+        let view = DetailView {
+            task,
+            detail,
+            section,
+            cursor,
+            scroll: &scroll,
+            prs,
+            diff,
+            viewport: &Cell::new(0),
+            follow: &Cell::new(false),
+            engines: None,
+            tasks: &[],
+            actions: &[],
+            can: &[],
+            refs,
+            hits: &RefCell::new(Vec::new()),
+        };
+        terminal
+            .draw(|f| super::render(f, f.area(), &view))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
-        (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect()
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect()
     }
 
     /// The screen with every reference group of `section` unfolded: drawn once to learn the groups, then again with them open.
-    fn render_open(width: u16, height: u16, task: &Task, detail: Option<&TaskDetail>, section: Section, cursor: usize) -> Vec<String> {
+    fn render_open(
+        width: u16,
+        height: u16,
+        task: &Task,
+        detail: Option<&TaskDetail>,
+        section: Section,
+        cursor: usize,
+    ) -> Vec<String> {
         let probe = RefState::default();
-        draw(width, height, task, detail, section, cursor, (&[], None), &probe);
-        let refs = RefState { toggled: probe.ids.borrow().iter().map(|id| (section, *id)).collect(), ..Default::default() };
-        draw(width, height, task, detail, section, cursor, (&[], None), &refs)
+        draw(
+            width,
+            height,
+            task,
+            detail,
+            section,
+            cursor,
+            (&[], None),
+            &probe,
+        );
+        let refs = RefState {
+            toggled: probe.ids.borrow().iter().map(|id| (section, *id)).collect(),
+            ..Default::default()
+        };
+        draw(
+            width,
+            height,
+            task,
+            detail,
+            section,
+            cursor,
+            (&[], None),
+            &refs,
+        )
     }
 
     /// The plan page as one run of lines: the main text, then each reference group open under its title.
@@ -2201,13 +3560,28 @@ mod tests {
     const TAMED: &str = "A [31mB C D E F";
 
     fn text_of(lines: &[Line]) -> String {
-        lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>()).collect::<Vec<_>>().join("\n")
+        lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     fn assert_safe(site: &str, text: &str) {
-        assert!(text.contains(TAMED), "{site}: the text did not reach the screen\n{text}");
+        assert!(
+            text.contains(TAMED),
+            "{site}: the text did not reach the screen\n{text}"
+        );
         for bad in ['\u{1b}', '\r', '\u{7}', '\u{202e}', '\u{200b}'] {
-            assert!(!text.contains(bad), "{site}: {bad:?} reached the screen\n{text}");
+            assert!(
+                !text.contains(bad),
+                "{site}: {bad:?} reached the screen\n{text}"
+            );
         }
     }
 
@@ -2232,20 +3606,33 @@ mod tests {
             }
         }));
         let approvals = detail["approvals"].as_array_mut().unwrap();
-        let cases = approvals.iter_mut().find(|a| a["kind"] == "awaiting_test_check").unwrap();
-        cases["requested"]["cases"][0] = serde_json::json!({"title": HOSTILE, "criterion": HOSTILE, "approach": HOSTILE});
+        let cases = approvals
+            .iter_mut()
+            .find(|a| a["kind"] == "awaiting_test_check")
+            .unwrap();
+        cases["requested"]["cases"][0] =
+            serde_json::json!({"title": HOSTILE, "criterion": HOSTILE, "approach": HOSTILE});
         detail["events"][0]["payload"]["error"] = HOSTILE.into();
         detail["events"][1]["payload"]["to"] = HOSTILE.into();
         detail["stageRuns"][2]["cases"][0]["title"] = HOSTILE.into();
         detail["artifacts"][0]["path"] = HOSTILE.into();
-        (serde_json::from_value(task).unwrap(), serde_json::from_value(detail).unwrap())
+        (
+            serde_json::from_value(task).unwrap(),
+            serde_json::from_value(detail).unwrap(),
+        )
     }
 
     #[test]
     fn the_title_description_and_criteria_are_drawn_without_unsafe_characters() {
         let (task, detail) = hostile();
-        assert_safe("overview", &text_of(&overview_lines(&task, Some(&detail), 100, 0, &[])));
-        assert_safe("popup title", &render(120, 40, &task, Some(&detail), Section::Overview, 0)[0]);
+        assert_safe(
+            "overview",
+            &text_of(&overview_lines(&task, Some(&detail), 100, 0, &[])),
+        );
+        assert_safe(
+            "popup title",
+            &render(120, 40, &task, Some(&detail), Section::Overview, 0)[0],
+        );
     }
 
     #[test]
@@ -2254,7 +3641,11 @@ mod tests {
         let page = crate::pages::gate_page(&task, Some(&detail), 100, 30, 0);
         let text = text_of(&page.main);
         assert_safe("question page", &text);
-        for needle in [format!("1. {TAMED}"), format!("suggested: {TAMED}"), format!("✗ {TAMED}: {TAMED}")] {
+        for needle in [
+            format!("1. {TAMED}"),
+            format!("suggested: {TAMED}"),
+            format!("✗ {TAMED}: {TAMED}"),
+        ] {
             assert!(text.contains(&needle), "{needle} missing in\n{text}");
         }
     }
@@ -2264,7 +3655,12 @@ mod tests {
         let (task, detail) = hostile();
         let text = text_of(&plan_lines(&task, Some(&detail), 0));
         assert_safe("plan", &text);
-        for needle in [format!("C1  {TAMED}"), format!("Kind       {TAMED}"), "~10 lines".to_string(), format!("change {TAMED}")] {
+        for needle in [
+            format!("C1  {TAMED}"),
+            format!("Kind       {TAMED}"),
+            "~10 lines".to_string(),
+            format!("change {TAMED}"),
+        ] {
             assert!(text.contains(&needle), "{needle} missing in\n{text}");
         }
     }
@@ -2272,7 +3668,10 @@ mod tests {
     #[test]
     fn the_test_cases_runs_and_activity_are_drawn_without_unsafe_characters() {
         let (task, detail) = hostile();
-        assert_safe("tests", &text_of(&tests_lines(&task, Some(&detail), 100, 0)));
+        assert_safe(
+            "tests",
+            &text_of(&tests_lines(&task, Some(&detail), 100, 0)),
+        );
         // The failed verifying run is the second row; the cursor picks it so its error and cases show.
         let (runs, _) = runs_lines(&task, Some(&detail), 2, 100, 0);
         assert_safe("runs", &text_of(&runs));
@@ -2285,7 +3684,16 @@ mod tests {
         let extra = r#""reason":null,"sources":[{"kind":"github","repo":"o/a","number":3,"url":"u"},{"type":"slack"}],"reporter":{"id":"U1\u001b[2J","channel":"slack"},"followers":["U2"],"project":"PAY","owners":["@team-a"],"attachments":[{"name":"trace.txt","url":"https://f/t"}],"merged":[{"id":"11111111-2222-3333-4444-555555555555"}]"#;
         let task: Task = serde_json::from_str(&TASK.replace(r#""reason":null"#, extra)).unwrap();
         let rows = render(120, 40, &task, Some(&detail), Section::Overview, 0).join("\n");
-        for needle in ["GitHub o/a#3", "slack", "Reporter   U1", "Followers  U2", "Project    PAY", "Owners     @team-a", "trace.txt", "Merged     11111111"] {
+        for needle in [
+            "GitHub o/a#3",
+            "slack",
+            "Reporter   U1",
+            "Followers  U2",
+            "Project    PAY",
+            "Owners     @team-a",
+            "trace.txt",
+            "Merged     11111111",
+        ] {
             assert!(rows.contains(needle), "{needle} missing in\n{rows}");
         }
         assert!(!rows.contains('\u{1b}'));
@@ -2296,7 +3704,12 @@ mod tests {
         let (task, mut detail) = fixture();
         detail.approvals.push(serde_json::from_str(r#"{"kind":"awaiting_setup","requested":{"kind":"context","missing":["repository","text"]},"decision":null}"#).unwrap());
         let rows = render(120, 40, &task, Some(&detail), Section::Gate, 0).join("\n");
-        assert!(rows.contains("Intake     waiting for: which repository it is for, more detail on what is wrong"), "{rows}");
+        assert!(
+            rows.contains(
+                "Intake     waiting for: which repository it is for, more detail on what is wrong"
+            ),
+            "{rows}"
+        );
         assert!(rows.contains(":context repo"), "{rows}");
     }
 
@@ -2308,27 +3721,47 @@ mod tests {
         let task: Task = serde_json::from_str(&TASK.replace(r#""reason":null"#, extra)).unwrap();
         let overview = render(120, 40, &task, Some(&detail), Section::Overview, 0).join("\n");
         let gate = render(120, 40, &task, Some(&detail), Section::Gate, 0).join("\n");
-        for needle in ["Intake     could this be a duplicate? pick with :dedup duplicate <slot> | related <slots> | neither", "1  11111111  triage", "0.82  Checkout fails"] {
+        for needle in [
+            "Intake     could this be a duplicate? pick with :dedup duplicate <slot> | related <slots> | neither",
+            "1  11111111  triage",
+            "0.82  Checkout fails",
+        ] {
             assert!(gate.contains(needle), "{needle} missing in\n{gate}");
         }
         for needle in ["Merged into  22222222", "Related    33333333"] {
             assert!(overview.contains(needle), "{needle} missing in\n{overview}");
         }
-        assert!(!overview.contains("could this be a duplicate"), "the question is not printed on the Overview too");
+        assert!(
+            !overview.contains("could this be a duplicate"),
+            "the question is not printed on the Overview too"
+        );
         assert!(!gate.contains('\u{1b}'));
     }
 
     fn col_of(rows: &[String], needle: &str) -> Option<usize> {
-        rows.iter().find_map(|r| r.find(needle).map(|i| r[..i].chars().count()))
+        rows.iter()
+            .find_map(|r| r.find(needle).map(|i| r[..i].chars().count()))
     }
 
     #[test]
     fn a_ticket_from_luna_notch_says_so_in_the_header_and_the_overview() {
         let (_, detail) = fixture();
-        let task: Task = serde_json::from_str(&TASK.replace(r#""reason":null"#, r#""reason":null,"source":{"kind":"notch","ref":"LUNA-14","id":"wo_1"}"#)).unwrap();
+        let task: Task = serde_json::from_str(&TASK.replace(
+            r#""reason":null"#,
+            r#""reason":null,"source":{"kind":"notch","ref":"LUNA-14","id":"wo_1"}"#,
+        ))
+        .unwrap();
         let rows = render(120, 36, &task, Some(&detail), Section::Overview, 0);
-        assert!(rows[0].contains("#abcdef12 notch LUNA-14 Add CSV export"), "{}", rows[0]);
-        assert!(rows.iter().any(|r| r.contains("Luna Notch LUNA-14")), "{}", rows.join("\n"));
+        assert!(
+            rows[0].contains("#abcdef12 notch LUNA-14 Add CSV export"),
+            "{}",
+            rows[0]
+        );
+        assert!(
+            rows.iter().any(|r| r.contains("Luna Notch LUNA-14")),
+            "{}",
+            rows.join("\n")
+        );
         let (plain, _) = fixture();
         let rows = render(120, 36, &plain, Some(&detail), Section::Overview, 0);
         assert!(rows[0].contains("#abcdef12 Add CSV export"), "{}", rows[0]);
@@ -2342,13 +3775,35 @@ mod tests {
         for s in order(&task) {
             assert!(text.contains(s.label()), "{}: {text}", s.label());
         }
-        let rail = |label: &str| rows.iter().find(|r| r.chars().take(14).collect::<String>().contains(label) || r.contains(&format!(" {label}"))).cloned().unwrap_or_default();
-        let plan_row = rows.iter().find(|r| r.contains('▌') && r.contains("Plan")).expect("the active section is marked");
+        let rail = |label: &str| {
+            rows.iter()
+                .find(|r| {
+                    r.chars().take(14).collect::<String>().contains(label)
+                        || r.contains(&format!(" {label}"))
+                })
+                .cloned()
+                .unwrap_or_default()
+        };
+        let plan_row = rows
+            .iter()
+            .find(|r| r.contains('▌') && r.contains("Plan"))
+            .expect("the active section is marked");
         assert!(plan_row.contains("✓"), "the plan is approved: {plan_row}");
-        assert!(rail("Tests").contains("3 ✓"), "three cases, checked: {}", rail("Tests"));
-        assert!(rail("Runs").contains("4 ◐"), "four runs, the last one running: {}", rail("Runs"));
+        assert!(
+            rail("Tests").contains("3 ✓"),
+            "three cases, checked: {}",
+            rail("Tests")
+        );
+        assert!(
+            rail("Runs").contains("4 ◐"),
+            "four runs, the last one running: {}",
+            rail("Runs")
+        );
         assert!(rail("Activity").contains("3"), "{}", rail("Activity"));
-        assert!(col_of(&rows, "Brief").unwrap() > 13, "the pane sits right of the rail");
+        assert!(
+            col_of(&rows, "Brief").unwrap() > 13,
+            "the pane sits right of the rail"
+        );
     }
 
     #[test]
@@ -2357,12 +3812,27 @@ mod tests {
         let text = render_open(120, 36, &task, Some(&detail), Section::Plan, 0).join("\n");
         assert!(text.contains("Plan · triage #1 · approved"), "{text}");
         assert!(text.contains("Add a CSV export endpoint."), "{text}");
-        assert!(text.contains("C1  handles a/b & c") && text.contains("C2  exports UTF-8 with a BOM"), "{text}");
-        assert!(text.contains("Add route") && text.contains("~80 lines"), "{text}");
-        assert!(!text.contains("Criteria to build") && !text.contains("Slices"), "{text}");
-        assert!(text.contains("09:40  sent back · criteria too vague"), "{text}");
+        assert!(
+            text.contains("C1  handles a/b & c") && text.contains("C2  exports UTF-8 with a BOM"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Add route") && text.contains("~80 lines"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("Criteria to build") && !text.contains("Slices"),
+            "{text}"
+        );
+        assert!(
+            text.contains("09:40  sent back · criteria too vague"),
+            "{text}"
+        );
         assert!(text.contains("09:58  approved"), "{text}");
-        assert!(text.contains("read-only now that Build has started"), "{text}");
+        assert!(
+            text.contains("read-only now that Build has started"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -2372,11 +3842,23 @@ mod tests {
         let text = rows.join("\n");
         assert!(text.contains("Criteria"), "{text}");
         let row = rows.iter().find(|r| r.contains("handles a/b & c")).unwrap();
-        assert!(row.contains("✓") && row.contains("2") && row.contains("✗ 1 of 2"), "{row}");
-        let dropped = rows.iter().find(|r| r.contains("declares charset in header")).unwrap();
+        assert!(
+            row.contains("✓") && row.contains("2") && row.contains("✗ 1 of 2"),
+            "{row}"
+        );
+        let dropped = rows
+            .iter()
+            .find(|r| r.contains("declares charset in header"))
+            .unwrap();
         assert!(dropped.contains("not in the plan"), "{dropped}");
-        let bom = rows.iter().find(|r| r.contains("exports UTF-8 with a BOM")).unwrap();
-        assert!(bom.contains("no case proves it") || bom.contains("1"), "{bom}");
+        let bom = rows
+            .iter()
+            .find(|r| r.contains("exports UTF-8 with a BOM"))
+            .unwrap();
+        assert!(
+            bom.contains("no case proves it") || bom.contains("1"),
+            "{bom}"
+        );
         assert!(text.contains("Branch     task/abcdef12"), "{text}");
         assert!(text.contains("Users want CSV."), "{text}");
         assert!(text.contains("run 2 of 3"), "{text}");
@@ -2390,8 +3872,16 @@ mod tests {
         detail.approvals[1].decision = None;
         for section in [Section::Overview, Section::Plan, Section::Activity] {
             let rows = render(120, 30, &task, Some(&detail), section, 0);
-            assert!(rows[1].contains("⏸ approve the plan?"), "{section:?}: {}", rows[1]);
-            assert!(rows[2].starts_with('├') && rows[2].trim_end().ends_with('┤'), "the rule under the bar: {}", rows[2]);
+            assert!(
+                rows[1].contains("⏸ approve the plan?"),
+                "{section:?}: {}",
+                rows[1]
+            );
+            assert!(
+                rows[2].starts_with('├') && rows[2].trim_end().ends_with('┤'),
+                "the rule under the bar: {}",
+                rows[2]
+            );
         }
         let text = render_open(120, 30, &task, Some(&detail), Section::Plan, 0).join("\n");
         assert!(text.contains("waiting for you"), "{text}");
@@ -2402,8 +3892,18 @@ mod tests {
     fn under_a_hundred_columns_the_rail_becomes_a_tab_strip() {
         let (task, detail) = fixture();
         let rows = render(99, 30, &task, Some(&detail), Section::Tests, 0);
-        assert!(rows[3].contains("Overview") && rows[3].contains("Tests 3 ✓") && rows[3].contains("Activity 3"), "{}", rows[3]);
-        assert!(rows[4].chars().filter(|ch| *ch == '─').count() > 60, "a rule under the strip: {}", rows[4]);
+        assert!(
+            rows[3].contains("Overview")
+                && rows[3].contains("Tests 3 ✓")
+                && rows[3].contains("Activity 3"),
+            "{}",
+            rows[3]
+        );
+        assert!(
+            rows[4].chars().filter(|ch| *ch == '─').count() > 60,
+            "a rule under the strip: {}",
+            rows[4]
+        );
         assert!(rows.iter().any(|r| r.contains("rejects a bad password")));
     }
 
@@ -2413,11 +3913,31 @@ mod tests {
         let rows = render(120, 30, &task, Some(&detail), Section::Tests, 0);
         let text = rows.join("\n");
         assert!(text.contains("Tests · test_design"), "{text}");
-        assert!(text.contains("3 cases over 2 criteria · verifying 1/2"), "{text}");
-        let crit = rows.iter().position(|r| r.contains("handles a/b & c") && r.contains("2 cases")).expect("criterion heading");
-        assert!(rows[crit + 1].contains("✓ S1 happy") && rows[crit + 1].contains("rejects a bad password") && rows[crit + 1].contains("run the suite"), "{}", rows[crit + 1]);
-        assert!(rows[crit + 2].contains("✗ S2 happy") && rows[crit + 2].contains("escapes a quoted comma"), "{}", rows[crit + 2]);
-        assert!(text.contains("– S3 happy") && text.contains("writes EF BB BF first"), "{text}");
+        assert!(
+            text.contains("3 cases over 2 criteria · verifying 1/2"),
+            "{text}"
+        );
+        let crit = rows
+            .iter()
+            .position(|r| r.contains("handles a/b & c") && r.contains("2 cases"))
+            .expect("criterion heading");
+        assert!(
+            rows[crit + 1].contains("✓ S1 happy")
+                && rows[crit + 1].contains("rejects a bad password")
+                && rows[crit + 1].contains("run the suite"),
+            "{}",
+            rows[crit + 1]
+        );
+        assert!(
+            rows[crit + 2].contains("✗ S2 happy")
+                && rows[crit + 2].contains("escapes a quoted comma"),
+            "{}",
+            rows[crit + 2]
+        );
+        assert!(
+            text.contains("– S3 happy") && text.contains("writes EF BB BF first"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -2427,14 +3947,29 @@ mod tests {
         let text = rows.join("\n");
         assert!(text.contains("Runs · 4 · $0.63 spent"), "{text}");
         let triage = rows.iter().find(|r| r.contains("triage")).unwrap();
-        assert!(triage.contains("passed") && triage.contains("3m") && triage.contains("$0.42") && triage.contains("18"), "{triage}");
-        let verifying = rows.iter().find(|r| r.contains("verifying") && r.contains("failed")).unwrap();
-        assert!(verifying.contains("▌"), "the cursor sits on the third run: {verifying}");
+        assert!(
+            triage.contains("passed")
+                && triage.contains("3m")
+                && triage.contains("$0.42")
+                && triage.contains("18"),
+            "{triage}"
+        );
+        let verifying = rows
+            .iter()
+            .find(|r| r.contains("verifying") && r.contains("failed"))
+            .unwrap();
+        assert!(
+            verifying.contains("▌"),
+            "the cursor sits on the third run: {verifying}"
+        );
         assert!(text.contains("─ verifying #1"), "{text}");
         assert!(text.contains("2 tests failed: csv.test.ts"), "{text}");
         assert!(text.contains("✗ escapes a quoted comma"), "{text}");
         assert!(text.contains("log /out/files/verify.log"), "{text}");
-        assert!(text.contains("j/k pick a run · J/K scroll · f follows"), "{text}");
+        assert!(
+            text.contains("j/k pick a run · J/K scroll · f follows"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -2442,17 +3977,27 @@ mod tests {
         let (task, detail) = fixture();
         let text = render(120, 30, &task, Some(&detail), Section::Evidence, 0).join("\n");
         assert!(text.contains("Folder  /out/files"), "{text}");
-        assert!(text.contains("log        verify  /out/files/verify.log"), "{text}");
-        assert!(text.contains("j/k pick a file · J/K scroll · enter opens it · o opens the folder"), "{text}");
+        assert!(
+            text.contains("log        verify  /out/files/verify.log"),
+            "{text}"
+        );
+        assert!(
+            text.contains("j/k pick a file · J/K scroll · enter opens it · o opens the folder"),
+            "{text}"
+        );
         let mut bare = detail.clone();
         bare.artifacts.clear();
         let text = render(120, 30, &task, Some(&bare), Section::Evidence, 0).join("\n");
-        assert!(text.contains("no evidence yet") && text.contains("once Verify and E2E have run"), "{text}");
+        assert!(
+            text.contains("no evidence yet") && text.contains("once Verify and E2E have run"),
+            "{text}"
+        );
         assert!(!text.contains("Folder"), "{text}");
     }
 
     #[test]
-    fn the_evidence_section_shows_verify_s_findings_by_level_with_their_criterion_and_the_browser_run_by_scenario() {
+    fn the_evidence_section_shows_verify_s_findings_by_level_with_their_criterion_and_the_browser_run_by_scenario()
+     {
         let (task, mut detail) = fixture();
         detail.reports = Some(
             serde_json::from_str(
@@ -2469,12 +4014,18 @@ mod tests {
         let text = render(120, 40, &task, Some(&detail), Section::Evidence, 0).join("\n");
         assert!(text.contains("Verify findings"), "{text}");
         assert!(text.contains("blocker  1"), "{text}");
-        assert!(text.contains("off by one [31m  a.ts:3  C1"), "the escape is a space: {text}");
+        assert!(
+            text.contains("off by one [31m  a.ts:3  C1"),
+            "the escape is a space: {text}"
+        );
         assert!(!text.contains('\u{1b}'), "{text}");
         assert!(text.contains("nit  1"), "{text}");
         assert!(!text.contains("already fixed"), "{text}");
         assert!(text.contains("Browser run  fail"), "{text}");
-        assert!(text.contains("✗ S1  export downloads a file  got a 500  shot.png"), "{text}");
+        assert!(
+            text.contains("✗ S1  export downloads a file  got a 500  shot.png"),
+            "{text}"
+        );
         assert!(text.contains("○ S2  empty report"), "{text}");
     }
 
@@ -2492,23 +4043,38 @@ mod tests {
         task_detail_task.evidence = task.evidence.clone();
         detail.task = task_detail_task;
         let text = render(120, 50, &task, Some(&detail), Section::Evidence, 0).join("\n");
-        for part in ["format: video (degraded: the film is short)", "Show the cart total.", "✓ Total shows", "? Zero on empty", "media: walk.mp4  https://x/w.mp4", "critic: ship", "published: yes", "y useful · n not useful"] {
+        for part in [
+            "format: video (degraded: the film is short)",
+            "Show the cart total.",
+            "✓ Total shows",
+            "? Zero on empty",
+            "media: walk.mp4  https://x/w.mp4",
+            "critic: ship",
+            "published: yes",
+            "y useful · n not useful",
+        ] {
             assert!(text.contains(part), "{part}: {text}");
         }
-        assert!(!text.contains("/Users/me"), "a local path is never printed: {text}");
+        assert!(
+            !text.contains("/Users/me"),
+            "a local path is never printed: {text}"
+        );
         assert!(text.contains("media: terminal.txt"), "{text}");
     }
 
     #[test]
     fn a_pack_with_no_web_media_says_it_is_not_published_and_text_is_made_plain() {
-        let lines = crate::ui::pack_lines(&serde_json::json!({"summary":"hi\u{1b}[31m red","format":"text","scenarios":[],"media":[{"label":"a\u{1b}[2Jb","url":"/x/a.txt"}]}));
+        let lines = crate::ui::pack_lines(
+            &serde_json::json!({"summary":"hi\u{1b}[31m red","format":"text","scenarios":[],"media":[{"label":"a\u{1b}[2Jb","url":"/x/a.txt"}]}),
+        );
         let text = lines.join("\n");
         assert!(text.contains("published: no"), "{text}");
         assert!(!text.contains('\u{1b}'), "{text:?}");
     }
 
     #[test]
-    fn a_text_only_pack_the_machine_published_says_published_and_an_old_pack_is_read_from_its_links() {
+    fn a_text_only_pack_the_machine_published_says_published_and_an_old_pack_is_read_from_its_links()
+     {
         let text = crate::ui::pack_lines(&serde_json::json!({"summary":"s","format":"text","scenarios":[],"media":[],"published":true})).join("\n");
         assert!(text.contains("published: yes"), "{text}");
         let text = crate::ui::pack_lines(&serde_json::json!({"summary":"s","format":"video","scenarios":[],"media":[{"label":"w","url":"https://x/w.mp4"}],"published":false})).join("\n");
@@ -2536,7 +4102,16 @@ mod tests {
             .unwrap(),
         );
         let text = render(120, 40, &task, Some(&detail), Section::Evidence, 0).join("\n");
-        for part in ["format: captures", "Show the cart total.", "verdict: pass", "3 artifacts", "/a.png", "/b.png", "✓ Total shows", "media: a.png  https://x/a.png"] {
+        for part in [
+            "format: captures",
+            "Show the cart total.",
+            "verdict: pass",
+            "3 artifacts",
+            "/a.png",
+            "/b.png",
+            "✓ Total shows",
+            "media: a.png  https://x/a.png",
+        ] {
             assert!(text.contains(part), "{part}: {text}");
         }
         assert!(text.contains("j/k pick a file · J/K scroll · enter opens it · o opens the folder · r send back with a note"), "{text}");
@@ -2562,12 +4137,24 @@ mod tests {
         assert!(text.contains("acme/app#412  Add CSV export"), "{text}");
         assert!(text.contains("@mia · task/abcdef12 → main"), "{text}");
         assert!(text.contains("✗ 1 of 3 failed"), "{text}");
-        assert!(text.contains("✗ lint") && text.contains("✓ build"), "{text}");
+        assert!(
+            text.contains("✗ lint") && text.contains("✓ build"),
+            "{text}"
+        );
         assert!(text.contains("approved · 2 unresolved threads"), "{text}");
         assert!(text.contains("⚙ ci fix · ci watch · #e1f2a3b4"), "{text}");
         assert!(text.contains("o opens it in the browser"), "{text}");
         let other = [pr("feat/other")];
-        let text = render_with(120, 30, &task, Some(&detail), Section::Pr, 0, (&other, None)).join("\n");
+        let text = render_with(
+            120,
+            30,
+            &task,
+            Some(&detail),
+            Section::Pr,
+            0,
+            (&other, None),
+        )
+        .join("\n");
         assert!(text.contains("no PR yet"), "{text}");
     }
 
@@ -2579,16 +4166,37 @@ mod tests {
             "file":"machine/src/csv.test.ts","patch":"@@ -0,0 +1,41 @@\n+import { toCsv } from \"./csv\";\n+"}"#,
         )
         .unwrap();
-        let rows = render_with(120, 30, &task, Some(&detail), Section::Diff, 1, (&[], Some(&diff)));
+        let rows = render_with(
+            120,
+            30,
+            &task,
+            Some(&detail),
+            Section::Diff,
+            1,
+            (&[], Some(&diff)),
+        );
         let text = rows.join("\n");
-        assert!(text.contains("Diff · task/abcdef12 against main · 2 files · +129 −4"), "{text}");
-        let selected = rows.iter().find(|r| r.contains("csv.test.ts") && r.contains("▌")).expect("the cursor on the second file");
-        assert!(selected.contains("A ") && selected.contains("+41"), "{selected}");
+        assert!(
+            text.contains("Diff · task/abcdef12 against main · 2 files · +129 −4"),
+            "{text}"
+        );
+        let selected = rows
+            .iter()
+            .find(|r| r.contains("csv.test.ts") && r.contains("▌"))
+            .expect("the cursor on the second file");
+        assert!(
+            selected.contains("A ") && selected.contains("+41"),
+            "{selected}"
+        );
         assert!(text.contains("─ machine/src/csv.test.ts"), "{text}");
         assert!(text.contains("+import { toCsv }"), "{text}");
-        assert!(text.contains("j/k pick a file · J/K scroll · o opens it"), "{text}");
+        assert!(
+            text.contains("j/k pick a file · J/K scroll · o opens it"),
+            "{text}"
+        );
         assert!(!text.contains("truncated"), "{text}");
-        let text = render_with(120, 30, &task, Some(&detail), Section::Diff, 0, (&[], None)).join("\n");
+        let text =
+            render_with(120, 30, &task, Some(&detail), Section::Diff, 0, (&[], None)).join("\n");
         assert!(text.contains("loading task/abcdef12"), "{text}");
     }
 
@@ -2603,20 +4211,67 @@ mod tests {
         .unwrap();
         let (width, height) = (120, 20);
         let scroll = Cell::new(300);
-        let view = DetailView { task: &task, detail: Some(&detail), section: Section::Diff, cursor: 0, scroll: &scroll, prs: &[], diff: Some(&diff), viewport: &Cell::new(0), follow: &Cell::new(false), engines: None, tasks: &[], actions: &[], can: &[], refs: &RefState::default(), hits: &RefCell::new(Vec::new()) };
+        let view = DetailView {
+            task: &task,
+            detail: Some(&detail),
+            section: Section::Diff,
+            cursor: 0,
+            scroll: &scroll,
+            prs: &[],
+            diff: Some(&diff),
+            viewport: &Cell::new(0),
+            follow: &Cell::new(false),
+            engines: None,
+            tasks: &[],
+            actions: &[],
+            can: &[],
+            refs: &RefState::default(),
+            hits: &RefCell::new(Vec::new()),
+        };
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
+        terminal
+            .draw(|f| super::render(f, f.area(), &view))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
-        let text: String = (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>() + "\n").collect();
-        assert!(text.contains("+line 300"), "scrolled into the patch: {text}");
+        let text: String = (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+                    + "\n"
+            })
+            .collect();
+        assert!(
+            text.contains("+line 300"),
+            "scrolled into the patch: {text}"
+        );
         assert!(!text.contains("+line 100"), "{text}");
-        assert_eq!(scroll.get(), 300, "well inside the content, nothing to clamp");
+        assert_eq!(
+            scroll.get(),
+            300,
+            "well inside the content, nothing to clamp"
+        );
         scroll.set(10_000);
-        terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
+        terminal
+            .draw(|f| super::render(f, f.area(), &view))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
-        let text: String = (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>() + "\n").collect();
-        assert!(text.contains("+line 400") && text.contains("… truncated"), "clamped to the end, which says the machine cut the patch: {text}");
-        assert!(scroll.get() < 10_000, "the offset is clamped to the content");
+        let text: String = (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+                    + "\n"
+            })
+            .collect();
+        assert!(
+            text.contains("+line 400") && text.contains("… truncated"),
+            "clamped to the end, which says the machine cut the patch: {text}"
+        );
+        assert!(
+            scroll.get() < 10_000,
+            "the offset is clamped to the content"
+        );
     }
 
     #[test]
@@ -2636,11 +4291,24 @@ mod tests {
         let text = render(120, 40, &task, Some(&detail), Section::Gate, 0).join("\n");
         assert!(text.contains("approve the setup?"), "{text}");
         assert!(text.contains("Proposed luna.yaml"), "{text}");
-        assert!(text.contains("run: cargo test"), "the file is shown as is: {text}");
-        assert!(text.contains("Base image (not approved by this gate)") && text.contains("sandbox.image.base: attacker/x:1"), "{text}");
-        assert!(text.contains("✓ board tests: cargo test (in board)"), "{text}");
+        assert!(
+            text.contains("run: cargo test"),
+            "the file is shown as is: {text}"
+        );
+        assert!(
+            text.contains("Base image (not approved by this gate)")
+                && text.contains("sandbox.image.base: attacker/x:1"),
+            "{text}"
+        );
+        assert!(
+            text.contains("✓ board tests: cargo test (in board)"),
+            "{text}"
+        );
         assert!(text.contains("✗ lint: pnpm lint"), "{text}");
-        assert!(text.contains("3 problems"), "a failed check shows its tail: {text}");
+        assert!(
+            text.contains("3 problems"),
+            "a failed check shows its tail: {text}"
+        );
         assert!(text.contains("no e2e surface"), "{text}");
     }
 
@@ -2651,30 +4319,72 @@ mod tests {
         let task: Task = serde_json::from_str(&crate::model::tests::jira_task_json()).unwrap();
         let lines = jira_lines(&task, now);
         let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
-        assert_eq!(text[0], "Jira       PLAT-123 · In Progress · due Fri · High");
-        assert!(text[1].contains("⚠ blocked: no transition to \"In Review\" from \"Blocked\""), "{}", text[1]);
-        assert!(lines[1].spans.iter().all(|s| s.style.fg == Some(c(RED))), "the block is red");
-        assert_eq!(text[2], "SLA        gate overdue 40m · stage implementing 1h of 4h · cycle 10h of 3d · jira due Fri");
-        let gate = lines[2].spans.iter().find(|s| s.content.contains("gate")).unwrap();
+        assert_eq!(
+            text[0],
+            "Jira       PLAT-123 · In Progress · due Fri · High"
+        );
+        assert!(
+            text[1].contains("⚠ blocked: no transition to \"In Review\" from \"Blocked\""),
+            "{}",
+            text[1]
+        );
+        assert!(
+            lines[1].spans.iter().all(|s| s.style.fg == Some(c(RED))),
+            "the block is red"
+        );
+        assert_eq!(
+            text[2],
+            "SLA        gate overdue 40m · stage implementing 1h of 4h · cycle 10h of 3d · jira due Fri"
+        );
+        let gate = lines[2]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("gate"))
+            .unwrap();
         assert_eq!(gate.style.fg, Some(c(RED)), "an overdue gate is red");
-        let stage = lines[2].spans.iter().find(|s| s.content.contains("stage")).unwrap();
+        let stage = lines[2]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("stage"))
+            .unwrap();
         assert_eq!(stage.style.fg, Some(c(YELLOW)), "a warning stage is yellow");
-        let cycle = lines[2].spans.iter().find(|s| s.content.contains("cycle")).unwrap();
+        let cycle = lines[2]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("cycle"))
+            .unwrap();
         assert_eq!(cycle.style.fg, None, "a clock inside its target is plain");
 
         let rows = render(120, 40, &task, Some(&detail), Section::Overview, 0).join("\n");
-        assert!(rows.contains("Jira       PLAT-123 · In Progress") && rows.contains("SLA        gate overdue"), "{rows}");
+        assert!(
+            rows.contains("Jira       PLAT-123 · In Progress")
+                && rows.contains("SLA        gate overdue"),
+            "{rows}"
+        );
 
         let (unlinked, _) = fixture();
-        let text: Vec<String> = jira_lines(&unlinked, now).iter().map(|l| l.to_string()).collect();
-        assert_eq!(text, vec!["Jira       —  J links an issue"], "no clocks, no SLA row");
+        let text: Vec<String> = jira_lines(&unlinked, now)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        assert_eq!(
+            text,
+            vec!["Jira       —  J links an issue"],
+            "no clocks, no SLA row"
+        );
         let mut fine = task.clone();
         fine.jira.as_mut().unwrap().blocked = None;
         fine.sla.as_mut().unwrap().gate = None;
         fine.sla.as_mut().unwrap().jira_due = None;
-        let text: Vec<String> = jira_lines(&fine, now).iter().map(|l| l.to_string()).collect();
+        let text: Vec<String> = jira_lines(&fine, now)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
         assert_eq!(text.len(), 2);
-        assert_eq!(text[1], "SLA        stage implementing 1h of 4h · cycle 10h of 3d", "null clocks are left out");
+        assert_eq!(
+            text[1], "SLA        stage implementing 1h of 4h · cycle 10h of 3d",
+            "null clocks are left out"
+        );
     }
 
     #[test]
@@ -2698,13 +4408,24 @@ mod tests {
         let (task, detail) = fixture();
         let text = render(120, 30, &task, Some(&detail), Section::Activity, 0).join("\n");
         assert!(text.contains("Activity · 3"), "{text}");
-        assert!(text.contains("10:11:58  ■ verifying #1 failed: 2 tests failed"), "{text}");
+        assert!(
+            text.contains("10:11:58  ■ verifying #1 failed: 2 tests failed"),
+            "{text}"
+        );
         assert!(text.contains("10:12:03  ▶ implementing #2"), "{text}");
     }
 
     /// A ticket at one open gate, with `requested` as the machine sent it.
     fn at_gate(requested: &str, state: &str) -> (Task, TaskDetail) {
-        let task_json = TASK.replace("\"state\":\"implementing\"", &format!("\"state\":\"{state}\"")).replace("\"waitingOnYou\":false,\"running\":true", "\"waitingOnYou\":true,\"running\":false");
+        let task_json = TASK
+            .replace(
+                "\"state\":\"implementing\"",
+                &format!("\"state\":\"{state}\""),
+            )
+            .replace(
+                "\"waitingOnYou\":false,\"running\":true",
+                "\"waitingOnYou\":true,\"running\":false",
+            );
         let task: Task = serde_json::from_str(&task_json).unwrap();
         let detail: TaskDetail = serde_json::from_str(&format!(
             r#"{{"task":{task_json},"stageRuns":[{{"id":"r1","stage":"test_design","attempt":1,"status":"passed","startedAt":"2026-10-22T09:30:00Z","endedAt":"2026-10-22T09:33:00Z"}}],"events":[],"artifacts":[],
@@ -2721,25 +4442,52 @@ mod tests {
 
     #[test]
     fn the_gate_shows_its_approval_rule_and_a_risk_a_person_set() {
-        let (task, detail) = at_gate(r#"{"brief":"b","lane":"full","risk":{"level":"high","machine":"high"},"overrides":{"risk":{"level":"low","reason":"behind a flag","applied":false}},"approvalRule":{"needed":2,"outside":"required","text":"Needs 2 approvers: at least one must be someone not among the code map's owners (@ana). This is an attestation."}}"#, "awaiting_approval");
+        let (task, detail) = at_gate(
+            r#"{"brief":"b","lane":"full","risk":{"level":"high","machine":"high"},"overrides":{"risk":{"level":"low","reason":"behind a flag","applied":false}},"approvalRule":{"needed":2,"outside":"required","text":"Needs 2 approvers: at least one must be someone not among the code map's owners (@ana). This is an attestation."}}"#,
+            "awaiting_approval",
+        );
         let text = render_open(120, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
-        assert!(text.contains("Rule       Needs 2 approvers") && text.contains("attestation"), "{text}");
-        assert!(text.contains("Override   you set low, below the machine's high"), "{text}");
-        let (task, detail) = at_gate(r#"{"brief":"b","lane":"full","risk":{"level":"low"}}"#, "awaiting_approval");
+        assert!(
+            text.contains("Rule       Needs 2 approvers") && text.contains("attestation"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Override   you set low, below the machine's high"),
+            "{text}"
+        );
+        let (task, detail) = at_gate(
+            r#"{"brief":"b","lane":"full","risk":{"level":"low"}}"#,
+            "awaiting_approval",
+        );
         let text = render_open(120, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
-        assert!(!text.contains("Rule ") && !text.contains("Override"), "{text}");
+        assert!(
+            !text.contains("Rule ") && !text.contains("Override"),
+            "{text}"
+        );
     }
 
     #[test]
     fn a_flagged_check_is_highlighted_and_a_plan_with_no_checks_shows_none() {
         let (task, detail) = at_gate(PLAN_GATE, "awaiting_approval");
         let lines = plan_lines(&task, Some(&detail), 0);
-        let flagged = lines.iter().find(|l| l.to_string().contains("⚑ plan flag")).expect("the flagged check");
-        let ok = lines.iter().find(|l| l.to_string().contains("✓ coverage proceed")).expect("a clear check");
-        assert!(flagged.to_string().starts_with("⚑") && ok.to_string().starts_with("✓"), "a glyph tells them apart");
+        let flagged = lines
+            .iter()
+            .find(|l| l.to_string().contains("⚑ plan flag"))
+            .expect("the flagged check");
+        let ok = lines
+            .iter()
+            .find(|l| l.to_string().contains("✓ coverage proceed"))
+            .expect("a clear check");
+        assert!(
+            flagged.to_string().starts_with("⚑") && ok.to_string().starts_with("✓"),
+            "a glyph tells them apart"
+        );
         let (task, detail) = at_gate(r#"{"brief":"b"}"#, "awaiting_approval");
         let text = render_open(100, 30, &task, Some(&detail), Section::Plan, 0).join("\n");
-        assert!(!text.contains("Checks") && !text.contains("Risk ") && !text.contains("Outcome"), "{text}");
+        assert!(
+            !text.contains("Checks") && !text.contains("Risk ") && !text.contains("Outcome"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -2747,60 +4495,151 @@ mod tests {
         let gate = r#"{"brief":"b","lane":"full","map":{"components":["board keys","board app"],"files":[{"path":"board/src/keys.rs","role":"change"},{"path":"board/src/app.rs","role":"read"},{"path":"board/src/keys_tests.rs","role":"test"},"board/src/old.rs"],"entry_points":["keys::handle"],"owners":["@marta","@lee"],"confidence":0.7,"stale":true,"behind":120}}"#;
         let (task, detail) = at_gate(gate, "awaiting_approval");
         let text = render_open(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
-        for want in ["Code map", "Components board keys, board app", "change board/src/keys.rs", "change board/src/old.rs", "read   board/src/app.rs", "test   board/src/keys_tests.rs", "Entry      keys::handle", "Owners     @marta, @lee", "stale: the graph is 120 commits behind"] {
+        for want in [
+            "Code map",
+            "Components board keys, board app",
+            "change board/src/keys.rs",
+            "change board/src/old.rs",
+            "read   board/src/app.rs",
+            "test   board/src/keys_tests.rs",
+            "Entry      keys::handle",
+            "Owners     @marta, @lee",
+            "stale: the graph is 120 commits behind",
+        ] {
             assert!(text.contains(want), "{want}: {text}");
         }
-        assert!(text.find("Code map").unwrap() > text.find("Brief").unwrap(), "the map is reference, below the brief: {text}");
-        let (task, detail) = at_gate(&gate.replace(r#","stale":true,"behind":120"#, r#","stale":false,"behind":3"#), "awaiting_approval");
+        assert!(
+            text.find("Code map").unwrap() > text.find("Brief").unwrap(),
+            "the map is reference, below the brief: {text}"
+        );
+        let (task, detail) = at_gate(
+            &gate.replace(
+                r#","stale":true,"behind":120"#,
+                r#","stale":false,"behind":3"#,
+            ),
+            "awaiting_approval",
+        );
         let text = render_open(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
-        assert!(text.contains("Code map") && !text.contains("stale"), "a current graph shows no flag: {text}");
+        assert!(
+            text.contains("Code map") && !text.contains("stale"),
+            "a current graph shows no flag: {text}"
+        );
     }
 
     #[test]
     fn a_plan_gate_without_a_map_says_so_and_why_and_a_triage_gate_shows_none() {
-        let (task, detail) = at_gate(r#"{"brief":"b","lane":"full","map":null,"mapNote":"the repo has no code graph, so there is no code map"}"#, "awaiting_approval");
+        let (task, detail) = at_gate(
+            r#"{"brief":"b","lane":"full","map":null,"mapNote":"the repo has no code graph, so there is no code map"}"#,
+            "awaiting_approval",
+        );
         let text = render_open(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
-        assert!(text.contains("Code map") && text.contains("no code graph"), "{text}");
-        let (task, detail) = at_gate(r#"{"brief":"b","lane":"full","map":null}"#, "awaiting_approval");
-        assert!(render_open(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n").contains("no code map"));
-        let (task, detail) = at_gate(r#"{"brief":"b","outcome":"conversation","reply":"hi"}"#, "awaiting_approval");
-        assert!(!render_open(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n").contains("Code map"));
+        assert!(
+            text.contains("Code map") && text.contains("no code graph"),
+            "{text}"
+        );
+        let (task, detail) = at_gate(
+            r#"{"brief":"b","lane":"full","map":null}"#,
+            "awaiting_approval",
+        );
+        assert!(
+            render_open(110, 50, &task, Some(&detail), Section::Plan, 0)
+                .join("\n")
+                .contains("no code map")
+        );
+        let (task, detail) = at_gate(
+            r#"{"brief":"b","outcome":"conversation","reply":"hi"}"#,
+            "awaiting_approval",
+        );
+        assert!(
+            !render_open(110, 50, &task, Some(&detail), Section::Plan, 0)
+                .join("\n")
+                .contains("Code map")
+        );
     }
 
     #[test]
     fn a_reply_gate_shows_the_reply_and_an_archive_gate_its_reason() {
-        let (task, detail) = at_gate(r#"{"outcome":"conversation","brief":"asks how","reply":"Use `pnpm dev`."}"#, "awaiting_approval");
+        let (task, detail) = at_gate(
+            r#"{"outcome":"conversation","brief":"asks how","reply":"Use `pnpm dev`."}"#,
+            "awaiting_approval",
+        );
         let text = render_open(100, 30, &task, Some(&detail), Section::Plan, 0).join("\n");
-        assert!(text.contains("Outcome    conversation") && text.contains("Use `pnpm dev`.") && text.contains("posts it"), "{text}");
-        let (task, detail) = at_gate(r#"{"outcome":"archive","archiveReason":"duplicate","brief":"same as #7"}"#, "awaiting_approval");
+        assert!(
+            text.contains("Outcome    conversation")
+                && text.contains("Use `pnpm dev`.")
+                && text.contains("posts it"),
+            "{text}"
+        );
+        let (task, detail) = at_gate(
+            r#"{"outcome":"archive","archiveReason":"duplicate","brief":"same as #7"}"#,
+            "awaiting_approval",
+        );
         let text = render_open(100, 30, &task, Some(&detail), Section::Plan, 0).join("\n");
-        assert!(text.contains("Outcome    archive (duplicate)") && text.contains("archives the ticket"), "{text}");
+        assert!(
+            text.contains("Outcome    archive (duplicate)") && text.contains("archives the ticket"),
+            "{text}"
+        );
     }
 
     const RECORD: &str = r#"{"kind":"bug","goal":"Stop the panic","summary":"The board panics on j.","typeOfWork":"frontend","size":"S","urgencyDetail":{"priority":"P1","subScores":{"who":3,"what":2,"impact":2,"time":1,"demand":1}},"riskPrelim":"low","decisionBy":"machine","version":1}"#;
 
     #[test]
     fn the_plan_shows_the_triage_record_its_priority_flags_and_who_decided() {
-        let (mut task, detail) = at_gate(r#"{"brief":"b","flagged":["triage.size","plan"]}"#, "awaiting_approval");
+        let (mut task, detail) = at_gate(
+            r#"{"brief":"b","flagged":["triage.size","plan"]}"#,
+            "awaiting_approval",
+        );
         task.record = Some(serde_json::from_str(RECORD).unwrap());
         let text = render_open(110, 40, &task, Some(&detail), Section::Plan, 0).join("\n");
-        for want in ["Triage record v1 · decided by the machine", "The board panics on j.", "Kind       bug", "Type       frontend", "Size       S", "Priority   P1 (who 3, what 2, impact 2, time 1, demand 1)", "Risk       low", "Flagged    size (T corrects the record)"] {
+        for want in [
+            "Triage record v1 · decided by the machine",
+            "The board panics on j.",
+            "Kind       bug",
+            "Type       frontend",
+            "Size       S",
+            "Priority   P1 (who 3, what 2, impact 2, time 1, demand 1)",
+            "Risk       low",
+            "Flagged    size (T corrects the record)",
+        ] {
             assert!(text.contains(want), "{want}: {text}");
         }
-        assert!(text.find("Triage record").unwrap() > text.find("Brief").unwrap(), "the record is reference, below the brief: {text}");
-        task.record = serde_json::from_str(&RECORD.replace(r#""decisionBy":"machine","version":1"#, r#""decisionBy":"person","version":2,"editedFields":["kind","size"]"#)).unwrap();
+        assert!(
+            text.find("Triage record").unwrap() > text.find("Brief").unwrap(),
+            "the record is reference, below the brief: {text}"
+        );
+        task.record = serde_json::from_str(&RECORD.replace(
+            r#""decisionBy":"machine","version":1"#,
+            r#""decisionBy":"person","version":2,"editedFields":["kind","size"]"#,
+        ))
+        .unwrap();
         let text = render_open(110, 40, &task, Some(&detail), Section::Plan, 0).join("\n");
-        assert!(text.contains("Triage record v2 · corrected by a person (kind, size)"), "{text}");
+        assert!(
+            text.contains("Triage record v2 · corrected by a person (kind, size)"),
+            "{text}"
+        );
         task.record = None;
-        assert!(!render_open(110, 40, &task, Some(&detail), Section::Plan, 0).join("\n").contains("Triage record"));
+        assert!(
+            !render_open(110, 40, &task, Some(&detail), Section::Plan, 0)
+                .join("\n")
+                .contains("Triage record")
+        );
     }
 
     #[test]
     fn the_tests_section_reads_the_cases_off_the_plan_gate() {
         let (task, detail) = at_gate(PLAN_GATE, "awaiting_approval");
         let text = render(120, 30, &task, Some(&detail), Section::Tests, 0).join("\n");
-        assert!(text.contains("1 case over 1 criterion") && text.contains("no panic") && text.contains("j on empty") && text.contains("cargo test keys::empty"), "{text}");
-        assert!(text.contains("e edits the cases"), "the cases are editable while the plan gate waits: {text}");
+        assert!(
+            text.contains("1 case over 1 criterion")
+                && text.contains("no panic")
+                && text.contains("j on empty")
+                && text.contains("cargo test keys::empty"),
+            "{text}"
+        );
+        assert!(
+            text.contains("e edits the cases"),
+            "the cases are editable while the plan gate waits: {text}"
+        );
     }
 
     #[test]
@@ -2809,12 +4648,28 @@ mod tests {
             let (task, detail) = at_gate(requested, "awaiting_approval");
             gate_question(&task, Some(&detail)).unwrap()
         };
-        assert_eq!(question(r#"{"brief":"b","risk":{"level":"low"}}"#), "approve the plan?");
-        assert!(question(r#"{"brief":"b","risk":{"level":"high"}}"#).contains("approve the plan? · first of two approvers; set LUNA_APPROVER"));
-        assert!(question(PLAN_GATE).contains("approve the plan? · last of two approvers"), "{}", question(PLAN_GATE));
+        assert_eq!(
+            question(r#"{"brief":"b","risk":{"level":"low"}}"#),
+            "approve the plan?"
+        );
+        assert!(
+            question(r#"{"brief":"b","risk":{"level":"high"}}"#)
+                .contains("approve the plan? · first of two approvers; set LUNA_APPROVER")
+        );
+        assert!(
+            question(PLAN_GATE).contains("approve the plan? · last of two approvers"),
+            "{}",
+            question(PLAN_GATE)
+        );
         assert!(question(r#"{"brief":"b","risk":{"level":"high"},"approvalRule":{"needed":3,"text":"t"},"approvers":["ana"]}"#).contains("next of 3 approvers"));
-        assert_eq!(question(r#"{"outcome":"archive","archiveReason":"duplicate"}"#), "archive this ticket?");
-        assert_eq!(question(r#"{"outcome":"conversation","reply":"x"}"#), "post the reply and close the ticket?");
+        assert_eq!(
+            question(r#"{"outcome":"archive","archiveReason":"duplicate"}"#),
+            "archive this ticket?"
+        );
+        assert_eq!(
+            question(r#"{"outcome":"conversation","reply":"x"}"#),
+            "post the reply and close the ticket?"
+        );
     }
 
     const SPLIT_GATE: &str = r#"{"outcome":"split","summary":"over the size limit","size":{"estLoc":4000,"planned":null,"limit":{"hard":2500,"target":[1000,2000]},"verdict":"over","by":"decision"},
@@ -2825,36 +4680,85 @@ mod tests {
     fn a_split_gate_asks_about_the_split_and_a_failed_one_has_no_approve() {
         let ask = |requested: &str| {
             let (task, detail) = at_gate(requested, "awaiting_approval");
-            (gate_question(&task, Some(&detail)).unwrap(), bar_status(&task, Some(&detail), 0).note)
+            (
+                gate_question(&task, Some(&detail)).unwrap(),
+                bar_status(&task, Some(&detail), 0).note,
+            )
         };
         let (split, note) = ask(SPLIT_GATE);
         assert_eq!(split, "approve the split (2 tickets)?");
         assert!(note.contains(":whole keeps it one card"), "{note}");
-        assert!(ask(&SPLIT_GATE.replace("tickets", "cards")).0.contains("approve the split (2 cards)?"));
-        let (failed, note) = ask(r#"{"outcome":"split_failed","reason":"no valid split after 3 rounds","split":{"children":[],"issues":["a"],"rounds":3}}"#);
-        assert!(failed.contains("the split failed") && !failed.contains("approve"), "{failed}");
+        assert!(
+            ask(&SPLIT_GATE.replace("tickets", "cards"))
+                .0
+                .contains("approve the split (2 cards)?")
+        );
+        let (failed, note) = ask(
+            r#"{"outcome":"split_failed","reason":"no valid split after 3 rounds","split":{"children":[],"issues":["a"],"rounds":3}}"#,
+        );
+        assert!(
+            failed.contains("the split failed") && !failed.contains("approve"),
+            "{failed}"
+        );
         assert!(note.contains(":whole keeps it one card"), "{note}");
-        let (two, _) = ask(&SPLIT_GATE.replace(r#""risk":{"level":"low"}"#, r#""risk":{"level":"high"},"approvalRule":{"needed":2,"text":"t"}"#));
+        let (two, _) = ask(&SPLIT_GATE.replace(
+            r#""risk":{"level":"low"}"#,
+            r#""risk":{"level":"high"},"approvalRule":{"needed":2,"text":"t"}"#,
+        ));
         assert!(two.contains("two different people"), "{two}");
     }
 
     #[test]
     fn the_plan_section_of_a_split_gate_shows_the_size_the_children_and_what_each_waits_for() {
         let (task, detail) = at_gate(SPLIT_GATE, "awaiting_approval");
-        let text = plan_lines(&task, Some(&detail), 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
-        assert!(text.contains("about 4000 lines") && text.contains("2500"), "{text}");
-        assert!(text.contains("1. Part A") && text.contains("900") && text.contains("2 criteria"), "{text}");
-        assert!(text.contains("2. Part B") && text.contains("after 1"), "{text}");
-        assert!(text.contains("tickets") && text.contains("judged"), "{text}");
-        let (task, detail) = at_gate(r#"{"outcome":"split_failed","reason":"no valid split after 3 rounds","split":{"children":[],"issues":["child 1 has fewer than 20 words to work from"],"rounds":3}}"#, "awaiting_approval");
-        let failed = plan_lines(&task, Some(&detail), 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
-        assert!(failed.contains("no valid split after 3 rounds") && failed.contains("fewer than 20 words"), "{failed}");
+        let text = plan_lines(&task, Some(&detail), 0)
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("about 4000 lines") && text.contains("2500"),
+            "{text}"
+        );
+        assert!(
+            text.contains("1. Part A") && text.contains("900") && text.contains("2 criteria"),
+            "{text}"
+        );
+        assert!(
+            text.contains("2. Part B") && text.contains("after 1"),
+            "{text}"
+        );
+        assert!(
+            text.contains("tickets") && text.contains("judged"),
+            "{text}"
+        );
+        let (task, detail) = at_gate(
+            r#"{"outcome":"split_failed","reason":"no valid split after 3 rounds","split":{"children":[],"issues":["child 1 has fewer than 20 words to work from"],"rounds":3}}"#,
+            "awaiting_approval",
+        );
+        let failed = plan_lines(&task, Some(&detail), 0)
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            failed.contains("no valid split after 3 rounds")
+                && failed.contains("fewer than 20 words"),
+            "{failed}"
+        );
     }
 
     #[test]
     fn a_machine_text_in_a_split_is_plain() {
-        let (task, detail) = at_gate(&SPLIT_GATE.replace("Part A", "Part \\u001b[31mA"), "awaiting_approval");
-        let text = plan_lines(&task, Some(&detail), 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        let (task, detail) = at_gate(
+            &SPLIT_GATE.replace("Part A", "Part \\u001b[31mA"),
+            "awaiting_approval",
+        );
+        let text = plan_lines(&task, Some(&detail), 0)
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(!text.contains('\u{1b}'), "{text:?}");
     }
 
@@ -2862,45 +4766,87 @@ mod tests {
     fn the_overview_says_what_a_stacked_card_is_and_what_it_waits_for() {
         let json = TASK.replace("\"state\":\"implementing\"", "\"state\":\"draft\"").replace("\"createdAt\"", "\"splitFrom\":\"aaaaaaaa-0000-4000-8000-000000000000\",\"splitPart\":{\"n\":2,\"of\":3},\"dependsOn\":[\"bbbbbbbb-0000-4000-8000-000000000000\"],\"base\":{\"card\":\"cccccccc-0000-4000-8000-000000000000\",\"branch\":\"task/x\"},\"startWhenReady\":true,\"riskFloor\":\"high\",\"createdAt\"");
         let task: Task = serde_json::from_str(&json).unwrap();
-        let text = overview_lines(&task, None, 100, 0, &[]).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        let text = overview_lines(&task, None, 100, 0, &[])
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(text.contains("Part 2 of 3 of aaaaaaaa"), "{text}");
         assert!(text.contains("Depends on bbbbbbbb"), "{text}");
         assert!(text.contains("Stacked on cccccccc (task/x)"), "{text}");
         assert!(text.contains("Waiting"), "{text}");
         assert!(text.contains("Risk floor high"), "{text}");
         let plain: Task = serde_json::from_str(TASK).unwrap();
-        assert!(!overview_lines(&plain, None, 100, 0, &[]).iter().any(|l| l.to_string().contains("Stacked") || l.to_string().contains("Part ")), "a card with no stack shows nothing of one");
+        assert!(
+            !overview_lines(&plain, None, 100, 0, &[])
+                .iter()
+                .any(|l| l.to_string().contains("Stacked") || l.to_string().contains("Part ")),
+            "a card with no stack shows nothing of one"
+        );
     }
 
     #[test]
     fn a_split_gate_shows_who_may_approve_in_the_machine_s_words_and_the_bar_counts_the_names() {
         let high = SPLIT_GATE.replace(r#""risk":{"level":"low"}"#, r#""risk":{"level":"high"},"approvalRule":{"needed":2,"outside":"at_approval","text":"Needs 2 different approvers. When CODEOWNERS names owners at the tap, one must be outside them (@ana\u001b[2J)."}"#);
         let (task, detail) = at_gate(&high, "awaiting_approval");
-        let text = plan_lines(&task, Some(&detail), 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
-        assert!(text.contains("Rule       Needs 2 different approvers"), "{text}");
+        let text = plan_lines(&task, Some(&detail), 0)
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("Rule       Needs 2 different approvers"),
+            "{text}"
+        );
         assert!(!text.contains('\u{1b}'), "{text:?}");
-        assert!(text.split_whitespace().collect::<Vec<_>>().join(" ").contains("one must be outside them"), "the outside condition is the rule's own words: {text}");
+        assert!(
+            text.split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .contains("one must be outside them"),
+            "the outside condition is the rule's own words: {text}"
+        );
         let question = gate_question(&task, Some(&detail)).unwrap();
         assert!(question.contains("two different people"), "{question}");
         let (task, detail) = at_gate(SPLIT_GATE, "awaiting_approval");
-        assert!(!gate_question(&task, Some(&detail)).unwrap().contains("different people"));
+        assert!(
+            !gate_question(&task, Some(&detail))
+                .unwrap()
+                .contains("different people")
+        );
     }
 
     #[test]
     fn a_held_card_says_what_it_waits_for_from_the_machine_s_hold_event_and_stops_when_released() {
         let held = |events: &str| {
-            let json = TASK.replace("\"state\":\"implementing\"", "\"state\":\"draft\"").replace("\"createdAt\"", "\"startWhenReady\":true,\"createdAt\"");
+            let json = TASK
+                .replace("\"state\":\"implementing\"", "\"state\":\"draft\"")
+                .replace("\"createdAt\"", "\"startWhenReady\":true,\"createdAt\"");
             let task: Task = serde_json::from_str(&json).unwrap();
-            let detail: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{json},"stageRuns":[],"approvals":[],"events":{events}}}"#)).unwrap();
-            overview_lines(&task, Some(&detail), 100, 0, &[]).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n")
+            let detail: TaskDetail = serde_json::from_str(&format!(
+                r#"{{"task":{json},"stageRuns":[],"approvals":[],"events":{events}}}"#
+            ))
+            .unwrap();
+            overview_lines(&task, Some(&detail), 100, 0, &[])
+                .iter()
+                .map(|l| l.to_string())
+                .collect::<Vec<_>>()
+                .join("\n")
         };
         let hold = r#"{"taskId":"t","kind":"card.held","at":"2026-11-06T10:00:00Z","payload":{"reason":"dependency","waitingOn":["b"],"text":"Waiting for bbbbbbbb: its PR is not open yet\u001b[31m"}}"#;
         let text = held(&format!("[{hold}]"));
-        assert!(text.contains("Waiting for bbbbbbbb: its PR is not open yet"), "{text}");
+        assert!(
+            text.contains("Waiting for bbbbbbbb: its PR is not open yet"),
+            "{text}"
+        );
         assert!(!text.contains('\u{1b}'), "{text:?}");
-        let released = r#"{"taskId":"t","kind":"card.released","at":"2026-11-06T11:00:00Z","payload":{}}"#;
+        let released =
+            r#"{"taskId":"t","kind":"card.released","at":"2026-11-06T11:00:00Z","payload":{}}"#;
         assert!(!held(&format!("[{hold},{released}]")).contains("its PR is not open yet"));
-        assert!(held("[]").contains("held until its dependencies"), "no event: the fixed words stay");
+        assert!(
+            held("[]").contains("held until its dependencies"),
+            "no event: the fixed words stay"
+        );
     }
 
     // @scenario:S12
@@ -2908,7 +4854,11 @@ mod tests {
     fn a_snapshot_without_split_fields_parses_with_them_empty() {
         let task: Task = serde_json::from_str(TASK).unwrap();
         assert!(task.split_part.is_none() && task.split_from.is_none());
-        assert!(overview_lines(&task, None, 100, 0, &[]).iter().all(|l| !l.to_string().contains("Part ")));
+        assert!(
+            overview_lines(&task, None, 100, 0, &[])
+                .iter()
+                .all(|l| !l.to_string().contains("Part "))
+        );
     }
 
     #[test]
@@ -2917,42 +4867,85 @@ mod tests {
         assert!(task.split_from.is_none() && task.depends_on.is_empty() && task.base.is_none());
         let json = TASK.replace("\"createdAt\"", "\"archiveReason\":\"split\",\"splitInto\":[\"dddddddd-0000-4000-8000-000000000000\"],\"createdAt\"");
         let origin: Task = serde_json::from_str(&json).unwrap();
-        let text = overview_lines(&origin, None, 100, 0, &[]).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
-        assert!(text.contains("split into smaller changes") && text.contains("Split into dddddddd"), "{text}");
+        let text = overview_lines(&origin, None, 100, 0, &[])
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("split into smaller changes") && text.contains("Split into dddddddd"),
+            "{text}"
+        );
     }
 
     fn split_card(id8: &str, title: &str, extra: &str) -> Task {
         let json = TASK
-            .replace("abcdef123456", &format!("{id8}-0000-4000-8000-000000000000"))
+            .replace(
+                "abcdef123456",
+                &format!("{id8}-0000-4000-8000-000000000000"),
+            )
             .replace("Add CSV export", title)
             .replace("\"createdAt\"", &format!("{extra}\"createdAt\""));
         serde_json::from_str(&json).unwrap()
     }
 
     fn overview_text(task: &Task, tasks: &[Task]) -> String {
-        overview_lines(task, None, 100, 0, tasks).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n")
+        overview_lines(task, None, 100, 0, tasks)
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     const CHILD_FROM: &str = "\"splitFrom\":\"aaaaaaaa-0000-4000-8000-000000000000\",";
 
     fn origin_into(ids: &[&str]) -> Task {
-        let list = ids.iter().map(|i| format!("\"{i}-0000-4000-8000-000000000000\"")).collect::<Vec<_>>().join(",");
-        split_card("aaaaaaaa", "Export everything", &format!("\"archiveReason\":\"split\",\"splitInto\":[{list}],"))
+        let list = ids
+            .iter()
+            .map(|i| format!("\"{i}-0000-4000-8000-000000000000\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        split_card(
+            "aaaaaaaa",
+            "Export everything",
+            &format!("\"archiveReason\":\"split\",\"splitInto\":[{list}],"),
+        )
     }
 
     fn child(id8: &str, title: &str, n: u32, of: u32) -> Task {
-        split_card(id8, title, &format!("{CHILD_FROM}\"splitPart\":{{\"n\":{n},\"of\":{of}}},"))
+        split_card(
+            id8,
+            title,
+            &format!("{CHILD_FROM}\"splitPart\":{{\"n\":{n},\"of\":{of}}},"),
+        )
     }
 
     // @scenario:S4
     #[test]
     fn a_split_origin_lists_every_child_on_its_own_stack_line_with_part_title_and_state() {
         let origin = origin_into(&["bbbbbbbb", "cccccccc", "dddddddd"]);
-        let tasks = vec![origin.clone(), child("bbbbbbbb", "Export CSV rows", 1, 3), child("cccccccc", "Export JSON rows", 2, 3), child("dddddddd", "Export XML rows", 3, 3)];
+        let tasks = vec![
+            origin.clone(),
+            child("bbbbbbbb", "Export CSV rows", 1, 3),
+            child("cccccccc", "Export JSON rows", 2, 3),
+            child("dddddddd", "Export XML rows", 3, 3),
+        ];
         let text = overview_text(&origin, &tasks);
-        for (n, title) in [(1, "Export CSV rows"), (2, "Export JSON rows"), (3, "Export XML rows")] {
-            let line = text.lines().find(|l| l.contains(title)).unwrap_or_else(|| panic!("no line for {title}: {text}"));
-            assert!(line.starts_with("Stack") && line.to_lowercase().contains(&format!("part {n}")) && line.contains("implementing"), "{line}");
+        for (n, title) in [
+            (1, "Export CSV rows"),
+            (2, "Export JSON rows"),
+            (3, "Export XML rows"),
+        ] {
+            let line = text
+                .lines()
+                .find(|l| l.contains(title))
+                .unwrap_or_else(|| panic!("no line for {title}: {text}"));
+            assert!(
+                line.starts_with("Stack")
+                    && line.to_lowercase().contains(&format!("part {n}"))
+                    && line.contains("implementing"),
+                "{line}"
+            );
         }
     }
 
@@ -2962,9 +4955,17 @@ mod tests {
         let origin = origin_into(&["bbbbbbbb"]);
         let tasks = vec![origin.clone(), child("bbbbbbbb", "Export CSV rows", 1, 1)];
         let text = overview_text(&origin, &tasks);
-        let lines: Vec<&str> = text.lines().filter(|l| l.contains("Export CSV rows")).collect();
+        let lines: Vec<&str> = text
+            .lines()
+            .filter(|l| l.contains("Export CSV rows"))
+            .collect();
         assert_eq!(lines.len(), 1, "{text}");
-        assert!(lines[0].starts_with("Stack") && lines[0].to_lowercase().contains("part 1") && lines[0].contains("implementing"), "{text}");
+        assert!(
+            lines[0].starts_with("Stack")
+                && lines[0].to_lowercase().contains("part 1")
+                && lines[0].contains("implementing"),
+            "{text}"
+        );
     }
 
     // @scenario:S6
@@ -2973,8 +4974,14 @@ mod tests {
         let origin = origin_into(&["bbbbbbbb"]);
         let kid = child("bbbbbbbb", "Export CSV rows", 1, 1);
         let text = overview_text(&kid, &[origin, kid.clone()]);
-        let line = text.lines().find(|l| l.contains("Part 1 of 1 of")).unwrap_or_else(|| panic!("{text}"));
-        assert!(line.contains("Export everything") && line.contains("aaaaaaaa"), "{line}");
+        let line = text
+            .lines()
+            .find(|l| l.contains("Part 1 of 1 of"))
+            .unwrap_or_else(|| panic!("{text}"));
+        assert!(
+            line.contains("Export everything") && line.contains("aaaaaaaa"),
+            "{line}"
+        );
     }
 
     // @scenario:S7
@@ -2982,8 +4989,14 @@ mod tests {
     fn a_child_whose_origin_is_gone_shows_the_origin_s_short_id() {
         let kid = child("bbbbbbbb", "Export CSV rows", 1, 2);
         let text = overview_text(&kid, std::slice::from_ref(&kid));
-        let line = text.lines().find(|l| l.contains("Part 1 of 2 of")).unwrap_or_else(|| panic!("{text}"));
-        assert!(line.contains("aaaaaaaa") && !line.contains("aaaaaaaa-"), "{line}");
+        let line = text
+            .lines()
+            .find(|l| l.contains("Part 1 of 2 of"))
+            .unwrap_or_else(|| panic!("{text}"));
+        assert!(
+            line.contains("aaaaaaaa") && !line.contains("aaaaaaaa-"),
+            "{line}"
+        );
     }
 
     // @scenario:S8
@@ -2993,22 +5006,41 @@ mod tests {
         let tasks = vec![origin.clone(), child("bbbbbbbb", "Export CSV rows", 1, 2)];
         let text = overview_text(&origin, &tasks);
         let stack: Vec<&str> = text.lines().filter(|l| l.starts_with("Stack")).collect();
-        assert!(stack.iter().any(|l| l.contains("Export CSV rows")), "{text}");
-        let missing = stack.iter().find(|l| l.contains("eeeeeeee")).unwrap_or_else(|| panic!("{text}"));
+        assert!(
+            stack.iter().any(|l| l.contains("Export CSV rows")),
+            "{text}"
+        );
+        let missing = stack
+            .iter()
+            .find(|l| l.contains("eeeeeeee"))
+            .unwrap_or_else(|| panic!("{text}"));
         assert!(!missing.contains("Export CSV rows"), "{missing}");
-        assert!(!stack.iter().any(|l| l.trim() == "Stack"), "no empty line: {text}");
+        assert!(
+            !stack.iter().any(|l| l.trim() == "Stack"),
+            "no empty line: {text}"
+        );
     }
 
     // @scenario:S9
     #[test]
     fn a_title_with_an_escape_sequence_in_a_split_line_is_printed_plain() {
-        let origin = split_card("aaaaaaaa", "Origin \\u001b[31mred", "\"archiveReason\":\"split\",\"splitInto\":[\"bbbbbbbb-0000-4000-8000-000000000000\"],");
+        let origin = split_card(
+            "aaaaaaaa",
+            "Origin \\u001b[31mred",
+            "\"archiveReason\":\"split\",\"splitInto\":[\"bbbbbbbb-0000-4000-8000-000000000000\"],",
+        );
         let kid = child("bbbbbbbb", "Child \\u001b[2Jwipe", 1, 1);
         let tasks = vec![origin.clone(), kid.clone()];
         let from_origin = overview_text(&origin, &tasks);
         let from_child = overview_text(&kid, &tasks);
-        assert!(!from_origin.contains('\u{1b}') && !from_child.contains('\u{1b}'), "{from_origin:?} {from_child:?}");
-        assert!(from_origin.contains("Child") && from_child.contains("Origin"), "{from_origin} {from_child}");
+        assert!(
+            !from_origin.contains('\u{1b}') && !from_child.contains('\u{1b}'),
+            "{from_origin:?} {from_child:?}"
+        );
+        assert!(
+            from_origin.contains("Child") && from_child.contains("Origin"),
+            "{from_origin} {from_child}"
+        );
     }
 
     // @scenario:S10
@@ -3020,7 +5052,12 @@ mod tests {
         assert!(overview_text(&origin, &[]).contains("Split into dddddddd"));
         let tasks = vec![origin.clone(), kid.clone()];
         let named = overview_text(&kid, &tasks);
-        assert!(named.contains("Part 2 of 3 of") && named.contains("aaaaaaaa") && named.contains("Export everything"), "{named}");
+        assert!(
+            named.contains("Part 2 of 3 of")
+                && named.contains("aaaaaaaa")
+                && named.contains("Export everything"),
+            "{named}"
+        );
     }
 
     // @scenario:S11
@@ -3029,7 +5066,12 @@ mod tests {
         let plain: Task = serde_json::from_str(TASK).unwrap();
         let other = child("bbbbbbbb", "Export CSV rows", 1, 2);
         let text = overview_text(&plain, &[other, plain.clone()]);
-        assert!(!text.contains("Part ") && !text.contains("Split into") && !text.contains("Export CSV rows"), "{text}");
+        assert!(
+            !text.contains("Part ")
+                && !text.contains("Split into")
+                && !text.contains("Export CSV rows"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -3039,19 +5081,33 @@ mod tests {
             detail.approvals = vec![serde_json::from_value(serde_json::json!({"kind":"awaiting_ship","requested":{"evidence":{"risk":risk}}})).unwrap()];
             gate_question(&task, Some(&detail)).unwrap()
         };
-        assert_eq!(question("high"), "ship this PR? · high risk: a release owner is asked after the checks");
+        assert_eq!(
+            question("high"),
+            "ship this PR? · high risk: the release is asked after the checks"
+        );
         assert_eq!(question("low"), "ship this PR?");
     }
 
     #[test]
     fn a_ticket_opens_on_the_section_its_gate_concerns_and_digits_jump() {
         let (mut task, _) = fixture();
-        assert_eq!(Section::for_task(&task), Section::Now, "a running card opens on what it is doing");
+        assert_eq!(
+            Section::for_task(&task),
+            Section::Now,
+            "a running card opens on what it is doing"
+        );
         task.running = false;
         task.state = "draft".into();
         task.waiting_on_you = false;
         assert_eq!(Section::for_task(&task), Section::Overview);
-        for (state, section) in [("awaiting_answers", Section::Gate), ("awaiting_setup", Section::Gate), ("awaiting_ship", Section::Result), ("closed", Section::Result), ("paused_rate_limit", Section::Stopped), ("failed", Section::Stopped)] {
+        for (state, section) in [
+            ("awaiting_answers", Section::Gate),
+            ("awaiting_setup", Section::Gate),
+            ("awaiting_ship", Section::Result),
+            ("closed", Section::Result),
+            ("paused_rate_limit", Section::Stopped),
+            ("failed", Section::Stopped),
+        ] {
             task.state = state.into();
             assert_eq!(Section::for_task(&task), section, "{state}");
         }
@@ -3082,14 +5138,26 @@ mod tests {
         assert_eq!(Section::from_digit('2', &at_gate), Some(Section::Overview));
         task.state = "implementing".into();
         let later = order(&task);
-        assert!(later.contains(&Section::Plan) && later.contains(&Section::Tests) && !later.contains(&Section::Review));
+        assert!(
+            later.contains(&Section::Plan)
+                && later.contains(&Section::Tests)
+                && !later.contains(&Section::Review)
+        );
     }
 
     #[test]
     fn every_section_draws_at_any_size_with_or_without_a_detail() {
         let (task, detail) = fixture();
         for section in Section::ALL {
-            for (w, h) in [(1, 1), (6, 3), (20, 6), (80, 24), (99, 30), (100, 30), (200, 50)] {
+            for (w, h) in [
+                (1, 1),
+                (6, 3),
+                (20, 6),
+                (80, 24),
+                (99, 30),
+                (100, 30),
+                (200, 50),
+            ] {
                 let rows = render(w, h, &task, Some(&detail), section, 7);
                 assert_eq!(rows.len(), usize::from(h));
                 let rows = render(w, h, &task, None, section, 0);
@@ -3098,7 +5166,11 @@ mod tests {
         }
     }
 
-    fn render_engines(task: &Task, detail: &TaskDetail, catalog: &Result<EngineCatalog, String>) -> String {
+    fn render_engines(
+        task: &Task,
+        detail: &TaskDetail,
+        catalog: &Result<EngineCatalog, String>,
+    ) -> String {
         let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
         let scroll = Cell::new(0);
         let view = DetailView {
@@ -3118,9 +5190,18 @@ mod tests {
             refs: &RefState::default(),
             hits: &RefCell::new(Vec::new()),
         };
-        terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
+        terminal
+            .draw(|f| super::render(f, f.area(), &view))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
-        (0..30).map(|y| (0..120).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+        (0..30)
+            .map(|y| {
+                (0..120)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     #[test]
@@ -3131,22 +5212,53 @@ mod tests {
         detail.stage_runs[3].engine = Some("codex:sol".into());
         let catalog = Ok(crate::model::engine_tests::catalog());
         let text = render_engines(&task, &detail, &catalog);
-        let row = |pack: &str| text.lines().find(|l| l.contains(&format!(" {pack} "))).unwrap_or_default().to_string();
-        assert!(row("triage").contains("codex:sol") && row("triage").contains("claude:opus"), "yours, then what it ran on: {text}");
+        let row = |pack: &str| {
+            text.lines()
+                .find(|l| l.contains(&format!(" {pack} ")))
+                .unwrap_or_default()
+                .to_string()
+        };
+        assert!(
+            row("triage").contains("codex:sol") && row("triage").contains("claude:opus"),
+            "yours, then what it ran on: {text}"
+        );
         assert!(row("triage").contains("no credential here"), "{text}");
-        assert!(row("test_design").contains("▌") && row("test_design").contains("default: claude:sonnet"), "{text}");
-        assert!(!text.contains("slack_triage") && !text.contains("evidence  "), "only the packs a task runs: {text}");
-        assert!(text.contains("implementing on codex:sol"), "the header names the running stage's engine: {text}");
+        assert!(
+            row("test_design").contains("▌")
+                && row("test_design").contains("default: claude:sonnet"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("slack_triage") && !text.contains("evidence  "),
+            "only the packs a task runs: {text}"
+        );
+        assert!(
+            text.contains("implementing on codex:sol"),
+            "the header names the running stage's engine: {text}"
+        );
         let text = render_engines(&task, &detail, &Err("not found".into()));
-        assert!(text.contains("this machine does not offer engines"), "{text}");
+        assert!(
+            text.contains("this machine does not offer engines"),
+            "{text}"
+        );
     }
 
     fn lines_text(lines: &[Line<'static>]) -> String {
-        lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>()).collect::<Vec<_>>().join("\n")
+        lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     #[test]
-    fn build_progress_shows_each_scenario_red_or_green_the_budget_against_its_limits_and_the_last_checkpoint() {
+    fn build_progress_shows_each_scenario_red_or_green_the_budget_against_its_limits_and_the_last_checkpoint()
+     {
         let mut detail: TaskDetail = serde_json::from_str(&detail_json(TASK)).unwrap();
         detail.build_progress = Some(serde_json::from_str(r#"{"scenarios":[{"id":"S1","state":"green"},{"id":"S2","state":"red"}],
             "budget":{"iterations":4,"tokens":175000,"minutes":12.5,"limits":{"max_iterations":15,"max_tokens":2000000,"max_minutes":90}},
@@ -3157,27 +5269,46 @@ mod tests {
         assert!(text.contains("4 of 15"), "{text}");
         assert!(text.contains("175k of 2000k"), "{text}");
         assert!(text.contains("12.5 of 90"), "{text}");
-        assert!(text.contains("bbbbbbb") && text.contains("after a green"), "{text}");
+        assert!(
+            text.contains("bbbbbbb") && text.contains("after a green"),
+            "{text}"
+        );
     }
 
     #[test]
     fn build_progress_says_tokens_are_not_counted_and_is_silent_without_progress() {
         let mut detail: TaskDetail = serde_json::from_str(&detail_json(TASK)).unwrap();
-        assert!(!lines_text(&build_progress_lines(&detail)).contains("Budget"), "no budget without progress");
+        assert!(
+            !lines_text(&build_progress_lines(&detail)).contains("Budget"),
+            "no budget without progress"
+        );
         detail.build_progress = Some(serde_json::from_str(r#"{"scenarios":[],"budget":{"iterations":1,"tokens":null,"minutes":1.0,"limits":{"max_iterations":15,"max_tokens":2000000,"max_minutes":90}},"lastCheckpoint":null}"#).unwrap());
         assert!(lines_text(&build_progress_lines(&detail)).contains("not counted"));
     }
 
     #[test]
-    fn an_escalated_gate_shows_the_reason_its_confidence_the_summary_and_the_outputs_tail_with_control_characters_taken_out() {
+    fn an_escalated_gate_shows_the_reason_its_confidence_the_summary_and_the_outputs_tail_with_control_characters_taken_out()
+     {
         let task = TASK.replace("\"state\":\"implementing\"", "\"state\":\"escalated\"");
         let mut detail: TaskDetail = serde_json::from_str(&detail_json(&task)).unwrap();
         detail.approvals.push(serde_json::from_str(r#"{"kind":"escalated","requested":{"escalation":"flaky_tests","escalationDecision":{"reason":"flaky_tests","confidence":0.82,"source":"decision","agentReason":"other"},"summary":"stopped at slice 2","outputTail":"FAIL a.test.ts\u001b[31m red \u001b]0;title\u0007\nexpected 3"},"decision":null}"#).unwrap());
         let text = lines_text(&escalation_lines(&detail));
-        assert!(text.contains("the tests are flaky") && !text.contains("flaky_tests") && text.contains("82% sure") && text.contains("judged by the escalation check"), "{text}");
+        assert!(
+            text.contains("the tests are flaky")
+                && !text.contains("flaky_tests")
+                && text.contains("82% sure")
+                && text.contains("judged by the escalation check"),
+            "{text}"
+        );
         assert!(text.contains("the agent said: it needs a person"), "{text}");
-        assert!(text.contains("stopped at slice 2") && text.contains("expected 3"), "{text}");
-        assert!(!text.contains('\u{1b}') && !text.contains('\u{7}'), "no control character reaches the terminal");
+        assert!(
+            text.contains("stopped at slice 2") && text.contains("expected 3"),
+            "{text}"
+        );
+        assert!(
+            !text.contains('\u{1b}') && !text.contains('\u{7}'),
+            "no control character reaches the terminal"
+        );
     }
 
     #[test]
@@ -3186,21 +5317,31 @@ mod tests {
         let mut detail: TaskDetail = serde_json::from_str(&detail_json(&task)).unwrap();
         detail.approvals.push(serde_json::from_str(r#"{"kind":"escalated","requested":{"escalationDecision":{"reason":"flaky_tests","confidence":0.8,"source":"decision","agentReason":null},"summary":"s","outputTail":"x"},"decision":null}"#).unwrap());
         detail.events.push(serde_json::from_str(r#"{"taskId":"abcdef123456","kind":"escalation.corrected","payload":{"from":"flaky_tests","to":"env_broken"},"at":"2026-10-22T10:20:00Z"}"#).unwrap());
-        assert!(lines_text(&escalation_lines(&detail)).contains("corrected to: the environment is broken"));
+        assert!(
+            lines_text(&escalation_lines(&detail))
+                .contains("corrected to: the environment is broken")
+        );
     }
 
     #[test]
     fn a_gate_that_carries_a_ticket_change_says_which_fields_and_when_through_plain() {
         let line = ticket_changed_line(&serde_json::json!({"ticketChanged":{"fields":["scope","priority"],"at":"2026-11-05T12:00:00Z"}})).expect("a line");
-        assert_eq!(line, "Ticket     the ticket changed since this was written: scope edited, priority changed (2026-11-05T12:00:00Z)");
-        let dirty = ticket_changed_line(&serde_json::json!({"ticketChanged":{"fields":["x\u{1b}[2J"],"at":"t\u{1b}"}})).expect("a line");
+        assert_eq!(
+            line,
+            "Ticket     the ticket changed since this was written: scope edited, priority changed (2026-11-05T12:00:00Z)"
+        );
+        let dirty = ticket_changed_line(
+            &serde_json::json!({"ticketChanged":{"fields":["x\u{1b}[2J"],"at":"t\u{1b}"}}),
+        )
+        .expect("a line");
         assert!(!dirty.contains('\u{1b}'));
         assert!(ticket_changed_line(&serde_json::json!({})).is_none());
         assert!(ticket_changed_line(&serde_json::json!({"ticketChanged":{"fields":[]}})).is_none());
     }
 
     #[test]
-    fn an_escalated_gate_names_the_kept_sandbox_and_how_long_it_lasts_with_control_characters_taken_out() {
+    fn an_escalated_gate_names_the_kept_sandbox_and_how_long_it_lasts_with_control_characters_taken_out()
+     {
         let task = TASK.replace("\"state\":\"implementing\"", "\"state\":\"escalated\"");
         let mut detail: TaskDetail = serde_json::from_str(&detail_json(&task)).unwrap();
         detail.approvals.push(serde_json::from_str(r#"{"kind":"escalated","requested":{"escalationDecision":{"reason":"flaky_tests","confidence":0.8,"source":"decision","agentReason":null},"summary":"s","outputTail":"x","keptSandbox":{"path":"/w/app/task-1\u001b[31m","ref":"refs/luna/kept/r1","until":"2026-11-06T12:00:00Z","keepHours":24}},"decision":null}"#).unwrap());
@@ -3215,13 +5356,39 @@ mod tests {
         let strip = |requested: serde_json::Value, waiting: bool| {
             let (mut task, mut detail) = at_gate("{}", "awaiting_ship");
             task.waiting_on_you = waiting;
-            detail.approvals = vec![serde_json::from_value(serde_json::json!({"kind":"awaiting_ship","requested":requested})).unwrap()];
+            detail.approvals = vec![
+                serde_json::from_value(
+                    serde_json::json!({"kind":"awaiting_ship","requested":requested}),
+                )
+                .unwrap(),
+            ];
             gate_question(&task, Some(&detail))
         };
-        assert_eq!(strip(serde_json::json!({"gate":"ship_approval","risk":"low"}), true).unwrap(), "approve the release?");
-        assert!(strip(serde_json::json!({"gate":"ship_approval","risk":"high"}), true).unwrap().contains("high risk: a release owner, not one of the plan's approvers"));
-        assert_eq!(strip(serde_json::json!({"evidence":{"risk":"low"}}), true).unwrap(), "ship this PR?");
-        assert_eq!(strip(serde_json::json!({}), false), None, "a watched PR is not a gate");
+        assert_eq!(
+            strip(
+                serde_json::json!({"gate":"ship_approval","risk":"low"}),
+                true
+            )
+            .unwrap(),
+            "approve the release?"
+        );
+        assert!(
+            strip(
+                serde_json::json!({"gate":"ship_approval","risk":"high"}),
+                true
+            )
+            .unwrap()
+            .contains("approve the release? · high risk")
+        );
+        assert_eq!(
+            strip(serde_json::json!({"evidence":{"risk":"low"}}), true).unwrap(),
+            "ship this PR?"
+        );
+        assert_eq!(
+            strip(serde_json::json!({}), false),
+            None,
+            "a watched PR is not a gate"
+        );
     }
 
     #[test]
@@ -3231,9 +5398,27 @@ mod tests {
             "checklist":[{"id":"ci","ok":false,"detail":"CI \u{1b}[31mred"},{"id":"freeze","ok":false,"detail":"freeze until Monday"},{"id":"pack","ok":true,"detail":"complete"}],
             "autoMerge":{"allowed":false,"reason":"not ready\u{7}"},"review":{"required":true,"by":"a ruleset"},"fixRounds":1,"quietSince":"2026-11-01T00:00:00Z"
         })).unwrap();
-        let text = ship_lines(&ship, crate::model::unix_secs("2026-11-04T00:00:00Z").unwrap()).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
-        assert!(!text.chars().any(|c| c.is_control() && c != '\n'), "{text:?}");
-        for want in ["✗ ", "ci", "✓ ", "required by a ruleset", "1 fix round", "quiet 3 days", "keeps waiting and goes on when it ends"] {
+        let text = ship_lines(
+            &ship,
+            crate::model::unix_secs("2026-11-04T00:00:00Z").unwrap(),
+        )
+        .iter()
+        .map(|l| l.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+        assert!(
+            !text.chars().any(|c| c.is_control() && c != '\n'),
+            "{text:?}"
+        );
+        for want in [
+            "✗ ",
+            "ci",
+            "✓ ",
+            "required by a ruleset",
+            "1 fix round",
+            "quiet 3 days",
+            "keeps waiting and goes on when it ends",
+        ] {
             assert!(text.contains(want), "{want}: {text}");
         }
     }
@@ -3250,7 +5435,10 @@ mod frame_tests {
     }
 
     fn bar_row(screen: &str, needle: &str) -> usize {
-        rows(screen).iter().position(|r| r.contains(needle)).unwrap_or_else(|| panic!("{needle} not on screen:\n{screen}"))
+        rows(screen)
+            .iter()
+            .position(|r| r.contains(needle))
+            .unwrap_or_else(|| panic!("{needle} not on screen:\n{screen}"))
     }
 
     fn press(app: &mut crate::app::App, code: ratatui::crossterm::event::KeyCode) {
@@ -3274,12 +5462,35 @@ mod frame_tests {
         let mut app = past_the_gate();
         app.detail_section = Section::Plan;
         let screen = render(&mut app, 180, 50);
-        for want in ["Brief", "Criteria", "C1  exports every column the report shows", "C5  a person without access gets a 403", "Steps", "~90 lines", "src/reports/csv.ts", "Rollback", "Out of scope", "Migration"] {
+        for want in [
+            "Brief",
+            "Criteria",
+            "C1  exports every column the report shows",
+            "C5  a person without access gets a 403",
+            "Steps",
+            "~90 lines",
+            "src/reports/csv.ts",
+            "Rollback",
+            "Out of scope",
+            "Migration",
+        ] {
             assert!(screen.contains(want), "{want} missing in\n{screen}");
         }
-        assert!(!screen.contains("Criteria to build") && !screen.contains("Slices"), "{screen}");
-        assert!(screen.contains("• the endpoint streams rows"), "the brief is markdown, its list a list: {screen}");
-        assert_eq!(screen.matches("exports every column the report shows").count(), 1, "a criterion is printed once: {screen}");
+        assert!(
+            !screen.contains("Criteria to build") && !screen.contains("Slices"),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("• the endpoint streams rows"),
+            "the brief is markdown, its list a list: {screen}"
+        );
+        assert_eq!(
+            screen
+                .matches("exports every column the report shows")
+                .count(),
+            1,
+            "a criterion is printed once: {screen}"
+        );
     }
 
     #[test]
@@ -3287,27 +5498,55 @@ mod frame_tests {
         let mut app = past_the_gate();
         app.detail_section = Section::Tests;
         let screen = render(&mut app, 180, 50);
-        let at = |needle: &str| screen.lines().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("no {needle:?} in\n{screen}"));
+        let at = |needle: &str| {
+            screen
+                .lines()
+                .position(|l| l.contains(needle))
+                .unwrap_or_else(|| panic!("no {needle:?} in\n{screen}"))
+        };
         let c1 = at("C1  exports every column the report shows");
-        assert!(screen.lines().nth(c1).unwrap().contains("2 cases"), "{screen}");
+        assert!(
+            screen.lines().nth(c1).unwrap().contains("2 cases"),
+            "{screen}"
+        );
         let first = screen.lines().nth(c1 + 1).unwrap();
-        assert!(first.contains("S1 happy") && first.contains("case 1 proves criterion 1"), "{first}");
-        assert_eq!(screen.matches("exports every column the report shows").count(), 1, "{screen}");
+        assert!(
+            first.contains("S1 happy") && first.contains("case 1 proves criterion 1"),
+            "{first}"
+        );
+        assert_eq!(
+            screen
+                .matches("exports every column the report shows")
+                .count(),
+            1,
+            "{screen}"
+        );
     }
 
     #[test]
-    fn plan_review_tests_and_runs_say_loading_until_the_detail_arrives_and_then_the_empty_wording() {
-        for (section, empty) in [(Section::Plan, "no plan yet"), (Section::Tests, "no cases yet"), (Section::Runs, "no runs")] {
+    fn plan_review_tests_and_runs_say_loading_until_the_detail_arrives_and_then_the_empty_wording()
+    {
+        for (section, empty) in [
+            (Section::Plan, "no plan yet"),
+            (Section::Tests, "no cases yet"),
+            (Section::Runs, "no runs"),
+        ] {
             let mut app = past_the_gate();
             app.detail_section = section;
             let ready = app.detail.take();
             let screen = render(&mut app, 140, 40);
-            assert!(screen.contains("loading…") && !screen.contains(empty), "{section:?} while fetching:\n{screen}");
+            assert!(
+                screen.contains("loading…") && !screen.contains(empty),
+                "{section:?} while fetching:\n{screen}"
+            );
             app.detail = ready;
             app.detail.as_mut().unwrap().approvals.clear();
             app.detail.as_mut().unwrap().stage_runs.clear();
             let screen = render(&mut app, 140, 40);
-            assert!(!screen.contains("loading…"), "{section:?} once loaded:\n{screen}");
+            assert!(
+                !screen.contains("loading…"),
+                "{section:?} once loaded:\n{screen}"
+            );
             if section != Section::Runs {
                 assert!(screen.contains(empty), "{section:?}:\n{screen}");
             }
@@ -3315,31 +5554,52 @@ mod frame_tests {
         let mut app = plan_gate_app();
         let ready = app.detail.take();
         let screen = render(&mut app, 140, 40);
-        assert!(screen.contains("loading…") && !screen.contains("no plan yet"), "Review while fetching:\n{screen}");
+        assert!(
+            screen.contains("loading…") && !screen.contains("no plan yet"),
+            "Review while fetching:\n{screen}"
+        );
         app.detail = ready;
         app.detail.as_mut().unwrap().approvals.clear();
         let screen = render(&mut app, 140, 40);
-        assert!(screen.contains("no plan yet") && !screen.contains("loading…"), "Review once loaded:\n{screen}");
+        assert!(
+            screen.contains("no plan yet") && !screen.contains("loading…"),
+            "Review once loaded:\n{screen}"
+        );
     }
 
     /// The foreground of every cell showing `glyph`, over the whole screen: the board card, the border, the bar, the rail, the page.
-    fn glyph_colours(app: &mut crate::app::App, glyph: &str, section: Section) -> Vec<Option<ratatui::style::Color>> {
+    fn glyph_colours(
+        app: &mut crate::app::App,
+        glyph: &str,
+        section: Section,
+    ) -> Vec<Option<ratatui::style::Color>> {
         use ratatui::{Terminal, backend::TestBackend};
         app.detail_section = section;
         let mut terminal = Terminal::new(TestBackend::new(160, 45)).unwrap();
         terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
-        buffer.content().iter().filter(|cell| cell.symbol() == glyph).map(|cell| Some(cell.fg).filter(|fg| *fg != ratatui::style::Color::Reset)).collect()
+        buffer
+            .content()
+            .iter()
+            .filter(|cell| cell.symbol() == glyph)
+            .map(|cell| Some(cell.fg).filter(|fg| *fg != ratatui::style::Color::Reset))
+            .collect()
     }
 
     #[test]
-    fn an_escalated_card_wears_the_lost_role_on_the_card_the_bar_the_rail_and_the_stopped_heading() {
+    fn an_escalated_card_wears_the_lost_role_on_the_card_the_bar_the_rail_and_the_stopped_heading()
+    {
         let mut app = escalated_app();
-        let want = theme::lost().fg.filter(|fg| *fg != ratatui::style::Color::Reset);
+        let want = theme::lost()
+            .fg
+            .filter(|fg| *fg != ratatui::style::Color::Reset);
         let found = glyph_colours(&mut app, "✗", Section::Stopped);
         // The board card, the bar, the rail's Stopped marker and the page's heading.
         assert!(found.len() >= 4, "{found:?}");
-        assert!(found.iter().all(|fg| *fg == want), "every ✗ is the lost role {want:?}: {found:?}");
+        assert!(
+            found.iter().all(|fg| *fg == want),
+            "every ✗ is the lost role {want:?}: {found:?}"
+        );
         let screen = render(&mut app, 160, 45);
         assert!(screen.contains("✗ escalated"), "{screen}");
     }
@@ -3349,12 +5609,22 @@ mod frame_tests {
         let mut app = escalated_app();
         app.tasks[0].state = "paused_rate_limit".into();
         app.tasks[0].column = "Build".into();
-        let want = theme::paused().fg.filter(|fg| *fg != ratatui::style::Color::Reset);
+        let want = theme::paused()
+            .fg
+            .filter(|fg| *fg != ratatui::style::Color::Reset);
         let found = glyph_colours(&mut app, "⏳", Section::Overview);
         assert!(found.len() >= 2, "{found:?}");
-        assert!(found.iter().all(|fg| *fg == want), "every ⏳ is the paused role {want:?}: {found:?}");
+        assert!(
+            found.iter().all(|fg| *fg == want),
+            "every ⏳ is the paused role {want:?}: {found:?}"
+        );
         let bar = crate::detail::bar_status(&app.tasks[0], app.detail.as_ref(), 0);
-        assert_eq!(bar.style.fg.filter(|fg| *fg != ratatui::style::Color::Reset), want);
+        assert_eq!(
+            bar.style
+                .fg
+                .filter(|fg| *fg != ratatui::style::Color::Reset),
+            want
+        );
     }
 
     #[test]
@@ -3362,12 +5632,32 @@ mod frame_tests {
         let mut app = plan_gate_app();
         app.detail_section = Section::Plan;
         let screen = render(&mut app, 180, 50);
-        let col = |needle: &str| rows(&screen).iter().find_map(|r| r.find(needle).map(|i| r[..i].chars().count())).unwrap_or_else(|| panic!("no {needle:?} in\n{screen}"));
-        assert!(col("Risk") > col("Brief") + 80, "the groups sit in a pane right of the main text: Brief at {}, Risk at {}\n{screen}", col("Brief"), col("Risk"));
-        for want in ["Risk", "▸ Code map  5 files", "Checks", "⚑ plan flag", "Card", "Repo       /work/app"] {
+        let col = |needle: &str| {
+            rows(&screen)
+                .iter()
+                .find_map(|r| r.find(needle).map(|i| r[..i].chars().count()))
+                .unwrap_or_else(|| panic!("no {needle:?} in\n{screen}"))
+        };
+        assert!(
+            col("Risk") > col("Brief") + 80,
+            "the groups sit in a pane right of the main text: Brief at {}, Risk at {}\n{screen}",
+            col("Brief"),
+            col("Risk")
+        );
+        for want in [
+            "Risk",
+            "▸ Code map  5 files",
+            "Checks",
+            "⚑ plan flag",
+            "Card",
+            "Repo       /work/app",
+        ] {
             assert!(screen.contains(want), "{want} missing in\n{screen}");
         }
-        assert!(!screen.contains("reference ──"), "no folded block under the text when the pane is there");
+        assert!(
+            !screen.contains("reference ──"),
+            "no folded block under the text when the pane is there"
+        );
     }
 
     #[test]
@@ -3375,16 +5665,30 @@ mod frame_tests {
         let mut app = plan_gate_app();
         app.detail_section = Section::Plan;
         let screen = render(&mut app, 100, 60);
-        let at = |needle: &str| screen.find(needle).unwrap_or_else(|| panic!("no {needle:?} in\n{screen}"));
-        assert!(at("Steps") < at("── reference") && at("── reference") < at("▸ Code map  5 files"), "{screen}");
+        let at = |needle: &str| {
+            screen
+                .find(needle)
+                .unwrap_or_else(|| panic!("no {needle:?} in\n{screen}"))
+        };
+        assert!(
+            at("Steps") < at("── reference") && at("── reference") < at("▸ Code map  5 files"),
+            "{screen}"
+        );
         for folded in ["▸ Risk", "▸ Checks", "▸ Card"] {
-            assert!(screen.contains(folded), "{folded} is a folded header: {screen}");
+            assert!(
+                screen.contains(folded),
+                "{folded} is a folded header: {screen}"
+            );
         }
-        assert!(screen.contains("src/reports/csv.ts") && !screen.contains("src/reports/model.ts"), "the steps name their files; the folded code map keeps its own out of sight\n{screen}");
+        assert!(
+            screen.contains("src/reports/csv.ts") && !screen.contains("src/reports/model.ts"),
+            "the steps name their files; the folded code map keeps its own out of sight\n{screen}"
+        );
     }
 
     #[test]
-    fn tab_focuses_the_groups_enter_unfolds_one_and_esc_gives_the_keys_back_before_it_closes_the_view() {
+    fn tab_focuses_the_groups_enter_unfolds_one_and_esc_gives_the_keys_back_before_it_closes_the_view()
+     {
         use ratatui::crossterm::event::KeyCode;
         let mut app = plan_gate_app();
         app.detail_section = Section::Plan;
@@ -3398,13 +5702,27 @@ mod frame_tests {
         assert!(screen.contains("▸ Code map  5 files"), "{screen}");
         press(&mut app, KeyCode::Enter);
         let open = render(&mut app, 180, 50);
-        assert!(open.contains("▾ Code map") && open.contains("src/reports/csv.ts") && !open.contains("5 files"), "{open}");
+        assert!(
+            open.contains("▾ Code map")
+                && open.contains("src/reports/csv.ts")
+                && !open.contains("5 files"),
+            "{open}"
+        );
         press(&mut app, KeyCode::Char(' '));
-        assert!(render(&mut app, 180, 50).contains("▸ Code map  5 files"), "space folds it again");
+        assert!(
+            render(&mut app, 180, 50).contains("▸ Code map  5 files"),
+            "space folds it again"
+        );
         press(&mut app, KeyCode::Esc);
-        assert!(!app.detail_refs.focus && matches!(app.mode, crate::app::Mode::Detail(_)), "the first esc leaves the groups");
+        assert!(
+            !app.detail_refs.focus && matches!(app.mode, crate::app::Mode::Detail(_)),
+            "the first esc leaves the groups"
+        );
         press(&mut app, KeyCode::Esc);
-        assert!(matches!(app.mode, crate::app::Mode::Normal), "the second closes the view");
+        assert!(
+            matches!(app.mode, crate::app::Mode::Normal),
+            "the second closes the view"
+        );
     }
 
     #[test]
@@ -3424,7 +5742,10 @@ mod frame_tests {
         app.detail_section = Section::Activity;
         render(&mut app, 180, 50);
         press(&mut app, KeyCode::Tab);
-        assert!(!app.detail_refs.focus, "the Activity section has no groups to take the keys");
+        assert!(
+            !app.detail_refs.focus,
+            "the Activity section has no groups to take the keys"
+        );
     }
 
     #[test]
@@ -3432,12 +5753,21 @@ mod frame_tests {
         let mut app = plan_gate_app();
         app.detail_section = Section::Activity;
         render(&mut app, 180, 50);
-        let avail = |app: &crate::app::App, key: &str| crate::keys::bindings_for(app, crate::keys::Scope::Detail).into_iter().find(|(b, _)| b.first() == key).map(|(_, a)| a).unwrap();
+        let avail = |app: &crate::app::App, key: &str| {
+            crate::keys::bindings_for(app, crate::keys::Scope::Detail)
+                .into_iter()
+                .find(|(b, _)| b.first() == key)
+                .map(|(_, a)| a)
+                .unwrap()
+        };
         assert!(matches!(avail(&app, "tab"), crate::keys::Avail::Off(_)));
         app.detail_section = Section::Plan;
         render(&mut app, 180, 50);
         assert_eq!(avail(&app, "tab"), crate::keys::Avail::On);
-        assert!(matches!(avail(&app, "space"), crate::keys::Avail::Off(_)), "space waits for the focus");
+        assert!(
+            matches!(avail(&app, "space"), crate::keys::Avail::Off(_)),
+            "space waits for the focus"
+        );
         press(&mut app, ratatui::crossterm::event::KeyCode::Tab);
         assert_eq!(avail(&app, "space"), crate::keys::Avail::On);
     }
@@ -3447,11 +5777,20 @@ mod frame_tests {
         let mut app = plan_gate_app();
         let screen = render(&mut app, 120, 40);
         let bar = rows(&screen)[bar_row(&screen, "approve the plan?")];
-        for want in ["⏸ approve the plan?", "a approve", "r send back", "e edit", "1 check flagged"] {
+        for want in [
+            "⏸ approve the plan?",
+            "a approve",
+            "r send back",
+            "e edit",
+            "1 check flagged",
+        ] {
             assert!(bar.contains(want), "{want} missing in the bar: {bar}");
         }
         let rule = rows(&screen)[bar_row(&screen, "approve the plan?") + 1];
-        assert!(rule.contains('├') && rule.contains('┬') && rule.contains('┤'), "a rule under the bar joins the frame: {rule}");
+        assert!(
+            rule.contains('├') && rule.contains('┬') && rule.contains('┤'),
+            "a rule under the bar joins the frame: {rule}"
+        );
     }
 
     #[test]
@@ -3463,8 +5802,15 @@ mod frame_tests {
         let bar = rows(&before)[at].to_string();
         app.detail_scroll.set(10);
         let after = render(&mut app, 120, 24);
-        assert!(app.detail_scroll.get() > 0, "the plan is long enough to scroll");
-        assert_eq!(rows(&after)[at], bar, "the bar is the same row after a page down:\n{after}");
+        assert!(
+            app.detail_scroll.get() > 0,
+            "the plan is long enough to scroll"
+        );
+        assert_eq!(
+            rows(&after)[at],
+            bar,
+            "the bar is the same row after a page down:\n{after}"
+        );
         assert!(after.contains("▲") && after.contains("above"), "{after}");
     }
 
@@ -3474,7 +5820,10 @@ mod frame_tests {
         for section in Section::ALL {
             app.detail_section = section;
             let screen = render(&mut app, 120, 40);
-            assert!(rows(&screen)[bar_row(&screen, "approve the plan?")].contains("a approve"), "{section:?}:\n{screen}");
+            assert!(
+                rows(&screen)[bar_row(&screen, "approve the plan?")].contains("a approve"),
+                "{section:?}:\n{screen}"
+            );
         }
     }
 
@@ -3490,7 +5839,10 @@ mod frame_tests {
         let footer = rows(&screen).last().unwrap().to_string();
         for text in [bar.to_string(), footer] {
             for banned in ["advance", "send back", "edit", "approve"] {
-                assert!(!text.contains(banned), "{banned} offered on a running card: {text}");
+                assert!(
+                    !text.contains(banned),
+                    "{banned} offered on a running card: {text}"
+                );
             }
         }
     }
@@ -3500,7 +5852,10 @@ mod frame_tests {
         let mut app = escalated_app();
         let screen = render(&mut app, 120, 40);
         let bar = rows(&screen)[bar_row(&screen, "✗ escalated")];
-        assert!(bar.contains("escalated · too complex for this engine") && !bar.contains("too_complex"), "{bar}");
+        assert!(
+            bar.contains("escalated · too complex for this engine") && !bar.contains("too_complex"),
+            "{bar}"
+        );
         assert!(bar.contains("a retry"), "{bar}");
         assert!(!bar.contains("a approve"), "{bar}");
     }
@@ -3517,7 +5872,11 @@ mod frame_tests {
     fn the_bottom_border_carries_the_stage_and_age_and_no_key_hints() {
         let mut app = plan_gate_app();
         let screen = render(&mut app, 120, 40);
-        let border = rows(&screen).iter().find(|r| r.contains(" ago ") && r.contains('╯')).copied().expect("a bottom border");
+        let border = rows(&screen)
+            .iter()
+            .find(|r| r.contains(" ago ") && r.contains('╯'))
+            .copied()
+            .expect("a bottom border");
         assert!(border.contains("Plan · "), "{border}");
         for hint in ["sections", "scroll", "help", "size"] {
             assert!(!border.contains(hint), "{hint} on the border: {border}");
@@ -3527,7 +5886,14 @@ mod frame_tests {
     /// The count in a marker row: `▼ 12 more` is 12.
     fn count(screen: &str, glyph: char, word: &str) -> Option<usize> {
         let row = screen.lines().find(|r| r.contains(glyph))?;
-        row.split(glyph).nth(1)?.trim_end_matches(|c: char| c == '│' || c.is_whitespace()).trim().trim_end_matches(word).trim().parse().ok()
+        row.split(glyph)
+            .nth(1)?
+            .trim_end_matches(|c: char| c == '│' || c.is_whitespace())
+            .trim()
+            .trim_end_matches(word)
+            .trim()
+            .parse()
+            .ok()
     }
 
     #[test]
@@ -3535,10 +5901,14 @@ mod frame_tests {
         let mut app = plan_gate_app();
         app.detail_section = Section::Activity;
         let short = render(&mut app, 120, 40);
-        assert!(!short.contains('▼') && !short.contains('▲'), "everything fits:\n{short}");
+        assert!(
+            !short.contains('▼') && !short.contains('▲'),
+            "everything fits:\n{short}"
+        );
         app.detail_section = Section::Plan;
         let top = render(&mut app, 120, 14);
-        let more = count(&top, '▼', "more").unwrap_or_else(|| panic!("a count of lines below:\n{top}"));
+        let more =
+            count(&top, '▼', "more").unwrap_or_else(|| panic!("a count of lines below:\n{top}"));
         assert!(more > 1 && !top.contains('▲'), "{top}");
         // Three lines of scroll: three fewer below, and what is above is those three plus the row the marker covers.
         app.detail_scroll.set(3);
@@ -3551,33 +5921,86 @@ mod frame_tests {
         assert!(!end.contains('▼') && end.contains('▲'), "{end}");
         let clamped = app.detail_scroll.get();
         // The pane is 7 rows (11 of the popup, less the border, the bar and its rule): `more` counted from the top was total - 7 + 1.
-        assert_eq!(clamped as usize, more - 1, "the offset stops at the last line");
+        assert_eq!(
+            clamped as usize,
+            more - 1,
+            "the offset stops at the last line"
+        );
         app.detail_scroll.set(clamped + 50);
-        assert_eq!(render(&mut app, 120, 14), end, "scrolling past the end changes nothing");
+        assert_eq!(
+            render(&mut app, 120, 14),
+            end,
+            "scrolling past the end changes nothing"
+        );
         assert_eq!(app.detail_scroll.get(), clamped);
     }
 
     #[test]
     fn a_narrow_bar_drops_keys_from_the_lowest_priority_then_the_note_and_never_the_question() {
-        let keys: Vec<(String, String)> = [("a", "approve"), ("r", "send back"), ("N", "reject"), ("e", "edit")].iter().map(|(k, l)| (k.to_string(), l.to_string())).collect();
-        let text = |width: usize| bar_line(width, "⏸ approve the plan?", theme::needs_you(), &keys, "1 check flagged").to_string();
+        let keys: Vec<(String, String)> = [
+            ("a", "approve"),
+            ("r", "send back"),
+            ("N", "reject"),
+            ("e", "edit"),
+        ]
+        .iter()
+        .map(|(k, l)| (k.to_string(), l.to_string()))
+        .collect();
+        let text = |width: usize| {
+            bar_line(
+                width,
+                "⏸ approve the plan?",
+                theme::needs_you(),
+                &keys,
+                "1 check flagged",
+            )
+            .to_string()
+        };
         let full = text(120);
-        assert!(full.starts_with("⏸ approve the plan?") && full.contains("a approve") && full.contains("e edit") && full.trim_end().ends_with("1 check flagged"), "{full}");
+        assert!(
+            full.starts_with("⏸ approve the plan?")
+                && full.contains("a approve")
+                && full.contains("e edit")
+                && full.trim_end().ends_with("1 check flagged"),
+            "{full}"
+        );
         assert_eq!(cells(&full), 120, "the note sits at the right edge");
         let tight = text(80);
-        assert!(tight.contains("1 check flagged") && tight.contains("a approve") && !tight.contains("e edit"), "{tight}");
+        assert!(
+            tight.contains("1 check flagged")
+                && tight.contains("a approve")
+                && !tight.contains("e edit"),
+            "{tight}"
+        );
         let tighter = text(30);
-        assert!(!tighter.contains("check flagged") && !tighter.contains("approve ") || tighter.starts_with("⏸ approve the plan?"), "{tighter}");
-        assert!(tighter.contains("⏸ approve the plan?") && !tighter.contains("a approve") && !tighter.contains("flagged"), "{tighter}");
+        assert!(
+            !tighter.contains("check flagged") && !tighter.contains("approve ")
+                || tighter.starts_with("⏸ approve the plan?"),
+            "{tighter}"
+        );
+        assert!(
+            tighter.contains("⏸ approve the plan?")
+                && !tighter.contains("a approve")
+                && !tighter.contains("flagged"),
+            "{tighter}"
+        );
         let squeezed = text(12);
-        assert!(squeezed.starts_with("⏸ approve t") && cells(&squeezed) <= 12, "{squeezed}");
+        assert!(
+            squeezed.starts_with("⏸ approve t") && cells(&squeezed) <= 12,
+            "{squeezed}"
+        );
         let none: Vec<(String, String)> = Vec::new();
-        assert_eq!(bar_line(60, "◐ implementing", theme::working(), &none, "").to_string(), "◐ implementing", "a running card with nothing to do shows no keys");
+        assert_eq!(
+            bar_line(60, "◐ implementing", theme::working(), &none, "").to_string(),
+            "◐ implementing",
+            "a running card with nothing to do shows no keys"
+        );
     }
 
     #[test]
     fn the_bar_shows_at_most_five_keys() {
-        let keys: Vec<(String, String)> = (0..8).map(|i| (format!("{i}"), format!("do{i}"))).collect();
+        let keys: Vec<(String, String)> =
+            (0..8).map(|i| (format!("{i}"), format!("do{i}"))).collect();
         let text = bar_line(200, "⏸ q?", theme::needs_you(), &keys, "").to_string();
         assert!(text.contains("4 do4") && !text.contains("5 do5"), "{text}");
     }
@@ -3588,7 +6011,11 @@ mod frame_tests {
         let mut task = app.tasks[0].clone();
         task.reason = Some("boom\u{1b}[31m red".into());
         let status = bar_status(&task, None, 0);
-        assert!(!status.text.contains('\u{1b}') && status.text.contains("escalated · boom"), "{}", status.text);
+        assert!(
+            !status.text.contains('\u{1b}') && status.text.contains("escalated · boom"),
+            "{}",
+            status.text
+        );
     }
 }
 
@@ -3611,7 +6038,13 @@ mod scroll_tests {
     }
 
     fn evidence_app(files: usize) -> App {
-        let task = task_json("dddddddd4444", "Rate limit the public API", "awaiting_ship", "Ship", json!({"waitingOnYou": true}));
+        let task = task_json(
+            "dddddddd4444",
+            "Rate limit the public API",
+            "awaiting_ship",
+            "Ship",
+            json!({"waitingOnYou": true}),
+        );
         let artifacts: Vec<_> = (0..files).map(|i| json!({"id": format!("a{i}"), "kind": "screenshot", "path": format!("/out/files/qa/shot-{i}.png"), "label": format!("shot {i}"), "stageRunId": "r2"})).collect();
         let runs = json!([{"id": "r2", "stage": "evidence", "attempt": 1, "status": "passed", "costUsd": 0.3, "turns": 3, "startedAt": "2026-10-22T09:00:00Z", "endedAt": "2026-10-22T09:30:00Z"}]);
         let mut app = open_card(task, json!({"artifacts": artifacts, "stageRuns": runs}));
@@ -3622,45 +6055,79 @@ mod scroll_tests {
 
     /// The row the selection marker is on, as the screen shows it; None when no row wears it.
     fn selected(screen: &str) -> Option<String> {
-        screen.lines().find(|l| l.contains("▌ screenshot")).map(|l| l.to_string())
+        screen
+            .lines()
+            .find(|l| l.contains("▌ screenshot"))
+            .map(|l| l.to_string())
     }
 
     #[test]
     fn the_selected_evidence_row_is_on_screen_and_not_under_a_marker_at_every_step_down_and_up() {
         let mut app = evidence_app(60);
         let screen = render(&mut app, 180, 30);
-        assert!(selected(&screen).is_some_and(|l| l.contains("shot 0  ")), "{screen}");
+        assert!(
+            selected(&screen).is_some_and(|l| l.contains("shot 0  ")),
+            "{screen}"
+        );
         for step in 1..60 {
             press(&mut app, KeyCode::Char('j'));
             let screen = render(&mut app, 180, 30);
-            let row = selected(&screen).unwrap_or_else(|| panic!("down {step}: the selected row is not on screen:\n{screen}"));
-            assert!(row.contains(&format!("shot {step}  ")), "down {step}: {row}");
+            let row = selected(&screen).unwrap_or_else(|| {
+                panic!("down {step}: the selected row is not on screen:\n{screen}")
+            });
+            assert!(
+                row.contains(&format!("shot {step}  ")),
+                "down {step}: {row}"
+            );
         }
         for step in (0..59).rev() {
             press(&mut app, KeyCode::Char('k'));
             let screen = render(&mut app, 180, 30);
-            let row = selected(&screen).unwrap_or_else(|| panic!("up {step}: the selected row is not on screen:\n{screen}"));
+            let row = selected(&screen).unwrap_or_else(|| {
+                panic!("up {step}: the selected row is not on screen:\n{screen}")
+            });
             assert!(row.contains(&format!("shot {step}  ")), "up {step}: {row}");
         }
     }
 
     fn map_app(files: usize) -> App {
         let mut app = plan_gate_app();
-        let gate = app.detail.as_mut().unwrap().approvals.iter_mut().find(|a| a.kind.as_deref() == Some("awaiting_approval")).unwrap();
-        gate.requested["map"]["files"] = json!((0..files).map(|i| json!({"path": format!("src/mod/file{i:02}.rs"), "role": "change"})).collect::<Vec<_>>());
+        let gate = app
+            .detail
+            .as_mut()
+            .unwrap()
+            .approvals
+            .iter_mut()
+            .find(|a| a.kind.as_deref() == Some("awaiting_approval"))
+            .unwrap();
+        gate.requested["map"]["files"] = json!(
+            (0..files)
+                .map(|i| json!({"path": format!("src/mod/file{i:02}.rs"), "role": "change"}))
+                .collect::<Vec<_>>()
+        );
         app
     }
 
     /// The side pane's columns of a 180-wide render.
     fn side(screen: &str) -> String {
-        screen.lines().map(|l| l.chars().skip(136).collect::<String>()).collect::<Vec<_>>().join("\n")
+        screen
+            .lines()
+            .map(|l| l.chars().skip(136).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     fn focus_map(app: &mut App) {
         press(app, KeyCode::Tab);
         render(app, 180, 50);
         for _ in 0..8 {
-            if app.detail_refs.ids.borrow().get(app.detail_refs.cursor).is_some_and(|id| *id == "map") {
+            if app
+                .detail_refs
+                .ids
+                .borrow()
+                .get(app.detail_refs.cursor)
+                .is_some_and(|id| *id == "map")
+            {
                 break;
             }
             press(app, KeyCode::Char('j'));
@@ -3676,28 +6143,51 @@ mod scroll_tests {
         render(&mut app, 180, 50);
         focus_map(&mut app);
         let screen = render(&mut app, 180, 50);
-        assert!(side(&screen).contains("file00.rs") && !side(&screen).contains("file59.rs"), "{}", side(&screen));
-        assert!(side(&screen).contains("▼") && side(&screen).contains("more"), "the pane's own marker:\n{}", side(&screen));
+        assert!(
+            side(&screen).contains("file00.rs") && !side(&screen).contains("file59.rs"),
+            "{}",
+            side(&screen)
+        );
+        assert!(
+            side(&screen).contains("▼") && side(&screen).contains("more"),
+            "the pane's own marker:\n{}",
+            side(&screen)
+        );
         for _ in 0..80 {
             press(&mut app, KeyCode::Char('j'));
             render(&mut app, 180, 50);
-            if app.detail_refs.cursor > 0 && app.detail_refs.ids.borrow()[app.detail_refs.cursor] != "map" {
+            if app.detail_refs.cursor > 0
+                && app.detail_refs.ids.borrow()[app.detail_refs.cursor] != "map"
+            {
                 break;
             }
         }
         let screen = render(&mut app, 180, 50);
-        assert!(side(&screen).contains("file59.rs"), "j scrolled the pane to the end of the group:\n{}", side(&screen));
-        assert!(side(&screen).contains("▲") && side(&screen).contains("above"), "{}", side(&screen));
+        assert!(
+            side(&screen).contains("file59.rs"),
+            "j scrolled the pane to the end of the group:\n{}",
+            side(&screen)
+        );
+        assert!(
+            side(&screen).contains("▲") && side(&screen).contains("above"),
+            "{}",
+            side(&screen)
+        );
         for _ in 0..80 {
             press(&mut app, KeyCode::Char('k'));
             render(&mut app, 180, 50);
         }
         let screen = render(&mut app, 180, 50);
-        assert!(side(&screen).contains("file00.rs") && !side(&screen).contains("▲"), "k scrolled it back:\n{}", side(&screen));
+        assert!(
+            side(&screen).contains("file00.rs") && !side(&screen).contains("▲"),
+            "k scrolled it back:\n{}",
+            side(&screen)
+        );
     }
 
     #[test]
-    fn the_focused_header_is_always_on_screen_as_j_walks_through_the_groups_and_into_the_long_one() {
+    fn the_focused_header_is_always_on_screen_as_j_walks_through_the_groups_and_into_the_long_one()
+    {
         let mut app = map_app(60);
         render(&mut app, 180, 50);
         focus_map(&mut app);
@@ -3716,9 +6206,17 @@ mod scroll_tests {
             let focused = title(ids[app.detail_refs.cursor.min(ids.len() - 1)]);
             // Inside the long group the header scrolls away under the marker while its rows are read; anywhere else it is on screen.
             let inside = focused == "Code map" && side(&screen).contains("file");
-            assert!(inside || side(&screen).contains(focused), "step {step}: {focused} is off screen:\n{}", side(&screen));
+            assert!(
+                inside || side(&screen).contains(focused),
+                "step {step}: {focused} is off screen:\n{}",
+                side(&screen)
+            );
         }
-        assert_eq!(app.detail_refs.ids.borrow()[app.detail_refs.cursor], "card", "the walk reached the last group");
+        assert_eq!(
+            app.detail_refs.ids.borrow()[app.detail_refs.cursor],
+            "card",
+            "the walk reached the last group"
+        );
     }
 
     #[test]
@@ -3729,7 +6227,11 @@ mod scroll_tests {
         let before = render(&mut app, 180, 50);
         ctrl(&mut app, 'd');
         let after = render(&mut app, 180, 50);
-        assert!(side(&before).contains("file00.rs") && !side(&after).contains("file00.rs"), "paged down:\n{}", side(&after));
+        assert!(
+            side(&before).contains("file00.rs") && !side(&after).contains("file00.rs"),
+            "paged down:\n{}",
+            side(&after)
+        );
         assert!(side(&after).contains("▲"), "{}", side(&after));
         ctrl(&mut app, 'u');
         assert!(side(&render(&mut app, 180, 50)).contains("file00.rs"));
@@ -3743,12 +6245,22 @@ mod scroll_tests {
                 for offset in 0..=(total - height) {
                     for row in 0..total {
                         let next = super::keep_visible(offset, row, height, total);
-                        assert!(next + height <= total.max(height), "offset in range: {height} {total} {offset} {row} -> {next}");
+                        assert!(
+                            next + height <= total.max(height),
+                            "offset in range: {height} {total} {offset} {row} -> {next}"
+                        );
                         let covered_top = next > 0 && row == next;
                         let covered_bottom = next + height < total && row == next + height - 1;
-                        assert!(row >= next && row < next + height && !covered_top && !covered_bottom, "row {row} of {total} in a window of {height} from {offset} -> {next}");
-                        let was_fine = row >= offset + usize::from(offset > 0) && row < offset + height - usize::from(offset + height < total);
-                        assert!(!was_fine || next == offset, "a row already in view does not scroll");
+                        assert!(
+                            row >= next && row < next + height && !covered_top && !covered_bottom,
+                            "row {row} of {total} in a window of {height} from {offset} -> {next}"
+                        );
+                        let was_fine = row >= offset + usize::from(offset > 0)
+                            && row < offset + height - usize::from(offset + height < total);
+                        assert!(
+                            !was_fine || next == offset,
+                            "a row already in view does not scroll"
+                        );
                     }
                 }
             }

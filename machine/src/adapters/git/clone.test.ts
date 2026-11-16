@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { bringBack, copiedSettings, removeLeftovers, ensureClone, ensurePrClone, freshClone, isClone, moveToClone, publishBranch, removeClone, unpushedCommits } from "./clone.ts";
+import { bringBack, copiedSettings, hostBaselineWorkspace, removeLeftovers, ensureClone, ensurePrClone, freshClone, isClone, isFreshWorkspace, moveToClone, publishBranch, removeClone, unpushedCommits } from "./clone.ts";
 import { configureMachineRepos, machineGitDir, machineRepoRoot } from "./machine-repo.ts";
 import { branchBase, changedPaths, commitAll, ensureWorktree, nestedLockfilesAt, removeWorktree, scopeStartOf, workspaceFor } from "./worktree.ts";
 
@@ -259,6 +259,18 @@ describe("a fresh workspace for Verify and fixes", () => {
     expect(existsSync(join(path, ".git"))).toBe(false);
   });
 
+  it("makes a throwaway workspace at the base beside the card's, without the card's change, and removes it with its repository", async () => {
+    const { workspace, sha } = await card();
+    const base = wgit(workspace.path, "rev-parse", `${sha}~1`);
+    const made = await hostBaselineWorkspace.clone(workspace.path, workspace.branch, "run-1-base", base);
+    expect(made.path).toBe(`${workspace.path}.base-run1base`);
+    expect(wgit(made.path, "rev-parse", "HEAD")).toBe(base);
+    expect(existsSync(join(made.path, "b.txt"))).toBe(false);
+    await hostBaselineWorkspace.remove(made.path);
+    expect(existsSync(made.path)).toBe(false);
+    expect(existsSync(machineGitDir(made.path))).toBe(false);
+  });
+
   it("refuses a revision that is not a full commit id", async () => {
     const { root, workspace } = await card();
     await expect(freshClone(workspace.path, "HEAD", workspace.branch, join(root, "v"))).rejects.toThrow(/commit/);
@@ -335,11 +347,67 @@ describe("the card's branch in the user's repository", () => {
     await ensureClone(repo, workspace);
     expect(await publishBranch(repo, workspace.path, "--upload-pack=x")).toMatchObject({ ok: false });
   });
+
+  it("says why it refused: a branch with commits the card's lacks is a non-fast-forward, and the reason is never empty", async () => {
+    const { repo, dir } = repository("publish-");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureClone(repo, workspace);
+    writeFileSync(join(repo, "c.txt"), "c\n");
+    git(repo, "checkout", "-q", "-b", workspace.branch);
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "a person's own commit on the same branch");
+    git(repo, "checkout", "-q", "main");
+    const refused = await publishBranch(repo, workspace.path, workspace.branch);
+    expect(refused).toMatchObject({ ok: false });
+    if (refused.ok) throw new Error("unreachable");
+    expect(refused.note).toMatch(/non-fast-forward/);
+    expect(refused.note).not.toMatch(/: $/);
+  });
+
+  it("follows a branch the machine itself rewrote, but only while the repository's branch is still what it published", async () => {
+    const { repo, dir } = repository("publish-");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureClone(repo, workspace);
+    writeFileSync(join(workspace.path, "b.txt"), "b\n");
+    await commitAll(workspace.path, "feat: b");
+    expect(await publishBranch(repo, workspace.path, workspace.branch)).toEqual({ ok: true });
+    // A rebase or an amend rewrites the card's branch: the old tip is no ancestor of the new one.
+    wgit(workspace.path, "reset", "-q", "--hard", "HEAD~1");
+    writeFileSync(join(workspace.path, "b.txt"), "rewritten\n");
+    const rewritten = (await commitAll(workspace.path, "feat: b, again"))!;
+    expect(await publishBranch(repo, workspace.path, workspace.branch)).toEqual({ ok: true });
+    expect(git(repo, "rev-parse", workspace.branch)).toBe(rewritten);
+    // A person commits on the branch in the repository: that is theirs, and a rewrite no longer overwrites it.
+    git(repo, "checkout", "-q", workspace.branch);
+    writeFileSync(join(repo, "mine.txt"), "mine\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "mine");
+    git(repo, "checkout", "-q", "main");
+    const mine = git(repo, "rev-parse", workspace.branch);
+    wgit(workspace.path, "reset", "-q", "--hard", "HEAD~1");
+    writeFileSync(join(workspace.path, "b.txt"), "rewritten twice\n");
+    await commitAll(workspace.path, "feat: b, once more");
+    expect(await publishBranch(repo, workspace.path, workspace.branch)).toMatchObject({ ok: false });
+    expect(git(repo, "rev-parse", workspace.branch)).toBe(mine);
+  });
+});
+
+describe("telling a card's own workspace from a fresh one", () => {
+  it("marks a fresh workspace, so what runs in it is never shown in the user's repository as the card's branch", async () => {
+    const { root, repo, dir } = repository("fresh-mark-");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureClone(repo, workspace);
+    const sha = wgit(workspace.path, "rev-parse", "HEAD");
+    const path = join(root, "verify-clone");
+    await freshClone(workspace.path, sha, workspace.branch, path);
+    expect(await isFreshWorkspace(path)).toBe(true);
+    expect(await isFreshWorkspace(workspace.path)).toBe(false);
+  });
 });
 
 describe("what a card's workspace leaves behind", () => {
-  // Root reads a file whose mode is 000, so the move never fails there: a stage container that runs as root (the machine's own) cannot make this failure.
-  it.skipIf(process.getuid?.() === 0)("removes a failed move's repository, so no half-made workspace is left to be mistaken for the card's", async () => {
+  // Root reads a file whose mode is 000, so the move never fails as root. Stage and check containers run as a non-root user (hostUser()), so this holds in a card as in CI.
+  it("removes a failed move's repository, so no half-made workspace is left to be mistaken for the card's", async () => {
     const { repo, dir } = repository("move-fail-");
     const workspace = workspaceFor(task, repo, dir);
     await ensureWorktree(repo, workspace);

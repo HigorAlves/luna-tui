@@ -14,7 +14,8 @@ pub(crate) const MEASURE: usize = 100;
 /// A character that must never reach the terminal: a control character (an escape sequence starts with one)
 /// or an invisible format character (zero-width, bidirectional overrides, the byte-order mark).
 pub(crate) fn is_unsafe(ch: char) -> bool {
-    ch.is_control() || matches!(ch, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}')
+    ch.is_control()
+        || matches!(ch, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}')
 }
 
 /// `text` with every unsafe character made a space (a newline stays when `keep_newline`). The zero-width joiner and non-joiner
@@ -29,7 +30,14 @@ pub(crate) fn sanitize(text: &str, keep_newline: bool) -> String {
         .enumerate()
         .map(|(i, &ch)| match ch {
             '\n' if keep_newline => ch,
-            _ if joiner(ch) && i > 0 && i + 1 < chars.len() && solid(chars[i - 1]) && solid(chars[i + 1]) => ch,
+            _ if joiner(ch)
+                && i > 0
+                && i + 1 < chars.len()
+                && solid(chars[i - 1])
+                && solid(chars[i + 1]) =>
+            {
+                ch
+            }
             _ if is_unsafe(ch) => ' ',
             _ => ch,
         })
@@ -180,7 +188,10 @@ pub(crate) fn wrap(text: &str, width: usize, indent: usize) -> Vec<String> {
             continue;
         }
         for line in wrap_pieces(&[(paragraph.to_string(), Style::new())], avail) {
-            out.push(format!("{pad}{}", line.into_iter().map(|(t, _)| t).collect::<String>()));
+            out.push(format!(
+                "{pad}{}",
+                line.into_iter().map(|(t, _)| t).collect::<String>()
+            ));
         }
     }
     out
@@ -198,9 +209,18 @@ fn inline(text: &str) -> Vec<Piece> {
     };
     while let Some(ch) = rest.chars().next() {
         let marked = if let Some(after) = rest.strip_prefix("**") {
-            after.find("**").filter(|&end| end > 0).map(|end| (&after[..end], 4 + end, Style::new().add_modifier(Modifier::BOLD)))
+            after.find("**").filter(|&end| end > 0).map(|end| {
+                (
+                    &after[..end],
+                    4 + end,
+                    Style::new().add_modifier(Modifier::BOLD),
+                )
+            })
         } else if let Some(after) = rest.strip_prefix('`') {
-            after.find('`').filter(|&end| end > 0).map(|end| (&after[..end], 2 + end, theme::code()))
+            after
+                .find('`')
+                .filter(|&end| end > 0)
+                .map(|end| (&after[..end], 2 + end, theme::code()))
         } else {
             None
         };
@@ -234,7 +254,9 @@ fn list_item(line: &str) -> Option<(String, &str, usize)> {
         return Some(("• ".into(), rest, nest));
     }
     let digits = body.chars().take_while(char::is_ascii_digit).count();
-    if (1..=3).contains(&digits) && let Some(rest) = body[digits..].strip_prefix(". ") {
+    if (1..=3).contains(&digits)
+        && let Some(rest) = body[digits..].strip_prefix(". ")
+    {
         return Some((format!("{}. ", &body[..digits]), rest, nest));
     }
     None
@@ -285,7 +307,11 @@ pub(crate) fn markdown(text: &str, width: usize, indent: usize) -> Vec<Line<'sta
 }
 
 fn markdown_body(text: &str, width: usize, indent: usize) -> Vec<Line<'static>> {
-    let safe: String = sanitize(text, true).lines().map(unmimic).collect::<Vec<_>>().join("\n");
+    let safe: String = sanitize(text, true)
+        .lines()
+        .map(unmimic)
+        .collect::<Vec<_>>()
+        .join("\n");
     let lines: Vec<&str> = safe.lines().collect();
     let total = width.min(MEASURE);
     let mut out = Vec::new();
@@ -293,8 +319,15 @@ fn markdown_body(text: &str, width: usize, indent: usize) -> Vec<Line<'static>> 
     while i < lines.len() {
         let line = lines[i];
         let trimmed = line.trim_start();
-        if trimmed.starts_with("```") && lines[i + 1..].iter().any(|l| l.trim_start().starts_with("```")) {
-            let close = lines[i + 1..].iter().position(|l| l.trim_start().starts_with("```")).map_or(lines.len(), |p| i + 1 + p);
+        if trimmed.starts_with("```")
+            && lines[i + 1..]
+                .iter()
+                .any(|l| l.trim_start().starts_with("```"))
+        {
+            let close = lines[i + 1..]
+                .iter()
+                .position(|l| l.trim_start().starts_with("```"))
+                .map_or(lines.len(), |p| i + 1 + p);
             let room = total.saturating_sub(indent + 2).max(1);
             for code in &lines[i + 1..close] {
                 let mut kept = String::new();
@@ -306,7 +339,10 @@ fn markdown_body(text: &str, width: usize, indent: usize) -> Vec<Line<'static>> 
                     kept.push(ch);
                     used += ch_cells(ch);
                 }
-                out.push(Line::from(vec![Span::raw(" ".repeat(indent + 2)), Span::styled(kept, theme::code())]));
+                out.push(Line::from(vec![
+                    Span::raw(" ".repeat(indent + 2)),
+                    Span::styled(kept, theme::code()),
+                ]));
             }
             i = close + 1;
             continue;
@@ -314,16 +350,30 @@ fn markdown_body(text: &str, width: usize, indent: usize) -> Vec<Line<'static>> 
         i += 1;
         if trimmed.is_empty() {
             out.push(Line::default());
-        } else if let Some(title) = ["### ", "## ", "# "].iter().find_map(|m| trimmed.strip_prefix(m)).filter(|t| !t.trim().is_empty()) {
+        } else if let Some(title) = ["### ", "## ", "# "]
+            .iter()
+            .find_map(|m| trimmed.strip_prefix(m))
+            .filter(|t| !t.trim().is_empty())
+        {
             let avail = total.saturating_sub(indent).max(1);
-            for row in wrap_pieces(&[(title.trim().to_string(), Style::new().add_modifier(Modifier::BOLD))], avail) {
+            for row in wrap_pieces(
+                &[(
+                    title.trim().to_string(),
+                    Style::new().add_modifier(Modifier::BOLD),
+                )],
+                avail,
+            ) {
                 out.push(to_line(row, " ".repeat(indent)));
             }
         } else if let Some((marker, rest, nest)) = list_item(line) {
             let lead = indent + nest;
             let avail = total.saturating_sub(lead + cells(&marker)).max(1);
             for (n, row) in wrap_pieces(&inline(rest), avail).into_iter().enumerate() {
-                let prefix = if n == 0 { format!("{}{marker}", " ".repeat(lead)) } else { " ".repeat(lead + cells(&marker)) };
+                let prefix = if n == 0 {
+                    format!("{}{marker}", " ".repeat(lead))
+                } else {
+                    " ".repeat(lead + cells(&marker))
+                };
                 out.push(to_line(row, prefix));
             }
             if rest.trim().is_empty() {
@@ -344,12 +394,18 @@ mod tests {
     use super::*;
 
     fn flat(lines: &[Line]) -> Vec<String> {
-        lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect()
+        lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
     }
 
     #[test]
     fn wrap_breaks_on_words_with_a_hanging_indent() {
-        assert_eq!(wrap("alpha beta gamma delta", 12, 2), ["  alpha beta", "  gamma", "  delta"]);
+        assert_eq!(
+            wrap("alpha beta gamma delta", 12, 2),
+            ["  alpha beta", "  gamma", "  delta"]
+        );
     }
 
     #[test]
@@ -387,14 +443,29 @@ mod tests {
     fn truncate_middle_keeps_the_head_and_the_file_name() {
         assert_eq!(truncate_middle("api/routes.ts", 20), "api/routes.ts");
         let cut = truncate_middle("api/reports/handlers/routes.ts", 16);
-        assert!(cut.starts_with("api/") && cut.ends_with("routes.ts") && cut.contains('…'), "{cut}");
+        assert!(
+            cut.starts_with("api/") && cut.ends_with("routes.ts") && cut.contains('…'),
+            "{cut}"
+        );
         assert_eq!(cells(&cut), 16);
     }
 
     #[test]
     fn markdown_renders_bullets_with_a_hanging_indent() {
-        let lines = flat(&markdown("- first item is long enough to wrap\n* second", 20, 2));
-        assert_eq!(lines, ["▏ • first item is", "▏   long enough to", "▏   wrap", "▏ • second"]);
+        let lines = flat(&markdown(
+            "- first item is long enough to wrap\n* second",
+            20,
+            2,
+        ));
+        assert_eq!(
+            lines,
+            [
+                "▏ • first item is",
+                "▏   long enough to",
+                "▏   wrap",
+                "▏ • second"
+            ]
+        );
     }
 
     #[test]
@@ -405,11 +476,27 @@ mod tests {
 
     #[test]
     fn markdown_styles_code_and_bold_spans_and_leaves_unbalanced_markers_literal() {
-        let lines = markdown("run `cargo test` and **stop** but `not this and **nor", 80, 0);
+        let lines = markdown(
+            "run `cargo test` and **stop** but `not this and **nor",
+            80,
+            0,
+        );
         let spans = &lines[0].spans;
-        assert!(spans.iter().any(|s| s.content == "cargo" && s.style == theme::code()));
-        assert!(spans.iter().any(|s| s.content == "test" && s.style == theme::code()));
-        assert!(spans.iter().any(|s| s.content == "stop" && s.style.add_modifier.contains(Modifier::BOLD)));
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.content == "cargo" && s.style == theme::code())
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.content == "test" && s.style == theme::code())
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.content == "stop" && s.style.add_modifier.contains(Modifier::BOLD))
+        );
         assert!(flat(&lines)[0].ends_with("but `not this and **nor"));
     }
 
@@ -417,7 +504,12 @@ mod tests {
     fn markdown_renders_headings_as_bold_lines() {
         let lines = markdown("## Plan\ntext", 40, 0);
         assert_eq!(flat(&lines), ["▏Plan", "▏text"]);
-        assert!(lines[0].spans[2].style.add_modifier.contains(Modifier::BOLD));
+        assert!(
+            lines[0].spans[2]
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
     }
 
     #[test]
@@ -440,26 +532,49 @@ mod tests {
     }
 
     #[test]
-    fn every_line_of_model_text_wears_the_dim_gutter_and_a_status_glyph_at_its_start_becomes_a_dot() {
-        let lines = markdown("# Criteria\n\n⚑ approved by the owner\n**✓ all passed**\n- ✗ nope\n⏸ held", 60, 2);
+    fn every_line_of_model_text_wears_the_dim_gutter_and_a_status_glyph_at_its_start_becomes_a_dot()
+    {
+        let lines = markdown(
+            "# Criteria\n\n⚑ approved by the owner\n**✓ all passed**\n- ✗ nope\n⏸ held",
+            60,
+            2,
+        );
         let text = flat(&lines);
         assert!(text.iter().all(|l| l.starts_with('▏')), "{text:?}");
-        assert!(lines.iter().all(|l| l.spans[0].content == "▏" && l.spans[0].style == theme::dim()));
+        assert!(
+            lines
+                .iter()
+                .all(|l| l.spans[0].content == "▏" && l.spans[0].style == theme::dim())
+        );
         assert_eq!(text[0], "▏ Criteria");
-        assert!(text.iter().any(|l| l == "▏ · approved by the owner") && text.iter().any(|l| l == "▏ · all passed"), "{text:?}");
-        assert!(text.iter().any(|l| l.contains("• · nope")) && text.iter().any(|l| l == "▏ · held"), "{text:?}");
+        assert!(
+            text.iter().any(|l| l == "▏ · approved by the owner")
+                && text.iter().any(|l| l == "▏ · all passed"),
+            "{text:?}"
+        );
+        assert!(
+            text.iter().any(|l| l.contains("• · nope")) && text.iter().any(|l| l == "▏ · held"),
+            "{text:?}"
+        );
         assert!(!text.join("\n").contains(['⚑', '✓', '✗', '⏸']));
     }
 
     #[test]
-    fn a_joiner_between_two_characters_stays_and_one_at_an_edge_or_beside_a_format_character_goes() {
+    fn a_joiner_between_two_characters_stays_and_one_at_an_edge_or_beside_a_format_character_goes()
+    {
         let family = "👨\u{200d}👩\u{200d}👧";
         assert_eq!(sanitize(family, false), family);
         assert_eq!(sanitize("می\u{200c}خواهم", false), "می\u{200c}خواهم");
         assert_eq!(sanitize("a\u{200d} b", false), "a  b");
         assert_eq!(sanitize("\u{200d}a", false), " a");
         assert_eq!(sanitize("a\u{200d}\u{202e}b", false), "a  b");
-        assert_eq!(sanitize("a\u{202e}b\u{200b}c\u{2066}d\u{feff}", false), "a b c d ");
-        assert_eq!(crate::model::plain("x\u{200d}y\u{202e}z", 20), "x\u{200d}y z");
+        assert_eq!(
+            sanitize("a\u{202e}b\u{200b}c\u{2066}d\u{feff}", false),
+            "a b c d "
+        );
+        assert_eq!(
+            crate::model::plain("x\u{200d}y\u{202e}z", 20),
+            "x\u{200d}y z"
+        );
     }
 }

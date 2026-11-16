@@ -89,13 +89,22 @@ impl SlackSplit {
 /// overdue on top), then P0 first, then oldest, so the most pressing thing is on top; the
 /// other splits newest first, like Slack itself.
 pub fn items(all: &[SlackItem], split: SlackSplit) -> Vec<usize> {
-    let mut found: Vec<usize> = all.iter().enumerate().filter(|(_, i)| i.split_enum() == Some(split)).map(|(i, _)| i).collect();
+    let mut found: Vec<usize> = all
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| i.split_enum() == Some(split))
+        .map(|(i, _)| i)
+        .collect();
     let at = |i: usize| unix_secs(&all[i].ts).unwrap_or(0);
     if split.needs_me() {
         found.sort_by_key(|&i| {
             let item = &all[i];
             if item.overdue {
-                (0, item.due_at.as_deref().and_then(unix_secs).unwrap_or(0), at(i))
+                (
+                    0,
+                    item.due_at.as_deref().and_then(unix_secs).unwrap_or(0),
+                    at(i),
+                )
             } else {
                 (1, item.priority_rank() as u64, at(i))
             }
@@ -109,14 +118,19 @@ pub fn items(all: &[SlackItem], split: SlackSplit) -> Vec<usize> {
 /// How many items past their reply SLA sit in an open split (anything but Snoozed and Done):
 /// the header strip's `‼ N overdue`.
 pub fn overdue_count(all: &[SlackItem]) -> usize {
-    all.iter().filter(|i| i.overdue && i.split_enum().is_some_and(SlackSplit::open)).count()
+    all.iter()
+        .filter(|i| i.overdue && i.split_enum().is_some_and(SlackSplit::open))
+        .count()
 }
 
 /// How many items sit in each split, in `SlackSplit::ALL` order.
 pub fn counts(all: &[SlackItem]) -> [usize; 6] {
     let mut out = [0; 6];
     for item in all {
-        if let Some(i) = item.split_enum().and_then(|s| SlackSplit::ALL.iter().position(|x| *x == s)) {
+        if let Some(i) = item
+            .split_enum()
+            .and_then(|s| SlackSplit::ALL.iter().position(|x| *x == s))
+        {
             out[i] += 1;
         }
     }
@@ -182,7 +196,9 @@ impl SlackKey {
             SlackKey::Bump => "priority up one step",
             SlackKey::Lower => "priority down one step",
             SlackKey::Kind => "kind: what the thread is (a stored answer, never a post)",
-            SlackKey::Relation => "link: the card or backlog item it is about, a new candidate, or none",
+            SlackKey::Relation => {
+                "link: the card or backlog item it is about, a new candidate, or none"
+            }
         }
     }
 
@@ -198,10 +214,14 @@ pub fn blocker(item: &SlackItem, key: SlackKey) -> Option<&'static str> {
     let split = item.split_enum();
     match key {
         SlackKey::Reply | SlackKey::Open | SlackKey::Snooze => None,
-        SlackKey::Kind | SlackKey::Relation => item.conversation.is_none().then_some("not assessed yet"),
+        SlackKey::Kind | SlackKey::Relation => {
+            item.conversation.is_none().then_some("not assessed yet")
+        }
         SlackKey::Task => item.task_id().is_some().then_some("already a ticket"),
         SlackKey::Done => (split == Some(SlackSplit::Done)).then_some("already done"),
-        SlackKey::Nudge => (split != Some(SlackSplit::WaitingOnThem)).then_some("only while waiting on them"),
+        SlackKey::Nudge => {
+            (split != Some(SlackSplit::WaitingOnThem)).then_some("only while waiting on them")
+        }
         SlackKey::Bump | SlackKey::Lower => match item.priority() {
             None => Some("not triaged yet"),
             Some("P0") if key == SlackKey::Bump => Some("already P0"),
@@ -229,12 +249,41 @@ pub fn relation_choices(item: &SlackItem) -> Vec<RelationChoice> {
         for e in &c.shortlist {
             let backlog = e.kind == "backlog";
             let title = crate::detail::plain(e.title.as_deref().unwrap_or(&e.id));
-            let from = e.other_source.as_ref().map(|s| format!(" (from {} {})", crate::detail::plain(&s.kind), crate::detail::plain(&s.key))).unwrap_or_default();
-            out.push(RelationChoice { label: format!("{}: {title}{from}", if backlog { "backlog" } else { "card" }), relation: if backlog { "related_to_backlog" } else { "related_to_in_progress" }, target: Some(e.id.clone()) });
+            let from = e
+                .other_source
+                .as_ref()
+                .map(|s| {
+                    format!(
+                        " (from {} {})",
+                        crate::detail::plain(&s.kind),
+                        crate::detail::plain(&s.key)
+                    )
+                })
+                .unwrap_or_default();
+            out.push(RelationChoice {
+                label: format!(
+                    "{}: {title}{from}",
+                    if backlog { "backlog" } else { "card" }
+                ),
+                relation: if backlog {
+                    "related_to_backlog"
+                } else {
+                    "related_to_in_progress"
+                },
+                target: Some(e.id.clone()),
+            });
         }
     }
-    out.push(RelationChoice { label: "a new candidate".to_string(), relation: "new_candidate", target: None });
-    out.push(RelationChoice { label: "none: not about any work".to_string(), relation: "none", target: None });
+    out.push(RelationChoice {
+        label: "a new candidate".to_string(),
+        relation: "new_candidate",
+        target: None,
+    });
+    out.push(RelationChoice {
+        label: "none: not about any work".to_string(),
+        relation: "none",
+        target: None,
+    });
     out
 }
 
@@ -244,10 +293,28 @@ pub fn conversation_lines(item: &SlackItem, now: u64) -> Vec<(&'static str, Stri
     let mut out = Vec::new();
     if let Some(c) = &item.conversation {
         if let Some(k) = &c.classification {
-            let who = if k.by == "person" { "you" } else { "the machine" };
-            out.push(("kind", format!("{} ({:.0}% sure, set by {who})", p(&k.kind), k.confidence * 100.0)));
+            let who = if k.by == "person" {
+                "you"
+            } else {
+                "the machine"
+            };
+            out.push((
+                "kind",
+                format!(
+                    "{} ({:.0}% sure, set by {who})",
+                    p(&k.kind),
+                    k.confidence * 100.0
+                ),
+            ));
             if !k.scores.is_empty() {
-                let parts: Vec<String> = ["who", "what", "impact", "time", "demand"].iter().filter_map(|n| k.scores.get(*n).map(|s| format!("{n} {} ({:.0}%)", s.score, s.confidence * 100.0))).collect();
+                let parts: Vec<String> = ["who", "what", "impact", "time", "demand"]
+                    .iter()
+                    .filter_map(|n| {
+                        k.scores
+                            .get(*n)
+                            .map(|s| format!("{n} {} ({:.0}%)", s.score, s.confidence * 100.0))
+                    })
+                    .collect();
                 let total = k.total.map(|t| format!(" · total {t}")).unwrap_or_default();
                 out.push(("scores", format!("{}{total}", parts.join(", "))));
             }
@@ -266,18 +333,33 @@ pub fn conversation_lines(item: &SlackItem, now: u64) -> Vec<(&'static str, Stri
                 "none" => "no existing work",
                 _ => "not sure: pick one with L",
             };
-            let title = r.target.as_ref().and_then(|t| c.shortlist.iter().find(|e| &e.id == t)).and_then(|e| e.title.as_deref()).map(|t| format!(": {}", p(t))).unwrap_or_default();
+            let title = r
+                .target
+                .as_ref()
+                .and_then(|t| c.shortlist.iter().find(|e| &e.id == t))
+                .and_then(|e| e.title.as_deref())
+                .map(|t| format!(": {}", p(t)))
+                .unwrap_or_default();
             out.push(("relation", format!("{words}{title}")));
             if let Some(s) = &r.other_source {
-                out.push(("source", format!("about a card from {} {}", p(&s.kind), p(&s.key))));
+                out.push((
+                    "source",
+                    format!("about a card from {} {}", p(&s.kind), p(&s.key)),
+                ));
             }
         }
         if c.redactions > 0 {
-            out.push(("cut", format!("{} secret(s) were cut from this thread", c.redactions)));
+            out.push((
+                "cut",
+                format!("{} secret(s) were cut from this thread", c.redactions),
+            ));
         }
     }
     if let Some(d) = &item.draft {
-        let left = unix_secs(&d.expires_at).map(|at| at.saturating_sub(now) / 3600).map(|h| format!(", expires in {h}h")).unwrap_or_default();
+        let left = unix_secs(&d.expires_at)
+            .map(|at| at.saturating_sub(now) / 3600)
+            .map(|h| format!(", expires in {h}h"))
+            .unwrap_or_default();
         out.push(("waiting", format!("a {} draft{left}", p(&d.kind))));
     }
     out
@@ -299,7 +381,13 @@ pub fn snooze_until(option: usize, now: u64, offset: i64) -> u64 {
             // 1970-01-01 was a Thursday: (days + 4) % 7 gives 0 for Sunday, 1 for Monday.
             let weekday = (today + 4).rem_euclid(7);
             let to_monday = (8 - weekday).rem_euclid(7);
-            let days_ahead = if option == 2 { 1 } else if to_monday == 0 { 7 } else { to_monday };
+            let days_ahead = if option == 2 {
+                1
+            } else if to_monday == 0 {
+                7
+            } else {
+                to_monday
+            };
             ((today + days_ahead) * DAY + 9 * 3600 - offset).max(0) as u64
         }
     }
@@ -335,10 +423,16 @@ pub fn watch_scope(watch: &SlackWatch) -> String {
     let scope = match watch.kind.as_str() {
         "usergroup" => Some("as mention".to_string()),
         "channel" => Some("FYI".to_string()),
-        "keyword" if !watch.channels.is_empty() => Some(format!("in {}", watch.channels.join(", "))),
+        "keyword" if !watch.channels.is_empty() => {
+            Some(format!("in {}", watch.channels.join(", ")))
+        }
         _ => None,
     };
-    [floor, scope].into_iter().flatten().collect::<Vec<_>>().join(" · ")
+    [floor, scope]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 #[cfg(test)]
@@ -352,7 +446,14 @@ pub(crate) mod fixtures {
     }
 
     /// `item_json` with a reply due at `due_at` and whether the machine has it overdue.
-    pub fn item_json_due(id: &str, split: &str, priority: Option<&str>, ts: &str, due_at: Option<&str>, overdue: bool) -> String {
+    pub fn item_json_due(
+        id: &str,
+        split: &str,
+        priority: Option<&str>,
+        ts: &str,
+        due_at: Option<&str>,
+        overdue: bool,
+    ) -> String {
         let due_at = due_at.map_or("null".to_string(), |d| format!("\"{d}\""));
         let triage = match priority {
             Some(p) => format!(
@@ -382,7 +483,13 @@ pub(crate) mod fixtures {
     }
 
     /// An item with its reply overdue since `due_at`.
-    pub fn overdue_item(id: &str, split: &str, priority: Option<&str>, ts: &str, due_at: &str) -> SlackItem {
+    pub fn overdue_item(
+        id: &str,
+        split: &str,
+        priority: Option<&str>,
+        ts: &str,
+        due_at: &str,
+    ) -> SlackItem {
         serde_json::from_str(&item_json_due(id, split, priority, ts, Some(due_at), true)).unwrap()
     }
 
@@ -390,7 +497,11 @@ pub(crate) mod fixtures {
         format!(
             r#"{{"id":"{id}","kind":"{kind}","value":"{value}","label":"{label}","channels":[],"enabled":true,
             "builtin":{builtin},"priority":{},"createdAt":"2026-10-28T08:00:00.000Z"}}"#,
-            if kind == "broadcast" { "\"P2\"" } else { "null" }
+            if kind == "broadcast" {
+                "\"P2\""
+            } else {
+                "null"
+            }
         )
     }
 
@@ -405,9 +516,28 @@ pub(crate) mod fixtures {
             r#"{{"items":[{},{},{}],"watches":[{},{}],"me":{{"id":"U0","name":"higor","isBot":false}},
             "polledAt":"2026-10-28T10:00:00.000Z","error":null,"socket":"connected",
             "sla":{{"P0":600,"P1":1800,"P2":3600,"P3":3600}}}}"#,
-            item_json_due("C0123:1730112345.0001", "needs_reply", Some("P0"), "2026-10-28T09:48:00.000Z", Some("2026-10-28T09:58:00.000Z"), false),
-            item_json("C0123:1730100000.0001", "fyi", Some("P3"), "2026-10-28T07:00:00.000Z"),
-            item_json_due("C0123:1730101000.0001", "decide", Some("P2"), "2026-10-28T08:00:00.000Z", Some("2026-10-28T09:00:00.000Z"), true),
+            item_json_due(
+                "C0123:1730112345.0001",
+                "needs_reply",
+                Some("P0"),
+                "2026-10-28T09:48:00.000Z",
+                Some("2026-10-28T09:58:00.000Z"),
+                false
+            ),
+            item_json(
+                "C0123:1730100000.0001",
+                "fyi",
+                Some("P3"),
+                "2026-10-28T07:00:00.000Z"
+            ),
+            item_json_due(
+                "C0123:1730101000.0001",
+                "decide",
+                Some("P2"),
+                "2026-10-28T08:00:00.000Z",
+                Some("2026-10-28T09:00:00.000Z"),
+                true
+            ),
             watch_json("w1", "usergroup", "S04ABCD", "@platform-team", false),
             watch_json("w2", "broadcast", "here", "@here", true),
         )
@@ -436,8 +566,16 @@ mod tests {
             item("g", "done", Some("P2"), "2026-10-28T09:30:00Z"),
         ];
         let ids = |ix: Vec<usize>| ix.iter().map(|&i| all[i].id.as_str()).collect::<Vec<_>>();
-        assert_eq!(ids(items(&all, SlackSplit::NeedsReply)), vec!["b", "c", "a", "d"], "P0, then P1 oldest first, untriaged last");
-        assert_eq!(ids(items(&all, SlackSplit::Fyi)), vec!["f", "e"], "FYI newest first");
+        assert_eq!(
+            ids(items(&all, SlackSplit::NeedsReply)),
+            vec!["b", "c", "a", "d"],
+            "P0, then P1 oldest first, untriaged last"
+        );
+        assert_eq!(
+            ids(items(&all, SlackSplit::Fyi)),
+            vec!["f", "e"],
+            "FYI newest first"
+        );
         assert_eq!(ids(items(&all, SlackSplit::Decide)), Vec::<&str>::new());
         assert_eq!(counts(&all), [4, 0, 0, 2, 0, 1]);
         assert_eq!(overdue_count(&all), 0);
@@ -447,16 +585,54 @@ mod tests {
     fn overdue_items_lead_needs_reply_longest_overdue_first_and_count_while_open() {
         let all = vec![
             item("a", "needs_reply", Some("P0"), "2026-10-28T09:00:00Z"),
-            overdue_item("b", "needs_reply", Some("P2"), "2026-10-28T07:00:00Z", "2026-10-28T08:00:00Z"),
-            overdue_item("c", "needs_reply", Some("P3"), "2026-10-28T06:00:00Z", "2026-10-28T07:00:00Z"),
+            overdue_item(
+                "b",
+                "needs_reply",
+                Some("P2"),
+                "2026-10-28T07:00:00Z",
+                "2026-10-28T08:00:00Z",
+            ),
+            overdue_item(
+                "c",
+                "needs_reply",
+                Some("P3"),
+                "2026-10-28T06:00:00Z",
+                "2026-10-28T07:00:00Z",
+            ),
             item("d", "needs_reply", Some("P1"), "2026-10-28T05:00:00Z"),
-            overdue_item("e", "done", Some("P1"), "2026-10-28T05:00:00Z", "2026-10-28T05:30:00Z"),
-            overdue_item("f", "snoozed", Some("P1"), "2026-10-28T05:00:00Z", "2026-10-28T05:30:00Z"),
-            overdue_item("g", "decide", Some("P1"), "2026-10-28T05:00:00Z", "2026-10-28T05:30:00Z"),
+            overdue_item(
+                "e",
+                "done",
+                Some("P1"),
+                "2026-10-28T05:00:00Z",
+                "2026-10-28T05:30:00Z",
+            ),
+            overdue_item(
+                "f",
+                "snoozed",
+                Some("P1"),
+                "2026-10-28T05:00:00Z",
+                "2026-10-28T05:30:00Z",
+            ),
+            overdue_item(
+                "g",
+                "decide",
+                Some("P1"),
+                "2026-10-28T05:00:00Z",
+                "2026-10-28T05:30:00Z",
+            ),
         ];
         let ids = |ix: Vec<usize>| ix.iter().map(|&i| all[i].id.as_str()).collect::<Vec<_>>();
-        assert_eq!(ids(items(&all, SlackSplit::NeedsReply)), vec!["c", "b", "a", "d"], "overdue first, the longest overdue on top, then P0 then oldest");
-        assert_eq!(overdue_count(&all), 3, "needs reply twice and decide once; snoozed and done are put away");
+        assert_eq!(
+            ids(items(&all, SlackSplit::NeedsReply)),
+            vec!["c", "b", "a", "d"],
+            "overdue first, the longest overdue on top, then P0 then oldest"
+        );
+        assert_eq!(
+            overdue_count(&all),
+            3,
+            "needs reply twice and decide once; snoozed and done are put away"
+        );
         let now = unix_secs("2026-10-28T10:00:00Z").unwrap();
         assert_eq!(all[1].due_label(now).as_deref(), Some("overdue 2h"));
         assert_eq!(all[0].due_label(now), None, "nothing due, nothing said");
@@ -468,9 +644,17 @@ mod tests {
         assert!(soon.due_soon(now), "inside five minutes it is");
         assert_eq!(soon.due_label(now).as_deref(), Some("due in 4m"));
         soon.due_at = Some("2026-10-28T09:59:20Z".into());
-        assert_eq!(soon.due_label(now).as_deref(), Some("overdue 40s"), "past due reads overdue even before the machine says so");
+        assert_eq!(
+            soon.due_label(now).as_deref(),
+            Some("overdue 40s"),
+            "past due reads overdue even before the machine says so"
+        );
         assert!(!soon.due_soon(now));
-        assert!(SlackSplit::NeedsReply.open() && SlackSplit::Fyi.open() && SlackSplit::WaitingOnThem.open());
+        assert!(
+            SlackSplit::NeedsReply.open()
+                && SlackSplit::Fyi.open()
+                && SlackSplit::WaitingOnThem.open()
+        );
         assert!(!SlackSplit::Done.open() && !SlackSplit::Snoozed.open());
     }
 
@@ -479,32 +663,64 @@ mod tests {
         assert_eq!(SlackSplit::NeedsReply.next(), SlackSplit::WaitingOnThem);
         assert_eq!(SlackSplit::Done.next(), SlackSplit::NeedsReply);
         assert_eq!(SlackSplit::NeedsReply.prev(), SlackSplit::Done);
-        assert_eq!(SlackSplit::from_wire("waiting_on_them"), Some(SlackSplit::WaitingOnThem));
+        assert_eq!(
+            SlackSplit::from_wire("waiting_on_them"),
+            Some(SlackSplit::WaitingOnThem)
+        );
         assert_eq!(SlackSplit::from_wire("nope"), None);
         for split in SlackSplit::ALL {
             assert_eq!(SlackSplit::from_wire(split.wire()), Some(split));
             assert!(split.label_narrow().len() <= 6, "{split:?}");
         }
         assert!(SlackSplit::NeedsReply.needs_me() && SlackSplit::Decide.needs_me());
-        assert!(!SlackSplit::Fyi.needs_me() && !SlackSplit::WaitingOnThem.needs_me() && !SlackSplit::Done.needs_me());
+        assert!(
+            !SlackSplit::Fyi.needs_me()
+                && !SlackSplit::WaitingOnThem.needs_me()
+                && !SlackSplit::Done.needs_me()
+        );
         assert_eq!(SlackSplit::Snoozed.label_narrow(), "Snz");
     }
 
     #[test]
     fn blockers_grey_the_keys_the_machine_would_refuse() {
-        let keys = |i: &SlackItem| SlackKey::ALL.iter().filter(|k| blocker(i, **k).is_none()).map(|k| k.key()).collect::<String>();
+        let keys = |i: &SlackItem| {
+            SlackKey::ALL
+                .iter()
+                .filter(|k| blocker(i, **k).is_none())
+                .map(|k| k.key())
+                .collect::<String>()
+        };
         let open = item("a", "needs_reply", Some("P1"), "t");
-        assert_eq!(keys(&open), "rtdso!-", "reply, ticket, done, snooze, open, both priority steps; no nudge");
+        assert_eq!(
+            keys(&open),
+            "rtdso!-",
+            "reply, ticket, done, snooze, open, both priority steps; no nudge"
+        );
         let mut linked = open.clone();
         linked.linked.task_id = Some("t1".into());
         assert_eq!(blocker(&linked, SlackKey::Task), Some("already a ticket"));
         let waiting = item("b", "waiting_on_them", Some("P2"), "t");
         assert!(blocker(&waiting, SlackKey::Nudge).is_none());
-        assert_eq!(blocker(&open, SlackKey::Nudge), Some("only while waiting on them"));
-        assert_eq!(blocker(&item("c", "done", Some("P2"), "t"), SlackKey::Done), Some("already done"));
-        assert_eq!(blocker(&item("d", "needs_reply", Some("P0"), "t"), SlackKey::Bump), Some("already P0"));
-        assert_eq!(blocker(&item("e", "fyi", Some("P3"), "t"), SlackKey::Lower), Some("already P3"));
-        assert_eq!(blocker(&item("f", "fyi", None, "t"), SlackKey::Bump), Some("not triaged yet"));
+        assert_eq!(
+            blocker(&open, SlackKey::Nudge),
+            Some("only while waiting on them")
+        );
+        assert_eq!(
+            blocker(&item("c", "done", Some("P2"), "t"), SlackKey::Done),
+            Some("already done")
+        );
+        assert_eq!(
+            blocker(&item("d", "needs_reply", Some("P0"), "t"), SlackKey::Bump),
+            Some("already P0")
+        );
+        assert_eq!(
+            blocker(&item("e", "fyi", Some("P3"), "t"), SlackKey::Lower),
+            Some("already P3")
+        );
+        assert_eq!(
+            blocker(&item("f", "fyi", None, "t"), SlackKey::Bump),
+            Some("not triaged yet")
+        );
         assert_eq!(SlackKey::from_char('!'), Some(SlackKey::Bump));
         assert_eq!(SlackKey::Reply.short(), "reply");
         assert_eq!(SlackKey::Bump.short(), "priority");
@@ -520,15 +736,30 @@ mod tests {
         let now = unix_secs("2026-10-28T10:00:00Z").unwrap();
         assert_eq!(snooze_until(0, now, 0), now + 3600);
         assert_eq!(snooze_until(1, now, 0), now + 3 * 3600);
-        assert_eq!(snooze_until(2, now, 0), unix_secs("2026-10-29T09:00:00Z").unwrap());
-        assert_eq!(snooze_until(3, now, 0), unix_secs("2026-11-02T09:00:00Z").unwrap());
+        assert_eq!(
+            snooze_until(2, now, 0),
+            unix_secs("2026-10-29T09:00:00Z").unwrap()
+        );
+        assert_eq!(
+            snooze_until(3, now, 0),
+            unix_secs("2026-11-02T09:00:00Z").unwrap()
+        );
         // In Lisbon (UTC+0 in winter, +1 before the clocks change) 9:00 local is 8:00Z.
-        assert_eq!(snooze_until(2, now, 3600), unix_secs("2026-10-29T08:00:00Z").unwrap());
+        assert_eq!(
+            snooze_until(2, now, 3600),
+            unix_secs("2026-10-29T08:00:00Z").unwrap()
+        );
         // A Monday asks for the one after.
         let monday = unix_secs("2026-11-02T10:00:00Z").unwrap();
-        assert_eq!(snooze_until(3, monday, 0), unix_secs("2026-11-09T09:00:00Z").unwrap());
+        assert_eq!(
+            snooze_until(3, monday, 0),
+            unix_secs("2026-11-09T09:00:00Z").unwrap()
+        );
         // São Paulo (UTC-3): tomorrow 9:00 local is 12:00Z.
-        assert_eq!(snooze_until(2, now, -3 * 3600), unix_secs("2026-10-29T12:00:00Z").unwrap());
+        assert_eq!(
+            snooze_until(2, now, -3 * 3600),
+            unix_secs("2026-10-29T12:00:00Z").unwrap()
+        );
     }
 
     #[test]
@@ -547,7 +778,13 @@ mod tests {
     }
 
     fn conversation_item() -> SlackItem {
-        let mut value: serde_json::Value = serde_json::from_str(&super::fixtures::item_json("C0123:1730112345.0001", "needs_reply", Some("P1"), "2026-10-28T09:00:00.000Z")).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&super::fixtures::item_json(
+            "C0123:1730112345.0001",
+            "needs_reply",
+            Some("P1"),
+            "2026-10-28T09:00:00.000Z",
+        ))
+        .unwrap();
         value["conversation"] = serde_json::json!({
             "history": [{"id": "ignored by the board"}], "participants": [], "private": false, "repo": "/r/app", "redactions": 2, "pii": [],
             "classification": { "kind": "bug", "confidence": 0.84, "by": "model", "at": "t", "records": {}, "verdict": "ask", "total": 22, "knockOut": "production_down",
@@ -561,24 +798,45 @@ mod tests {
 
     #[test]
     fn a_snapshot_and_an_item_from_before_wave_17_still_parse() {
-        let old: SlackItem = serde_json::from_str(&super::fixtures::item_json("C0123:1.0001", "fyi", None, "2026-10-28T09:00:00.000Z")).unwrap();
+        let old: SlackItem = serde_json::from_str(&super::fixtures::item_json(
+            "C0123:1.0001",
+            "fyi",
+            None,
+            "2026-10-28T09:00:00.000Z",
+        ))
+        .unwrap();
         assert!(old.conversation.is_none() && old.draft.is_none());
         assert!(conversation_lines(&old, 0).is_empty());
         let snapshot: crate::model::SlackSnapshot = serde_json::from_str(r#"{"items":[],"watches":[],"polledAt":null,"error":null,"socket":"off","sla":{},"quiet":false}"#).unwrap();
         assert!(snapshot.scope.is_none() && snapshot.opted_in.is_none());
-        let new: crate::model::SlackSnapshot = serde_json::from_str(r#"{"items":[],"scope":"opted_in","optedIn":0}"#).unwrap();
-        assert_eq!((new.scope.as_deref(), new.opted_in), (Some("opted_in"), Some(0)));
+        let new: crate::model::SlackSnapshot =
+            serde_json::from_str(r#"{"items":[],"scope":"opted_in","optedIn":0}"#).unwrap();
+        assert_eq!(
+            (new.scope.as_deref(), new.opted_in),
+            (Some("opted_in"), Some(0))
+        );
     }
 
     #[test]
     fn the_pane_says_what_the_machine_decided_with_every_string_cleaned() {
         let now = unix_secs("2026-10-28T10:00:00.000Z").unwrap();
-        let lines: std::collections::BTreeMap<_, _> = conversation_lines(&conversation_item(), now).into_iter().collect();
+        let lines: std::collections::BTreeMap<_, _> = conversation_lines(&conversation_item(), now)
+            .into_iter()
+            .collect();
         assert_eq!(lines["kind"], "bug (84% sure, set by the machine)");
-        assert_eq!(lines["scores"], "who 2 (90%), what 3 (80%), impact 2 (70%), time 1 (60%), demand 1 (50%) · total 22");
-        assert_eq!(lines["knock-out"], "production_down (P0 before any scoring)");
+        assert_eq!(
+            lines["scores"],
+            "who 2 (90%), what 3 (80%), impact 2 (70%), time 1 (60%), demand 1 (50%) · total 22"
+        );
+        assert_eq!(
+            lines["knock-out"],
+            "production_down (P0 before any scoring)"
+        );
         assert!(lines["asks you"].contains("not sure"));
-        assert!(lines["relation"].starts_with("a card in progress: Checkout") && lines["relation"].ends_with("fails"));
+        assert!(
+            lines["relation"].starts_with("a card in progress: Checkout")
+                && lines["relation"].ends_with("fails")
+        );
         assert_eq!(lines["source"], "about a card from jira PAY-12");
         assert_eq!(lines["cut"], "2 secret(s) were cut from this thread");
         assert_eq!(lines["waiting"], "a reply draft, expires in 23h");
@@ -589,10 +847,22 @@ mod tests {
     fn the_link_picker_lists_the_machines_candidates_then_new_and_none() {
         let choices = relation_choices(&conversation_item());
         assert_eq!(choices.len(), 4);
-        assert_eq!((choices[0].relation, choices[0].target.as_deref()), ("related_to_in_progress", Some("card-1")));
-        assert!(choices[0].label.starts_with("card: Checkout") && choices[0].label.ends_with("(from jira PAY-12)"));
-        assert_eq!((choices[1].relation, choices[1].target.as_deref()), ("related_to_backlog", Some("b-2")));
-        assert_eq!((choices[2].relation, choices[3].relation), ("new_candidate", "none"));
+        assert_eq!(
+            (choices[0].relation, choices[0].target.as_deref()),
+            ("related_to_in_progress", Some("card-1"))
+        );
+        assert!(
+            choices[0].label.starts_with("card: Checkout")
+                && choices[0].label.ends_with("(from jira PAY-12)")
+        );
+        assert_eq!(
+            (choices[1].relation, choices[1].target.as_deref()),
+            ("related_to_backlog", Some("b-2"))
+        );
+        assert_eq!(
+            (choices[2].relation, choices[3].relation),
+            ("new_candidate", "none")
+        );
         assert!(choices[2].target.is_none() && choices[3].target.is_none());
     }
 

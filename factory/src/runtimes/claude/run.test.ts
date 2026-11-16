@@ -50,6 +50,45 @@ describe("the loop guard's stop", () => {
   });
 });
 
+describe("a call the SDK's own rules refuse", () => {
+  const DENIED = "Permission to use Bash has been denied because Claude Code is running in don't ask mode";
+  const refusing = (hookFirst: boolean): Transport => (params) => {
+    async function* play() {
+      yield { type: "system", subtype: "init", session_id: "s", model: "m", skills: [], plugins: [] };
+      yield { type: "assistant", session_id: "s", message: { content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "git status --short" } }] } };
+      if (hookFirst) {
+        // The guard's hook sees the call before the SDK's rules do, and lets it pass.
+        await params.options?.hooks?.PreToolUse?.[0]?.hooks[0]?.({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "git status --short" }, tool_use_id: "t1", session_id: "s", transcript_path: "", cwd: "/work" } as never, "t1", { signal: new AbortController().signal });
+      }
+      yield { type: "system", subtype: "permission_denied", tool_name: "Bash", tool_use_id: "t1", message: DENIED, uuid: "u", session_id: "s" };
+      yield { type: "user", session_id: "s", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: [{ type: "text", text: DENIED }], is_error: true }] } };
+      yield { type: "result", subtype: "success", is_error: false, result: "", structured_output: AGENT_TABLE.valid, num_turns: 2, duration_ms: 1, total_cost_usd: 0, session_id: "s" };
+    }
+    return play() as unknown as Query;
+  };
+
+  it("is logged as refused with the SDK's reason, and its failed result says why", async () => {
+    const root = mkdtempSync(join(tmpdir(), "denied-"));
+    try {
+      const { events } = await runScenario(claudeRuntime(refusing(false)), "claude:sonnet", root);
+      expect(events.filter((e) => e.kind === "tool_call")).toEqual([{ kind: "tool_call", payload: expect.objectContaining({ tool: "Bash", allowed: false, reason: DENIED }) }]);
+      expect(events.filter((e) => e.kind === "tool_result")).toEqual([{ kind: "tool_result", payload: expect.objectContaining({ ok: false, error: DENIED }) }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("still tells why on the result when the guard had already let the call pass", async () => {
+    const root = mkdtempSync(join(tmpdir(), "denied-"));
+    try {
+      const { events } = await runScenario(claudeRuntime(refusing(true)), "claude:sonnet", root);
+      expect(events.filter((e) => e.kind === "tool_result")).toEqual([{ kind: "tool_result", payload: expect.objectContaining({ ok: false, error: DENIED }) }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("the run's token count", () => {
   /** The scripted query, with a usage on its result as the SDK gives it. */
   const withUsage = (usage: unknown): Transport => (params) => {

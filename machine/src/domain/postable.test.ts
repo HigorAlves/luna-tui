@@ -4,6 +4,10 @@ import { archivedNotice, questionsComment } from "./notices.ts";
 import { carriesSecret, flattenLinks, postable, postableKeeping } from "./postable.ts";
 
 describe("postable", () => {
+  it("never leaves a body that is only /ship: that comment is the release approval, and the machine's words are not one", () => {
+    for (const text of ["/ship", " /SHIP\n", "/Ship"]) expect(postable(text)).toBe(`\`${text.trim()}\``);
+    expect(postable("/ship it")).toBe("/ship it");
+  });
   it("shows a link's address in the open and drops an image", () => {
     expect(postable("See [the docs](https://evil.example/login) now")).toBe("See the docs (https\u200b://evil.example/login) now");
     expect(postable("before ![tracking pixel](https://evil.example/p.png) after")).toBe("before  after".replace("  ", " "));

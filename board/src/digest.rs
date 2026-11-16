@@ -51,7 +51,10 @@ pub fn entries(tasks: &[Task], since: Option<u64>) -> Vec<(Group, usize)> {
         .filter(|(_, t)| since.is_none() || is_new(t, since))
         .filter_map(|(i, t)| Group::of(t).map(|g| (g, i)))
         .collect();
-    found.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| tasks[b.1].updated_at.cmp(&tasks[a.1].updated_at)));
+    found.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| tasks[b.1].updated_at.cmp(&tasks[a.1].updated_at))
+    });
     found
 }
 
@@ -78,12 +81,37 @@ mod tests {
 
     #[test]
     fn a_ticket_s_latest_change_lands_in_one_of_four_groups_or_none() {
-        assert_eq!(Group::of(&task("a", "closed", false, "2026-10-22T23:00:00Z")), Some(Group::Closed));
-        assert_eq!(Group::of(&task("a", "archived", false, "2026-10-22T23:00:00Z")), Some(Group::Closed));
-        assert_eq!(Group::of(&task("a", "escalated", false, "2026-10-22T23:00:00Z")), Some(Group::Escalated));
-        assert_eq!(Group::of(&task("a", "awaiting_ship", true, "2026-10-22T23:00:00Z")), Some(Group::Shipped), "the ship gate means delivered");
-        assert_eq!(Group::of(&task("a", "awaiting_approval", true, "2026-10-22T23:00:00Z")), Some(Group::NeedsYou));
-        assert_eq!(Group::of(&task("a", "implementing", false, "2026-10-22T23:00:00Z")), None, "still working is not news");
+        assert_eq!(
+            Group::of(&task("a", "closed", false, "2026-10-22T23:00:00Z")),
+            Some(Group::Closed)
+        );
+        assert_eq!(
+            Group::of(&task("a", "archived", false, "2026-10-22T23:00:00Z")),
+            Some(Group::Closed)
+        );
+        assert_eq!(
+            Group::of(&task("a", "escalated", false, "2026-10-22T23:00:00Z")),
+            Some(Group::Escalated)
+        );
+        assert_eq!(
+            Group::of(&task("a", "awaiting_ship", true, "2026-10-22T23:00:00Z")),
+            Some(Group::Shipped),
+            "the ship gate means delivered"
+        );
+        assert_eq!(
+            Group::of(&task(
+                "a",
+                "awaiting_approval",
+                true,
+                "2026-10-22T23:00:00Z"
+            )),
+            Some(Group::NeedsYou)
+        );
+        assert_eq!(
+            Group::of(&task("a", "implementing", false, "2026-10-22T23:00:00Z")),
+            None,
+            "still working is not news"
+        );
     }
 
     #[test]
@@ -91,18 +119,41 @@ mod tests {
         let tasks = vec![
             task("old-closed", "closed", false, "2026-10-22T20:30:00Z"),
             task("new-closed", "closed", false, "2026-10-22T23:00:00Z"),
-            task("newer-gate", "awaiting_approval", true, "2026-10-22T23:30:00Z"),
-            task("new-gate", "awaiting_approval", true, "2026-10-22T22:30:00Z"),
+            task(
+                "newer-gate",
+                "awaiting_approval",
+                true,
+                "2026-10-22T23:30:00Z",
+            ),
+            task(
+                "new-gate",
+                "awaiting_approval",
+                true,
+                "2026-10-22T22:30:00Z",
+            ),
             task("shipped", "awaiting_ship", true, "2026-10-22T22:00:00Z"),
             task("working", "implementing", false, "2026-10-22T23:59:00Z"),
         ];
         let seen = unix_secs("2026-10-22T21:00:00Z");
-        let names = |e: Vec<(Group, usize)>| e.iter().map(|(g, i)| (g.label(), tasks[*i].id.as_str())).collect::<Vec<_>>();
+        let names = |e: Vec<(Group, usize)>| {
+            e.iter()
+                .map(|(g, i)| (g.label(), tasks[*i].id.as_str()))
+                .collect::<Vec<_>>()
+        };
         assert_eq!(
             names(entries(&tasks, seen)),
-            vec![("Shipped", "shipped"), ("Needs you", "newer-gate"), ("Needs you", "new-gate"), ("Closed", "new-closed")]
+            vec![
+                ("Shipped", "shipped"),
+                ("Needs you", "newer-gate"),
+                ("Needs you", "new-gate"),
+                ("Closed", "new-closed")
+            ]
         );
-        assert_eq!(entries(&tasks, None).len(), 5, "a first run shows everything with a group");
+        assert_eq!(
+            entries(&tasks, None).len(),
+            5,
+            "a first run shows everything with a group"
+        );
         assert!(is_new(&tasks[1], seen));
         assert!(!is_new(&tasks[0], seen));
         assert!(!is_new(&tasks[1], None));

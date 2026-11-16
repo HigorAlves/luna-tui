@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "match.choice",
+      "value": "slot1"
+    }
+  ],
+  "rubric": "A vague title; the branch and the changed paths name the avatar upload.",
+  "label": {
+    "match": {
+      "choice": "slot1"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "match": "the PR implements or fixes slot 1"
+    },
+    "why": "The branch is feature/avatar-upload and every changed file is under src/avatar, which is the work of the card in slot one.",
+    "second": {
+      "label": {
+        "match": {
+          "choice": "slot1"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

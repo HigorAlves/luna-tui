@@ -28,12 +28,18 @@ describe("LOCKFILES", () => {
 describe("compareEnv", () => {
   const recorded = envOf(LOCKED);
   it("matches the same image and lockfiles", () => {
-    expect(compareEnv(recorded, envOf(LOCKED))).toEqual({ matched: true, differences: [] });
+    expect(compareEnv(recorded, envOf(LOCKED))).toEqual({ matched: true, differences: [], notes: [] });
   });
 
-  it("names a different image with both values", () => {
+  it("notes a different image with both values but does not call it a mismatch: Verify runs its own checks in the image it has", () => {
     const out = compareEnv(recorded, envOf({ ...LOCKED, image: "sha256:new" }));
-    expect(out).toEqual({ matched: false, differences: ["the runner image differs: Build ran on sha256:abc, Verify on sha256:new"] });
+    expect(out).toEqual({ matched: true, differences: [], notes: ["the runner image differs: Build ran on sha256:abc, Verify on sha256:new"] });
+  });
+
+  it("still fails on a lockfile that differs when the image differs too", () => {
+    const out = compareEnv(recorded, envOf({ ...LOCKED, image: "sha256:new", lockfiles: { ...LOCKED.lockfiles, "Cargo.lock": "h9" } }));
+    expect(out.matched).toBe(false);
+    expect(out.notes).toHaveLength(1);
   });
 
   it("names a lockfile that differs at the same commit, but not at another commit", () => {

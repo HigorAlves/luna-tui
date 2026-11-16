@@ -232,7 +232,9 @@ export class ApproverRequiredError extends Error {
   constructor(id: string, gate: "plan" | "ship" = "plan", needed = 2) {
     super(
       gate === "ship"
-        ? `task ${id}: a pack of High risk ships only with a ship approver who did not approve the plan; send your name as the approver`
+        ? needed > 1
+          ? `task ${id}: a pack of High risk ships only with a ship approver who did not approve the plan; send your name as the approver`
+          : `task ${id}: this release needs one of the gate's release owners; send your name as the approver`
         : `task ${id}: this plan needs ${needed} named approvers; send your name as the approver`,
     );
     this.name = "ApproverRequiredError";
@@ -252,6 +254,14 @@ export class PlanApprovedError extends Error {
   constructor(id: string) {
     super(`task ${id}: the plan is approved; its steps, risk, code map and rollback change only by sending it back through the plan gate`);
     this.name = "PlanApprovedError";
+  }
+}
+
+/** An approval of a plan gate whose coverage report still has criteria no scenario names (and nobody excused): Build's entry contract would refuse the plan seconds later and send it back. */
+export class CoverageGapsError extends Error {
+  constructor(id: string, readonly gaps: string[]) {
+    super(`task ${id}: the plan has criteria no scenario names (${gaps.join(", ")}); mark them untestable with the approval (\`untestable\`) or ask for changes`);
+    this.name = "CoverageGapsError";
   }
 }
 

@@ -44,7 +44,7 @@ describe("facts", () => {
   })
 
   it("committed facts.json has the factory numbers, and a default engine for each of the 25 measured decision slots", () => {
-    expect(facts).toMatchObject({ states: 23, columns: 8, packs: 56, images: 3 })
+    expect(facts).toMatchObject({ states: 23, columns: 8, packs: 57, images: 3 })
     expect(Object.keys(facts.decisionDefaults)).toHaveLength(25)
   })
 

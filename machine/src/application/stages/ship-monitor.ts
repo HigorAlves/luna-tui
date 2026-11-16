@@ -19,7 +19,7 @@ import { shipEvents } from "../../domain/ship-events.ts";
 import { ownerApprovals, parseCodeownersChecked, requiredOwners } from "../../domain/codeowners.ts";
 import { MAX_DEPENDENCIES, type MergeReadinessInput, inFreeze, mergeReadiness, parseDependencies } from "../../domain/merge-readiness.ts";
 import { STACK_REBASES_MAX, type StackFacts, mergedIntoOther } from "../stack.ts";
-import { type ReviewRequirement, type ReviewRule, approvedOnHead, objectionOnPr, reviewRequirement } from "../../domain/review-rule.ts";
+import { type ReviewRequirement, type ReviewRule, approvedOnHead, approversOnHead, objectionOnPr, reviewRequirement } from "../../domain/review-rule.ts";
 import { fromGraphQl } from "../../domain/pull-request.ts";
 import { type GitHub, type PrActivity, type PrReview, messageOf } from "../github.ts";
 import type { FreezeSource } from "../freeze.ts";
@@ -125,6 +125,8 @@ export interface ShipFacts {
   events: ShipEventClass[];
   /** A stacked card's parent and the commit the card was last cut from; null for a card with no stack. */
   stack: { parent: StackFacts["parent"]; defaultBranch: string | null; recordedBase: string | null } | null;
+  /** The logins whose approval of the PR counts at this head (an owner, member or collaborator, never the machine's own login); the release approval the ship gate probe may take. */
+  approvers: string[];
   /** Who answers the release question: `ship.release_owners`, else the CODEOWNERS owners of the PR's paths at the base ref. Facts, never a model's word. */
   releaseOwners: string[];
 }
@@ -261,7 +263,7 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
   const fromCodeowners = codeownersText ? [...new Set(requiredOwners(paths, parseCodeownersChecked(codeownersText).rules).flatMap((r) => r.owners))] : [];
   const releaseOwners = (named.length > 0 ? named : fromCodeowners).slice(0, 20);
   const events = shipEvents({ mergeable: pr.mergeable, mergeState: pr.mergeState, frozen: inFreeze(windows, now()) !== null, openDependencies: dependencies.filter((d) => !d.merged && !d.closed).length, stack: stackFacts ? { state: stackFacts.parent.state, head: stackFacts.parent.head, recordedBase: stackFacts.recordedBase } : null });
-  return { pr, head, pack, risk, readiness, review, paths, events, releaseOwners, stack: stackFacts };
+  return { pr, head, pack, risk, readiness, review, paths, events, releaseOwners, approvers: approversOnHead(reviewList, head, me), stack: stackFacts };
 }
 
 /** The PR merged: the decisions it was waiting on are settled by what happened to their threads. Called wherever a merge is recorded. */
@@ -663,7 +665,8 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       if (!local || local !== head) return { result: escalated("the worktree is not at the PR's head; the branch is not rebased", "head_moved") };
       cursor.rebases++;
       await saveCursor(deps.stateDir, task.id, cursor);
-      const rebase = deps.loop?.rebase ?? ((r, w, repo) => rebaseOntoDefault(r, w, repo));
+      // The default branch is GitHub's answer for the slug, never the branch the user's checkout is on.
+      const rebase = deps.loop?.rebase ?? ((r, w, repo) => rebaseOntoDefault(r, w, repo, () => deps.github.defaultBranch(slug).catch(() => null)));
       const result = await rebase(run, wt, task.repoPath ?? wt);
       if (!result.ok && result.conflicts.length > 0) {
         const base = (await deps.github.prFacts(slug, number).catch(() => null))?.baseRefName ?? null;

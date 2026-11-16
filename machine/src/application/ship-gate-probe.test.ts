@@ -53,11 +53,74 @@ describe("shipGateProbe", () => {
   it("withdraws an open ship approval when a collaborator's objection lands, whatever GitHub's review decision says", async () => {
     const ana = { author: "ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" };
     const bob = { author: "bob", state: "CHANGES_REQUESTED", commitId: HEAD, at: "t2", association: "COLLABORATOR" };
-    expect(await (await probeWith({ prReviews: async () => [ana] }))(task, gate())).toBe("keep");
     expect(await (await probeWith({ prReviews: async () => [ana, bob] }))(task, gate())).toBe("withdraw");
+  });
+  const review = (author: string, state: string, commitId = HEAD, association = "COLLABORATOR") => ({ author, state, commitId, at: "t", association });
+  it("reports who approved the PR on the head: a collaborator's approval is the release approval", async () => {
+    expect(await (await probeWith({ prReviews: async () => [review("ana", "APPROVED")] }))(task, gate())).toEqual({ approvedBy: ["ana"], head: HEAD });
+    expect(await (await probeWith({ prReviews: async () => [review("ana", "APPROVED"), review("Cy", "APPROVED", HEAD, "OWNER")] }))(task, gate())).toEqual({ approvedBy: ["ana", "Cy"], head: HEAD });
+  });
+  it("does not count an approval on an older head, from a stranger, from the machine's own login, or one the same person took back", async () => {
+    for (const reviews of [
+      [review("ana", "APPROVED", MOVED)],
+      [review("ana", "APPROVED", HEAD, "NONE")],
+      [review("ana", "APPROVED", HEAD, "CONTRIBUTOR")],
+      [review("me", "APPROVED")],
+      [review("ana", "COMMENTED")],
+    ]) expect(await (await probeWith({ prReviews: async () => reviews }))(task, gate())).toBe("keep");
+    expect(await (await probeWith({ prReviews: async () => [review("ana", "APPROVED"), review("ana", "CHANGES_REQUESTED")] }))(task, gate())).toBe("withdraw");
+    expect(await (await probeWith({ prReviews: async () => [review("ana", "APPROVED"), review("ana", "DISMISSED")] }))(task, gate())).toBe("keep");
+  });
+  it("a merged PR is merged, whatever the reviews say", async () => {
+    const merged = { ...open, merged: true, state: "closed" as const, mergedSha: "m" };
+    expect(await (await probeWith({ prMerged: async () => merged, prReviews: async () => [review("ana", "APPROVED")] }))(task, gate())).toBe("merged");
   });
   it("keeps when there is no cursor or GitHub shows no PR: nothing is withdrawn on a guess", async () => {
     expect(await (await probeWith({}, false))(task, gate())).toBe("keep");
     expect(await (await probeWith({ prFacts: async () => null }))(task, gate())).toBe("keep");
+  });
+
+  describe("a /ship comment", () => {
+    // The head commit of `node()` is dated when the test runs, so "after" is the far future and "before" the far past.
+    const AFTER = "2099-01-01T00:00:00Z";
+    const BEFORE = "2000-01-01T00:00:00Z";
+    const said = (actor: string | null, body: string, at = AFTER, association: string | null = "COLLABORATOR", kind: "comment" | "review_comment" | "review" = "comment") => ({ id: `comment:${actor}${body}${at}`, kind, actor, isBot: false, body, association, state: null, at, url: null });
+    const withComments = (comments: ReturnType<typeof said>[]) => ({ prActivity: async () => comments });
+    it("counts for the token's own login, which GitHub never lets review its own PR", async () => {
+      expect(await (await probeWith(withComments([said("me", "/ship")])))(task, gate())).toEqual({ approvedBy: ["me"], head: HEAD, byComment: ["me"] });
+    });
+    it("is read case-insensitively and trimmed", async () => {
+      expect(await (await probeWith(withComments([said("ana", "  /SHIP \n")])))(task, gate())).toEqual({ approvedBy: ["ana"], head: HEAD, byComment: ["ana"] });
+    });
+    it("follows the reviews in the list, and a person who did both is a review", async () => {
+      const github = { ...withComments([said("me", "/ship"), said("ana", "/ship")]), prReviews: async () => [review("ana", "APPROVED")] };
+      expect(await (await probeWith(github))(task, gate())).toEqual({ approvedBy: ["ana", "me"], head: HEAD, byComment: ["me"] });
+    });
+    it("does not count before the head commit, before the question was asked, from a stranger, or with any other body", async () => {
+      for (const comments of [
+        [said("me", "/ship", BEFORE)],
+        [said("ana", "/ship", AFTER, "NONE")],
+        [said("ana", "/ship", AFTER, "CONTRIBUTOR")],
+        [said("ana", "/ship it")],
+        [said("ana", "LGTM")],
+        [said("ana", "/ship", AFTER, "COLLABORATOR", "review_comment")],
+        [said(null, "/ship")],
+      ]) expect(await (await probeWith(withComments(comments)))(task, gate())).toBe("keep");
+      const asked = { ...gate(), createdAt: new Date("2099-06-01T00:00:00Z") } as ApprovalRow;
+      expect(await (await probeWith(withComments([said("me", "/ship")])))(task, asked)).toBe("keep");
+      expect(await (await probeWith(withComments([said("me", "/ship", "2099-07-01T00:00:00Z")])))(task, asked)).toEqual({ approvedBy: ["me"], head: HEAD, byComment: ["me"] });
+    });
+    it("does not count for a head that moved, a checklist that fails, or a later objection", async () => {
+      expect(await (await probeWith({ ...withComments([said("me", "/ship")]), prFacts: async () => node("SUCCESS", MOVED) as never, prHeadSha: async () => MOVED }))(task, gate())).toBe("withdraw");
+      expect(await (await probeWith({ ...withComments([said("me", "/ship")]), prFacts: async () => node("FAILURE") as never }))(task, gate())).toBe("withdraw");
+      expect(await (await probeWith({ ...withComments([said("me", "/ship")]), prReviews: async () => [review("bob", "CHANGES_REQUESTED")] }))(task, gate())).toBe("withdraw");
+    });
+    it("leaves the gate when the comments cannot be read", async () => {
+      expect(await (await probeWith({ prActivity: async () => Promise.reject(new Error("github down")) }))(task, gate())).toBe("keep");
+    });
+    it("is not looked for once the PR is merged", async () => {
+      const merged = { ...open, merged: true, state: "closed" as const, mergedSha: "m" };
+      expect(await (await probeWith({ prMerged: async () => merged, ...withComments([said("me", "/ship")]) }))(task, gate())).toBe("merged");
+    });
   });
 });

@@ -24,14 +24,19 @@ export function envHash({ image, lockfiles, commit }: EnvInputs): string {
 
 export const envOf = (inputs: EnvInputs): EnvRecord => ({ ...inputs, hash: envHash(inputs) });
 
-/** What Verify's environment has that Build's did not: a different image, or at the same commit a lockfile that differs. */
-export function compareEnv(recorded: EnvInputs, current: EnvInputs): { matched: boolean; differences: string[] } {
+/**
+ * What Verify's environment has that Build's did not. At the same commit a lockfile that differs is a difference: the dependencies are not the
+ * ones Build tested. A different image is only a note: Verify runs its own checks and review in the image it has, so it tests the current
+ * environment whatever Build ran in, and a rebuilt image is not something the card's change did.
+ */
+export function compareEnv(recorded: EnvInputs, current: EnvInputs): { matched: boolean; differences: string[]; notes: string[] } {
   const differences: string[] = [];
-  if (recorded.image !== current.image) differences.push(`the runner image differs: Build ran on ${recorded.image}, Verify on ${current.image}`);
+  const notes: string[] = [];
+  if (recorded.image !== current.image) notes.push(`the runner image differs: Build ran on ${recorded.image}, Verify on ${current.image}`);
   if (recorded.commit === current.commit) {
     for (const name of [...new Set([...Object.keys(recorded.lockfiles), ...Object.keys(current.lockfiles)])].sort()) {
       if (recorded.lockfiles[name] !== current.lockfiles[name]) differences.push(`${name} differs at the same commit: Build recorded ${recorded.lockfiles[name] ?? "none"}, Verify has ${current.lockfiles[name] ?? "none"}`);
     }
   }
-  return { matched: differences.length === 0, differences };
+  return { matched: differences.length === 0, differences, notes };
 }

@@ -1,0 +1,48 @@
+{
+  "schema": 3,
+  "stage": "pr_link",
+  "pack": "pr_link",
+  "attempt": 1,
+  "task": {
+    "id": "pr-link",
+    "title": "Add retry with backoff to the webhook sender",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "prLink": {
+      "pr": {
+        "title": "Add retry with backoff to the webhook sender",
+        "branch": "feat/webhook-retry",
+        "body": "A failed delivery is retried three times with exponential backoff.",
+        "files": [
+          "src/webhooks/sender.ts",
+          "src/webhooks/sender.test.ts"
+        ]
+      },
+      "candidates": [
+        {
+          "slot": 1,
+          "kind": "jira",
+          "id": "DISC-55",
+          "title": "Webhook payloads miss the signature header",
+          "excerpt": "Receivers cannot verify a delivery because the X-Signature header is not set."
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

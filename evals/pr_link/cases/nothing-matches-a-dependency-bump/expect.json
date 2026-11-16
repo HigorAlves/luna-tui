@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "match.choice",
+      "value": "none"
+    }
+  ],
+  "rubric": "A tooling bump names no ticket and no card.",
+  "label": {
+    "match": {
+      "choice": "none"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "match": "no candidate is the work this PR does"
+    },
+    "why": "Updating eslint's major version is not the work of a ticket about lint errors in one package, nor of a webhook retry; no candidate is the work this PR does.",
+    "second": {
+      "label": {
+        "match": {
+          "choice": "none"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

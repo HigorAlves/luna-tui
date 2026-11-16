@@ -34,7 +34,14 @@ pub fn render(app: &mut App, width: u16, height: u16) -> String {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|frame| ui::draw(frame, app)).unwrap();
     let buffer = terminal.backend().buffer().clone();
-    (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    (0..height)
+        .map(|y| {
+            (0..width)
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// A ticket as the machine sends it; `extra` is merged over the defaults.
@@ -59,7 +66,8 @@ fn stage_run(id: &str, stage: &str, attempt: u32, status: &str, cost: f64) -> Va
 
 /// An app with `task` listed and its popup open on `detail`.
 pub fn open_card(task: Value, detail_rest: Value) -> App {
-    let mut detail = json!({"task": task, "stageRuns": [], "approvals": [], "events": [], "artifacts": []});
+    let mut detail =
+        json!({"task": task, "stageRuns": [], "approvals": [], "events": [], "artifacts": []});
     for (key, value) in detail_rest.as_object().into_iter().flatten() {
         detail[key] = value.clone();
     }
@@ -84,7 +92,13 @@ pub fn plan_gate_app() -> App {
         "streams a large report without loading it whole",
         "a person without access gets a 403",
     ];
-    let task = task_json("aaaaaaaa1111", PLAN_GATE_TITLE, "awaiting_approval", "Plan", json!({"waitingOnYou": true, "criteria": criteria}));
+    let task = task_json(
+        "aaaaaaaa1111",
+        PLAN_GATE_TITLE,
+        "awaiting_approval",
+        "Plan",
+        json!({"waitingOnYou": true, "criteria": criteria}),
+    );
     let cases: Vec<Value> = (0..6)
         .map(|i| json!({"id": format!("S{}", i + 1), "title": format!("case {} proves criterion {}", i + 1, i % 5 + 1), "criterion": criteria[i % 5], "approach": "run the suite and read the output", "type": if i < 5 { "happy" } else { "failure" }, "layer": if i % 2 == 0 { "unit" } else { "integration" }}))
         .collect();
@@ -129,20 +143,52 @@ pub fn real_plan_gate_app() -> App {
         "rejects a report over 1M rows",
         "a person without access gets a 403",
     ];
-    let task = task_json("abababab1111", "Add CSV export to reports", "awaiting_approval", "Plan", json!({"waitingOnYou": true, "criteria": criteria}));
-    let scenario = |id: &str, title: &str, text: &str, reference: &str, kind: &str| {
-        json!({"id": id, "title": title, "criterion": text, "criterion_ref": reference, "approach": "run the suite and read the output", "type": kind, "layer": "unit"})
-    };
+    let task = task_json(
+        "abababab1111",
+        "Add CSV export to reports",
+        "awaiting_approval",
+        "Plan",
+        json!({"waitingOnYou": true, "criteria": criteria}),
+    );
+    let scenario = |id: &str, title: &str, text: &str, reference: &str, kind: &str| json!({"id": id, "title": title, "criterion": text, "criterion_ref": reference, "approach": "run the suite and read the output", "type": kind, "layer": "unit"});
     let cases = vec![
-        scenario("S1", "every column of the report is in the header row", criteria[0], "C1", "happy"),
+        scenario(
+            "S1",
+            "every column of the report is in the header row",
+            criteria[0],
+            "C1",
+            "happy",
+        ),
         // The criterion text as the scenario carries it differs from the plan's (a tab): the tie is the ref.
-        scenario("S2", "a comma inside a cell is quoted", "escapes commas,\tquotes and newlines", "C2", "happy"),
-        scenario("S3", "the file starts with the byte-order mark", criteria[2], "C3", "happy"),
+        scenario(
+            "S2",
+            "a comma inside a cell is quoted",
+            "escapes commas,\tquotes and newlines",
+            "C2",
+            "happy",
+        ),
+        scenario(
+            "S3",
+            "the file starts with the byte-order mark",
+            criteria[2],
+            "C3",
+            "happy",
+        ),
     ];
     let steps = [
         ("P1", "Add the CSV writer", 90, vec!["src/reports/csv.ts"]),
-        ("P2", "Add GET /api/reports/:id/export.csv and its CI check", 120, vec!["src/reports/api.ts", ".github/workflows/ci.yml"]),
-        ("P3", "Add the export button", 60, vec!["src/reports/page.tsx"]),
+        (
+            "P2",
+            "Add GET /api/reports/:id/export.csv and its CI check",
+            120,
+            vec!["src/reports/api.ts", ".github/workflows/ci.yml"],
+        ),
+        (
+            "P3",
+            "Add the export button",
+            60,
+            vec!["src/reports/page.tsx"],
+        ),
     ];
     let steps: Vec<Value> = steps
         .into_iter()
@@ -187,7 +233,13 @@ pub fn real_plan_gate_app() -> App {
 
 /// A running Build card: 3 slices (scenarios) and the budget used against its limits.
 pub fn running_build_app() -> App {
-    let task = task_json("bbbbbbbb2222", RUNNING_BUILD_TITLE, "implementing", "Build", json!({"running": true, "updatedAt": "2099-01-01T00:00:00.000Z", "spentUsd": 0.63}));
+    let task = task_json(
+        "bbbbbbbb2222",
+        RUNNING_BUILD_TITLE,
+        "implementing",
+        "Build",
+        json!({"running": true, "updatedAt": "2099-01-01T00:00:00.000Z", "spentUsd": 0.63}),
+    );
     open_card(
         task,
         json!({
@@ -203,7 +255,13 @@ pub fn running_build_app() -> App {
 
 /// An escalated card: the machine's reason with its confidence, a summary and the tail of the failing output.
 pub fn escalated_app() -> App {
-    let task = task_json("cccccccc3333", ESCALATED_TITLE, "escalated", "Build", json!({"reason": "the build budget is spent: 12 of 12 iterations, 3 consecutive reds", "retries": {"verify": 2, "e2e": 0, "ci": 0, "total": 2}}));
+    let task = task_json(
+        "cccccccc3333",
+        ESCALATED_TITLE,
+        "escalated",
+        "Build",
+        json!({"reason": "the build budget is spent: 12 of 12 iterations, 3 consecutive reds", "retries": {"verify": 2, "e2e": 0, "ci": 0, "total": 2}}),
+    );
     open_card(
         task,
         json!({
@@ -221,7 +279,13 @@ pub fn escalated_app() -> App {
 pub fn ship_stage_app() -> App {
     let pack = json!({"verdict": "pass", "artifactCount": 3, "summary": "The limiter answers 429 past the limit.",
         "diffSummary": {"what": "Rate limits the public API per key with a sliding window.", "why": "C2: one client must not starve the rest.", "files": ["src/limit.ts"], "added": 42, "removed": 3}});
-    let task = task_json("dddddddd4444", SHIP_STAGE_TITLE, "awaiting_ship", "Ship", json!({"waitingOnYou": true, "evidence": pack}));
+    let task = task_json(
+        "dddddddd4444",
+        SHIP_STAGE_TITLE,
+        "awaiting_ship",
+        "Ship",
+        json!({"waitingOnYou": true, "evidence": pack}),
+    );
     open_card(
         task,
         json!({
@@ -251,19 +315,38 @@ pub fn real_ship_gate_app(preview: bool) -> App {
     let pack = json!({"verdict": "pass", "artifactCount": 3, "summary": "The limiter answers 429 past the limit.", "format": "markdown", "scenarios": [], "results": [],
         "diffSummary": {"what": "Rate limits the public API per key with a sliding window.", "why": "C2: one client must not starve the rest.", "files": ["src/limit.ts"], "added": 42, "removed": 3}});
     let trimmed = json!({"format": "markdown", "summary": "The limiter answers 429 past the limit.", "media": [], "commitSha": "9f3c2a1", "risk": "medium"});
-    let extra = if preview { json!({"waitingOnYou": true}) } else { json!({"waitingOnYou": true, "evidence": pack.clone()}) };
-    let task = task_json("dbdbdbdb4444", SHIP_STAGE_TITLE, "awaiting_ship", "Ship", extra);
+    let extra = if preview {
+        json!({"waitingOnYou": true})
+    } else {
+        json!({"waitingOnYou": true, "evidence": pack.clone()})
+    };
+    let task = task_json(
+        "dbdbdbdb4444",
+        SHIP_STAGE_TITLE,
+        "awaiting_ship",
+        "Ship",
+        extra,
+    );
     let mut requested = json!({"gate": "ship_approval", "head": "9f3c2a1", "prUrl": "https://github.com/acme/app/pull/412", "number": 412, "risk": "medium",
         "question": "safe to release now?", "checklist": [{"id": "ci", "ok": true, "detail": "CI green on 3 of 3 checks"}], "evidence": trimmed});
     if preview {
         requested["pack"] = pack;
     }
-    open_card(task, json!({"approvals": [{"id": "s1", "kind": "awaiting_ship", "decision": null, "createdAt": "2026-10-22T10:00:00Z", "requested": requested}]}))
+    open_card(
+        task,
+        json!({"approvals": [{"id": "s1", "kind": "awaiting_ship", "decision": null, "createdAt": "2026-10-22T10:00:00Z", "requested": requested}]}),
+    )
 }
 
 /// A card at the triage questions: two questions, each with the machine's suggested answer.
 pub fn questions_app() -> App {
-    let task = task_json("eeeeeeee5555", "Fix the invoice rounding", "awaiting_answers", "Triage", json!({"waitingOnYou": true}));
+    let task = task_json(
+        "eeeeeeee5555",
+        "Fix the invoice rounding",
+        "awaiting_answers",
+        "Triage",
+        json!({"waitingOnYou": true}),
+    );
     open_card(
         task,
         json!({"approvals": [{"id": "q1", "kind": "awaiting_answers", "decision": null, "createdAt": "2026-10-22T10:00:00Z", "requested": {
@@ -274,7 +357,13 @@ pub fn questions_app() -> App {
 
 /// The release question for a high-risk card: the checklist as it was when asked.
 pub fn release_question_app() -> App {
-    let task = task_json("ffffffff6666", "Rotate the signing keys", "awaiting_ship", "Ship", json!({"waitingOnYou": true}));
+    let task = task_json(
+        "ffffffff6666",
+        "Rotate the signing keys",
+        "awaiting_ship",
+        "Ship",
+        json!({"waitingOnYou": true}),
+    );
     open_card(
         task,
         json!({"approvals": [{"id": "s1", "kind": "awaiting_ship", "decision": null, "createdAt": "2026-10-22T10:00:00Z", "requested": {
@@ -288,25 +377,104 @@ pub fn release_question_app() -> App {
 /// escalation in Build and four closed cards in Done. For the board's width tests.
 pub fn full_board_app() -> App {
     let rows: [(&str, &str, &str, &str, Value); 13] = [
-        ("a1", "Fix the typo in the onboarding email", "draft", "Intake", json!({})),
-        ("a2", "Support dark mode in the dashboard charts", "draft", "Intake", json!({})),
-        ("b1", "Rotate the signing keys", "triaging", "Triage", json!({"running": true, "updatedAt": "2099-01-01T00:00:00.000Z"})),
-        ("c1", PLAN_GATE_TITLE, "awaiting_approval", "Plan", json!({"waitingOnYou": true})),
-        ("d1", "Retry failed webhook deliveries with exponential backoff and a dead letter queue", "implementing", "Build", json!({"running": true, "updatedAt": "2099-01-01T00:00:00.000Z"})),
-        ("d2", ESCALATED_TITLE, "escalated", "Build", json!({"reason": "build budget spent"})),
-        ("e1", "Paginate the audit log", "verifying", "Verify", json!({"running": true, "updatedAt": "2099-01-01T00:00:00.000Z"})),
-        ("f1", "Cache the pricing lookups", "evidence", "Evidence", json!({"running": true, "updatedAt": "2099-01-01T00:00:00.000Z"})),
-        ("g1", SHIP_STAGE_TITLE, "awaiting_ship", "Ship", json!({"waitingOnYou": true})),
-        ("h1", "Upgrade the queue client", "closed", "Done", json!({})),
-        ("h2", "Drop the legacy export route", "closed", "Done", json!({})),
-        ("h3", "Fix the flaky session test", "closed", "Done", json!({})),
-        ("h4", "Document the retry policy", "closed", "Done", json!({})),
+        (
+            "a1",
+            "Fix the typo in the onboarding email",
+            "draft",
+            "Intake",
+            json!({}),
+        ),
+        (
+            "a2",
+            "Support dark mode in the dashboard charts",
+            "draft",
+            "Intake",
+            json!({}),
+        ),
+        (
+            "b1",
+            "Rotate the signing keys",
+            "triaging",
+            "Triage",
+            json!({"running": true, "updatedAt": "2099-01-01T00:00:00.000Z"}),
+        ),
+        (
+            "c1",
+            PLAN_GATE_TITLE,
+            "awaiting_approval",
+            "Plan",
+            json!({"waitingOnYou": true}),
+        ),
+        (
+            "d1",
+            "Retry failed webhook deliveries with exponential backoff and a dead letter queue",
+            "implementing",
+            "Build",
+            json!({"running": true, "updatedAt": "2099-01-01T00:00:00.000Z"}),
+        ),
+        (
+            "d2",
+            ESCALATED_TITLE,
+            "escalated",
+            "Build",
+            json!({"reason": "build budget spent"}),
+        ),
+        (
+            "e1",
+            "Paginate the audit log",
+            "verifying",
+            "Verify",
+            json!({"running": true, "updatedAt": "2099-01-01T00:00:00.000Z"}),
+        ),
+        (
+            "f1",
+            "Cache the pricing lookups",
+            "evidence",
+            "Evidence",
+            json!({"running": true, "updatedAt": "2099-01-01T00:00:00.000Z"}),
+        ),
+        (
+            "g1",
+            SHIP_STAGE_TITLE,
+            "awaiting_ship",
+            "Ship",
+            json!({"waitingOnYou": true}),
+        ),
+        (
+            "h1",
+            "Upgrade the queue client",
+            "closed",
+            "Done",
+            json!({}),
+        ),
+        (
+            "h2",
+            "Drop the legacy export route",
+            "closed",
+            "Done",
+            json!({}),
+        ),
+        (
+            "h3",
+            "Fix the flaky session test",
+            "closed",
+            "Done",
+            json!({}),
+        ),
+        (
+            "h4",
+            "Document the retry policy",
+            "closed",
+            "Done",
+            json!({}),
+        ),
     ];
     let mut app = App::new(dead_machine());
     app.tasks.clear();
     for (i, (key, title, state, column, extra)) in rows.into_iter().enumerate() {
         let id = format!("{key}{:010}", i);
-        let task: Task = serde_json::from_value(task_json(&id, title, state, column, extra)).unwrap();
+        let task: Task =
+            serde_json::from_value(task_json(&id, title, state, column, extra)).unwrap();
         app.tasks.push(task);
     }
     app
@@ -318,7 +486,15 @@ mod tests {
 
     #[test]
     fn every_fixture_talks_to_the_dead_machine_and_never_to_the_environment() {
-        for app in [plan_gate_app(), running_build_app(), escalated_app(), ship_stage_app(), questions_app(), release_question_app(), full_board_app()] {
+        for app in [
+            plan_gate_app(),
+            running_build_app(),
+            escalated_app(),
+            ship_stage_app(),
+            questions_app(),
+            release_question_app(),
+            full_board_app(),
+        ] {
             assert_eq!(app.machine.base(), DEAD_MACHINE);
         }
     }
@@ -376,7 +552,10 @@ mod tests {
         let popup = render(&mut app, 120, 40);
         assert!(popup.contains("A [31mB C D E F"), "{popup}");
         for bad in ['\u{1b}', '\r', '\u{7}', '\u{202e}', '\u{200b}'] {
-            assert!(!board.contains(bad) && !popup.contains(bad), "{bad:?} reached the screen");
+            assert!(
+                !board.contains(bad) && !popup.contains(bad),
+                "{bad:?} reached the screen"
+            );
         }
     }
 }

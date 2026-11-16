@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import { ensureClone } from "../../adapters/git/clone.ts";
+import { ensureClone, hostFreshWorkspace } from "../../adapters/git/clone.ts";
 import { configureMachineRepos, machineGitDir } from "../../adapters/git/machine-repo.ts";
 import { fakeGitHub } from "../../test/github.ts";
 import type { StageContext, StageResult } from "../ports.ts";
@@ -46,12 +46,14 @@ async function world(theirs: string) {
   return { root, remote, repo, workspace, before, base };
 }
 
-function deps(w: Awaited<ReturnType<typeof world>>, resolve: ((path: string) => void) | null, checks: StageResult = { outcome: "pass" }) {
+function deps(w: Awaited<ReturnType<typeof world>>, resolve: ((path: string) => void) | null, checks: StageResult = { outcome: "pass" }, packCommits = true, escalates?: string) {
   const runPack = vi.fn(async (_pack: string, context: StageContext, _extra: unknown) => {
     // The pack edits the files in the folder it is given and commits there (its commits come back like this).
     const path = context.task.worktreePath!;
     resolve?.(path);
-    wgit(path, "commit", "-q", "-am", "resolve the conflict");
+    if (packCommits) wgit(path, "commit", "-q", "-am", "resolve the conflict");
+    // The pack stops on purpose and says why: its outcome is escalated, with the reason it gave (the shape the pack runner reports).
+    if (escalates) return { outcome: "escalated", detail: { summary: "edits left", reason: "The edits are in the worktree but uncommitted", escalation: escalates, options: [] } } as StageResult;
     return { outcome: "pass", detail: { answer: { kind: "done", summary: "resolved", replies: [] } } } as StageResult;
   });
   const github = fakeGitHub({
@@ -93,6 +95,92 @@ describe("mergeRound: a branch that no longer merges", () => {
     expect(git(w.remote, "rev-parse", "refs/heads/card")).toBe(head);
   });
 
+  it("commits the pack's edits itself when the pack could not (its tool rules refuse `git -C`), and still checks them", async () => {
+    const w = await world("conflict");
+    const { d, context } = deps(w, (path) => writeFileSync(join(path, "doc.md"), "one\nTWO, the card's rewrite, and a new fact\nthree\n"), { outcome: "pass" }, false);
+    const out = await mergeRound(d, context, input(w));
+    expect(out).toMatchObject({ ok: true, resolved: ["doc.md"] });
+    const head = wgit(w.workspace.path, "rev-parse", "HEAD");
+    expect(wgit(w.workspace.path, "rev-list", "--parents", "-n", "1", head).split(" ").slice(1)).toEqual([w.before, w.base]);
+    expect(readFileSync(join(w.workspace.path, "doc.md"), "utf8")).toBe("one\nTWO, the card's rewrite, and a new fact\nthree\n");
+    expect(git(w.remote, "rev-parse", "refs/heads/card")).toBe(head);
+  });
+
+  it("does not take an uncommitted edit outside the conflicted files, or markers left in them", async () => {
+    for (const [name, resolve, said] of [
+      ["outside", (path: string) => { writeFileSync(join(path, "doc.md"), "one\nresolved\nthree\n"); writeFileSync(join(path, "other.md"), "sneaked\n"); }, "changed files that had no conflict (other.md)"],
+      ["markers", (path: string) => writeFileSync(join(path, "doc.md"), readFileSync(join(path, "doc.md"), "utf8").replace("three", "3")), "conflict markers are left in doc.md"],
+    ] as const) {
+      const w = await world("conflict");
+      const { d, context } = deps(w, resolve, { outcome: "pass" }, false);
+      const out = await mergeRound(d, context, input(w));
+      expect(out.ok, name).toBe(false);
+      expect(String(out.result.detail?.reason), name).toContain(said);
+      expect(git(w.remote, "rev-parse", "refs/heads/card"), name).toBe(w.before);
+    }
+  });
+
+  describe("a pack that escalates with the resolution edited and uncommitted", () => {
+    const resolveDoc = (path: string) => writeFileSync(join(path, "doc.md"), "one\nTWO, the card's rewrite, and a new fact\nthree\n");
+
+    it("env_broken (its commit was refused): the host commits the edits and runs the same gates, so the merge ships", async () => {
+      const w = await world("conflict");
+      const { d, context } = deps(w, resolveDoc, { outcome: "pass" }, false, "env_broken");
+      const out = await mergeRound(d, context, input(w));
+      expect(out).toMatchObject({ ok: true, resolved: ["doc.md"] });
+      const head = wgit(w.workspace.path, "rev-parse", "HEAD");
+      expect(wgit(w.workspace.path, "rev-list", "--parents", "-n", "1", head).split(" ").slice(1)).toEqual([w.before, w.base]);
+      expect(git(w.remote, "rev-parse", "refs/heads/card")).toBe(head);
+      expect((d.loop.checks as unknown as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
+    });
+
+    it("still escalates when a gate fails: a file outside the conflicts, markers left, or failing checks", async () => {
+      for (const [name, resolve, checks, said] of [
+        ["outside", (path: string) => { resolveDoc(path); writeFileSync(join(path, "other.md"), "sneaked\n"); }, { outcome: "pass" }, "changed files that had no conflict (other.md)"],
+        ["markers", (path: string) => writeFileSync(join(path, "doc.md"), readFileSync(join(path, "doc.md"), "utf8").replace("three", "3")), { outcome: "pass" }, "conflict markers are left in doc.md"],
+        ["checks", resolveDoc, { outcome: "fail", detail: { error: "lint failed" } }, "the checks failed after merging main: lint failed"],
+      ] as const) {
+        const w = await world("conflict");
+        const { d, context } = deps(w, resolve, checks as StageResult, false, "env_broken");
+        const out = await mergeRound(d, context, input(w));
+        expect(out.ok, name).toBe(false);
+        expect(String(out.result.detail?.reason), name).toContain(said);
+        expect(git(w.remote, "rev-parse", "refs/heads/card"), name).toBe(w.before);
+      }
+    }, 60_000);
+
+    it("takes no edits from a pack that escalates for another reason, or that left nothing edited", async () => {
+      const decided = await world("conflict");
+      const other = deps(decided, resolveDoc, { outcome: "pass" }, false, "other");
+      const out = await mergeRound(other.d, other.context, input(decided));
+      expect(out).toMatchObject({ ok: false, result: { detail: { reason: expect.stringContaining("uncommitted") } } });
+      expect(git(decided.remote, "rev-parse", "refs/heads/card")).toBe(decided.before);
+      const bare = await world("conflict");
+      const none = deps(bare, null, { outcome: "pass" }, false, "env_broken");
+      expect((await mergeRound(none.d, none.context, input(bare))).ok).toBe(false);
+      expect(git(bare.remote, "rev-parse", "refs/heads/card")).toBe(bare.before);
+    }, 60_000);
+  });
+
+  it("says nothing was committed when the pack left the markers committed and edited nothing", async () => {
+    const w = await world("conflict");
+    const { d, context } = deps(w, null, { outcome: "pass" }, false);
+    const out = await mergeRound(d, context, input(w));
+    expect(out.ok).toBe(false);
+    expect(String(out.result.detail?.reason)).toMatch(/nothing was committed/);
+  });
+
+  it("asks the checks about the base's own tip, and says the base is red when they fail there too (env_broken, not `other`)", async () => {
+    const w = await world("conflict");
+    const red: StageResult = { outcome: "escalated", detail: { escalation: "env_broken", red_on_base: true, reason: "machine tests fails on the base commit abc1234 too, so this change did not cause it (src/clone.test.ts)" } };
+    const { d, context } = deps(w, (path: string) => writeFileSync(join(path, "doc.md"), "one\nresolved\nthree\n"), red);
+    const out = await mergeRound(d, context, input(w));
+    expect(out.ok).toBe(false);
+    expect(out.result.detail).toMatchObject({ escalation: "env_broken", reason: expect.stringContaining("main is red without this card: machine tests fails on the base commit abc1234 too") });
+    expect(d.loop.checks).toHaveBeenCalledWith(expect.anything(), w.before, input(w).base.sha);
+    expect(git(w.remote, "rev-parse", "refs/heads/card")).toBe(w.before);
+  });
+
   it("pushes nothing when markers are left, when the pack touched another file, or when the checks fail", async () => {
     for (const [name, resolve, checks, said] of [
       ["markers", (path: string) => writeFileSync(join(path, "doc.md"), readFileSync(join(path, "doc.md"), "utf8").replace("three", "3")), { outcome: "pass" }, "conflict markers are left in doc.md"],
@@ -107,6 +195,24 @@ describe("mergeRound: a branch that no longer merges", () => {
       expect(git(w.remote, "rev-parse", "refs/heads/card"), name).toBe(w.before);
       expect(wgit(w.workspace.path, "rev-parse", "HEAD"), name).toBe(w.before);
     }
+  });
+
+  it("shows what shipped in the user's repository, and only that: the markers' commit on the fresh clone never reaches it", async () => {
+    const w = await world("conflict");
+    const { d, context } = deps(w, (path) => writeFileSync(join(path, "doc.md"), "one\nTWO, the card's rewrite, and a new fact\nthree\n"));
+    (d.loop as { fresh?: unknown }).fresh = hostFreshWorkspace;
+    const out = await mergeRound(d, context, input(w));
+    expect(out).toMatchObject({ ok: true });
+    const head = wgit(w.workspace.path, "rev-parse", "HEAD");
+    expect(git(w.repo, "rev-parse", "refs/heads/card")).toBe(head);
+    expect(git(w.repo, "log", "--format=%s", "card")).not.toContain("conflicts to resolve");
+  });
+
+  it("shows the merge in the user's repository when it ran in the card's own folder too", async () => {
+    const w = await world("clean");
+    const { d, context } = deps(w, null);
+    expect(await mergeRound(d, context, input(w))).toMatchObject({ ok: true });
+    expect(git(w.repo, "rev-parse", "refs/heads/card")).toBe(wgit(w.workspace.path, "rev-parse", "HEAD"));
   });
 
   it("does not start when someone pushed to the PR", async () => {

@@ -42,6 +42,8 @@ export interface PrExtra {
   head?: string | null;
   /** The PR of the card this one is stacked on. */
   stack?: { number: number };
+  /** The merged PR of this card that these commits follow: they were made after it merged, so it does not hold them. */
+  followsUp?: number;
   /** The repository's PR template (from its default branch), when it has one: its headings are what the body fills. */
   template?: string | null;
 }
@@ -103,6 +105,8 @@ function partsOf({ task, plan, repoSlug, extra }: PrBodyInput): Parts {
   const notes: string[] = [];
   const parent = extra?.stack?.number;
   if (typeof parent === "number" && Number.isInteger(parent) && parent > 0) notes.push(`Stacked on #${parent}: review that first; this PR shows only its own change and moves to the default branch when #${parent} merges.`);
+  const earlier = extra?.followsUp;
+  if (typeof earlier === "number" && Number.isInteger(earlier) && earlier > 0) notes.push(`Follows up #${earlier}: that PR merged before these commits were made, so it does not have them.`);
   const open = (extra?.findings ?? []).filter((f) => !f.resolution);
   if (open.length > 0) {
     const worst = open.filter((f) => severityOf(f.severity) === "blocker").concat(open.filter((f) => severityOf(f.severity) !== "blocker")).slice(0, FINDINGS_SHOWN);

@@ -3,12 +3,17 @@
 // replies, a conversation's reply, triage's questions).
 import { holdsForeignAddress } from "./address-rule.ts";
 import { redact, safe } from "./evidence-markdown.ts";
+import { isShipCommand } from "./review-rule.ts";
 
 /** The longest a reply the machine posts may be, after flattening. */
 export const REPLY_CAP = 1500;
 
-/** A model's text made safe to post: one line, no HTML, no `@mention`, no `#N` auto-link, capped. */
-export const postable = (text: string, cap = REPLY_CAP): string => safe(flattenLinks(text)).slice(0, cap).trim();
+/** A model's text made safe to post: one line, no HTML, no `@mention`, no `#N` auto-link, capped. A body that is only `/ship` is the release approval when a person
+ *  comments it, so the machine never says it: it is posted as code instead. */
+export const postable = (text: string, cap = REPLY_CAP): string => {
+  const out = safe(flattenLinks(text)).slice(0, cap).trim();
+  return isShipCommand(out) ? `\`${out}\`` : out;
+};
 
 /** A Markdown image is dropped and a link keeps its address in the open (`[label](url)` becomes `label (url)`): GitHub would render
  *  both, and a model's or a stranger's text does not get a clickable label that hides where it goes. Bounded, so no run backtracks.

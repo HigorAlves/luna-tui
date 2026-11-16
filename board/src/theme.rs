@@ -86,7 +86,11 @@ pub(crate) fn code() -> Style {
 
 /// The selected row: a background, or reverse video without colour.
 pub(crate) fn selection() -> Style {
-    if env::var_os("NO_COLOR").is_some() { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new().bg(SELECTED_BG) }
+    if env::var_os("NO_COLOR").is_some() {
+        Style::new().add_modifier(Modifier::REVERSED)
+    } else {
+        Style::new().bg(SELECTED_BG)
+    }
 }
 
 /// The focused border and the selection bar.

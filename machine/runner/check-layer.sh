@@ -18,7 +18,7 @@ starts() {
   if printf '%s' "$out" | grep -Eqi "not found|docker: |Error response|no such file|GLIBC|error while loading|cannot open shared|Cannot find module"; then printf '%s\n' "$out" | tail -5; return 1; fi
 }
 tools() {
-  docker run --rm --entrypoint sh "$1" -c '/opt/luna/bin/node --version && /opt/luna/bin/rg --version | head -1 && /opt/luna/bin/gh --version | head -1 && /opt/luna/bin/graphify --help >/dev/null && test -f /opt/luna/graph-tools/build.py && /opt/luna/python/bin/python3 -c "import graphify" && /opt/luna/bin/node /opt/luna/egress/proxy.ts --check'
+  docker run --rm --entrypoint sh "$1" -c '/opt/luna/bin/node --version && /opt/luna/bin/rg --version | head -1 && /opt/luna/bin/gh --version | head -1 && /opt/luna/bin/pnpm --version && /opt/luna/bin/graphify --help >/dev/null && test -f /opt/luna/graph-tools/build.py && /opt/luna/python/bin/python3 -c "import graphify" && /opt/luna/bin/node /opt/luna/egress/proxy.ts --check'
 }
 check "the image has the entrypoint /opt/luna/bin/luna-stage" docker run --rm --entrypoint test "$image" -x /opt/luna/bin/luna-stage
 check "the factory starts from the layer in the runner image" starts "$image"

@@ -19,7 +19,7 @@ The machine's API is `${LUNA_MACHINE_URL:-http://127.0.0.1:4318}`, its token in 
 ```bash
 LUNA="${LUNA_MACHINE_URL:-http://127.0.0.1:4318}"
 AUTH="Authorization: Bearer $(tr -d '[:space:]' < ~/.config/hardness/machine-api-token)"
-curl -sf -H "$AUTH" "$LUNA/health" >/dev/null && echo up || echo down
+case "$(curl -s -o /dev/null -w '%{http_code}' -H "$AUTH" "$LUNA/health")" in 200|503) echo up ;; *) echo down ;; esac   # 503 is up with problems: /health lists them
 ```
 
 - Down or no token: say so, and offer to go on without it (draft and write the file; the check and the proof wait for the machine).

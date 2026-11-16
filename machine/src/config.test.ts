@@ -29,7 +29,7 @@ describe("loadConfig", () => {
       worktreesDir: "/home/me/Developer/worktrees",
       stateDir: "/home/me/.local/state/hardness",
       githubPoll: { repos: [], intervalMs: 300_000, label: "ready-for-agent" },
-      githubPrs: { enabled: true, intervalMs: 60_000 },
+      githubPrs: { enabled: true, intervalMs: 60_000, allIntervalMs: 900_000 },
       shipPoll: { intervalMs: null },
       githubToken: null,
       graphIntervalSecs: 600,
@@ -144,7 +144,9 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ MACHINE_GITHUB_POLL_INTERVAL: "0" })).toThrow(/MACHINE_GITHUB_POLL_INTERVAL/);
     expect(() => loadConfig({ MACHINE_GITHUB_POLL_INTERVAL: "x" })).toThrow(/MACHINE_GITHUB_POLL_INTERVAL/);
     expect(() => loadConfig({ MACHINE_GITHUB_POLL: "nope" })).toThrow(/MACHINE_GITHUB_POLL/);
-    expect(loadConfig({ HOME: "/h", MACHINE_GITHUB_PRS: "off", MACHINE_GITHUB_PRS_INTERVAL: "120" }).githubPrs).toEqual({ enabled: false, intervalMs: 120_000 });
+    expect(loadConfig({ HOME: "/h", MACHINE_GITHUB_PRS: "off", MACHINE_GITHUB_PRS_INTERVAL: "120" }).githubPrs).toEqual({ enabled: false, intervalMs: 120_000, allIntervalMs: 900_000 });
+    expect(loadConfig({ HOME: "/h", MACHINE_GITHUB_PRS_ALL_INTERVAL: "1800" }).githubPrs.allIntervalMs).toBe(1_800_000);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_GITHUB_PRS_ALL_INTERVAL: "0" })).toThrow(/MACHINE_GITHUB_PRS_ALL_INTERVAL/);
     expect(loadConfig({ HOME: "/h", MACHINE_SHIP_POLL_INTERVAL: "5", MACHINE_SHIP_MAX_WAIT_DAYS: "3" }).shipPoll).toEqual({ intervalMs: 5_000 });
     expect(() => loadConfig({ HOME: "/h", MACHINE_SHIP_POLL_INTERVAL: "0" })).toThrow(/MACHINE_SHIP_POLL_INTERVAL/);
     // The five-day clock (`ship.sla.escalate_days`) names the release owners; no second, total-time cap exists, so the old variable is ignored.

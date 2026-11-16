@@ -7,7 +7,8 @@ import picomatch from "picomatch";
 import type { BlockedRow } from "../../adapters/docker/egress.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import { type CheckCommand, checkCommand } from "../../domain/checks.ts";
-import { envBrokenDetail } from "../env-broken.ts";
+import { envBrokenDetail, noIdentityDetail } from "../env-broken.ts";
+import { type SessionExec, openChecksSession } from "./checks-session.ts";
 
 const TAIL_LINES = 60;
 const GATE_NAME = /lint|type-?check|tsc|format|fmt|prettier|eslint|biome/i;
@@ -44,10 +45,22 @@ export interface CheckRun {
   missingTool?: { cmd: string; tail: string };
 }
 
-type Exec = (command: string, args: string[], options: { cwd?: string; signal?: AbortSignal; timeoutMs?: number; env?: NodeJS.ProcessEnv; services?: Record<string, ServiceSpec>; repoPath?: string; secrets?: string[] }) => Promise<ExecResult & { blocked?: BlockedRow[] }>;
+type Exec = SessionExec<(command: string, args: string[], options: { cwd?: string; signal?: AbortSignal; timeoutMs?: number; env?: NodeJS.ProcessEnv; services?: Record<string, ServiceSpec>; repoPath?: string; secrets?: string[] }) => Promise<ExecResult & { blocked?: BlockedRow[] }>>;
 
-/** Runs the commands in order inside one budget of `timeoutMs`; a command that finds the budget spent is reported as failed and skipped. */
-export async function runChecks(opts: { commands: readonly CheckCommand[]; exec: Exec; cwd: string; signal?: AbortSignal; env: NodeJS.ProcessEnv; services?: Record<string, ServiceSpec>; repoPath?: string; stage: string; timeoutMs: number; onBlocked?: (check: string, rows: BlockedRow[]) => void }): Promise<CheckRun> {
+type RunChecksOptions = { commands: readonly CheckCommand[]; exec: Exec; cwd: string; signal?: AbortSignal; env: NodeJS.ProcessEnv; services?: Record<string, ServiceSpec>; repoPath?: string; stage: string; timeoutMs: number; onBlocked?: (check: string, rows: BlockedRow[]) => void };
+
+/** Runs the commands in order inside one budget of `timeoutMs`; a command that finds the budget spent is reported as failed and skipped.
+ *  The repository's services start once for the whole pass (when the exec can open a session) and are removed when it ends, however it ends. */
+export async function runChecks(opts: RunChecksOptions): Promise<CheckRun> {
+  const pass = await openChecksSession(opts.exec, { cwd: opts.cwd, ...(opts.repoPath ? { repoPath: opts.repoPath } : {}), ...(opts.services && opts.commands.length > 0 ? { services: opts.services } : {}) });
+  try {
+    return await runCommands({ ...opts, exec: pass.exec });
+  } finally {
+    await pass.close();
+  }
+}
+
+async function runCommands(opts: RunChecksOptions): Promise<CheckRun> {
   const reports: CheckReport[] = [];
   const log: string[] = [];
   const deadline = Date.now() + opts.timeoutMs;
@@ -84,6 +97,8 @@ export interface SweepDeps {
   /** The files the code graph names for a change to `files`: importers, dependents and tests; empty without a graph. */
   impact: (repoPath: string, files: string[]) => Promise<string[]>;
   policy: (repoPath: string) => Promise<{ checks: CheckSpec[] | null; services: Record<string, ServiceSpec>; wholeSuiteMinutes: number }>;
+  /** The identity git resolves for the repository. A suite that commits needs one and the check container has no gitconfig: it gets this one, and with none the sweep escalates (as Verify does) rather than run as nobody. */
+  gitIdentity?: (repoPath: string) => Promise<{ name: string; email: string } | null>;
   timeoutMs?: number;
 }
 
@@ -107,9 +122,12 @@ export async function runSweep(deps: SweepDeps, input: { worktree: string; repoP
   const impact = changed && changed.length > 0 ? await deps.impact(input.repoPath, changed).catch(() => []) : [];
   const selected = selectSweep(checks, changed, impact, wholeSuiteMinutes);
   if (selected.length === 0) return { status: "skipped", ran: [], failed: [], note: "no check covers the change, so the regression sweep had nothing to run" };
+  const identity = deps.gitIdentity ? await deps.gitIdentity(input.repoPath) : undefined;
+  if (identity === null) return { status: "failed", ran: [], failed: [], escalated: noIdentityDetail(input.repoPath) };
+  const env = identity ? { ...input.env, GIT_AUTHOR_NAME: identity.name, GIT_AUTHOR_EMAIL: identity.email, GIT_COMMITTER_NAME: identity.name, GIT_COMMITTER_EMAIL: identity.email } : input.env;
   let run: CheckRun;
   try {
-    run = await runChecks({ commands: selected.map(checkCommand), exec: deps.exec, cwd: input.worktree, ...(input.signal ? { signal: input.signal } : {}), env: input.env, services, repoPath: input.repoPath, stage: "implementing", timeoutMs: deps.timeoutMs ?? SWEEP_TIMEOUT_MS, ...(input.onBlocked ? { onBlocked: input.onBlocked } : {}) });
+    run = await runChecks({ commands: selected.map(checkCommand), exec: deps.exec, cwd: input.worktree, ...(input.signal ? { signal: input.signal } : {}), env, services, repoPath: input.repoPath, stage: "implementing", timeoutMs: deps.timeoutMs ?? SWEEP_TIMEOUT_MS, ...(input.onBlocked ? { onBlocked: input.onBlocked } : {}) });
   } catch (error) {
     const escalated = envBrokenDetail(error);
     if (!escalated) throw error;
