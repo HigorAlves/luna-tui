@@ -98,4 +98,3 @@ The `foreman` pack reads a snapshot of the open board (60 cards at most) and ans
 - `plan` cannot get proposals. It runs in the `test_design` state beside the `test_design` pack. A state counts for a pack only when it runs exactly one agent pack.
 - `evals/baselines/` holds no `<engine>@<effort>` folder yet. Nobody has run the baselines at each effort, so the rule has no effort scorecards to read.
 - No schedule harvests, re-measures or proposes. A person runs `pnpm eval propose`.
-- A card that the ticket machine makes from a GitHub ticket carries no `authorAssociation`, so it counts as untrusted (see RFC 0009).

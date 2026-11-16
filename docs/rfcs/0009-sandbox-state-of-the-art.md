@@ -148,7 +148,7 @@ The two spikes are above. S4 gave a go with conditions. S6 gave a no-go, so S7 i
 
 ### S10: trust
 
-- A card is untrusted when its source is a GitHub issue or PR from an author outside `OWNER`, `MEMBER` and `COLLABORATOR`. Intake and the PR inbox record GitHub's `author_association` as `authorAssociation` on the card's source. A GitHub card with no association on record counts as untrusted. A card the ticket machine makes from a GitHub ticket records no association at this commit. So it counts as untrusted, even for the owner's own issue. A Jira card is trusted.
+- A card is untrusted when its source is a GitHub issue or PR from an author outside `OWNER`, `MEMBER` and `COLLABORATOR`. Intake and the PR inbox record GitHub's `author_association` as `authorAssociation` on the card's source. A GitHub card with no association on record counts as untrusted. Cards and candidate lookups from the ticket machine record it too: for a GitHub ticket the machine reads the association, or asks GitHub once. If the read fails, the card stays untrusted and a `card.trust_unread` row says so. A Jira card is trusted.
 - An untrusted card gets its own cache volume and the runtime that `runtime.untrusted` names, such as gVisor `runsc`. The egress proxy always stays on `runc`.
 
 ### S11, S11b and S12: the image
@@ -170,5 +170,4 @@ The review rounds found 24 issues, and the PR fixes all of them. A later gap rou
 - Codex, OpenAI and Jev are not relayed. Their stages still hold the engine's credential.
 - Condition 2, the real relay smoke, has not run. Run it before you rely on the relay. See [verify-the-engine-relay.md](../runbooks/verify-the-engine-relay.md).
 - The eval scorecards for the eve 1.0.0 and SDK 0.3.325 bumps are still to run. The bumps shipped in this PR against "a bump goes alone", by the maintainer's choice.
-- Cards from the ticket machine record no `authorAssociation`. A GitHub one always runs untrusted until the card's source carries it.
 - gVisor is untested on a host with `runsc`. See [turn-on-gvisor.md](../runbooks/turn-on-gvisor.md).
