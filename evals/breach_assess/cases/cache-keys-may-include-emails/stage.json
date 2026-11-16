@@ -1,0 +1,55 @@
+{
+  "schema": 3,
+  "stage": "breach_assess",
+  "pack": "breach_assess",
+  "attempt": 1,
+  "task": {
+    "id": "breach-assess",
+    "title": "Incident: Cache keys may include customer emails",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "breach": {
+      "title": "Cache keys may include customer emails",
+      "severity": "medium",
+      "service": "gateway",
+      "startedAt": "2026-11-10T09:00:00.000Z",
+      "timeline": [
+        {
+          "at": "2026-11-10T09:00:00.000Z",
+          "source": "datadog",
+          "text": "datadog signal: Cache keys may include customer emails"
+        },
+        {
+          "at": "2026-11-10T09:25:00.000Z",
+          "source": "slack",
+          "text": "The gateway cache keys are built from the request path. Some paths carry a query string, and a few of those could hold an email address. Nobody has checked whether the cache was reachable from outside."
+        }
+      ],
+      "signals": [
+        {
+          "source": "datadog",
+          "title": "Cache keys may include customer emails",
+          "severity": "medium",
+          "status": "open",
+          "summary": "Datadog monitor in Warn."
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

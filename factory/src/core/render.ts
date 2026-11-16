@@ -209,6 +209,26 @@ const accessText = (access: StageInput["context"]["access"]) => {
   };
 };
 
+/** The incident, as postmortem reads it: the facts, the timeline and each signal's own summary (written by tools and people, so quoted data), and the breach clocks the machine computed. */
+const postmortemText = (postmortem: StageInput["context"]["postmortem"]) => {
+  if (!postmortem) return { incident: NONE, breach: NONE };
+  const { incident, breach } = postmortem;
+  return {
+    incident: [
+      `Title: ${incident.title}`,
+      `Severity: ${incident.severity}`,
+      `Service: ${incident.service ?? "unknown"}`,
+      `Started: ${incident.startedAt}`,
+      `Resolved: ${incident.resolvedAt ?? "not yet"}`,
+      "Timeline:",
+      ...incident.timeline.map((t) => `${t.at} [${t.source}] ${t.text}`),
+      "Signals:",
+      ...incident.signals.map((s) => `${s.source} (${s.severity}, ${s.status}): ${s.title} | ${s.summary}`),
+    ].join("\n"),
+    breach: breach && breach.regimes.length > 0 ? breach.regimes.map((r) => `${r}: notify by ${breach.clocks[r] ?? "(no deadline)"}`).join("\n") : "No regime applies, or no assessment was made.",
+  };
+};
+
 /** The issue, as jira_intake reads it: one header line, the description, the comments, the repo. */
 const jiraText = (jira: StageInput["context"]["jira"]) => {
   if (!jira) return { issue: NONE, description: NONE, comments: NONE, repoPath: NONE, classification: NONE };
@@ -538,6 +558,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
   const exceptions = exceptionsText(input.context.exceptions);
   const compliance = complianceText(input.context.compliance);
   const access = accessText(input.context.access);
+  const postmortem = postmortemText(input.context.postmortem);
   const questions = questionsText(input.context.questions);
   const video = videoText(input.context.video);
   const subs: Record<string, string> = {
@@ -662,6 +683,8 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.access.period}}": access.period,
     "{{context.access.flags}}": access.flags,
     "{{context.access.removed}}": access.removed,
+    "{{context.postmortem.incident}}": postmortem.incident,
+    "{{context.postmortem.breach}}": postmortem.breach,
     "{{context.jira.issue}}": jira.issue,
     "{{context.jira.description}}": jira.description,
     "{{context.jira.comments}}": jira.comments,

@@ -116,3 +116,25 @@ export const AccessReviewAnswer = z.object({
   summary: z.string().max(600),
 });
 export type AccessReviewAnswer = z.infer<typeof AccessReviewAnswer>;
+
+/** postmortem: a blameless page written from an incident's facts. The facts, the breach clocks and the timeline are the machine's; this is the reading and the follow-up. */
+export const PostmortemAnswer = z.object({
+  summary: z.string().min(1).max(800),
+  impact: z.string().min(1).max(800),
+  timeline: z.array(z.object({ at: z.string().min(1), text: z.string().min(1).max(300) })).max(40),
+  rootCauses: z.array(z.string().min(1).max(400)).max(5),
+  contributingFactors: z.array(z.string().min(1).max(400)).max(10),
+  actionItems: z
+    .array(
+      z.object({
+        title: z.string().min(1).max(120),
+        owner: z.string().max(120).nullable(),
+        /** `YYYY-MM-DD`. */
+        due: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD").nullable(),
+      }),
+    )
+    .max(10),
+  /** Each notification deadline and who must be told, when the breach assessment found regimes; no legal conclusions. */
+  breachNotes: z.string().max(1500).nullable(),
+});
+export type PostmortemAnswer = z.infer<typeof PostmortemAnswer>;

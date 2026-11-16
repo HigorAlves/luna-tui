@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type AccessReviewContext, type ChangeExceptionsContext, type ComplianceReviewContext, type ChatTriageContext, type ForemanContext, type QuestionsContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type Effort, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type PrLinkContext, type ProposeContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
+import { type AccessReviewContext, type PostmortemContext, type BreachAssessContext, type ChangeExceptionsContext, type ComplianceReviewContext, type ChatTriageContext, type ForemanContext, type QuestionsContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type Effort, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type PrLinkContext, type ProposeContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
 import { isDocsOnly } from "./docs-only.ts";
 
 export { PACK_LIMITS };
@@ -334,6 +334,8 @@ export function buildContextPackInput(pack: ContextPackId, context: PackContext,
   const foreman: ForemanContext | null = "foreman" in context ? context.foreman : null;
   const exceptions: ChangeExceptionsContext | null = "exceptions" in context ? context.exceptions : null;
   const access: AccessReviewContext | null = "access" in context ? context.access : null;
+  const breach: BreachAssessContext | null = "breach" in context ? context.breach : null;
+  const postmortem: PostmortemContext | null = "postmortem" in context ? context.postmortem : null;
   const plan: PlanContext | null = "plan" in context ? context.plan : null;
   const check: CheckContext | null = "check" in context ? context.check : null;
   const evidence: EvidenceContext | null = "evidence" in context ? context.evidence : null;
@@ -352,11 +354,11 @@ export function buildContextPackInput(pack: ContextPackId, context: PackContext,
     pack,
     ...(engine ? { engine } : {}),
     attempt: 1,
-    task: { id: pack.replace(/_/g, "-"), title: (ticket ? `${ticket.key}: ${ticket.title}` : null) ?? (conversation ? "Conversation" : null) ?? (prLink ? prLink.pr.title : null) ?? (propose ? `Facts of ${propose.repo}` : null) ?? (foreman ? "Foreman" : null) ?? (exceptions ? `Change exceptions of ${exceptions.repo}, ${exceptions.period}` : null) ?? (access ? `Access review of ${access.org}, ${access.period}` : null) ?? issue?.title ?? dedup?.title ?? size?.title ?? split?.origin.title ?? plan?.brief.split("\n")[0] ?? (check ? checkTitle(check) : evidence ? evidenceTitle(evidence) : ship ? shipTitle(ship) : "Chat triage"), description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
+    task: { id: pack.replace(/_/g, "-"), title: (ticket ? `${ticket.key}: ${ticket.title}` : null) ?? (conversation ? "Conversation" : null) ?? (prLink ? prLink.pr.title : null) ?? (propose ? `Facts of ${propose.repo}` : null) ?? (foreman ? "Foreman" : null) ?? (exceptions ? `Change exceptions of ${exceptions.repo}, ${exceptions.period}` : null) ?? (access ? `Access review of ${access.org}, ${access.period}` : null) ?? (breach ? `Incident: ${breach.title}` : null) ?? (postmortem ? `Postmortem: ${postmortem.incident.title}` : null) ?? issue?.title ?? dedup?.title ?? size?.title ?? split?.origin.title ?? plan?.brief.split("\n")[0] ?? (check ? checkTitle(check) : evidence ? evidenceTitle(evidence) : ship ? shipTitle(ship) : "Chat triage"), description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
     plan: null,
     decisions: [],
     priorFindings: [],
-    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}), ...(foreman ? { foreman } : {}), ...(exceptions ? { exceptions } : {}), ...(access ? { access } : {}), ...(plan ? { plan } : {}), ...(check ? { check } : {}), ...(evidence ? { evidence } : {}), ...(ship ? { ship } : {}), ...(dedup ? { dedup } : {}), ...(size ? { size } : {}), ...(split ? { split } : {}), ...(ticket ? { ticket } : {}), ...(conversation ? { conversation } : {}), ...(prLink ? { prLink } : {}), ...(propose ? { propose } : {}) },
+    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}), ...(foreman ? { foreman } : {}), ...(exceptions ? { exceptions } : {}), ...(access ? { access } : {}), ...(breach ? { breach } : {}), ...(postmortem ? { postmortem } : {}), ...(plan ? { plan } : {}), ...(check ? { check } : {}), ...(evidence ? { evidence } : {}), ...(ship ? { ship } : {}), ...(dedup ? { dedup } : {}), ...(size ? { size } : {}), ...(split ? { split } : {}), ...(ticket ? { ticket } : {}), ...(conversation ? { conversation } : {}), ...(prLink ? { prLink } : {}), ...(propose ? { propose } : {}) },
     limits: { maxTurns, timeoutMs },
     env: { LUNA_FACTORY: "1" },
   };

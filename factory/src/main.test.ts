@@ -70,7 +70,7 @@ function run(input: unknown, env: Record<string, string> = {}, files: Record<str
 }
 
 // slack_triage, chat_triage, foreman and eval_judge have no worktree and read no project context; their dry runs are below. council_second defaults to an eve engine: its dry run is below.
-const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "foreman" && p.id !== "change_exceptions" && p.id !== "access_review" && p.id !== "eval_judge" && p.id !== "council_second").map((p) => p.id);
+const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "foreman" && p.id !== "change_exceptions" && p.id !== "access_review" && p.id !== "postmortem" && p.id !== "eval_judge" && p.id !== "council_second").map((p) => p.id);
 
 describe("factory main (dry run)", () => {
   it.each(agentPacks)("%s: renders the prompt, prints the options and leaves a valid result", (pack) => {
@@ -210,6 +210,23 @@ describe("factory main (dry run)", () => {
     expect(prompt).toContain("| org_owner:ann:- · org_owner · new · ann · organization owner");
     const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
     expect(options).toMatchObject({ agent: "access-reviewer", agents: ["access-reviewer"], model: "claude-sonnet-5-5", effort: "low", tools: [], allowedTools: [] });
+  });
+
+  it("postmortem: runs over an empty /work with no tools, renders the incident as data and leaves a valid result", () => {
+    const task = { id: "postmortem", title: "Postmortem: Export bucket public", description: "", criteria: [], repoPath: "", branch: "", source: null };
+    const postmortem = {
+      incident: { title: "Export bucket public", severity: "high", service: "exports", startedAt: "2026-11-10T09:00:00.000Z", resolvedAt: "2026-11-10T15:00:00.000Z", timeline: [{ at: "2026-11-10T09:00:00.000Z", source: "jira", text: "Jira signal: Export bucket public" }], signals: [] },
+      breach: { regimes: ["gdpr"], clocks: { gdpr: "2026-11-13T09:00:00.000Z" } },
+    };
+    const { code, stdout, out, result } = run(stageInput("postmortem", { task, plan: null, context: { projectContext: null, postmortem } }), {}, {}, { emptyWork: true });
+    expect(code).toBe(0);
+    const prompt = readFileSync(join(out, "prompt.md"), "utf8");
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("`incident-writer` role running the `postmortem` stage");
+    expect(prompt).toContain("2026-11-10T09:00:00.000Z [jira] Jira signal: Export bucket public");
+    expect(prompt).toContain("gdpr: notify by 2026-11-13T09:00:00.000Z");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: "incident-writer", agents: ["incident-writer"], model: "claude-sonnet-5-5", effort: "medium", tools: [], allowedTools: [] });
     expect(StageOutput.safeParse(result).error).toBeUndefined();
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });

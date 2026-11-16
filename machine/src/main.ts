@@ -74,6 +74,13 @@ import { PgPackRunStore } from "./adapters/persistence/pack-run-store.ts";
 import { MINUTE_MS, Ticker } from "./application/ticker.ts";
 import { ChangeEvidence } from "./application/change-evidence.ts";
 import { AccessReview, accessSlicesWriter } from "./application/access-review.ts";
+import { IncidentJob } from "./application/incidents.ts";
+import type { Incident } from "./domain/incident.ts";
+import { postmortemWriter } from "./application/incident-postmortem.ts";
+import { jiraActionsWriter } from "./application/jira-actions.ts";
+import { breachAssessor } from "./application/breach-assessment.ts";
+import { createSentry } from "./adapters/sentry/rest.ts";
+import { createDatadog } from "./adapters/datadog/rest.ts";
 import { ComplianceDrafts, publisher as compliancePublisher } from "./application/compliance-drafts.ts";
 import { sharedWiki } from "./adapters/git/wiki.ts";
 import { graphifyGraph } from "./adapters/graph/graphify.ts";
@@ -855,7 +862,38 @@ const accessReview = new AccessReview({
   stateDir: config.stateDir,
 });
 const wiki = sharedWiki(config.stateDir);
-const compliance = { drafts: complianceDrafts, publisher: compliancePublisher({ drafts: complianceDrafts, wiki, handlers: { access_slices: accessSlicesWriter({ wiki, stateDir: config.stateDir }) } }), evidence: changeEvidence, access: accessReview, repos: complianceRepos };
+/** Incidents (RFC 0008, wave 5): each source the person configured is asked every 5 minutes; one with no credential or setting is left out. */
+const incidentSources = {
+  sentry: config.sentry ? createSentry(config.sentry) : undefined,
+  datadog: config.datadog.apiKey ? { port: createDatadog(config.datadog), scope: config.datadog.scope } : undefined,
+  jira: config.jira ? { port: jiraApi, jql: config.incidents.jiraJql } : undefined,
+  slack: config.incidents.slackChannel && config.slackInbox.userToken ? { port: slackApi, channel: config.incidents.slackChannel } : undefined,
+};
+/** The breach assessment runs when an incident starts and again when it resolves, the answer may change; a failed one is kept on the incident as its error. */
+const assessBreach = breachAssessor({
+  decide: async (breach) => {
+    if (!packRuns) throw new Error("agents are off: no model to assess the breach");
+    return (await ownCalls(packRuns).run({ pack: "breach_assess", context: { breach } }, INTAKE_CLIENT)).answer;
+  },
+});
+const reassess = async (incident: Incident): Promise<Incident> => (await incidentJob.update(incident.id, { breach: await assessBreach(incident) })) ?? incident;
+/** On resolve, with the fresh assessment, the postmortem pack writes the page and a draft waits for the person. */
+const writePostmortem = postmortemWriter({
+  drafts: complianceDrafts,
+  write: async (postmortem) => {
+    if (!packRuns) throw new Error("agents are off: no model to write the postmortem");
+    return (await ownCalls(packRuns).run({ pack: "postmortem", context: { postmortem } }, INTAKE_CLIENT)).answer;
+  },
+  wikiRepo: config.managerWikiRepo,
+  jiraProject: config.incidents.jiraProject,
+});
+const incidentJob: IncidentJob = new IncidentJob({
+  stateDir: config.stateDir,
+  ...incidentSources,
+  onStarted: async (incident) => void (await reassess(incident)),
+  onResolved: async (incident) => void (await writePostmortem(await reassess(incident))),
+});
+const compliance = { drafts: complianceDrafts, publisher: compliancePublisher({ drafts: complianceDrafts, wiki, handlers: { access_slices: accessSlicesWriter({ wiki, stateDir: config.stateDir }), jira_actions: jiraActionsWriter({ jira: jiraApi, stateDir: config.stateDir }) } }), evidence: changeEvidence, access: accessReview, repos: complianceRepos, incidents: incidentJob };
 /** A person approves the exact base the repository's luna.yaml (on the user's checkout) names now, or the exact key of the Dockerfile its devcontainer builds now; any other is refused. */
 const approveBase = async (repo: string, base: string): Promise<{ ok: true } | { ok: false; reason: string }> => {
   if (!agentDeps) return { ok: false, reason: "repository images are off on this machine" };
@@ -1022,6 +1060,11 @@ const accessFirst = accessTicker ? setTimeout(() => void accessReview.tick().cat
 accessFirst?.unref();
 accessTicker?.start();
 
+const incidentSourceNames = Object.entries(incidentSources).filter(([, v]) => v).map(([k]) => k);
+const incidentTicker = config.incidents.enabled && incidentSourceNames.length > 0 ? new Ticker(() => void incidentJob.tick().catch((error: unknown) => console.warn("incidents failed", error)), 5 * MINUTE_MS) : null;
+incidentTicker?.start();
+console.log(incidentTicker ? `incidents: reading ${incidentSourceNames.join(", ")} every 5 minutes` : "incidents: off (MACHINE_INCIDENTS=off, or no Sentry, Datadog, Jira or Slack channel configured)");
+
 /** The minute tick: a gate goes overdue, a stage passes 80% of its target, with no event to say so. */
 const slaTicker = new Ticker(() => {
   void pipeline
@@ -1074,6 +1117,7 @@ async function shutdown(): Promise<void> {
   slaTicker.stop();
   graphTicker?.stop();
   complianceTicker?.stop();
+  incidentTicker?.stop();
   if (complianceFirst) clearTimeout(complianceFirst);
   accessTicker?.stop();
   if (accessFirst) clearTimeout(accessFirst);

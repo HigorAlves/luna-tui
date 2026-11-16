@@ -65,8 +65,10 @@ export interface Config {
   economy: boolean;
   /** The monthly change-management evidence job (RFC 0008). `MACHINE_COMPLIANCE_EVIDENCE=0` or `off` stops it. */
   complianceEvidence: boolean;
-  /** `owner/name` whose wiki holds the org-wide pages (RFC 0008); unused in wave 1. */
+  /** `owner/name` whose wiki holds the org-wide pages (RFC 0008). */
   managerWikiRepo: string | null;
+  /** Incidents from Slack, Jira, Sentry and Datadog (RFC 0008, wave 5): `MACHINE_INCIDENTS=off` stops them; the Slack channel id, the Jira JQL and the Jira project for postmortem action items. */
+  incidents: { enabled: boolean; slackChannel: string | null; jiraJql: string; jiraProject: string | null };
   /** Keep each decision pack call's context, answer and verdicts under the state dir, for evals (`MACHINE_DECISIONS=off` stops it) and for how many days (`MACHINE_DECISIONS_RETENTION_DAYS`, 365; 0 keeps them) and up to how many megabytes (`MACHINE_DECISIONS_MAX_MB`, 4096; 0 for no cap). */
   decisions: { enabled: boolean; retentionDays: number; maxMb: number };
   /** A Slack bot token and channel: one thread per task is opened there. Both or neither. */
@@ -493,6 +495,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const ddApiKey = env.MACHINE_DATADOG_API_KEY?.trim() ?? "";
   const ddAppKey = env.MACHINE_DATADOG_APP_KEY?.trim() ?? "";
   if ((ddApiKey === "") !== (ddAppKey === "")) throw new Error("MACHINE_DATADOG_API_KEY and MACHINE_DATADOG_APP_KEY go together; set both or neither");
+  const incidentSlackChannel = env.MACHINE_INCIDENT_SLACK_CHANNEL?.trim() || null;
+  if (incidentSlackChannel !== null && !/^[CGD][A-Z0-9]+$/.test(incidentSlackChannel)) throw new Error(`MACHINE_INCIDENT_SLACK_CHANNEL must be a channel id like C0123ABC, got "${incidentSlackChannel}"`);
+  const incidentJiraProject = env.MACHINE_INCIDENT_JIRA_PROJECT?.trim() || null;
+  if (incidentJiraProject !== null && !/^[A-Z][A-Z0-9_]+$/.test(incidentJiraProject)) throw new Error(`MACHINE_INCIDENT_JIRA_PROJECT must be a project key like OPS, got "${incidentJiraProject}"`);
   let sentry: SentryConfig | null = null;
   const sentryToken = env.MACHINE_SENTRY_TOKEN?.trim() ?? "";
   const sentryOrg = env.MACHINE_SENTRY_ORG?.trim() ?? "";
@@ -545,6 +551,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     economy: env.MACHINE_ECONOMY !== "off",
     complianceEvidence: env.MACHINE_COMPLIANCE_EVIDENCE !== "off" && env.MACHINE_COMPLIANCE_EVIDENCE !== "0",
     managerWikiRepo,
+    incidents: { enabled: env.MACHINE_INCIDENTS !== "off" && env.MACHINE_INCIDENTS !== "0", slackChannel: incidentSlackChannel, jiraJql: env.MACHINE_INCIDENT_JIRA_JQL?.trim() || "issuetype = Incident AND updated >= -1d", jiraProject: incidentJiraProject },
     decisions: { enabled: env.MACHINE_DECISIONS !== "off", retentionDays: decisionRetentionDays, maxMb: decisionMaxMb },
     slack: slackToken === "" ? null : { token: slackToken, channel: slackChannel },
     slackInbox: {

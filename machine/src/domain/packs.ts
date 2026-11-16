@@ -78,6 +78,10 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   compliance_review: [],
   // The quarterly access review, run on demand by the access review job.
   access_review: [],
+  // The incident job asks it when an incident starts and when it resolves.
+  breach_assess: [],
+  // Writes the postmortem when an incident resolves.
+  postmortem: [],
 };
 
 /** The task states in which the pipeline runs the pack. */

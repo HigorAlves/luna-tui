@@ -54,7 +54,7 @@ export type VariableKind = "machine" | "line" | "block";
 // Only what the machine alone writes (a constant, a count, an enum, a hash, a path it chose). Traced one by one: the checks and QA targets
 // are the repository's own text, the scenario tests and the video's narration and sheets carry names a model or a tool wrote, the coverage
 // report lists paths from a report the container wrote, and a classification holds labels a model answered: all foreign.
-const machine = ["agent", "attempt", "skills", "plan.risk", "context.plan.risk", "context.baseCommit", "context.testsCommit", "context.docsOnly", "context.unlockedTests.note", "context.browserScenarios", "context.plan.docsOnly", "context.graph", "context.chat.source", "context.jira.repoPath", "plan.fallback", "context.video.budgetS", "context.conversation.relation", "context.conversation.note", "context.foreman.now", "context.foreman.truncated", "context.foreman.packs", "context.exceptions.repo", "context.exceptions.period", "context.compliance.repo", "context.compliance.regimes", "context.access.org", "context.access.period"];
+const machine = ["agent", "attempt", "skills", "plan.risk", "context.plan.risk", "context.baseCommit", "context.testsCommit", "context.docsOnly", "context.unlockedTests.note", "context.browserScenarios", "context.plan.docsOnly", "context.graph", "context.chat.source", "context.jira.repoPath", "plan.fallback", "context.video.budgetS", "context.conversation.relation", "context.conversation.note", "context.foreman.now", "context.foreman.truncated", "context.foreman.packs", "context.exceptions.repo", "context.exceptions.period", "context.compliance.repo", "context.compliance.regimes", "context.access.org", "context.access.period", "context.postmortem.breach"];
 const line = ["task.title", "task.branch", "task.goal", "task.classification", "context.jira.classification", "context.slack.me", "context.chat.me", "context.eval.pack", "context.eval.case"];
 const block = [
   "task.description", "task.criteria", "task.record", "task.evidence", "plan.brief", "plan.criteria", "plan.criteria.ids", "plan.assumptions", "plan.slices",
@@ -65,6 +65,7 @@ const block = [
   "context.slack.watches", "context.slack.rules", "context.slack.items", "context.chat.rules", "context.chat.items",
   "context.foreman.question", "context.foreman.history", "context.foreman.cards", "context.foreman.pending",
   "context.exceptions.controls", "context.exceptions.items", "context.compliance.controls", "context.access.flags", "context.access.removed",
+  "context.postmortem.incident",
   "context.split", "context.jira.issue", "context.jira.description", "context.jira.comments", "context.intake", "context.ticket", "context.check", "context.propose", "context.factCandidates",
   "context.conversation.thread", "context.conversation.card", "context.conversation.evidence", "context.conversation.docs", "context.conversation.tone",
   "context.eval.rubric", "context.eval.input", "context.eval.checks", "context.eval.answer",
@@ -153,6 +154,8 @@ export const CAPS: Readonly<Record<string, number>> = {
   // The access reviewer reads up to three hundred flags of about 1,200 characters each and the names that left since the last signed review.
   "context.access.flags": 360_000,
   "context.access.removed": 100_000,
+  // The postmortem reads one incident: up to a hundred timeline lines of 300 characters and twenty signals of 700.
+  "context.postmortem.incident": 64_000,
   // The video packs.
   "context.video.scenarios": 200_000,
   "context.video.steps": 32_000,

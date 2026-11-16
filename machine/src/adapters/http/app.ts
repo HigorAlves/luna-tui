@@ -67,6 +67,7 @@ import { economyMetrics } from "../../domain/economy/metrics.ts";
 import { type Backlog, BacklogItemNotFoundError, NotSchedulableError } from "../../application/backlog.ts";
 import type { ChangeEvidence } from "../../application/change-evidence.ts";
 import type { AccessReview } from "../../application/access-review.ts";
+import type { IncidentJob } from "../../application/incidents.ts";
 import { type ComplianceDrafts, type CompliancePublisher, DraftNotFoundError, DraftRefusedError, DraftStatusError, StaleDraftError } from "../../application/compliance-drafts.ts";
 import { type TicketMachine, TicketNotFound, TicketRefusal } from "../../application/ticket-machine.ts";
 import { streamSSE } from "hono/streaming";
@@ -133,8 +134,8 @@ export interface AppDeps {
   backlog?: Backlog;
   /** The Ticket Machine; without it the `/tickets` routes are absent. */
   tickets?: TicketMachine;
-  /** The manager's drafts (RFC 0008): the store, the publisher an approve goes through, the monthly evidence job and the `owner/name` of every repo the machine knows. Without it the `/compliance` routes answer 503. */
-  compliance?: { drafts: ComplianceDrafts; publisher: CompliancePublisher; evidence: Pick<ChangeEvidence, "buildMonth">; repos: () => Promise<string[]>; access?: Pick<AccessReview, "orgs" | "buildQuarter"> };
+  /** The manager's drafts (RFC 0008): the store, the publisher an approve goes through, the monthly evidence job, the quarterly access review, the incidents and the `owner/name` of every repo the machine knows. Without it the `/compliance` routes answer 503. */
+  compliance?: { drafts: ComplianceDrafts; publisher: CompliancePublisher; evidence: Pick<ChangeEvidence, "buildMonth">; repos: () => Promise<string[]>; access?: Pick<AccessReview, "orgs" | "buildQuarter">; incidents: Pick<IncidentJob, "list"> };
   /** Closes a task's herdr watch tab when it is deleted; closing it on `closed` is main.ts's job. */
   watcher?: Watcher;
   /** Enables `POST /dev/stubs` when the stub stages are in use. */
@@ -705,6 +706,7 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     // The manager's drafts: the board's Compliance view lists them and taps them. The id holds `:` and `/`, which the board percent-encodes; Hono decodes the segment.
     const off = (c: Context) => fail(c, 503, "compliance_off", "this machine has no compliance drafts");
     const id = (c: Context): string => c.req.param("id") ?? "";
+    app.get("/compliance/incidents", async (c) => (compliance ? c.json({ incidents: await compliance.incidents.list() }) : off(c)));
     app.get("/compliance/drafts", async (c) => (compliance ? c.json({ drafts: await compliance.drafts.list() }) : off(c)));
     app.post("/compliance/drafts/:id/approve", async (c) => (compliance ? c.json(await compliance.publisher.approve(id(c), (await body(c, ComplianceActInput)).hash, "board")) : off(c)));
     app.post("/compliance/drafts/:id/edit", async (c) => {

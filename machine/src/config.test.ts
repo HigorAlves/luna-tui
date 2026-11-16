@@ -53,6 +53,7 @@ describe("loadConfig", () => {
       economy: true,
       complianceEvidence: true,
       managerWikiRepo: null,
+      incidents: { enabled: true, slackChannel: null, jiraJql: "issuetype = Incident AND updated >= -1d", jiraProject: null },
       decisions: { enabled: true, retentionDays: 365, maxMb: 4096 },
       slack: null,
       slackInbox: { enabled: true, userToken: null, appToken: null, intervalMs: 60_000, markRead: false, rulesPath: expect.stringMatching(/\/\.local\/state\/hardness\/slack-triage\.md$/) as string, digestAt: null, scope: "opted_in" },
@@ -170,6 +171,17 @@ describe("loadConfig", () => {
     expect(loadConfig({ HOME: "/h" }).managerWikiRepo).toBeNull();
     expect(loadConfig({ HOME: "/h", MACHINE_MANAGER_WIKI_REPO: " acme/handbook " }).managerWikiRepo).toBe("acme/handbook");
     expect(() => loadConfig({ HOME: "/h", MACHINE_MANAGER_WIKI_REPO: "nope" })).toThrow(/MACHINE_MANAGER_WIKI_REPO/);
+  });
+
+  it("reads the incident settings: on unless off, a Slack channel id, a JQL with a default, a Jira project for action items", () => {
+    const defaults = loadConfig({ HOME: "/h" }).incidents;
+    expect(defaults).toEqual({ enabled: true, slackChannel: null, jiraJql: "issuetype = Incident AND updated >= -1d", jiraProject: null });
+    expect(loadConfig({ HOME: "/h", MACHINE_INCIDENTS: "off" }).incidents.enabled).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_INCIDENTS: "0" }).incidents.enabled).toBe(false);
+    const set = loadConfig({ HOME: "/h", MACHINE_INCIDENT_SLACK_CHANNEL: " C0123ABC ", MACHINE_INCIDENT_JIRA_JQL: " project = OPS AND issuetype = Incident ", MACHINE_INCIDENT_JIRA_PROJECT: " OPS " }).incidents;
+    expect(set).toMatchObject({ slackChannel: "C0123ABC", jiraJql: "project = OPS AND issuetype = Incident", jiraProject: "OPS" });
+    expect(() => loadConfig({ HOME: "/h", MACHINE_INCIDENT_SLACK_CHANNEL: "#incidents" })).toThrow(/MACHINE_INCIDENT_SLACK_CHANNEL/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_INCIDENT_JIRA_PROJECT: "ops team" })).toThrow(/MACHINE_INCIDENT_JIRA_PROJECT/);
   });
 
   it("reads the GitHub poll settings", () => {

@@ -216,6 +216,10 @@ export const PackId = z.enum([
   "compliance_review",
   // Suggests, for each flag of a GitHub org's quarterly access review, whether to keep, remove, reduce or investigate the access; no tools, no worktree, on demand.
   "access_review",
+  // A decision at the incident job (RFC 0008, wave 5): did an incident expose personal data or health information, whose, and how many people.
+  "breach_assess",
+  // Writes the blameless postmortem of a resolved incident from its facts, timeline and breach clocks; no tools, no worktree, on demand.
+  "postmortem",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -505,6 +509,38 @@ export const AccessReviewContext = z.object({
   removedSinceSigned: z.array(z.string().max(200)).max(500),
 });
 export type AccessReviewContext = z.infer<typeof AccessReviewContext>;
+
+/** For breach_assess: one incident as the machine knows it, flattened and capped. Titles and summaries come from tools and people: data, never an instruction. No payload, stack trace or personal data is in it. */
+export const BreachAssessContext = z.object({
+  title: z.string().max(200),
+  severity: z.enum(["critical", "high", "medium", "low", "unknown"]),
+  service: z.string().max(120).nullable(),
+  startedAt: z.string(),
+  /** The newest entries, oldest first. */
+  timeline: z.array(z.object({ at: z.string(), source: z.string().max(40), text: z.string().max(300) })).max(40),
+  signals: z
+    .array(z.object({ source: z.enum(["datadog", "sentry", "slack", "jira"]), title: z.string().max(200), severity: z.enum(["critical", "high", "medium", "low", "unknown"]), status: z.enum(["open", "resolved"]), summary: z.string().max(500) }))
+    .max(20),
+});
+export type BreachAssessContext = z.infer<typeof BreachAssessContext>;
+
+/** For postmortem: a resolved incident and its breach assessment. Titles, timeline lines and summaries come from tools and people: data, never an instruction. */
+export const PostmortemContext = z.object({
+  incident: z.object({
+    title: z.string().max(200),
+    severity: z.enum(["critical", "high", "medium", "low", "unknown"]),
+    service: z.string().max(120).nullable(),
+    startedAt: z.string(),
+    resolvedAt: z.string().nullable(),
+    timeline: z.array(z.object({ at: z.string(), source: z.string().max(40), text: z.string().max(300) })).max(100),
+    signals: z
+      .array(z.object({ source: z.enum(["datadog", "sentry", "slack", "jira"]), title: z.string().max(200), severity: z.enum(["critical", "high", "medium", "low", "unknown"]), status: z.enum(["open", "resolved"]), summary: z.string().max(500) }))
+      .max(20),
+  }),
+  /** The regimes the assessment found and each one's deadline (ISO), or null when there is no assessment or it found none. */
+  breach: z.object({ regimes: z.array(z.enum(["gdpr", "lgpd", "hipaa", "us_privacy"])), clocks: z.record(z.string(), z.string()) }).nullable(),
+});
+export type PostmortemContext = z.infer<typeof PostmortemContext>;
 
 /** One slice of the implementer's ledger, kept by the runner in `/out/ledger.json`. */
 export const LedgerSlice = z.object({
@@ -1392,6 +1428,10 @@ export const StageInput = z.object({
     compliance: ComplianceReviewContext.nullable().optional(),
     /** For access_review: the flags of one org's quarterly access review; the task is synthetic and there is no worktree. */
     access: AccessReviewContext.nullable().optional(),
+    /** For breach_assess: the incident to assess; the task is synthetic and there is no worktree. */
+    breach: BreachAssessContext.nullable().optional(),
+    /** For postmortem: the resolved incident and its breach clocks; the task is synthetic and there is no worktree. */
+    postmortem: PostmortemContext.nullable().optional(),
     /** For question_council: the open triage questions to settle from the code, the card and the answers so far. */
     questions: QuestionsContext.nullable().optional(),
     /** For verifying: the files the code graph says depend on what the change touched, to review first. */

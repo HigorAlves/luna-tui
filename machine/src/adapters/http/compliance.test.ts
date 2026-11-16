@@ -13,6 +13,7 @@ import type { GitHub } from "../../application/github.ts";
 import { Pipeline } from "../../application/pipeline.ts";
 import { StubStages } from "../../application/stages/stubs.ts";
 import { WikiError, type Wiki } from "../../application/wiki.ts";
+import type { Incident } from "../../domain/incident.ts";
 import { freshTestDatabase } from "../../test/database.ts";
 import { createApp } from "./app.ts";
 import { Bus } from "./bus.ts";
@@ -39,6 +40,7 @@ const fields = (over: Partial<ComplianceDraft> = {}) => ({
   ...over,
 });
 
+let incidentList: Incident[] = [];
 let wrote: unknown[][];
 let wikiFails: string | null;
 const mk = (wired = true) => {
@@ -60,7 +62,7 @@ const mk = (wired = true) => {
     orgs: async () => ["acme"],
     buildQuarter: vi.fn(async (org: string) => drafts.open(fields({ id: `access_review:${org}:2026-Q4`, kind: "access_review", title: `Access review, ${org}, 2026-Q4`, period: "2026-Q4", targets: [{ kind: "access_slices", org, period: "2026-Q4" }] }))),
   };
-  const compliance = wired ? { drafts, publisher: publisher({ drafts, wiki }), evidence, repos: async () => ["acme/web"], access } : undefined;
+  const compliance = wired ? { drafts, publisher: publisher({ drafts, wiki }), evidence, repos: async () => ["acme/web"], access, incidents: { list: async () => incidentList } } : undefined;
   const app = createApp({ db, pipeline: new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true }), bus: new Bus(), ...(compliance ? { compliance } : {}), access: { host: "127.0.0.1", port: 1, token: "tok" } });
   return { app, drafts };
 };
@@ -74,6 +76,27 @@ describe("the compliance routes", () => {
     expect((await off.request("/compliance/drafts", { headers: auth })).status).toBe(503);
     expect((await post(off, ID, "approve", { hash: "0123456789abcdef" })).status).toBe(503);
     expect((await off.request("/compliance/evidence/run", { method: "POST", headers: auth, body: JSON.stringify({ repo: "acme/web", period: "2026-10" }) })).status).toBe(503);
+  });
+
+  it("list the incidents with their breach assessment and clocks, 503 when compliance is off", async () => {
+    const { app } = mk();
+    const incident: Incident = {
+      id: "jira:OPS-9",
+      title: "Export bucket public",
+      severity: "high",
+      status: "open",
+      startedAt: "2026-11-10T09:00:00.000Z",
+      resolvedAt: null,
+      service: null,
+      signals: [],
+      timeline: [],
+      breach: { error: "agents are off" },
+    };
+    incidentList = [incident];
+    expect((await app.request("/compliance/incidents")).status).toBe(401);
+    expect(await (await app.request("/compliance/incidents", { headers: auth })).json()).toEqual({ incidents: [incident] });
+    expect((await mk(false).app.request("/compliance/incidents", { headers: auth })).status).toBe(503);
+    incidentList = [];
   });
 
   it("list the drafts with the hash to send back with a tap", async () => {

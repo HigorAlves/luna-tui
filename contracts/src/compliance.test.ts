@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { AccessReviewAnswer, AccessReviewContext, ChangeExceptionKind, ChangeExceptionsAnswer, ChangeExceptionsContext, NO_ACCESS, PACKS, ComplianceActInput, ComplianceDraft, ComplianceDraftKind, ComplianceDraftsResponse, ComplianceEditInput, ComplianceTarget } from "./index.ts";
+import { AccessReviewAnswer, AccessReviewContext, PostmortemAnswer, PostmortemContext, ChangeExceptionKind, ChangeExceptionsAnswer, ChangeExceptionsContext, NO_ACCESS, PACKS, ComplianceActInput, ComplianceDraft, ComplianceDraftKind, ComplianceDraftsResponse, ComplianceEditInput, ComplianceTarget } from "./index.ts";
 
 const draft = {
   id: "change_evidence:acme/api:2026-10",
@@ -122,6 +122,29 @@ describe("compliance drafts", () => {
     expect(() => ComplianceTarget.parse({ kind: "jira_actions", project: "OPS-1" })).toThrow();
     expect(() => ComplianceTarget.parse({ kind: "access_slices", org: "acme", period: "Q4" })).toThrow();
     expect(() => ComplianceTarget.parse({ kind: "github_release", repo: "acme/api", tag: "v1 4" })).toThrow();
+  });
+
+  it("gives the incident writer a context of facts and a blameless answer with checkable action items", () => {
+    const context = {
+      incident: { title: "Export bucket public", severity: "high", service: "exports", startedAt: "2026-11-10T09:00:00.000Z", resolvedAt: "2026-11-10T15:00:00.000Z", timeline: [{ at: "2026-11-10T09:00:00.000Z", source: "jira", text: "Jira signal: Export bucket public" }], signals: [] },
+      breach: { regimes: ["gdpr"], clocks: { gdpr: "2026-11-13T09:00:00.000Z" } },
+    };
+    expect(PostmortemContext.parse(context)).toEqual(context);
+    expect(PostmortemContext.parse({ ...context, breach: null }).breach).toBeNull();
+    expect(() => PostmortemContext.parse({ ...context, breach: { regimes: ["ccpa"], clocks: {} } })).toThrow();
+    const answer = { summary: "A bucket served the export.", impact: "Customers' export was readable for six hours.", timeline: [{ at: "2026-11-10T09:00:00.000Z", text: "Declared." }], rootCauses: ["The bucket policy was widened by a migration."], contributingFactors: [], actionItems: [{ title: "Add a public-access check to the deploy", owner: null, due: "2026-12-01" }], breachNotes: null };
+    expect(PostmortemAnswer.parse(answer)).toEqual(answer);
+    expect(() => PostmortemAnswer.parse({ ...answer, summary: "x".repeat(801) })).toThrow();
+    expect(() => PostmortemAnswer.parse({ ...answer, rootCauses: Array(6).fill("a cause") })).toThrow();
+    expect(() => PostmortemAnswer.parse({ ...answer, actionItems: Array(11).fill(answer.actionItems[0]) })).toThrow();
+    expect(() => PostmortemAnswer.parse({ ...answer, actionItems: [{ title: "x".repeat(121), owner: null, due: null }] })).toThrow();
+    expect(() => PostmortemAnswer.parse({ ...answer, actionItems: [{ title: "Fix", owner: null, due: "1 Dec" }] })).toThrow();
+  });
+
+  it("runs the incident writer as a text-only agent on sonnet or opus, one turn, medium effort", () => {
+    expect(PACKS.postmortem).toMatchObject({ kind: "agent", agent: "incident-writer", writable: false, maxTurns: 1, effort: "medium", template: "postmortem.md", helpers: [], skills: [] });
+    expect(PACKS.postmortem.engines).toMatchObject({ default: "claude:sonnet", allowed: ["claude:sonnet", "claude:opus"] });
+    expect(PACKS.postmortem.access).toEqual(NO_ACCESS);
   });
 });
 
