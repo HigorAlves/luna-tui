@@ -7,7 +7,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { PgTicketStore } from "../adapters/persistence/ticket-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import type { AssessAnswer } from "../domain/ticket-score.ts";
-import { TicketMachine, TicketNotFound, TicketRefusal, parseTicketKey, splitTargetOf } from "./ticket-machine.ts";
+import { TicketMachine, TicketNotFound, TicketRefusal, parseTicketKey, splitTargetOf, ticketSource } from "./ticket-machine.ts";
+import { trustOf } from "../domain/trust.ts";
 import { draftHash } from "./ticket-drafts.ts";
 import type { Tickets } from "./tickets.ts";
 import type { ValidityAnswer } from "./ticket-validity.ts";
@@ -771,5 +772,59 @@ describe("a ticket's split (wave 15)", () => {
     await x.store.setMachine("PAY-101", { cardId: "card-a" });
     await x.machine.card("PAY-102");
     expect(x.cards.at(-1)).toMatchObject({ stack: { dependsOn: ["card-a"], riskFloor: "high" } });
+  });
+});
+
+describe("a GitHub ticket's author association", () => {
+  const gh = (over: Partial<CanonicalTicket> = {}) => ticket({ tool: "github", id: "o/a#3", key: "o/a#3", permalink: "https://github.com/o/a/issues/3", ...over });
+  const held = async (t: CanonicalTicket) => {
+    const x = setup();
+    await x.machine.ingest(t, ctx);
+    return x;
+  };
+
+  it("is stored on the card's source when the ticket carries it, and an OWNER card is trusted", async () => {
+    const x = await held(gh({ authorAssociation: "OWNER" }));
+    await x.machine.card("o/a#3");
+    expect(x.cards[0]).toMatchObject({ source: { kind: "github", repo: "o/a", number: 3, authorAssociation: "OWNER" } });
+    for (const a of ["OWNER", "MEMBER", "COLLABORATOR"]) expect(trustOf({ source: ticketSource(gh({ authorAssociation: a }))! })).toBe("trusted");
+    expect(trustOf({ source: ticketSource(gh({ authorAssociation: "NONE" }))! })).toBe("untrusted");
+  });
+
+  it("is fetched once through the GitHub port when the ticket carries none", async () => {
+    const x = await held(gh());
+    const association = vi.fn(async () => "MEMBER");
+    (x.machine as any).deps.association = association;
+    await x.machine.card("o/a#3");
+    expect(association).toHaveBeenCalledOnce();
+    expect(association).toHaveBeenCalledWith("o/a", 3);
+    expect(x.cards[0]).toMatchObject({ source: { authorAssociation: "MEMBER" } });
+  });
+
+  it("stays absent when the fetch fails: the card is untrusted and says so once", async () => {
+    const x = await held(gh());
+    const records: unknown[][] = [];
+    (x.machine as any).deps.association = async () => { throw new Error("github is down"); };
+    (x.machine as any).deps.record = async (...a: unknown[]) => void records.push(a);
+    await x.machine.card("o/a#3");
+    const source = (x.cards[0] as { source: Parameters<typeof trustOf>[0]["source"] }).source;
+    expect(source).not.toHaveProperty("authorAssociation");
+    expect(trustOf({ source })).toBe("untrusted");
+    expect(records).toEqual([["card-1", "card.trust_unread", { note: expect.stringContaining("could not be read") }]]);
+  });
+
+  it("is looked up for the candidates of a ticket that carries none, and left absent on a failure", async () => {
+    const seen: Array<string | undefined> = [];
+    const x = setup();
+    (x.machine as any).deps.candidates = async (t: CanonicalTicket) => (seen.push(t.authorAssociation), []);
+    (x.machine as any).deps.association = async () => "COLLABORATOR";
+    await x.machine.ingest(gh(), ctx);
+    expect(seen).toEqual(["COLLABORATOR"]);
+    const y = setup();
+    (y.machine as any).deps.candidates = async (t: CanonicalTicket) => (seen.push(t.authorAssociation), []);
+    (y.machine as any).deps.association = async () => { throw new Error("down"); };
+    await db.query("truncate tickets");
+    await y.machine.ingest(gh(), ctx);
+    expect(seen).toEqual(["COLLABORATOR", undefined]);
   });
 });

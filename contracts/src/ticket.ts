@@ -52,6 +52,8 @@ export const CanonicalTicket = z.object({
   createdAt: z.string().max(60).nullable(),
   updatedAt: z.string().max(60).nullable(),
   permalink: z.string().max(500),
+  /** GitHub's `author_association` of a GitHub issue's author; absent when it was not read (the card then runs untrusted). */
+  authorAssociation: z.string().max(40).optional(),
 });
 export type CanonicalTicket = z.infer<typeof CanonicalTicket>;
 

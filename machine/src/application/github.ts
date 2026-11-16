@@ -158,6 +158,8 @@ export interface GitHub {
   threadResolved(threadId: string): Promise<boolean>;
   /** Open issues (not PRs) carrying `label`. */
   listReadyIssues(slug: string, label: string): Promise<GhIssue[]>;
+  /** GitHub's `author_association` of whoever opened one issue; null when GitHub gives none. Rejects when the read fails. */
+  issueAssociation(slug: string, number: number): Promise<string | null>;
   commentOnIssue(slug: string, number: number, body: string): Promise<void>;
   /** Opens a new issue in `slug` (a split's child ticket). A write: only on a person's tap. */
   /** The repository's default branch as GitHub says it, or null when it cannot be read. */
@@ -218,6 +220,7 @@ export function noTokenGitHub(): GitHub {
     resolveThread: refuse,
     threadResolved: () => Promise.resolve(false),
     listReadyIssues: refuse,
+    issueAssociation: refuse,
     commentOnIssue: refuse,
     defaultBranch: async () => null,
     createIssue: refuse,

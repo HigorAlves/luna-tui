@@ -35,6 +35,7 @@ const METHODS: Array<keyof GitHub> = [
   "resolveThread",
   "threadResolved",
   "listReadyIssues",
+  "issueAssociation",
   "commentOnIssue",
   "createIssue",
   "defaultBranch",

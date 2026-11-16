@@ -44,6 +44,12 @@ describe("canonicalTicketOf", () => {
     expect(t).toMatchObject({ tool: "github", id: "o/r#7", key: "o/r#7", title: "Crash on start", labels: ["bug"], reporter: { id: "ana", name: "ana" }, assignee: null, status: "open" });
   });
 
+  it("carries a GitHub issue's author association, and none when the issue has none", () => {
+    const issue: GhIssue = { number: 7, title: "t", body: null, url: "https://github.com/o/r/issues/7", authorAssociation: "MEMBER" };
+    expect(canonicalTicketOf({ tool: "github", slug: "o/r", issue }).authorAssociation).toBe("MEMBER");
+    expect(canonicalTicketOf({ tool: "github", slug: "o/r", issue: { ...issue, authorAssociation: undefined } })).not.toHaveProperty("authorAssociation");
+  });
+
   it("caps every text and bounds every list", () => {
     const long = "x".repeat(TICKET_CAPS.description * 2);
     const t = canonicalTicketOf({
