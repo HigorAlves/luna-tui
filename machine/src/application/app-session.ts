@@ -203,8 +203,8 @@ export async function openPreview(deps: AppDeps, input: OpenAppInput & { branch:
   const installed = await deps.install({ taskId: input.taskId, repoPath: input.repoPath, workspace: input.workspace, commit: input.commit, ...(input.trust ? { trust: input.trust } : {}), ...(input.signal ? { signal: input.signal } : {}) });
   if (!installed.ok) return { ok: false, detail: installed.detail };
   const image = await deps.imageFor(input.repoPath, input.taskId);
-  const base = deps.egress ? await deps.egress.for({ repoPath: input.repoPath, kind: "check" }) : { allow: [], allowPrivate: [], proxyImage: image };
-  const spec = { ...base, allow: [...new Set([...base.allow, `${host}:443`])].sort() };
+  // The preview's host is one the repo chose: the egress policy holds it within the machine's sandbox policy (egress.deny, repo_hosts, max_repo_hosts) like the rest.
+  const spec = deps.egress ? await deps.egress.for({ repoPath: input.repoPath, kind: "check", deploy: [`${host}:443`] }) : { allow: [], allowPrivate: [], proxyImage: image };
   const runName = `${input.taskId.slice(0, 8)}-deploy-${input.attempt}`;
   const card = deps.egress ? await deps.openCardNetwork(runName, spec, { proxyImage: spec.proxyImage }) : await deps.openPlainNetwork(runName);
   const seen = new Set<string>();

@@ -826,6 +826,7 @@ const app = createApp({
       repos: [],
       knownRepos,
       policy: (repoPath) => policies.for(repoPath),
+      ...(agentDeps?.egress?.bounds ? { egressBounds: (repoPath: string) => agentDeps.egress!.bounds!(repoPath) } : {}),
       ...(agentDeps ? { source: agentDeps.imageSource } : {}),
       machineImage: config.runnerImage,
       images: { warnings: (repoPath) => agentDeps?.repoImages.warnings(repoPath) ?? [], status: (repoPath) => agentDeps?.repoImages.status(repoPath) ?? null, pending: async (repoPath) => (await agentDeps?.repoImages.pending(repoPath)) ?? null, pendingDockerfile: async (repoPath) => (await agentDeps?.repoImages.pendingDockerfile(repoPath)) ?? null },

@@ -96,4 +96,17 @@ describe("a repository's image and graph health", () => {
     expect(bounded!.bounds).toEqual(['sandbox.image.base "node:22" is refused', 'sandbox.egress.allow: "x.pastebin.com" dropped']);
     expect(plain).not.toHaveProperty("bounds");
   });
+
+  it("adds what the policy dropped from the lockfile, QA and deploy hosts", async () => {
+    const [row] = await repoHealthOf({
+      repos: ["/a/r"],
+      policy: async () => ({ graph: true, bounds: { notes: [], egress: ['sandbox.egress.allow: "x.pastebin.com" dropped'], image: [], seccomp: null } }),
+      egressBounds: async () => ['lockfile: "cdn.pastebin.com" dropped, it matches egress.deny "*.pastebin.com"'],
+      machineImage: "hardness-runner:dev",
+      images: { pending: async () => null, status: () => null },
+      graph: { stampOf: async () => null },
+      watch: { health: () => ({ building: false, lastFailure: null }) },
+    });
+    expect(row!.bounds).toEqual(['sandbox.egress.allow: "x.pastebin.com" dropped', 'lockfile: "cdn.pastebin.com" dropped, it matches egress.deny "*.pastebin.com"']);
+  });
 });

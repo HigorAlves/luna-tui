@@ -11,6 +11,8 @@ export interface RepoHealthDeps {
   /** The repositories the machine knows now; read on each call, added to `repos`. */
   knownRepos?: () => Promise<string[]>;
   policy: (repoPath: string) => Promise<{ graph?: boolean; factory?: { sandbox?: { image?: { base?: string | null } } }; bounds?: { egress: string[]; image: string[] } }>;
+  /** What the machine's policy dropped from the hosts a repo's lockfiles, QA targets and preview named (`EgressPolicy.bounds`). */
+  egressBounds?: (repoPath: string) => Promise<string[]>;
   /** Where the base comes from (luna.yaml, else the devcontainer) and what the devcontainer asked that is not applied. */
   source?: Pick<RepoImageSource, "for">;
   machineImage: string;
@@ -34,7 +36,8 @@ export async function repoHealthOf(deps: RepoHealthDeps): Promise<RepoHealth[]> 
       const built = deps.graph.health?.(repo);
       const health = built ? { building: built.building || watch.building, lastFailure: built.lastFailure } : watch;
       const source = await deps.source?.for(repo).catch(() => null);
-      const bounds = [...(policy.bounds?.image ?? []), ...(source?.bounds ?? []), ...(policy.bounds?.egress ?? [])].map((line) => safe(line).slice(0, 400));
+      const hostBounds = (await deps.egressBounds?.(repo).catch(() => [])) ?? [];
+      const bounds = [...(policy.bounds?.image ?? []), ...(source?.bounds ?? []), ...(policy.bounds?.egress ?? []), ...hostBounds].map((line) => safe(line).slice(0, 400));
       const dockerfile = await deps.images.pendingDockerfile?.(repo).catch(() => null);
       const dockerfileNote = dockerfile ? [`Dockerfile ${dockerfile.path} ${dockerfile.changed ? "changed since approval" : "awaits approval"}`] : [];
       const notes = [...(source?.notes ?? []), ...dockerfileNote, ...(deps.images.warnings?.(repo) ?? [])].map((line) => safe(line).slice(0, 400));

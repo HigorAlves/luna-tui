@@ -11,11 +11,11 @@ export function traceEntriesOf(traces: Config["traces"]): string[] {
 }
 
 /** The runs' lists of hosts, or undefined with `MACHINE_EGRESS=off` (every run then joins an ordinary bridge, said once). */
-export function buildEgress(config: Pick<Config, "egress" | "runnerImage" | "traces">, policies: PolicyStore): EgressPolicy | undefined {
+export function buildEgress(config: Pick<Config, "egress" | "runnerImage" | "traces"> & Partial<Pick<Config, "sandboxPolicy">>, policies: PolicyStore): EgressPolicy | undefined {
   if (!config.egress.enabled) {
     console.warn("MACHINE_EGRESS=off: every run joins an ordinary network, with no allow-list");
     return undefined;
   }
-  return egressPolicy({ policies, proxyImage: config.runnerImage, engineHosts: config.egress.engineHosts, traceEntries: traceEntriesOf(config.traces) });
+  return egressPolicy({ policies, ...(config.sandboxPolicy ? { machinePolicy: config.sandboxPolicy } : {}), proxyImage: config.runnerImage, engineHosts: config.egress.engineHosts, traceEntries: traceEntriesOf(config.traces) });
 }
 

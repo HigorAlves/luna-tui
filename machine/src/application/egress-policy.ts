@@ -2,14 +2,15 @@
 // lockfiles at the root of the same checkout. Nothing in a card's work folder (its luna.yaml, its lockfiles, a .npmrc) is read here, so an agent
 // steered by a ticket cannot widen its own list by editing a file. The proxy that enforces the list is the adapter's (adapters/docker/egress.ts).
 import { join } from "node:path";
-import type { CredentialOwner } from "@hardness/contracts";
+import type { CredentialOwner, MachinePolicy } from "@hardness/contracts";
 
 import { readRegularFile } from "../adapters/fs/bounded.ts";
 import { HOST_GIT } from "../adapters/git/worktree.ts";
 import { exec } from "../adapters/process/exec.ts";
 import { LOCKFILES } from "../domain/env-hash.ts";
 import { type EgressKind, egressFor } from "../domain/egress.ts";
-import { type LockfileText, registryHostsOf } from "../domain/registry-hosts.ts";
+import { type LockfileText, registryHostsSplit } from "../domain/registry-hosts.ts";
+import { boundRepoHosts } from "../domain/sandbox-bounds.ts";
 import type { PolicyStore } from "./policy.ts";
 
 /** What a run is given: its list, and the machine's own image the proxy runs from (never a repository's). */
@@ -17,6 +18,8 @@ export interface EgressRun {
   allow: string[];
   allowPrivate: string[];
   proxyImage: string;
+  /** What the machine's sandbox policy dropped from the hosts the repo chose, as sentences (also in repo health). */
+  bounds?: string[];
 }
 
 export interface EgressRequest {
@@ -29,14 +32,20 @@ export interface EgressRequest {
   relayed?: readonly CredentialOwner[];
   /** Hosts the repository's config names for a browser run. */
   targets?: readonly string[];
+  /** The preview host (`host:443`) a deploy brings up, for a check that reaches it. */
+  deploy?: readonly string[];
 }
 
 export interface EgressPolicy {
   for(request: EgressRequest): Promise<EgressRun>;
+  /** Why the machine's policy dropped hosts the repo's lockfiles, QA targets and last preview named, for repo health. */
+  bounds?(repoPath: string): Promise<string[]>;
 }
 
 export interface EgressPolicyDeps {
   policies: Pick<PolicyStore, "for">;
+  /** The owner's sandbox policy: every host the repo chose is held within it. Absent, they stand. */
+  machinePolicy?: MachinePolicy;
   /** The machine's own runner image. */
   proxyImage: string;
   /** `MACHINE_EGRESS_ENGINE_HOSTS`, already checked. */
@@ -64,8 +73,10 @@ export async function trackedNestedLockfiles(repoPath: string): Promise<string[]
 export function egressPolicy(deps: EgressPolicyDeps): EgressPolicy {
   const read = deps.readLockfile ?? ((path: string) => readRegularFile(path, LOCKFILE_CAP));
   const listNested = deps.nestedLockfiles ?? trackedNestedLockfiles;
-  return {
-    async for(request) {
+  /** The drops of the last preview host per repo: the preview's host is known only when a deploy starts. */
+  const deployDrops = new Map<string, string[]>();
+  const compute = async (request: EgressRequest): Promise<{ run: EgressRun; reasons: string[] }> => {
+    {
       const policy = request.repoPath ? await deps.policies.for(request.repoPath) : null;
       const sandbox = policy?.factory.sandbox.egress ?? { allow: [], registries: "always" as const };
       const lockfiles: LockfileText[] = [];
@@ -82,17 +93,53 @@ export function egressPolicy(deps: EgressPolicyDeps): EgressPolicy {
         nested = await listNested(request.repoPath).catch(() => []);
       }
       const agentLike = request.kind === "agent" || request.kind === "pack" || request.kind === "github";
+      // Every host the repo chose goes through the machine's policy, in a fixed order that counts against `max_repo_hosts`: its allow list (bounded by the store), then the hosts its
+      // lockfiles name, its QA targets and its preview. The machine's own (GitHub, each ecosystem's registries, the engines') are not the repo's and pass.
+      const reasons: string[] = [];
+      let taken = sandbox.allow.length;
+      const bound = (hosts: readonly string[], source: string): string[] => {
+        if (!deps.machinePolicy) return [...hosts];
+        const out = boundRepoHosts(hosts, deps.machinePolicy, source, taken);
+        taken += out.kept.length;
+        reasons.push(...out.reasons);
+        return out.kept;
+      };
+      const split = registryHostsSplit(lockfiles, nested);
+      const namedHosts = bound(split.named, "lockfile");
+      const targets = bound(request.targets ?? [], "qa_targets");
+      const deploy = bound(request.deploy ?? [], "deploy.url_pattern");
       const { allow, allowPrivate } = egressFor(request.kind, {
         allow: sandbox.allow,
         registries: sandbox.registries,
-        registryHosts: registryHostsOf(lockfiles, nested),
+        registryHosts: [...split.own, ...namedHosts],
         ...(request.owners ? { owners: request.owners } : {}),
         ...(request.relayed ? { relayed: request.relayed } : {}),
         engineHosts: agentLike ? (deps.engineHosts ?? []) : [],
-        targets: request.targets ?? [],
+        targets,
+        deploy,
         machineEntries: agentLike ? (deps.traceEntries ?? []) : [],
       });
-      return { allow, allowPrivate, proxyImage: deps.proxyImage };
+      return { run: { allow, allowPrivate, proxyImage: deps.proxyImage, bounds: reasons }, reasons };
+    }
+  };
+  return {
+    async for(request) {
+      const { run, reasons } = await compute(request);
+      if (request.repoPath && request.deploy) deployDrops.set(request.repoPath, reasons.filter((line) => line.startsWith("deploy.url_pattern")));
+      return run;
+    },
+    async bounds(repoPath) {
+      const policy = await deps.policies.for(repoPath);
+      const targets = policy.qaTargets.flatMap((target) => {
+        try {
+          const url = new URL(target.baseUrl);
+          return [`${url.hostname}:${url.port || (url.protocol === "https:" ? "443" : "80")}`];
+        } catch {
+          return [];
+        }
+      });
+      const { reasons } = await compute({ repoPath, kind: "check", targets });
+      return [...reasons, ...(deployDrops.get(repoPath) ?? [])];
     },
   };
 }
