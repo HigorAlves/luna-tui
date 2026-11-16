@@ -32,8 +32,10 @@ The owner pins a decision on Jev (`PINNED` in `evals/src/scorecard.ts`). These s
    2. Repeat with `codex:luna`.
    3. Repeat with `jev`. Its provider meters it, and it needs `AI_GATEWAY_API_KEY` or `TYPESAFE_API_KEY`.
    - Add `--trials 3` to see a model's variance.
+   - An agent pack also takes `--effort low|medium|high`. Its baseline then goes to `baselines/<engine>@<effort>/`. `pnpm eval baseline-plan --efforts low,high` lists those runs.
 6. **Scorecard.**
    - Run `pnpm eval scorecard`.
+   - The `## Agent packs` table in `evals/scorecard.md` shows each agent pack by engine and effort. It proposes no default.
 7. **Dry run.**
    1. Run `pnpm eval defaults`.
    2. Read the acted-on accuracy with its interval.

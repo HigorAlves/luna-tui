@@ -25,8 +25,12 @@ pnpm eval --pack triage --engine claude:opus --case task-price-decimals --no-jud
 | `--engine <id>` | the engine under test; one outside the pack's `allowed` runs as a candidate |
 | `--against <id>` | runs the cases on a second engine too and prints the diff |
 | `--case <id>` | only this case; repeat it for several |
+| `--effort <low\|medium\|high>` | runs an agent pack at that effort. Without it, the pack's own effort applies. An engine that does not support it fails the case. A decision pack takes none |
 | `--no-judge` | schema and checks only |
-| `--save-baseline` | writes each scorecard to `baselines/<engine>/<pack>.json` (`claude:opus` is `claude-opus`) |
+| `--judge` | adds the judge to a decision pack, which runs without one by default |
+| `--trials <n>` | runs every case n times (1 to 20), each in its own container |
+| `--dataset <name>` | takes the cases from the Laminar dataset of that name instead of the folder |
+| `--save-baseline` | writes each scorecard to `baselines/<engine>/<pack>.json` (`claude:opus` is `claude-opus`). With `--effort`, the folder is `<engine>@<effort>` |
 | `--image <tag>` | the stage image (`RUNNER_IMAGE`, else `hardness-runner:dev`) |
 
 On a laptop, keep it awake for the run (`caffeinate -s pnpm eval …` on macOS). A sleep freezes the container, and the grader counts the run as timed out.
@@ -98,7 +102,7 @@ An adversarial case must be unambiguous apart from its steering text. A borderli
 | `pnpm eval preflight` | no model call. It checks eight cases per decision pack: six labelled, an adversarial with its twin, a borderline. It also checks every reading, the runner image (reported, never built), each engine's credential and the collector (a warning). It exits 1 on a failure |
 | `pnpm eval calibrate --pack <p> [--since <date>] [--target 0.9] [--with-outcome] [--out <file>]` | proposes confidence bars from labelled answers: per question the count, the acted-on accuracy at each bar from 0.50 to 0.95, and a proposal needing 20 answers. It prints the `luna.yaml` lines, marked proposed, not applied |
 | `pnpm eval calibrate --weights [--machine <m>] [--out <file>]` | proposes the priority weights and bands from the priority files (30 files, 10 that a person changed, a knock-out card left out) |
-| `pnpm eval baseline-plan [--engines a,b,c]` | prints the baseline commands in order and runs none; `evals/baseline-run.sh` is that output |
+| `pnpm eval baseline-plan [--engines a,b,c] [--efforts a,b]` | prints the baseline commands in order and runs none; `evals/baseline-run.sh` is that output. With `--efforts`, it adds one run for each agent pack that has cases, each engine and each effort that engine supports |
 | `pnpm eval prune-runs [--older-than 30]` | removes stamped run folders under `evals/.runs/` older than that |
 
 Neither calibrate mode writes a config, a default, a pack or a record. Only `--out` writes, and it writes the report. The team has not built the automatic loop that would turn these by itself. See [architecture](../docs/architecture.md#evals-and-calibration).

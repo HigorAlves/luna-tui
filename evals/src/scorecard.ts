@@ -8,7 +8,7 @@
 //     what they acted on (the user's choice of 2026-11-06); among several such, Jev, else the cheaper;
 //   - a pack with fewer than two engines measured keeps its current default and reads `unmeasured`.
 // Pure over scorecards; `cli.ts` reads and writes the files.
-import { DecisionDefaults, type DecisionDefault, type EngineId, PACKS, type PackId } from "@hardness/contracts";
+import { DecisionDefaults, type DecisionDefault, type Effort, EffortId, type EngineId, PACKS, type PackId } from "@hardness/contracts";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -67,6 +67,56 @@ export function loadBaselines(evalsDir: string): Scorecard[] {
     }
   }
   return cards.sort((a, b) => a.pack.localeCompare(b.pack) || a.engine.localeCompare(b.engine));
+}
+
+/** One agent-pack baseline as a row of the scorecard's agent table: a pack on an engine at an effort. */
+export interface AgentRow {
+  pack: PackId;
+  engine: EngineId;
+  effort: Effort;
+  n: number;
+  passRate: number;
+  meanTurns: number;
+  costPerCase: number | null;
+  at: string;
+}
+
+/** Every agent pack's baselines under `evals/baselines/<engine>[@<effort>]/<pack>.json`, those that parse. The effort is the card's, else the folder's `@<effort>`, else the pack's own. */
+export function loadAgentBaselines(evalsDir: string): AgentRow[] {
+  const root = join(evalsDir, "baselines");
+  if (!existsSync(root)) return [];
+  const rows: AgentRow[] = [];
+  for (const engineDir of readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory())) {
+    const suffix = EffortId.safeParse(engineDir.name.split("@")[1]);
+    for (const file of readdirSync(join(root, engineDir.name)).filter((f) => f.endsWith(".json"))) {
+      try {
+        const card = JSON.parse(readFileSync(join(root, engineDir.name, file), "utf8")) as Scorecard;
+        const pack = PACKS[card.pack];
+        if (card.schema !== 1 || pack?.kind !== "agent" || !card.summary || !Array.isArray(card.cases)) continue;
+        const effort = EffortId.safeParse(card.effort).data ?? suffix.data ?? pack.effort;
+        rows.push({ pack: card.pack, engine: card.engine, effort, n: card.summary.cases, passRate: card.summary.passRate, meanTurns: card.summary.meanTurns, costPerCase: card.summary.costUsd === null || card.summary.cases === 0 ? null : card.summary.costUsd / card.summary.cases, at: card.at });
+      } catch {
+        // A file that is not a scorecard is not a baseline.
+      }
+    }
+  }
+  return sortAgentRows(rows);
+}
+
+const EFFORT_ORDER: Record<Effort, number> = { low: 0, medium: 1, high: 2 };
+const sortAgentRows = (rows: AgentRow[]): AgentRow[] => [...rows].sort((a, b) => a.pack.localeCompare(b.pack) || a.engine.localeCompare(b.engine) || EFFORT_ORDER[a.effort] - EFFORT_ORDER[b.effort]);
+
+/** The agent table, or nothing when no agent pack has a baseline. */
+function agentSection(rows: AgentRow[]): string[] {
+  if (rows.length === 0) return [];
+  return [
+    "## Agent packs",
+    "",
+    "| pack | engine | effort | n | pass rate | mean turns | cost per case | measured at |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...sortAgentRows(rows).map((r) => `| ${r.pack} | ${r.engine} | ${r.effort} | ${r.n} | ${percent(r.passRate)} | ${r.meanTurns.toFixed(1)} | ${r.costPerCase === null ? "n/a" : `$${r.costPerCase.toFixed(4)}`} | ${r.at.slice(0, 10)} |`),
+    "",
+  ];
 }
 
 /** The numbers a pack's rule reads: the whole-answer calibration, or for a pack read answer by answer the pool of its answers (null for a baseline from before). */
@@ -156,7 +206,7 @@ function perAnswerSection(cards: Scorecard[]): string[] {
 }
 
 /** `evals/scorecard.md`: one row per pack and engine, then each pack's proposed default and why. */
-export function renderScorecard(cards: Scorecard[], proposals: Partial<Record<PackId, Proposal>>, now: Date): string {
+export function renderScorecard(cards: Scorecard[], proposals: Partial<Record<PackId, Proposal>>, now: Date, agentRows: AgentRow[] = []): string {
   const median = (values: number[]) => {
     const sorted = [...values].sort((a, b) => a - b);
     return sorted.length === 0 ? 0 : sorted.length % 2 ? sorted[(sorted.length - 1) / 2]! : (sorted[sorted.length / 2 - 1]! + sorted[sorted.length / 2]!) / 2;
@@ -193,6 +243,7 @@ export function renderScorecard(cards: Scorecard[], proposals: Partial<Record<Pa
     "| --- | --- | --- |",
     ...decided,
     "",
+    ...agentSection(agentRows),
   ].join("\n");
 }
 

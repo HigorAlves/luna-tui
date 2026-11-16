@@ -12,7 +12,7 @@
 //   pnpm eval preflight                                       what a baseline run needs, checked without a model call; exits 1 when a check fails
 //   pnpm eval calibrate --pack <p> [--since <date>] [--target 0.9] [--with-outcome] [--out <file>]   proposes the confidence bars from ground truth, with the evidence; changes nothing
 //   pnpm eval calibrate --weights [--machine triage|ticket|conversation] [--out <file>]   proposes the priority weights and bands from the priority files; changes nothing
-//   pnpm eval baseline-plan [--engines a,b,c]                 prints the baseline commands and runs none
+//   pnpm eval baseline-plan [--engines a,b,c] [--efforts a,b] prints the baseline commands and runs none; --efforts adds the agent packs
 //   pnpm eval prune-runs [--older-than 30]                    removes run folders under evals/.runs older than that many days
 //   pnpm eval scorecard                       evals/scorecard.md over every decision baseline
 //   pnpm eval defaults [--write] [--except <pack>...]              the default per slot by the scorecard's rule; --write updates contracts/src/decision-defaults.json
@@ -31,14 +31,14 @@ import { decisionPack } from "./src/labels.ts";
 import { baselineHashes, changedLines, readLedger, writeLedger } from "./src/baseline-ledger.ts";
 import { labelFor, nextToLabel, renderNext, setLabel } from "./src/label.ts";
 import { runHarvest, runLabelPush, runPull, runPush } from "./src/loop.ts";
-import { baselinePlan } from "./src/baseline-plan.ts";
+import { agentPacksWithCases, baselinePlan, parseEfforts } from "./src/baseline-plan.ts";
 import { renderBars } from "./src/propose.ts";
 import { pruneRuns } from "./src/prune-runs.ts";
 import { writeReport } from "./src/report-out.ts";
 import { proposeWeights, readPriorityFiles, renderWeights } from "./src/weights.ts";
 import { casesTable, decisionPackIds, preflight } from "./src/preflight.ts";
 import { folderMegabytes, priorityHints, printable, recordsReport, stripUnsafe } from "./src/records.ts";
-import { type Proposal, PINNED, buildDefaultsFile, loadBaselines, proposeDefaults, renderScorecard } from "./src/scorecard.ts";
+import { type Proposal, PINNED, buildDefaultsFile, loadAgentBaselines, loadBaselines, proposeDefaults, renderScorecard } from "./src/scorecard.ts";
 
 const EVALS = dirname(fileURLToPath(import.meta.url));
 const DEFAULTS_FILE = resolve(EVALS, "..", "contracts", "src", "decision-defaults.json");
@@ -121,8 +121,15 @@ if (command === "harvest") {
   const saved = writeReport(values.out, lines);
   if (saved) console.log(`report written to ${saved}`);
 } else if (command === "baseline-plan") {
-  const { values } = parseArgs({ args: process.argv.slice(3), options: { engines: { type: "string" } } });
-  for (const line of baselinePlan(values.engines ? { engines: values.engines.split(",").map((e) => e.trim()).filter(Boolean) } : {})) console.log(line);
+  const { values } = parseArgs({ args: process.argv.slice(3), options: { engines: { type: "string" }, efforts: { type: "string" } } });
+  let efforts: ReturnType<typeof parseEfforts> | undefined;
+  try {
+    efforts = values.efforts ? parseEfforts(values.efforts) : undefined;
+  } catch (error) {
+    fail((error as Error).message);
+  }
+  const plan = baselinePlan({ ...(values.engines ? { engines: values.engines.split(",").map((e) => e.trim()).filter(Boolean) } : {}), ...(efforts ? { efforts, agentPacks: agentPacksWithCases(EVALS) } : {}) });
+  for (const line of plan) console.log(line);
 } else if (command === "prune-runs") {
   const { values } = parseArgs({ args: process.argv.slice(3), options: { "older-than": { type: "string", default: "30" } } });
   const days = Number(values["older-than"]);
@@ -186,7 +193,7 @@ if (command === "harvest") {
   const proposals = Object.fromEntries(
     Object.values(PACKS).filter((p) => p.kind === "decision").map((p) => [p.id, proposeDefaults(p.id, cards, { default: current(p.id).default, fallback: current(p.id).fallback })]),
   ) as Partial<Record<PackId, Proposal>>;
-  const text = renderScorecard(cards, proposals, new Date());
+  const text = renderScorecard(cards, proposals, new Date(), loadAgentBaselines(EVALS));
   if (command === "scorecard") {
     writeFileSync(join(EVALS, "scorecard.md"), text);
     console.log(`evals/scorecard.md written: ${cards.length} baseline(s)`);
