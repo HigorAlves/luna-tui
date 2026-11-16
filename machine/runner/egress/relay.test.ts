@@ -30,6 +30,7 @@ async function start(
   kind: "oauth" | "api-key" = "oauth",
   resolved: string[] = [PUBLIC],
   denyLocal: string[] = [],
+  credential: () => Promise<string> = async () => REAL,
 ): Promise<{ port: number; seen: Seen[]; lines: string[]; connects: Array<{ port: number; address: string }>; lookups: string[] }> {
   const seen: Seen[] = [];
   const lines: string[] = [];
@@ -51,7 +52,7 @@ async function start(
     resolve: async (name) => (lookups.push(name), resolved),
     connect: (port, address) => (connects.push({ port, address }), netConnect(upstreamPort, "127.0.0.1")),
     log: (line) => lines.push(line),
-    relay: { kind, placeholder: PLACEHOLDER, credential: async () => REAL, tls: false, denyLocal },
+    relay: { kind, placeholder: PLACEHOLDER, credential, tls: false, denyLocal },
   });
   const bound = await proxy.listen(0, null, "127.0.0.1", 0);
   return { port: bound.relayPort!, seen, lines, connects, lookups };
@@ -147,6 +148,32 @@ describe("the engine relay", () => {
     expect(seen[0]!.headers["x-api-key"]).toBe(REAL);
     expect(seen[0]!.headers.authorization).toBeUndefined();
   });
+
+  for (const status of [429, 401]) {
+    it(`passes an upstream ${status} through with its status, headers and body, and logs the status`, async () => {
+      const body = JSON.stringify({ type: "error", error: { type: status === 429 ? "rate_limit_error" : "authentication_error", message: "no" } });
+      const { port, lines } = await start((_req, res) => {
+        (res as import("node:http").ServerResponse).writeHead(status, {
+          "content-type": "application/json",
+          "retry-after": "17",
+          "anthropic-ratelimit-unified-status": "rejected",
+          "anthropic-ratelimit-unified-reset": "1790000000",
+          "anthropic-ratelimit-unified-representative-claim": "five_hour",
+        });
+        (res as import("node:http").ServerResponse).end(body);
+      });
+      const reply = await send(port, { headers: oauth });
+      expect(reply.status).toBe(status);
+      expect(reply.body).toBe(body);
+      expect(reply.headers["retry-after"]).toBe("17");
+      expect(reply.headers["anthropic-ratelimit-unified-status"]).toBe("rejected");
+      expect(reply.headers["anthropic-ratelimit-unified-reset"]).toBe("1790000000");
+      expect(reply.headers["anthropic-ratelimit-unified-representative-claim"]).toBe("five_hour");
+      expect(reply.headers["content-type"]).toBe("application/json");
+      await new Promise((r) => setTimeout(r, 50));
+      expect(lines.map((l) => JSON.parse(l) as { relay: Record<string, unknown> })[0]!.relay).toMatchObject({ method: "POST", path: "/v1/messages", status });
+    });
+  }
 
   it("refuses a request that does not carry the run's placeholder, and never reaches the upstream", async () => {
     const { port, seen } = await start((_req, res) => (res as import("node:http").ServerResponse).end("ok"));
