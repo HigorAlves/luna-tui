@@ -187,6 +187,16 @@ const exceptionsText = (exceptions: StageInput["context"]["exceptions"]) => {
   };
 };
 
+/** The changed files and the doc files, as docs_drift reads them: one path per line. Paths come from the repository, so both lists are quoted data. */
+const docsDriftText = (docsDrift: StageInput["context"]["docsDrift"]) => {
+  if (!docsDrift) return { repo: NONE, changedFiles: NONE, docFiles: NONE };
+  return {
+    repo: docsDrift.repo,
+    changedFiles: docsDrift.changedFiles.length > 0 ? docsDrift.changedFiles.join("\n") : NONE,
+    docFiles: docsDrift.docFiles.length > 0 ? docsDrift.docFiles.join("\n") : NONE,
+  };
+};
+
 /** The regimes and the wiki's control pages, as compliance_review reads them: each page under its path as a heading. The pages are written by others, so the block is quoted data. */
 const complianceText = (compliance: StageInput["context"]["compliance"]) => {
   if (!compliance) return { repo: NONE, regimes: NONE, controls: NONE };
@@ -559,6 +569,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
   const compliance = complianceText(input.context.compliance);
   const access = accessText(input.context.access);
   const postmortem = postmortemText(input.context.postmortem);
+  const docsDrift = docsDriftText(input.context.docsDrift);
   const questions = questionsText(input.context.questions);
   const video = videoText(input.context.video);
   const subs: Record<string, string> = {
@@ -685,6 +696,9 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.access.removed}}": access.removed,
     "{{context.postmortem.incident}}": postmortem.incident,
     "{{context.postmortem.breach}}": postmortem.breach,
+    "{{context.docsDrift.repo}}": docsDrift.repo,
+    "{{context.docsDrift.changedFiles}}": docsDrift.changedFiles,
+    "{{context.docsDrift.docFiles}}": docsDrift.docFiles,
     "{{context.jira.issue}}": jira.issue,
     "{{context.jira.description}}": jira.description,
     "{{context.jira.comments}}": jira.comments,

@@ -34,6 +34,12 @@ describe("context-only packs", () => {
     expect(isContextPack("compliance_review")).toBe(false);
   });
 
+  it("never include docs_drift: it reads a change in a worktree, so a client has nothing to send it", () => {
+    expect(packStates("docs_drift")).toEqual([]);
+    expect(NOT_ON_DEMAND).toContain("docs_drift");
+    expect(isContextPack("docs_drift")).toBe(false);
+  });
+
   it("take an object with the pack's own key and nothing else", () => {
     expect(contextSchema("chat_triage").safeParse({ chat }).success).toBe(true);
     for (const pack of ["risk_score", "coverage_check", "plan_check"] as const) {

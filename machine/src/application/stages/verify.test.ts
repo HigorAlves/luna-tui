@@ -50,6 +50,8 @@ function setup(opts: {
   approvals?: StageContext["approvals"];
   /** The compliance review beside the review pack. */
   compliance?: NonNullable<Parameters<typeof verifyRunner>[0]["compliance"]>;
+  /** The docs-drift note beside the review pack. */
+  docsDrift?: NonNullable<Parameters<typeof verifyRunner>[0]["docsDrift"]>;
   /** An exec that can open a session of checks sharing one set of services. */
   session?: () => Promise<{ exec: (command: string, args: string[], options?: unknown) => Promise<ExecResult>; close: () => Promise<void> }>;
 }) {
@@ -64,6 +66,7 @@ function setup(opts: {
     exec,
     runPack: opts.noPack ? null : runPack,
     ...(opts.compliance ? { compliance: opts.compliance } : {}),
+    ...(opts.docsDrift ? { docsDrift: opts.docsDrift } : {}),
     stateDir,
     detect: async () => (opts.detected ?? { manager: "pnpm", test: ["pnpm", "run", "test"], lint: ["pnpm", "run", "lint"] }) as never,
     gitIdentity: async () => ("identity" in opts ? opts.identity! : { name: "Ada L", email: "ada@x.dev" }),
@@ -144,6 +147,59 @@ describe("verifying stage", () => {
       const result = await second.run(second.context);
       expect(result.outcome).toBe("pass");
       expect(broken.run).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("the docs-drift note", () => {
+    const stale = { doc: "docs/configuration.md", section: "Variables", why: "The change renamed MACHINE_PORT.", suggestion: "Rename the row." };
+    const docsDrift = (run: StageResult | Error, docs = ["docs/configuration.md"]) => ({
+      slugOf: async () => "o/a",
+      docFiles: async () => docs,
+      run: vi.fn(async () => {
+        if (run instanceof Error) throw run;
+        return run;
+      }),
+    });
+    const answered: StageResult = { outcome: "pass", detail: { answer: { stale: [stale] } } };
+
+    it("adds one nit per stale section, titled for it, and the verdict stays a pass", async () => {
+      const deps = docsDrift(answered);
+      const { run, context } = setup({ docsDrift: deps, changed: ["src/config.ts"] });
+      const result = await run(context);
+      expect(deps.run).toHaveBeenCalledTimes(1);
+      expect(result.outcome).toBe("pass");
+      expect(result.findings).toEqual([expect.objectContaining({ severity: "nit", path: "docs/configuration.md", title: "Docs drift: docs/configuration.md Variables" })]);
+    });
+
+    it("keeps a failing review failing and a passing one passing: its notes are never what decides", async () => {
+      const blocker = setup({ pack: { outcome: "pass", detail: { answer: { verdict: "fail", summary: "broken", findings: [finding()] } } }, docsDrift: docsDrift(answered), changed: ["src/config.ts"] });
+      const failed = await blocker.run(blocker.context);
+      expect(failed.outcome).toBe("fail");
+      expect(failed.findings).toEqual(expect.arrayContaining([expect.objectContaining({ title: "off by one", severity: "bug" }), expect.objectContaining({ severity: "nit" })]));
+      const clean = setup({ docsDrift: docsDrift(answered), changed: ["src/config.ts"] });
+      expect((await clean.run(clean.context)).outcome).toBe("pass");
+    });
+
+    it("does not run when the repo has no docs, or when the change touches only docs", async () => {
+      const noDocs = docsDrift(answered, []);
+      const first = setup({ docsDrift: noDocs, changed: ["src/config.ts"] });
+      expect((await first.run(first.context)).findings ?? []).toEqual([]);
+      expect(noDocs.run).not.toHaveBeenCalled();
+      const onlyDocs = docsDrift(answered);
+      const second = setup({ docsDrift: onlyDocs, changed: ["docs/configuration.md", "README.md"] });
+      expect((await second.run(second.context)).findings ?? []).toEqual([]);
+      expect(onlyDocs.run).not.toHaveBeenCalled();
+    });
+
+    it("never blocks when the pack fails, throws or answers badly", async () => {
+      for (const outcome of [new Error("container died"), { outcome: "fail" } as StageResult, { outcome: "pass", detail: { answer: { stale: "no" } } } as StageResult]) {
+        const deps = docsDrift(outcome);
+        const { run, context } = setup({ docsDrift: deps, changed: ["src/config.ts"] });
+        const result = await run(context);
+        expect(deps.run).toHaveBeenCalledTimes(1);
+        expect(result.outcome).toBe("pass");
+        expect(result.findings ?? []).toEqual([]);
+      }
     });
   });
 

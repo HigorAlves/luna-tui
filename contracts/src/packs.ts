@@ -16,6 +16,7 @@ import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from 
 import { type Bands, type KnockOutFlags, type SubScores, type Weights, knockOut, riskProduct, scorePriority } from "./scoring.ts";
 import { AccessReviewAnswer, ChangeExceptionsAnswer, PostmortemAnswer } from "./compliance.ts";
 import { ComplianceReviewAnswer } from "./compliance-review.ts";
+import { DocsDriftAnswer } from "./docs-drift.ts";
 import { ForemanAnswer } from "./foreman.ts";
 import { FactProposal, ProjectContextSection } from "./economy.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
@@ -54,6 +55,9 @@ export const AgentRole = z.enum([
   "decomposer",
   // Helpers a pack's role hands work to (packs' `helpers`); never a pack's own role.
   "security-reviewer",
+  // Path-triggered reviewers of reviewing and verifying: a migration for its safety, infrastructure config for its exposure.
+  "migration-reviewer",
+  "iac-reviewer",
   "reply-drafter",
   "ticket-writer",
   // The loop guard's redirect: a short note to a run that repeats one failure; no tools.
@@ -81,6 +85,8 @@ export const AgentRole = z.enum([
   "access-reviewer",
   // Writes the blameless postmortem of a resolved incident; text only, no tools.
   "incident-writer",
+  // Reads a change and the repo's docs and names the doc sections the change made stale; advisory, read-only.
+  "docs-keeper",
 ]);
 export type AgentRole = z.infer<typeof AgentRole>;
 
@@ -1192,9 +1198,11 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     kind: "agent",
     agent: "verifier",
     // A second opinion on another engine before the verdict: a child run through `delegate`.
-    helpers: [{ role: "second-opinion", engine: "codex:sol", on: { eve: "claude:opus" } }],
+    // The migration and infrastructure passes run as subagents when the diff touches such a path.
+    helpers: [{ role: "second-opinion", engine: "codex:sol", on: { eve: "claude:opus" } }, { role: "migration-reviewer", engine: "claude:sonnet" }, { role: "iac-reviewer", engine: "claude:sonnet" }],
     skills: ["review-contract", "caveman-review"],
     access: access(READ_ONLY, {
+      agent: true,
       write: true,
       commands: ["gh pr view", "gh pr diff", "git diff", "git log", "git merge-base", "git rev-list", "git add", "git commit", ...CHECK_COMMANDS],
     }),
@@ -1452,8 +1460,8 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     id: "reviewing",
     kind: "agent",
     agent: "pr-reviewer",
-    // The security pass runs as a subagent when the diff touches a sensitive path.
-    helpers: [{ role: "security-reviewer", engine: "claude:opus" }],
+    // The security pass runs as a subagent when the diff touches a sensitive path; so do the migration and infrastructure passes.
+    helpers: [{ role: "security-reviewer", engine: "claude:opus" }, { role: "migration-reviewer", engine: "claude:sonnet" }, { role: "iac-reviewer", engine: "claude:sonnet" }],
     skills: ["review-contract", "caveman-review", "inline-review", "code-discovery"],
     access: access(READ_ONLY, { agent: true, commands: ["git diff", "git log", "git merge-base"] }),
     writable: false,
@@ -1486,6 +1494,22 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: ComplianceReviewAnswer,
     template: "compliance_review.md",
+  },
+  docs_drift: {
+    id: "docs_drift",
+    kind: "agent",
+    // Names the doc sections a change made wrong or incomplete, beside Verify. Read-only on the worktree and advisory: the machine turns each into a nit, never a blocker.
+    agent: "docs-keeper",
+    helpers: [],
+    skills: [],
+    access: access(READ_ONLY, {}),
+    writable: false,
+    maxTurns: 12,
+    timeoutMs: 5 * MINUTE,
+    engines: { default: "claude:haiku", allowed: ["claude:haiku", "claude:sonnet"] },
+    effort: "low",
+    answer: DocsDriftAnswer,
+    template: "docs_drift.md",
   },
   addressing: {
     id: "addressing",

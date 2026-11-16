@@ -123,10 +123,10 @@ describe("agentFiles", () => {
     // The answer schema is a literal: the workflow bundle cannot import the contracts.
     expect(tool).not.toContain("@hardness/contracts");
     expect(JSON.parse(/const HELPER_ANSWER = (.*);/.exec(tool)![1]!)).toMatchObject({ type: "object", required: ["answer"] });
-    // verifying on eve has no native helper: its second opinion is Claude's, over the bridge.
+    // verifying on eve has no native helper: its second opinion and the path-triggered reviewers are Claude's, over the bridge.
     const verifying = agentFiles(PACKS.verifying, options());
     expect(verifying["agent/tools/delegate.ts"]).toContain("const SUBAGENTS: string[] = [];");
-    expect(verifying["agent/tools/delegate.ts"]).toContain('delegateInput(["second-opinion"])');
+    expect(verifying["agent/tools/delegate.ts"]).toContain('delegateInput(["second-opinion","migration-reviewer","iac-reviewer"])');
     expect(Object.keys(verifying).filter((f) => f.startsWith("agent/subagents/"))).toEqual([]);
     expect(agentFiles(triage, options())["agent/tools/delegate.ts"]).toBeUndefined();
   });

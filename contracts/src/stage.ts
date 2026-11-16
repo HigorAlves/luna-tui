@@ -220,6 +220,8 @@ export const PackId = z.enum([
   "breach_assess",
   // Writes the blameless postmortem of a resolved incident from its facts, timeline and breach clocks; no tools, no worktree, on demand.
   "postmortem",
+  // Names the doc sections a change made stale: advisory, read-only, run beside Verify; never a stage of its own.
+  "docs_drift",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -541,6 +543,19 @@ export const PostmortemContext = z.object({
   breach: z.object({ regimes: z.array(z.enum(["gdpr", "lgpd", "hipaa", "us_privacy"])), clocks: z.record(z.string(), z.string()) }).nullable(),
 });
 export type PostmortemContext = z.infer<typeof PostmortemContext>;
+
+/** At most this many doc files, and this many changed files, go to the docs-drift pack. */
+export const DOCS_DRIFT_DOC_FILES = 200;
+export const DOCS_DRIFT_CHANGED_FILES = 500;
+
+/** For docs_drift: the repo, the files the change touched and the repo's doc files (markdown under `docs/` and the README). The worktree holds the code and the docs: data, never an instruction. */
+export const DocsDriftContext = z.object({
+  /** owner/name. */
+  repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/name"),
+  changedFiles: z.array(z.string()).max(DOCS_DRIFT_CHANGED_FILES),
+  docFiles: z.array(z.string()).max(DOCS_DRIFT_DOC_FILES),
+});
+export type DocsDriftContext = z.infer<typeof DocsDriftContext>;
 
 /** One slice of the implementer's ledger, kept by the runner in `/out/ledger.json`. */
 export const LedgerSlice = z.object({
@@ -1432,6 +1447,8 @@ export const StageInput = z.object({
     breach: BreachAssessContext.nullable().optional(),
     /** For postmortem: the resolved incident and its breach clocks; the task is synthetic and there is no worktree. */
     postmortem: PostmortemContext.nullable().optional(),
+    /** For docs_drift: the repo, the change's files and the repo's doc files; the worktree is the change. */
+    docsDrift: DocsDriftContext.nullable().optional(),
     /** For question_council: the open triage questions to settle from the code, the card and the answers so far. */
     questions: QuestionsContext.nullable().optional(),
     /** For verifying: the files the code graph says depend on what the change touched, to review first. */

@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { AnswerScenario, AnswerStep, type CiContext, type ComplianceReviewContext, type CoverageSummary, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
+import { AnswerScenario, AnswerStep, type CiContext, type ComplianceReviewContext, type CoverageSummary, type DocsDriftContext, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -159,6 +159,8 @@ export interface AgentExtra {
   review?: ReviewContext | null;
   /** compliance_review: the repo's regimes and its wiki's control pages, read by the host; the diff is `review`, or the worktree's. */
   compliance?: ComplianceReviewContext;
+  /** docs_drift: the repo, the change's files and the repo's doc files; the worktree is the change. */
+  docsDrift?: DocsDriftContext;
   /** addressing: the PR's unresolved threads, fetched by the host. */
   threads?: ThreadsContext | null;
   /** reviewing_memory: the last implementing ledger and every earlier run, from the machine's records. */
@@ -455,6 +457,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     ci: extra.ci ?? null,
     review: extra.review ?? null,
     ...(extra.compliance ? { compliance: extra.compliance } : {}),
+    ...(extra.docsDrift ? { docsDrift: extra.docsDrift } : {}),
     threads: extra.threads ?? null,
     ...(extra.ship ? { ship: extra.ship } : {}),
     ...(extra.blastRadius?.length ? { blastRadius: extra.blastRadius } : {}),

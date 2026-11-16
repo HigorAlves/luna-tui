@@ -615,6 +615,17 @@ describe("renderPrompt", () => {
     expect(renderPrompt({ pack: PACKS.postmortem, input, template })).toContain("incident:\n(none)\nbreach:\n(none)");
   });
 
+  it("renders the repo, the changed files and the doc files for docs_drift: the repo as the machine's own text, the two lists quoted as data", () => {
+    const template = "repo {{context.docsDrift.repo}}\nchanged:\n{{context.docsDrift.changedFiles}}\ndocs:\n{{context.docsDrift.docFiles}}";
+    const docsDrift = { repo: "acme/api", changedFiles: ["src/config.ts", "src/a b.ts"], docFiles: ["docs/configuration.md", "README.md"] };
+    const prompt = renderQuoted({ pack: PACKS.docs_drift, input: { ...input, pack: "docs_drift", stage: "docs_drift", context: { projectContext: null, docsDrift } } as StageInput, template });
+    expect(prompt).toContain("repo acme/api");
+    expect(prompt).toContain("<<<data:context.docsDrift.changedFiles>>>\n| src/config.ts\n| src/a b.ts\n<<<end-data:context.docsDrift.changedFiles>>>");
+    expect(prompt).toContain("<<<data:context.docsDrift.docFiles>>>\n| docs/configuration.md\n| README.md\n<<<end-data:context.docsDrift.docFiles>>>");
+    expect(prompt).toContain("`docs-keeper` role running the `docs_drift` stage");
+    expect(renderPrompt({ pack: PACKS.docs_drift, input, template })).toContain("repo (none)\nchanged:\n(none)\ndocs:\n(none)");
+  });
+
   it("renders the issue for jira_intake: the facts line, the description, the comments and the repo", () => {
     const template = "issue:\n{{context.jira.issue}}\ndescription:\n{{context.jira.description}}\ncomments:\n{{context.jira.comments}}\nrepo: {{context.jira.repoPath}}";
     const jira = { key: "PLAT-123", url: "https://acme.atlassian.net/browse/PLAT-123", summary: "Login page", description: "Users sign in.\n\n- bad password errors", issueType: "Story", priority: "High", labels: ["luna"], dueAt: "2026-10-31", comments: ["Marta: please", "Lee: by Friday"], repoPath: "/work" };

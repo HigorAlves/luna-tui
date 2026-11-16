@@ -25,6 +25,9 @@ const HELPER: Partial<Record<AgentRole, HelperSpec>> = {
   "gdpr-reviewer": { tools: ["Read", "Glob", "Grep"], maxTurns: 20 },
   "lgpd-reviewer": { tools: ["Read", "Glob", "Grep"], maxTurns: 20 },
   "us-privacy-reviewer": { tools: ["Read", "Glob", "Grep"], maxTurns: 20 },
+  // The path-triggered reviewers: the changed files and the code around them, nothing else.
+  "migration-reviewer": { tools: ["Read", "Glob", "Grep"], maxTurns: 20 },
+  "iac-reviewer": { tools: ["Read", "Glob", "Grep"], maxTurns: 20 },
   "reply-drafter": {
     tools: ["Read", "Glob", "Grep"],
     skills: [`${PLUGIN_NAME}:receiving-code-review`],

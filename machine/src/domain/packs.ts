@@ -82,6 +82,8 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   breach_assess: [],
   // Writes the postmortem when an incident resolves.
   postmortem: [],
+  // The docs-drift note, run by Verify as a sub-run when the repo has docs; advisory and never a stage of its own.
+  docs_drift: [],
 };
 
 /** The task states in which the pipeline runs the pack. */

@@ -82,6 +82,7 @@ import { buildTestsStep } from "../application/stages/build-tests.ts";
 import { exec } from "../adapters/process/exec.ts";
 import { type GitHub, noTokenGitHub } from "../application/github.ts";
 import { type ComplianceDeps } from "../application/stages/compliance-review.ts";
+import { type DocsDriftDeps } from "../application/stages/docs-drift.ts";
 import { sharedWiki } from "../adapters/git/wiki.ts";
 import { type ShipGateProbe, shipGateProbe } from "../application/ship-gate-probe.ts";
 
@@ -105,6 +106,8 @@ export interface RealStagesResult {
   shipGateProbe: ShipGateProbe | null;
   /** The compliance review beside the review and Verify packs: the repo's regimes, its wiki's control pages and the pack's run; null when stages are stubs. */
   compliance: ComplianceDeps | null;
+  /** The docs-drift pack's run, beside Verify; null when stages are stubs. */
+  docsDrift: DocsDriftDeps | null;
 }
 
 /** Why the runner image cannot give a run its own network and proxy (it was built before the egress proxy went in), or null. */
@@ -121,7 +124,7 @@ export interface ImageEventSink {
 }
 
 /** Every stage a stub: what `buildRealStages` returns when it cannot run agents, with the reason (null for `MACHINE_AGENTS=off`, which is a choice). */
-const stubbed = (stubReason: string | null): RealStagesResult => ({ stubReason, real: {}, verifyPack: null, checksExec: null, proofRig: null, agentDeps: null, shipGateProbe: null, compliance: null });
+const stubbed = (stubReason: string | null): RealStagesResult => ({ stubReason, real: {}, verifyPack: null, checksExec: null, proofRig: null, agentDeps: null, shipGateProbe: null, compliance: null, docsDrift: null });
 
 /** Real agents for Triage and Implementer when everything they need is there; stubs otherwise. */
 export async function buildRealStages(
@@ -386,6 +389,8 @@ export async function buildRealStages(
     wiki: sharedWiki(config.stateDir),
     run: (subContext, review, context) => runAgent(deps, subContext, "compliance_review", { ...(review ? { review } : {}), compliance: context }),
   };
+  // The docs-drift note runs beside Verify's review, on every repo that has docs.
+  const docsDrift: DocsDriftDeps = { run: (subContext, drift) => runAgent(deps, subContext, "docs_drift", { docsDrift: drift }) };
   const real: Partial<Record<TaskState, StageRunner>> = {
     ...agents,
     // Build: a tests step (one failing, tagged test per scenario, committed by the machine) runs before the implementer.
@@ -639,7 +644,7 @@ export async function buildRealStages(
   };
   const resolveConflicts: DeliverDeps["resolveConflicts"] = (context, input) =>
     mergeRound({ github, loop: reviewLoop, policies, evidence: { load: evidenceDeps.load, save: saveEvidence, publish: publishByPolicy, store: evidenceStore }, stateDir: config.stateDir }, context, input);
-  return { stubReason: null, compliance, real, resolveConflicts, verifyPack, checksExec, proofRig, shipGateProbe: shipGateProbe({ github, ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch } } : {}), policies, evidence: { load: evidenceDeps.load }, stateDir: config.stateDir }), agentDeps: { ...(egress ? { egress } : {}), image: config.runnerImage, approvals, repoImages, imageSource, imageEvents, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
+  return { stubReason: null, compliance, docsDrift, real, resolveConflicts, verifyPack, checksExec, proofRig, shipGateProbe: shipGateProbe({ github, ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch } } : {}), policies, evidence: { load: evidenceDeps.load }, stateDir: config.stateDir }), agentDeps: { ...(egress ? { egress } : {}), image: config.runnerImage, approvals, repoImages, imageSource, imageEvents, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
 }
 
 /** Packs on demand (`POST /runs`): on whenever agents are, off (undefined, the route's 503) only

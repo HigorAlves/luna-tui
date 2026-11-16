@@ -3,7 +3,7 @@
 // findings and no suite run; a red check fails it with its output as a finding of category `tests`.
 import { FACTORY_DEFAULTS, type CheckSpec, type FactoryConfig, type CoverageSummary, type DecisionOverrides, type Finding, type ServiceSpec, mergeDuplicateFindings, normaliseFinding, severityOf } from "@hardness/contracts";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
-import { join, resolve, sep } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 
 import { branchBase, branchDiffStat, changedPaths as hostChangedPaths, diffText, gitIdentity as hostGitIdentity } from "../../adapters/git/worktree.ts";
 import { RepoImageError } from "../repo-images.ts";
@@ -23,6 +23,7 @@ import { failureGist } from "../../domain/failure-gist.ts";
 import { addedLineNumbers, coverageFinding, mutationFinding, parseLcov, parseMutationScore, patchCoverage } from "../../domain/coverage.ts";
 import { type EnvRecord, compareEnv } from "../../domain/env-hash.ts";
 import { type ComplianceDeps, runCompliance } from "./compliance-review.ts";
+import { type DocsDriftDeps, runDocsDrift } from "./docs-drift.ts";
 import { verifySteps } from "../../domain/verify-order.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { noIdentityDetail } from "../env-broken.ts";
@@ -46,6 +47,8 @@ export interface VerifyDeps {
   runPack: ((context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary; image?: string }) => Promise<StageResult>) | null;
   /** The compliance review beside the review pack, when the repo declares regimes (`slugOf` names the repo's GitHub slug for its wiki); its findings join the review's. */
   compliance?: ComplianceDeps & { slugOf: (repoPath: string) => Promise<string | null> };
+  /** The docs-drift note beside the review pack, when the repo has docs (`slugOf` names the repo for the pack); its sections join the report as nits and never change the verdict. */
+  docsDrift?: DocsDriftDeps & { slugOf: (repoPath: string) => Promise<string | null> };
   stateDir: string;
   detect?: (worktreePath: string) => Promise<DetectedChecks>;
   /** A fresh clone of the card's clone at its head commit, where the checks and the review run; absent, they run in the card's own folder. */
@@ -343,6 +346,15 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       }
       classification = { ...classification, ...(await classify(reviewed)) };
       if (pack.outcome === "fail") return { ...pack, detail: { ...pack.detail, step: "review", ...classification } };
+      // The docs-keeper names the doc sections the change made stale: nits after the classification, so no check or verdict reads them.
+      if (deps.docsDrift && task.repoPath) {
+        const slug = (await deps.docsDrift.slugOf(task.repoPath).catch(() => null)) ?? `local/${basename(task.repoPath).replace(/[^A-Za-z0-9_.-]/g, "-") || "repo"}`;
+        const drift = await runDocsDrift(deps.docsDrift, context, slug, cwd, await changed(cwd, task.repoPath).catch(() => null));
+        if (drift) {
+          reviewed = mergeDuplicateFindings([...reviewed, ...drift.findings.map(normaliseFinding)]);
+          classification = { ...classification, docsDrift: { findings: drift.findings.length, notes: drift.notes } };
+        }
+      }
       const standing = assemble(pack, reviewed, classification);
       const blockers = standing.outcome === "fail" ? 1 : 0;
       if (verifySteps({ env: "matched", review: "done", blockers, checks: null }) === "fail") return standing;

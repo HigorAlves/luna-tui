@@ -319,7 +319,7 @@ const stackDeps = {
 const jiraApi = config.jira ? createJira(config.jira) : noTokenJira();
 /** Ship's review-loop decisions run through PackRuns as the `ship` client: bound once it exists. */
 const shipDecisions: { decide: ShipDecide | null } = { decide: null };
-const { stubReason, real, resolveConflicts, verifyPack, checksExec, proofRig, agentDeps, shipGateProbe, compliance: complianceReview } = await buildRealStages(
+const { stubReason, real, resolveConflicts, verifyPack, checksExec, proofRig, agentDeps, shipGateProbe, compliance: complianceReview, docsDrift: docsDriftReview } = await buildRealStages(
   config,
   watcher,
   (taskId) => pipeline.latestStageFinish(taskId, "e2e"),
@@ -397,6 +397,8 @@ const realVerifyRunner = verifyRunner({
   runPack: verifyPack,
   // The compliance lead reads Verify's change too, when the repo declares regimes; its wiki is the repo's own, by its origin's slug.
   ...(complianceReview ? { compliance: { ...complianceReview, slugOf: originSlugOf } } : {}),
+  // The docs-keeper reads Verify's change too and names the docs it made stale, as nits.
+  ...(docsDriftReview ? { docsDrift: { ...docsDriftReview, slugOf: originSlugOf } } : {}),
   // Verify runs on a fresh clone at the head commit, never in the folder Build used.
   fresh: keptFresh,
   // A failing check is asked again on the base, in a throwaway clone: a failure that is there too is the environment's, not the card's.

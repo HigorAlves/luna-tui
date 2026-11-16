@@ -184,6 +184,20 @@ describe("factory main (dry run)", () => {
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });
 
+  it("docs_drift: runs read-only on haiku, renders the changed files and the doc files as data and leaves a valid result", () => {
+    const docsDrift = { repo: "acme/api", changedFiles: ["src/config.ts"], docFiles: ["docs/configuration.md", "README.md"] };
+    const { code, stdout, out, result } = run(stageInput("docs_drift", { context: { projectContext: null, docsDrift } }));
+    expect(code).toBe(0);
+    const prompt = readFileSync(join(out, "prompt.md"), "utf8");
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("acme/api");
+    expect(prompt).toContain("| src/config.ts");
+    expect(prompt).toContain("| docs/configuration.md\n| README.md");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: "docs-keeper", model: "claude-haiku-5-5", effort: "low" });
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+  });
+
   it("compliance_review: dispatches the five regime reviewers as subagents, renders the regimes and controls as data and leaves a valid result", () => {
     const compliance = { repo: "acme/api", regimes: ["soc2", "gdpr"], controls: [{ path: "Compliance/Controls/PRIV-LOG-01.md", text: "No personal data in logs." }] };
     const { code, stdout, out, result } = run(stageInput("compliance_review", { context: { projectContext: null, compliance } }));
