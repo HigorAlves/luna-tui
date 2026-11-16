@@ -430,18 +430,21 @@ describe("a reply that asks for a link", () => {
 });
 
 describe("posting once", () => {
-  it("two taps in flight post once: the second is refused", async () => {
+  it("two taps in flight post once: the other is refused", async () => {
     let release!: () => void;
     const hold = new Promise<void>((r) => (release = r));
     const x = setup({ hold });
     await x.machine.ingest(ticket(), ctx);
     const [d] = (await x.machine.view("PAY-12")).drafts;
-    const first = x.machine.approve("PAY-12", { draft: d!.id, hash: d!.hash });
-    const second = x.machine.approve("PAY-12", { draft: d!.id, hash: d!.hash });
-    const refused = await second.then(() => null, (e) => e);
+    const taps = [
+      x.machine.approve("PAY-12", { draft: d!.id, hash: d!.hash }).then(() => null, (e: unknown) => e),
+      x.machine.approve("PAY-12", { draft: d!.id, hash: d!.hash }).then(() => null, (e: unknown) => e),
+    ];
+    for (let i = 0; i < 100 && (await x.machine.view("PAY-12")).drafts[0]!.status !== "posting"; i++) await new Promise((r) => setTimeout(r, 10));
     release();
-    await first;
-    expect(refused).toBeInstanceOf(TicketRefusal);
+    const results = await Promise.all(taps);
+    expect(results.filter((r) => r instanceof TicketRefusal)).toHaveLength(1);
+    expect(results.filter((r) => r === null)).toHaveLength(1);
     expect(x.writes).toHaveLength(1);
     expect((await x.machine.view("PAY-12")).drafts[0]!.status).toBe("posted");
   });
@@ -466,7 +469,7 @@ describe("posting once", () => {
     await x.machine.ingest(ticket(), ctx);
     const [d] = (await x.machine.view("PAY-12")).drafts;
     const tap = x.machine.approve("PAY-12", { draft: d!.id, hash: d!.hash });
-    await new Promise((r) => setTimeout(r, 50));
+    for (let i = 0; i < 100 && (await x.machine.view("PAY-12")).drafts[0]!.status !== "posting"; i++) await new Promise((r) => setTimeout(r, 10));
     expect((await x.machine.view("PAY-12")).drafts[0]!.status).toBe("posting");
     await x.machine.ingest(ticket({ updatedAt: "2026-11-06T10:00:00Z" }), ctx);
     expect((await x.machine.view("PAY-12")).drafts[0]!.status).toBe("posting");
