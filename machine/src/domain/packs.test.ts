@@ -1,7 +1,28 @@
 import { PACKS, PackId, RUNNING, RUN_OR_GATE } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { packForState, packInfo, packStates } from "./packs.ts";
+import { packForState, packInfo, packStates, soleAgentPackForState } from "./packs.ts";
+
+describe("soleAgentPackForState", () => {
+  it("names the pack of a state that runs exactly one agent pack", () => {
+    expect(soleAgentPackForState("setup")).toBe("setup");
+    expect(soleAgentPackForState("verifying")).toBe("verifying");
+  });
+
+  it("names none for a state that several agent packs run in", () => {
+    expect(soleAgentPackForState("test_design")).toBeNull();
+    expect(soleAgentPackForState("implementing")).toBeNull();
+    expect(soleAgentPackForState("triage")).toBeNull();
+    expect(soleAgentPackForState("evidence")).toBeNull();
+  });
+
+  it("agrees with the agent packs the registry says run in the state", () => {
+    for (const state of ["setup", "test_design", "implementing", "triage", "verifying", "e2e", "evidence", "ci_watch", "reviewing", "addressing", "awaiting_ship"] as const) {
+      const agents = PackId.options.filter((id) => PACKS[id].kind !== "decision" && packStates(id).includes(state));
+      expect(soleAgentPackForState(state)).toBe(agents.length === 1 ? agents[0] : null);
+    }
+  });
+});
 
 describe("packStates", () => {
   it("is the stage of the same name for a stage pack", () => {

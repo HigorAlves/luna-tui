@@ -42,7 +42,7 @@ export interface Candidate {
 export interface RepoSignal {
   runs: number;
   escalations: number;
-  /** The loop guard's stops: the machine escalates each one, so they are already among `escalations`. Said in `why`, not counted again. */
+  /** The loop guard's stops. Evidence only: `escalations` is read from the event log, where the pipeline escalates each stop, so they are already in it. Said in `why`, not counted again. */
   stuck: number;
   costUsd: number;
 }
@@ -98,7 +98,8 @@ function draftFor(pack: PackId, input: ProposalInput): Drafted | null {
   // 3. The repo's own signal.
   const signal = input.signals[pack];
   if (!signal || signal.runs < MIN_RUNS) return null;
-  // A stuck loop is an escalation too (the machine escalates every loop-guard stop): it is not added again.
+  // `escalations` counts every `stage_done escalated` event (loop-guard and stuck-detector stops, scope reds), and a stage run
+  // stores those as `fail`, so `stuck` is a subset of it: adding it here would count a stuck run twice.
   const trouble = signal.escalations / signal.runs;
 
   // 2. Only candidates the pack may run.

@@ -57,10 +57,12 @@ export function loadBaselines(evalsDir: string): Scorecard[] {
   if (!existsSync(root)) return [];
   const cards: Scorecard[] = [];
   for (const engineDir of readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory())) {
+    // A decision pack takes no effort: a card in an `@<effort>` folder is a second card for the same engine, not a measurement.
+    if (engineDir.name.includes("@")) continue;
     for (const file of readdirSync(join(root, engineDir.name)).filter((f) => f.endsWith(".json"))) {
       try {
         const card = JSON.parse(readFileSync(join(root, engineDir.name, file), "utf8")) as Scorecard;
-        if (card.schema === 1 && PACKS[card.pack]?.kind === "decision" && card.summary?.calibration && Array.isArray(card.cases)) cards.push(withOwnSummary(card));
+        if (card.schema === 1 && PACKS[card.pack]?.kind === "decision" && card.effort === undefined && card.summary?.calibration && Array.isArray(card.cases)) cards.push(withOwnSummary(card));
       } catch {
         // A file that is not a scorecard is not a baseline.
       }

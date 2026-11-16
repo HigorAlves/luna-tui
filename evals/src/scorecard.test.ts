@@ -163,6 +163,18 @@ describe("the scorecard", () => {
     expect(md).toContain("Generated 2026-11-12");
   });
 
+  it("skips a decision card saved under an @<effort> folder, or one that carries an effort: a decision pack takes none, so it is no second card for the engine", () => {
+    const dir = mkdtempSync(join(tmpdir(), "evals-effort-"));
+    const put = (folder: string, c: Scorecard) => {
+      mkdirSync(join(dir, "baselines", folder), { recursive: true });
+      writeFileSync(join(dir, "baselines", folder, `${c.pack}.json`), JSON.stringify(c));
+    };
+    put("jev", card("risk_score", "jev", { actedOnAccuracy: 0.9 }));
+    put("jev@low", card("risk_score", "jev", { actedOnAccuracy: 0.5 }));
+    put("codex-luna", { ...card("risk_score", "codex:luna", {}), effort: "low" });
+    expect(loadBaselines(dir).map((c) => `${c.pack} ${c.engine}`)).toEqual(["risk_score jev"]);
+  });
+
   it("recomputes a baseline's numbers from its own cases instead of trusting the summary the file carries", () => {
     const honest = card("worth_learning", "claude:haiku", {});
     // Eight graded cases, half wrong; the file's summary says every one was right.

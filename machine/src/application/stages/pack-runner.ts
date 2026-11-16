@@ -753,6 +753,12 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     );
   }
   const { output } = ingested;
+  // A runner image built before `StageInput.effort` strips the key and runs at the pack's own effort: nothing else would say so.
+  if (input.effort && output.run?.effort !== input.effort) {
+    const reason = `${pack} was asked to run at ${input.effort} effort and ${output.run?.effort ? `ran at ${output.run.effort}` : "reported none"}: the runner image may be older than this build (pnpm images)`;
+    engineEvents.push({ at: new Date().toISOString(), kind: "engine", payload: { pack, engine: choice.engine, reason } });
+    await context.note?.(reason).catch(() => {});
+  }
   const mapped = toStageResult(ingested);
   if (pushes.attempted) mapped.detail = { ...mapped.detail, pushes };
   const merged = (result: StageResult): StageResult => ({

@@ -1122,6 +1122,38 @@ describe("the engine a stage runs on", () => {
     });
   });
 
+  describe("an effort the runner image may not honour", () => {
+    const runInfo = (effort?: string) => ({ runtime: "claude", engine: "claude:opus", modelId: "m", ...(effort ? { effort } : {}), sdk: { name: "s", version: "1" }, fingerprint: "a".repeat(64) }) as StageOutput["run"];
+    const asked = () => writeFileSync(join(repo, "luna.yaml"), "effort:\n  triage: low\n");
+
+    it("says on the task, and in the run's events, when the result ran at another effort than the input set", async () => {
+      asked();
+      const note = vi.fn(async () => {});
+      const result = await runAgent(deps(fakeSandbox(output({ run: runInfo("high") }))), { ...context("triage"), note }, "triage");
+      expect((seen!.input as unknown as StageInput).effort).toBe("low");
+      const reason = "triage was asked to run at low effort and ran at high: the runner image may be older than this build (pnpm images)";
+      expect(note).toHaveBeenCalledWith(reason);
+      expect(result.events?.find((e) => e.kind === "engine")?.payload).toEqual({ pack: "triage", engine: "claude:opus", reason });
+    });
+
+    it("says so when the result reports no effort at all (an old image strips the key)", async () => {
+      asked();
+      const note = vi.fn(async () => {});
+      await runAgent(deps(fakeSandbox(output({ run: runInfo() }))), { ...context("triage"), note }, "triage");
+      expect(note).toHaveBeenCalledWith("triage was asked to run at low effort and reported none: the runner image may be older than this build (pnpm images)");
+    });
+
+    it("says nothing when the result ran at the effort asked for, or no effort was set", async () => {
+      asked();
+      const note = vi.fn(async () => {});
+      const same = await runAgent(deps(fakeSandbox(output({ run: runInfo("low") }))), { ...context("triage"), note }, "triage");
+      expect(same.events?.find((e) => e.kind === "engine")).toBeUndefined();
+      writeFileSync(join(repo, "luna.yaml"), "policy:\n  graph: off\n");
+      await runAgent(deps(fakeSandbox(output({ run: runInfo("high") }))), { ...context("triage"), note }, "triage");
+      expect(note).not.toHaveBeenCalled();
+    });
+  });
+
   it("runs the engine a re-attached run started on, whatever the task or luna.yaml say now", async () => {
     const { credentials } = recordingCredentials();
     const resume = { container: "hardness-x", inputCommit: null, engine: "claude:opus" as const };

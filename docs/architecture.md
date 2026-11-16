@@ -433,14 +433,15 @@ The machine can draft a `luna.yaml` change from evidence. A person still turns t
 
 **How it starts.** A person runs `pnpm eval propose --repo <abs path>`. The command turns the baselines in `evals/baselines/` and the scorecards in `decision-defaults.json` into candidates. It posts them to `POST /repos/proposals`. `--dry-run` prints the request and calls nothing. The machine adds the repo's own signals from the last 30 days (`SIGNAL_DAYS`). It reads them per pack:
 
-- `runs` and `escalations` come from the repo's `stage_runs`. An escalated outcome counts as an escalation.
-- `stuck` counts the loop guard's stops in the repo's economy log. The machine escalates each stop, so a stop is also an escalation.
+- `runs` comes from the repo's `stage_runs`. A stage run records its task state, not the pack. A state counts for a pack only when it runs exactly one agent pack (`soleAgentPackForState` in `machine/src/domain/packs.ts`, from `RUNS_IN`). So only the packs `setup`, `verifying`, `e2e`, `ci_watch`, `reviewing`, `reviewing_memory`, `addressing` and `pr_reply` can get a proposal. `test_design` (the planner, the code map, the councils), `implementing` (with `build_tests`), `triage` (with `question_council`) and `evidence` (with the video packs) report no signal, so no proposal follows from their mixed runs.
+- `escalations` counts the `stage_done escalated` transitions in the task event log, by the state the task left. A stage run stores a loop-guard stop, a stuck-detector stop and a second scope red as `fail`; only the pipeline event escalates them, so `stage_runs.outcome` cannot be the source.
+- `stuck` counts the loop guard's stops in the repo's economy log. It is evidence only: each stop is already an escalation above.
 - `costUsd` is the stage runs' cost plus the cost of the ledger's `overhead` records. A stage run's own ledger record is not added again.
 
 **The rule.** `proposeConfig` (`machine/src/domain/config-proposal.ts`) is a fixed rule. It calls no model. It decides per pack, from these constants:
 
 - A candidate needs `MIN_CASES = 3` cases. A pack needs `MIN_RUNS = 10` runs in the repo. Otherwise the pack has no signal.
-- The trouble rate is escalations / runs. A stuck loop is not counted twice. The `why` says how many escalations were a stuck loop.
+- The trouble rate is escalations / runs. `stuck` is a part of `escalations`, so it is not added. The `why` says how many escalations were a stuck loop.
 - At `TROUBLE = 0.25` or more, the pack steps up. It takes the candidate with the best quality, at least `GAIN = 0.10` above the current one.
 - Below `CALM = 0.10`, the pack steps down. It takes the cheapest candidate that costs at most `CHEAPER = 0.7` of the current one and loses at most `TOLERANCE = 0.05` of quality.
 - A change is only to an engine the pack allows, at an effort that engine supports.
@@ -469,7 +470,7 @@ Each change carries a `why` built from the numbers. It is never model text.
 - For `fix_scope`, "a person sent it to the verifier or the planner" is not a signal anywhere yet. `size_estimate` labels lines only. The retro holds no counted file count, so `est_files` stays unlabelled.
 - A `learned()` call that names neither a card nor a repository gets the machine's default. The machine keeps the truth, whatever a repository says. One example is `intake_dedup` from a Slack or Jira intake with no card. Another is a conversation channel that no repository or two repositories claim. A third is a ticket with no repository link. Calls that name no task get the default `learning` values and no `repo`.
 - `pnpm eval calibrate --repo <path>` (a repository's own bars beside the pack's) does not exist yet.
-- A config proposal changes only a pack's engine and effort. It does not change the bars or the priority weights. No schedule harvests, re-measures or proposes. The signals leave out `POST /runs` calls, because `pack_runs` records no repo. A change that made things worse has no automatic undo: a person restores `luna.yaml` from git.
+- A config proposal changes only a pack's engine and effort. It does not change the bars or the priority weights. No schedule harvests, re-measures or proposes. The signals leave out `POST /runs` calls, because `pack_runs` records no repo. A change that made things worse has no automatic undo: a person restores `luna.yaml` from git. A stage run does not record which pack ran inside a shared state, so the planner, the code-map reader, the councils, the build-tests step, the question council and the video packs get no proposal from the repo's signals (sub-run attribution). The stuck-detector's stops are in the escalations but not in `stuck`, which counts only the loop guard's.
 - The second reading of every hand-written case came in the same pass as the first, not independently. Read `pnpm eval cases --pack <p>` before a baseline counts on it.
 
 ## Token economy
