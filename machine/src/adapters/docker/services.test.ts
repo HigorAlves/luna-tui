@@ -29,7 +29,7 @@ describe("serviceArgs", () => {
     expect(serviceArgs("hardness-net-r1", "r1", "postgres", postgres)).toEqual([
       "run", "-d", "--name", "r1-svc-postgres", "--label", "dev.hardness.stage=1",
       // Official images start as root and drop to their own user, so the few capabilities that takes stay; the rest go.
-      "--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--cap-add", "CHOWN,SETUID,SETGID,DAC_OVERRIDE,FOWNER", "--pids-limit", "512",
+      "--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--cap-add", "CHOWN", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER", "--pids-limit", "512",
       "--network", "hardness-net-r1", "--network-alias", "postgres",
       "-e", "POSTGRES_USER=app", "-e", "POSTGRES_PASSWORD=app", "postgres:16",
     ]);

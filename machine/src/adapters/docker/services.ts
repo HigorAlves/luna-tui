@@ -57,8 +57,10 @@ export function hostArgs(hosts: readonly ServiceHost[] | undefined): string[] {
 export const networkName = (runName: string): string => `hardness-net-${runName}`;
 export const serviceName = (runName: string, key: string): string => `${runName}-svc-${key}`;
 
-/** Official images start as root and drop to their own user (postgres, redis), so the few capabilities that takes stay and the rest go. */
-const SERVICE_HARDENING = ["--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--cap-add", "CHOWN,SETUID,SETGID,DAC_OVERRIDE,FOWNER", "--pids-limit", "512"];
+/** Official images start as root and drop to their own user (postgres, redis), so the few capabilities that takes stay and the rest go.
+ *  One `--cap-add` per capability: the daemon refuses a comma-joined list ("invalid CapAdd"), and no service would start. */
+const SERVICE_CAPS = ["CHOWN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER"];
+const SERVICE_HARDENING = ["--security-opt", "no-new-privileges", "--cap-drop", "ALL", ...SERVICE_CAPS.flatMap((cap) => ["--cap-add", cap]), "--pids-limit", "512"];
 
 /** What the machine policy adds to a service container: its process limit (at most 512), the seccomp profile it names, and the runtime for the card's trust (never runc). */
 export interface ServiceHardening {
