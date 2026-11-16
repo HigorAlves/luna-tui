@@ -69,8 +69,8 @@ function run(input: unknown, env: Record<string, string> = {}, files: Record<str
   return { code, stdout, out, result };
 }
 
-// slack_triage, chat_triage and eval_judge have no worktree and read no project context; their dry runs are below.
-const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "eval_judge").map((p) => p.id);
+// slack_triage, chat_triage and eval_judge have no worktree and read no project context; their dry runs are below. council_second defaults to an eve engine: its dry run is below.
+const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "eval_judge" && p.id !== "council_second").map((p) => p.id);
 
 describe("factory main (dry run)", () => {
   it.each(agentPacks)("%s: renders the prompt, prints the options and leaves a valid result", (pack) => {
@@ -242,6 +242,15 @@ describe("factory main (dry run)", () => {
       tools: ["bash", "read_file", "glob", "grep", "web_fetch", "step", "decision_get", "card_search", "delegate"],
       guard: { writable: false, commands: expect.arrayContaining(["gh issue view"]), roots: { scratch: expect.stringMatching(/luna-scratch-/), read: [expect.stringMatching(/\/in$/), "/graph"] } },
     });
+    expect(result).toMatchObject({ ok: true, summary: "dry-run" });
+  });
+
+  it("council_second: renders the council prompt on its default eve engine, read-only", () => {
+    const { code, stdout, out, result } = run(stageInput("council_second"));
+    expect(code).toBe(0);
+    expect(readFileSync(join(out, "prompt.md"), "utf8")).not.toContain("{{");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: expect.stringMatching(/\.eve-agents\/council_second$/), model: "chatgpt(gpt-5.6-terra)", guard: { writable: false } });
     expect(result).toMatchObject({ ok: true, summary: "dry-run" });
   });
 

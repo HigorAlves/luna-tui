@@ -254,6 +254,19 @@ function mapText(map: NonNullable<StageInput["context"]["plan"]>["map"]): string
   ].join("\n");
 }
 
+/** The council packs' view: the plan under review, its criteria, the round and the transcript so far. */
+function councilText(council: NonNullable<StageInput["context"]["plan"]>["council"]): string {
+  if (!council) return NONE;
+  const turn = (t: { member: string; round: number; summary: string; findings: StageInput["priorFindings"] }) =>
+    [`- ${t.member}, round ${t.round}: ${t.summary}`, ...t.findings.map((f) => `    - ${f.severity}: ${f.title}: ${f.body}`)].join("\n");
+  return [
+    `Round: ${council.round}`,
+    `Plan:\n${council.plan}`,
+    `Criteria:\n${council.criteria.map((c) => `- ${c}`).join("\n") || "- (none)"}`,
+    `Earlier turns:\n${council.transcript.length ? council.transcript.map(turn).join("\n") : "(none)"}`,
+  ].join("\n");
+}
+
 /** What the machine's lexical match of the goal against the graph found: the code mapper confirms it. */
 function shortlistText(shortlist: NonNullable<StageInput["context"]["plan"]>["shortlist"]): string {
   if (!shortlist) return NONE;
@@ -438,6 +451,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.propose}}": proposeText(input.context.propose),
     "{{context.factCandidates}}": candidatesText(input.context.factCandidates),
     ...(input.context.conversation ? conversationText(input.context.conversation) : Object.fromEntries(Object.keys(CONVERSATION_VARIABLES).map((name) => [`{{context.conversation.${name}}}`, NONE]))),
+    "{{context.plan.council}}": councilText(input.context.plan?.council),
     "{{context.plan.map}}": mapText(input.context.plan?.map),
     "{{context.plan.shortlist}}": shortlistText(input.context.plan?.shortlist),
     "{{context.plan.replan}}": replanText(input.context.plan?.replan),

@@ -17,6 +17,7 @@ import {
   EvidencePack,
   EvalJudgeAnswer,
   CodeMapAnswer,
+  CouncilAnswer,
   PlanAnswer,
   PlanContext,
   TestDesignAnswer,
@@ -206,11 +207,11 @@ describe("StageOutput", () => {
 describe("PackId", () => {
   it("has the eleven stage packs, each named after a task state, plus the Slack, chat and Jira intake triages, the issue classifier and the eval judge", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "build_tests", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "code_map", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "ci_failure_class", "frame_privacy", "evidence_format", "size_estimate", "split_check", "decompose", "video_script", "recording", "video_qa", "video_fix", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "pr_reply", "loop_judge", "loop_redirect", "fact_propose", "conversation_assess", "conversation_relation", "conversation_reply", "pr_link"].sort(),
+      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "build_tests", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "code_map", "council_second", "council_security", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "ci_failure_class", "frame_privacy", "evidence_format", "size_estimate", "split_check", "decompose", "video_script", "recording", "video_qa", "video_fix", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "pr_reply", "loop_judge", "loop_redirect", "fact_propose", "conversation_assess", "conversation_relation", "conversation_reply", "pr_link"].sort(),
     );
     const onDemand: string[] = ["slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "ci_failure_class", "frame_privacy", "evidence_format", "size_estimate", "split_check", "decompose", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "loop_judge", "loop_redirect", "fact_propose", "conversation_assess", "conversation_relation", "conversation_reply", "pr_link"];
     // The planner runs in the test_design state (the machine's RUNS_IN), so it names no state of its own.
-    const runsInAnotherState: string[] = ["plan", "plan_fast", "test_design_fast", "build_tests", "code_map", "video_script", "recording", "video_qa", "video_fix", "pr_reply"];
+    const runsInAnotherState: string[] = ["plan", "plan_fast", "test_design_fast", "build_tests", "code_map", "council_security", "council_second", "video_script", "recording", "video_qa", "video_fix", "pr_reply"];
     for (const pack of PackId.options) {
       if (onDemand.includes(pack) || runsInAnotherState.includes(pack)) expect(TaskState.options).not.toContain(pack);
       else expect(TaskState.options).toContain(pack);
@@ -249,6 +250,41 @@ describe("the plan pack", () => {
     expect(PlanAnswer.parse(plan)).toEqual(plan);
     expect(PlanAnswer.safeParse({ kind: "questions", summary: "s", questions: [{ question: "q", recommended: "r" }] }).success).toBe(true);
     expect(PlanAnswer.safeParse({ ...plan, kind: "maybe" }).success).toBe(false);
+  });
+});
+
+describe("the council packs", () => {
+  it("is a security reviewer on opus and a second opinion on codex, each read-only at medium effort, 15 turns, 6 minutes", () => {
+    expect(PACKS.council_security).toMatchObject({
+      kind: "agent", agent: "security-reviewer", helpers: [], writable: false, maxTurns: 15, timeoutMs: 6 * 60_000, effort: "medium", template: "council_security.md", answer: CouncilAnswer,
+      engines: { default: "claude:opus", allowed: ["claude:opus"] },
+    });
+    expect(PACKS.council_second).toMatchObject({
+      kind: "agent", agent: "second-opinion", helpers: [], writable: false, maxTurns: 15, timeoutMs: 6 * 60_000, effort: "medium", template: "council_second.md", answer: CouncilAnswer,
+      engines: { default: "codex:sol", allowed: ["codex:sol", "claude:opus"], fallback: ["claude:opus"] },
+    });
+    for (const id of ["council_security", "council_second"] as const) {
+      const access = PACKS[id].kind === "agent" ? PACKS[id].access : null;
+      expect(access).toMatchObject({ read: true, write: false, web: false, luna: ["step"] });
+      expect(access?.commands.some((c) => c === "npm" || c === "pnpm" || c.startsWith("git add"))).toBe(false);
+    }
+  });
+
+  it("answers a short summary and up to eight findings; no findings means nothing to add", () => {
+    const finding = { path: "plan", line: 1, severity: "security", title: "t", body: "b", confidence: 0.9 };
+    expect(CouncilAnswer.parse({ summary: "nothing to add", findings: [] }).findings).toEqual([]);
+    expect(CouncilAnswer.safeParse({ summary: "s", findings: [finding] }).success).toBe(true);
+    expect(CouncilAnswer.safeParse({ summary: "s".repeat(301), findings: [] }).success).toBe(false);
+    expect(CouncilAnswer.safeParse({ summary: "s", findings: Array(9).fill(finding) }).success).toBe(false);
+  });
+
+  it("rides on the plan context as the plan, its criteria, the round and the transcript", () => {
+    const plan = { record: null, brief: "b", criteria: ["c"], assumptions: [], slices: [] };
+    const council = { plan: "1. s", criteria: ["c"], round: 2, transcript: [{ member: "security", round: 1, summary: "one gap", findings: [] }] };
+    expect(PlanContext.parse({ ...plan, council }).council).toEqual(council);
+    expect(PlanContext.safeParse({ ...plan, council: { ...council, round: 3 } }).success).toBe(false);
+    expect(PlanContext.safeParse({ ...plan, council: { ...council, transcript: [{ member: "other", round: 1, summary: "", findings: [] }] } }).success).toBe(false);
+    expect(PlanContext.parse(plan).council).toBeUndefined();
   });
 });
 

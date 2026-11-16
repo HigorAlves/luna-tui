@@ -10,6 +10,9 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   // The plan stage opens with the code map, read from the repo's graph.
   code_map: ["test_design"],
   test_design_fast: ["test_design"],
+  // The plan council runs after plan_check, inside the plan stage.
+  council_security: ["test_design"],
+  council_second: ["test_design"],
   // Build's tests step runs inside the implementing stage, before the implementer.
   build_tests: ["implementing"],
   // The inboxes' packs and the decision pack callers run on demand: no task, so no task state.

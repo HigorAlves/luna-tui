@@ -277,6 +277,19 @@ describe("renderPrompt", () => {
     expect(render({ ...plan, map: null })).toContain("(none)");
   });
 
+  it("renders the council's plan, criteria, round and earlier transcript as data, or none", () => {
+    const council = { plan: "1. Add the route", criteria: ["C1 exports csv"], round: 2, transcript: [{ member: "security", round: 1, summary: "no auth on the route", findings: [{ path: "plan", line: 1, severity: "security", title: "Route has no auth", body: "Anyone can export.", confidence: 0.9 }] }] };
+    const plan = { record: null, brief: "", criteria: [], assumptions: [], slices: [] };
+    const render = (c?: unknown) => renderPrompt({ pack: PACKS.council_security, input: { ...input, context: { ...input.context, plan: { ...plan, ...(c ? { council: c } : {}) } } } as never, template: "{{context.plan.council}}" });
+    const out = render(council);
+    expect(out).toContain("Round: 2");
+    expect(out).toContain("1. Add the route");
+    expect(out).toContain("- C1 exports csv");
+    expect(out).toContain("security, round 1: no auth on the route");
+    expect(out).toContain("Route has no auth");
+    expect(render()).toContain("(none)");
+  });
+
   it("renders the shortlist the machine located for the code mapper", () => {
     const plan = { record: null, brief: "", criteria: [], assumptions: [], slices: [], shortlist: { files: ["src/cart.ts"], symbols: ["applyCoupon"], components: ["cart"], owners: ["@marta"] } };
     const render = (p: unknown) => renderPrompt({ pack: PACKS.code_map, input: { ...input, context: { ...input.context, plan: p } } as never, template: "{{context.plan.shortlist}}" });

@@ -401,6 +401,10 @@ export type LoopRedirectAnswer = z.infer<typeof LoopRedirectAnswer>;
 export const ConversationReplyAnswer = z.object({ reply: z.string().max(1500), confidence: z.number().min(0).max(1) });
 export type ConversationReplyAnswer = z.infer<typeof ConversationReplyAnswer>;
 
+/** council_security and council_second: a short summary and findings from the member's own lane. No findings means nothing to add. */
+export const CouncilAnswer = z.object({ summary: z.string().max(300), findings: z.array(Finding).max(8) });
+export type CouncilAnswer = z.infer<typeof CouncilAnswer>;
+
 export const HelperAnswer = z.object({ answer: z.string(), findings: z.array(Finding).optional() });
 export type HelperAnswer = z.infer<typeof HelperAnswer>;
 
@@ -1010,6 +1014,38 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: CodeMapAnswer,
     template: "code_map.md",
+  },
+  // The plan council's security member: reviews a plan, not a diff; the machine runs it after plan_check on a High-risk or large card.
+  council_security: {
+    id: "council_security",
+    kind: "agent",
+    agent: "security-reviewer",
+    helpers: [],
+    skills: [],
+    access: access(READ_ONLY, { skills: false }),
+    writable: false,
+    maxTurns: 15,
+    timeoutMs: 6 * MINUTE,
+    engines: only("claude:opus"),
+    effort: "medium",
+    answer: CouncilAnswer,
+    template: "council_security.md",
+  },
+  // The plan council's independent member, on another model.
+  council_second: {
+    id: "council_second",
+    kind: "agent",
+    agent: "second-opinion",
+    helpers: [],
+    skills: [],
+    access: access(READ_ONLY, { skills: false }),
+    writable: false,
+    maxTurns: 15,
+    timeoutMs: 6 * MINUTE,
+    engines: { default: "codex:sol", allowed: ["codex:sol", "claude:opus"], fallback: ["claude:opus"] },
+    effort: "medium",
+    answer: CouncilAnswer,
+    template: "council_second.md",
   },
   plan_fast: {
     id: "plan_fast",

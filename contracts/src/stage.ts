@@ -199,6 +199,9 @@ export const PackId = z.enum([
   "fact_propose",
   // Drafts the answer to a reviewer's question on a shipped PR from the Evidence Pack (runs in the shipping state, after the retro in PACKS order).
   "pr_reply",
+  // The plan council (run in test_design after plan_check): a security review and an independent second opinion on a High-risk or large plan.
+  "council_security",
+  "council_second",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -679,6 +682,10 @@ export const PlanRisk = z.object({
 });
 export type PlanRisk = z.infer<typeof PlanRisk>;
 
+/** One member's answer in the plan council: who, which round, what they said and the findings (none means nothing to add). */
+export const CouncilTurn = z.object({ member: z.enum(["security", "second"]), round: z.union([z.literal(1), z.literal(2)]), summary: z.string(), findings: z.array(Finding) });
+export type CouncilTurn = z.infer<typeof CouncilTurn>;
+
 export const PlanContext = z.object({
   /** The machine's fact that every file the plan touches is documentation (or a test): the test designer writes reading checks, no test. */
   docsOnly: z.boolean().optional(),
@@ -703,6 +710,8 @@ export const PlanContext = z.object({
   replan: z.object({ raised_by: z.string(), reason: z.string(), output: z.string().optional(), findings: z.array(z.string()).optional(), thread: z.string().optional() }).optional(),
   /** For the code mapper: where the graph says the goal lives (the machine's lexical match), to confirm and give roles to. */
   shortlist: z.object({ files: z.array(z.string()), symbols: z.array(z.string()), components: z.array(z.string()), owners: z.array(z.string()) }).optional(),
+  /** For the council packs: the plan under review as text, its criteria, the round and what the members said so far. */
+  council: z.object({ plan: z.string(), criteria: z.array(z.string()), round: z.union([z.literal(1), z.literal(2)]), transcript: z.array(CouncilTurn) }).optional(),
 });
 export type PlanContext = z.infer<typeof PlanContext>;
 
