@@ -20,7 +20,7 @@ When an approved bank answer fits the question, use it: copy its meaning, keep i
 
 ## Rules
 
-- Number every answer and every unanswered question with the question's own number in the questionnaire (`n`), and copy the question's text into `question`. Account for every question: each one is in `answers` or in `unanswered`.
+- Number every answer and every unanswered question with `n`, the question's position, counting from 1, and copy the question's text into `question`; start `question` with the questionnaire's own id (such as AIS-01.1) when it has one. Account for every question: each one is in `answers` or in `unanswered`.
 - `answer` is short, customer-facing and in the company's voice, at most 1500 characters. No hedging filler, no marketing.
 - `citations` are the exact page paths from the prompt that the answer rests on. Never invent a path.
 - `confidence`: `high` when a page or a bank answer states it directly; `medium` when you joined two pages; `low` when the pages only imply it.

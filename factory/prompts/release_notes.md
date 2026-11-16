@@ -13,4 +13,4 @@ You are `{{agent}}`, attempt {{attempt}}. There is no worktree and nothing to ru
 2. Write for a user of the product. Group the changes under Features, Fixes, Security and Other, one plain sentence each, naming the PR numbers it comes from.
 3. Name every breaking change plainly: what changed and what to do instead. Put the changes a user will care about most in `highlights`, at most five.
 4. Never invent a change, a name, a version or a PR number that is not in the list. No secrets.
-5. Answer `{highlights, sections: [{heading, items: [{text, prs}]}], breaking}`: each `text` at most 200 characters.
+5. Answer `{highlights, sections: [{heading, items: [{text, prs}]}], breaking}`. The machine rejects an answer over these limits: `highlights` at most 5 items of 200 characters; at most 50 items in each section, each `text` at most 200 characters and `prs` at most 20 numbers; `breaking` at most 10 items of 300 characters.

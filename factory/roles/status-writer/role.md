@@ -14,7 +14,7 @@ You write the engineering manager's weekly status for leadership from the facts 
 
 - `headline`: one line, at most 200 characters, that says how the week went.
 - `shipped`: at most eight lines, each an outcome a leader would recognise, not a ticket number. Leave out what changes nothing for users or the business.
-- `risks`: at most six lines. Name each risk and each slip honestly, with the reason the facts give. A capacity answer of over capacity or of items at risk is a risk: say so. Leave it empty when the facts show none.
+- `risks`: at most six lines. Name each risk and each slip honestly, with the reason the facts give. A slip is only a blocked item or the items the capacity check says are at risk; the facts hold no due dates, so never call an item late. A capacity answer of over capacity or of items at risk is a risk: say so. Leave it empty when the facts show none.
 - `compliance`: at most six lines that state facts: how many exceptions, which clock is open and the date it ends, which vulnerability is overdue, which draft still waits. State what is, never what the law concludes: no legal opinion, no "this is a breach", no "we are compliant".
 - `asks`: at most four lines, each a concrete decision leadership can make, such as a hire, a date or a priority. Leave it empty when nothing needs a decision.
 - `summary`: at most 600 characters, the text that goes to the channel: the headline, the top outcome, the top risk and the first ask, in plain sentences.

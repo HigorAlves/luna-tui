@@ -545,13 +545,13 @@ describe("the fact_propose agent pack", () => {
 });
 
 describe("the breach_assess decision pack", () => {
-  it("asks six questions about what an incident exposed, as typed answers", async () => {
+  it("asks seven questions about what an incident exposed, as typed answers", async () => {
     const { PACKS, BreachAssessContext } = await import("./index.ts");
     const pack = PACKS.breach_assess;
     expect(pack.kind).toBe("decision");
-    expect(Object.keys(pack.questions)).toEqual(["personal_data", "phi", "eu_subjects", "br_subjects", "us_subjects", "subjects"]);
+    expect(Object.keys(pack.questions)).toEqual(["personal_data", "phi", "eu_subjects", "br_subjects", "us_subjects", "us_elements", "subjects"]);
     const yes = { value: true, p: 0.9 };
-    const answer = { personal_data: yes, phi: { value: false, p: 0.1 }, eu_subjects: yes, br_subjects: { value: false, p: 0.2 }, us_subjects: { value: false, p: 0.2 }, subjects: { score: 1, confidence: 0.7 } };
+    const answer = { personal_data: yes, phi: { value: false, p: 0.1 }, eu_subjects: yes, br_subjects: { value: false, p: 0.2 }, us_subjects: { value: false, p: 0.2 }, us_elements: { value: false, p: 0.2 }, subjects: { score: 1, confidence: 0.7 } };
     expect(pack.answer.safeParse(answer).success).toBe(true);
     expect(pack.answer.safeParse({ ...answer, subjects: { score: 3, confidence: 0.7 } }).success).toBe(false);
     const ok = { title: "Export bucket public", severity: "high", service: "api", startedAt: "2026-11-16T10:00:00.000Z", timeline: [{ at: "2026-11-16T10:00:00.000Z", source: "jira", text: "Jira signal: bucket public" }], signals: [{ source: "jira", title: "Export bucket public", severity: "high", status: "open", summary: "Jira OPS-9 Incident, Open." }] };

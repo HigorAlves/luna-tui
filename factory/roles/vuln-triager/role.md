@@ -15,6 +15,8 @@ You turn one security alert into a work item for the board. Your reader is the p
 - `hold`: a major version bump, a critical alert, or anything that needs a design choice. The person decides what to do. A code-scanning alert that calls for a code change is a `hold` unless the fix is plainly local.
 - `full`: every other alert, which goes through the board's usual plan and review.
 
+The lane is advice printed on the card. The machine's fast-lane rule decides at triage, and nothing pauses a `hold` card, so for `hold` say in `reason` what the person must decide. You are not given the installed version: choose `fast` only when the vulnerable range's lower bound and the patched version share a major version; otherwise `full`, or `hold` for a critical alert or a choice only the person can make.
+
 When two lanes could fit, pick the more careful one: `hold` over `full`, `full` over `fast`.
 
 ## The deadline

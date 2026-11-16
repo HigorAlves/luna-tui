@@ -5,17 +5,18 @@ import type { Incident } from "./incident.ts";
 
 const yes = { value: true, p: 0.9 };
 const no = { value: false, p: 0.1 };
-const answers = (over: Partial<BreachAnswers> = {}): BreachAnswers => ({ personal_data: no, phi: no, eu_subjects: no, br_subjects: no, us_subjects: no, subjects: { score: 0, confidence: 0.8 }, ...over });
+const answers = (over: Partial<BreachAnswers> = {}): BreachAnswers => ({ personal_data: no, phi: no, eu_subjects: no, br_subjects: no, us_subjects: no, us_elements: no, subjects: { score: 0, confidence: 0.8 }, ...over });
 
 describe("regimesOf", () => {
   it.each([
     ["nothing exposed", answers({ eu_subjects: yes, br_subjects: yes, us_subjects: yes }), []],
     ["personal data of people in the EU", answers({ personal_data: yes, eu_subjects: yes }), ["gdpr"]],
     ["personal data of people in Brazil", answers({ personal_data: yes, br_subjects: yes }), ["lgpd"]],
-    ["personal data of people in the US", answers({ personal_data: yes, us_subjects: yes }), ["us_privacy"]],
-    ["personal data of people in all three", answers({ personal_data: yes, eu_subjects: yes, br_subjects: yes, us_subjects: yes }), ["gdpr", "lgpd", "us_privacy"]],
+    ["personal data of people in the US, of a kind the state laws cover", answers({ personal_data: yes, us_subjects: yes, us_elements: yes }), ["us_privacy"]],
+    ["personal data of people in the US, of no covered kind", answers({ personal_data: yes, us_subjects: yes }), []],
+    ["personal data of people in all three", answers({ personal_data: yes, eu_subjects: yes, br_subjects: yes, us_subjects: yes, us_elements: yes }), ["gdpr", "lgpd", "us_privacy"]],
     ["health information alone", answers({ phi: yes }), ["hipaa"]],
-    ["health information of people in the US", answers({ personal_data: yes, phi: yes, us_subjects: yes }), ["hipaa", "us_privacy"]],
+    ["health information of people in the US", answers({ personal_data: yes, phi: yes, us_subjects: yes, us_elements: yes }), ["hipaa", "us_privacy"]],
     ["personal data of nobody in particular", answers({ personal_data: yes }), []],
   ])("%s gives %j", (_name, given, regimes) => {
     expect(regimesOf(given)).toEqual(regimes);

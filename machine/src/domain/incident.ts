@@ -162,8 +162,10 @@ function addWorkingDays(from: Date, days: number): Date {
 }
 
 /** The notification deadline per regime, from the time the company became aware of the breach (`seenAt`, ISO):
- *  GDPR 72 hours (Art. 33); LGPD 3 working days (ANPD Resolution 15/2024); HIPAA 60 days (45 CFR 164.404); US state laws 30 days,
- *  the conservative earliest (state deadlines differ; a per-state setting can replace this later). Deadlines are ISO instants. */
+ *  GDPR 72 hours (Art. 33); LGPD 3 working days (ANPD Resolution 15/2024); HIPAA 60 days (45 CFR 164.404); US state laws 30 days.
+ *  The US figure is a default, not the earliest: some states are shorter (Vermont 14 business days to its attorney general,
+ *  Puerto Rico 10 days), and a per-state setting can replace it later. LGPD working days skip weekends, not Brazilian holidays.
+ *  Deadlines are ISO instants. */
 export function breachClocks(awareAt: string, regimes: readonly BreachRegime[]): Partial<Record<BreachRegime, string>> {
   const from = new Date(awareAt);
   const due: Record<BreachRegime, Date> = {

@@ -17,7 +17,7 @@ const incident: Incident = {
 const NOW = new Date("2026-11-12T00:00:00.000Z");
 const yes = { value: true, p: 0.9 };
 const no = { value: false, p: 0.1 };
-const answer = { personal_data: yes, phi: no, eu_subjects: yes, br_subjects: yes, us_subjects: no, subjects: { score: 1, confidence: 0.7 } };
+const answer = { personal_data: yes, phi: no, eu_subjects: yes, br_subjects: yes, us_subjects: no, us_elements: no, subjects: { score: 1, confidence: 0.7 } };
 
 describe("breachAssessor", () => {
   it("derives the regimes from the answers and the clocks from when the incident started", async () => {

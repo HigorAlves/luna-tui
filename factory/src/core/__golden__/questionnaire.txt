@@ -21,4 +21,4 @@ You are `questionnaire-drafter`, attempt 1. There is no worktree and nothing to 
 3. Cite the page paths each answer rests on, copied verbatim from the `##` headers. Never invent a path.
 4. When the pages do not show a control, put the question in `unanswered` with a short `why`. Never claim what the pages do not show. No secrets, no personal data.
 5. Every question is in `answers` or in `unanswered`, numbered as in the questionnaire.
-6. Answer `{answers: [{n, question, answer, citations, fromBank, confidence}], unanswered: [{n, question, why}]}`: `answer` at most 1500 characters; `confidence` is `high`, `medium` or `low`.
+6. Answer `{answers: [{n, question, answer, citations, fromBank, confidence}], unanswered: [{n, question, why}]}`: the machine rejects an answer over these limits: `question` at most 2000 characters, `answer` at most 1500, `citations` at most 10 paths, `why` at most 400, and at most 300 entries in each list. `confidence` is `high`, `medium` or `low`.

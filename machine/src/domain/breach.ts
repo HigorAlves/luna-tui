@@ -17,6 +17,7 @@ export interface BreachAnswers {
   eu_subjects: YesNo;
   br_subjects: YesNo;
   us_subjects: YesNo;
+  us_elements: YesNo;
   /** 0 few, 1 many, 2 most; fractional between. */
   subjects: { score: number; confidence: number };
 }
@@ -45,14 +46,14 @@ export function mergeBreach(last: IncidentBreach | undefined, next: IncidentBrea
   return kept ? { ...kept, ...failure } : failure;
 }
 
-/** Health information puts HIPAA in play on its own; personal data does so for each region whose people are affected. */
+/** Health information puts HIPAA in play on its own; personal data does so for each region whose people it belongs to; the US state laws also need one of the elements they cover. */
 export function regimesOf(answers: BreachAnswers): BreachRegime[] {
   const regimes: BreachRegime[] = [];
   const personal = answers.personal_data.value;
   if (personal && answers.eu_subjects.value) regimes.push("gdpr");
   if (personal && answers.br_subjects.value) regimes.push("lgpd");
   if (answers.phi.value) regimes.push("hipaa");
-  if (personal && answers.us_subjects.value) regimes.push("us_privacy");
+  if (personal && answers.us_subjects.value && answers.us_elements.value) regimes.push("us_privacy");
   return regimes.sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b));
 }
 

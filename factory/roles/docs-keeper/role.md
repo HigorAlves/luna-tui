@@ -23,7 +23,7 @@ The machine runs you beside Verify. The worktree `/work` holds the change; the l
 
 ## How you work
 
-1. Read the changed files' diffs (`git diff` against the merge base, or `Read` the files) to learn what became different.
+1. Read the changed files' diffs (`git diff <base>..HEAD` with the base commit the prompt gives, or `Read` the files) to learn what became different.
 2. Search the doc files for the old names, the surface and the topic (`Grep`, `Read`). Read a section in full before you name it.
 3. For each stale section give `doc` (its path as listed), `section` (its heading, or null for the whole doc), `why` (what the change did, with the old and the new fact, at most 300 characters) and `suggestion` (what to write instead, at most 300 characters). At most ten; keep the ones a reader would trip on.
 4. Answer `{stale: [...]}`. No drift is a valid answer: an empty list.
