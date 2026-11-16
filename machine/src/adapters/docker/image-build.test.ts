@@ -31,6 +31,21 @@ describe("docker for a repository's image", () => {
     expect(await dockerImages({ exec: wrongArch }).checkBase("x:1")).toMatchObject({ ok: false, reason: expect.stringMatching(/architecture/) });
   });
 
+  it("asks the probe for the declared toolchains' versions and returns the mismatches as warnings, never a refusal", async () => {
+    const scripts: string[] = [];
+    const run = async (_c: string, a: string[]): Promise<ExecResult> => {
+      if (a[0] === "image") return ok(`${digest}|linux|${process.arch === "arm64" ? "arm64" : "amd64"}\n`);
+      if (a[0] === "run") return (scripts.push(a.at(-1)!), ok("/lib/ld-linux-aarch64.so.1\n/usr/bin/git\nluna-tool:node=v22.3.0\nluna-tool:go=\n"));
+      return ok();
+    };
+    const got = await dockerImages({ exec: run }).checkBase("debian:12", undefined, { node: "24", go: "1.22", mystery: "1" });
+    expect(got).toEqual({ ok: true, digest, toolchainWarnings: ["toolchains node: the image has 22.3, luna.yaml wants 24", "toolchains go: the image has none, luna.yaml wants 1.22"] });
+    expect(scripts[0]).toContain("luna-tool:node=");
+    expect(scripts[0]).not.toContain("mystery");
+    // no toolchains: the probe and its answer are what they were
+    expect(await dockerImages({ exec: run }).checkBase("debian:12")).toEqual({ ok: true, digest });
+  });
+
   it("builds with argv only: an empty context, no network, no build argument, no secret, a time limit", async () => {
     const seen: { command: string; args: string[]; timeoutMs?: number; dockerfile: string }[] = [];
     const run = async (command: string, args: string[], o: { timeoutMs?: number } = {}): Promise<ExecResult> => {

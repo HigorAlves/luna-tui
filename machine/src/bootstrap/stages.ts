@@ -206,6 +206,7 @@ export async function buildRealStages(
   const repoImages = makeRepoImages({
     machineImage: config.runnerImage,
     imageOf: async (repoPath) => ({ base: (await imageSource.for(repoPath)).base }),
+    toolchainsOf: async (repoPath) => (await policies.for(repoPath)).toolchains,
     slugOf: repoSlug,
     docker: dockerImages(),
     approvals,

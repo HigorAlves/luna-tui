@@ -19,7 +19,7 @@ export interface ImageDocker {
   /** The key of the machine's layer: the label of the machine's image. */
   layerKey(machineImage: string): Promise<string>;
   /** Pulls the base and checks it: Linux, glibc, the host's architecture. */
-  checkBase(base: string, signal?: AbortSignal): Promise<{ ok: true; digest: string } | { ok: false; reason: string }>;
+  checkBase(base: string, signal?: AbortSignal, toolchains?: Record<string, string>): Promise<{ ok: true; digest: string; toolchainWarnings?: string[] } | { ok: false; reason: string }>;
   exists(tag: string): Promise<boolean>;
   build(spec: ImageBuildSpec): Promise<{ ok: true } | { ok: false; log: string }>;
 }
@@ -38,6 +38,8 @@ export interface RepoImagesDeps {
   machineImage: string;
   /** The repository's `sandbox.image`, from its own luna.yaml as the machine already reads policy. */
   imageOf: (repoPath: string) => Promise<{ base?: string | null } | undefined>;
+  /** The repository's `toolchains` from luna.yaml; the probe checks the image against them. */
+  toolchainsOf?: (repoPath: string) => Promise<Record<string, string>>;
   slugOf: (repoPath: string) => string;
   docker: ImageDocker;
   /** The bases a person approved, per repository and exact reference; a base without it is neither pulled nor built. */
@@ -56,6 +58,8 @@ export interface RepoImages {
   /** A person approved the base the repository names now: what was remembered of its refusals and failures is forgotten. */
   approved(repoPath: string): void;
   /** What this machine knows of the repository's own image: its tag, when it was built here, the last failure; null when it has none. */
+  /** What the last probe of the repository's base found wrong with its `toolchains`; empty when nothing, or not probed yet. Never blocks a run. */
+  warnings(repoPath: string): string[];
   status(repoPath: string): { image: string; builtAt: string | null; lastFailure: string | null } | null;
 }
 
@@ -81,6 +85,7 @@ export function repoImages(deps: RepoImagesDeps): RepoImages {
   /** A refusal or a failure of one base for one repository, remembered for a while so every stage, check and graph build does not pull again. */
   const memory = new Map<string, { at: number; refusal: string } | { at: number; failure: string }>();
   const waiting = new Set<string>();
+  const warned = new Map<string, string[]>();
   const queues = new Map<string, Promise<unknown>>();
   const now = deps.now ?? Date.now;
   const ttl = deps.ttlMs ?? 10 * 60_000;
@@ -108,6 +113,7 @@ export function repoImages(deps: RepoImagesDeps): RepoImages {
 
   return {
     status: (repoPath) => statuses.get(repoPath) ?? null,
+    warnings: (repoPath) => warned.get(repoPath) ?? [],
     approved(repoPath) {
       for (const key of [...memory.keys()]) if (key.startsWith(`${repoPath}\0`)) memory.delete(key);
       resolved.delete(repoPath);
@@ -143,7 +149,9 @@ export function repoImages(deps: RepoImagesDeps): RepoImages {
       }
       return abortable(
         queued(spec.base, async () => {
-          const checked = await deps.docker.checkBase(spec.base, signal);
+          const toolchains = (await deps.toolchainsOf?.(repoPath).catch(() => undefined)) ?? {};
+          const checked = await deps.docker.checkBase(spec.base, signal, toolchains);
+          if (checked.ok) warned.set(repoPath, (checked.toolchainWarnings ?? []).map((line) => safe(line).slice(0, 400)));
           if (!checked.ok) {
             const reason = logTail(checked.reason);
             memory.set(key, { at: now(), refusal: reason });

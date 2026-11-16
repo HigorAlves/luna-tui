@@ -837,7 +837,7 @@ const app = createApp({
       policy: (repoPath) => policies.for(repoPath),
       ...(agentDeps ? { source: agentDeps.imageSource } : {}),
       machineImage: config.runnerImage,
-      images: { status: (repoPath) => agentDeps?.repoImages.status(repoPath) ?? null, pending: async (repoPath) => (await agentDeps?.repoImages.pending(repoPath)) ?? null },
+      images: { warnings: (repoPath) => agentDeps?.repoImages.warnings(repoPath) ?? [], status: (repoPath) => agentDeps?.repoImages.status(repoPath) ?? null, pending: async (repoPath) => (await agentDeps?.repoImages.pending(repoPath)) ?? null },
       graph,
       watch: { health: (repoPath) => graphWatch?.health(repoPath) ?? { building: false, lastFailure: null } },
     }),

@@ -53,6 +53,18 @@ describe("a repository's image and graph health", () => {
     expect(plain).not.toHaveProperty("notes");
   });
 
+  it("shows the image's toolchain warnings as notes", async () => {
+    const [row] = await repoHealthOf({
+      repos: ["/a/shop"],
+      policy: async () => ({ graph: true }),
+      machineImage: "hardness-runner:dev",
+      images: { pending: async () => null, status: () => null, warnings: () => ["toolchains node: the image has 22.3, luna.yaml wants 24"] },
+      graph: { stampOf: async () => null },
+      watch: { health: () => ({ building: false, lastFailure: null }) },
+    });
+    expect(row!.notes).toEqual(["toolchains node: the image has 22.3, luna.yaml wants 24"]);
+  });
+
   it("shows what the machine's sandbox policy dropped from the repo's luna.yaml, only when it dropped something", async () => {
     const [bounded, plain] = await repoHealthOf({
       repos: ["/a/bounded", "/a/plain"],

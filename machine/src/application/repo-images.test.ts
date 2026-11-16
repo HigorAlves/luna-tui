@@ -27,6 +27,18 @@ const approveAll = { isApproved: async () => true };
 const make = (image: { base?: string | null } | undefined, docker: ImageDocker, approvals: { isApproved(repoPath: string, base: string): Promise<boolean> } = approveAll, extra: { now?: () => number } = {}) =>
   repoImages({ machineImage: MACHINE, imageOf: async () => image, slugOf: (p) => `slug-${p}`, docker, approvals, onEvent: (e) => events.push(e), ...extra });
 
+describe("the toolchain warnings of a repository's base", () => {
+  it("passes the declared toolchains to the probe and keeps its warnings for the repository, without blocking the image", async () => {
+    const asked: unknown[] = [];
+    const { docker } = fakeDocker({ checkBase: async (_b, _s, toolchains) => (asked.push(toolchains), { ok: true, digest, toolchainWarnings: ["toolchains node: the image has 22.3, luna.yaml wants 24"] }) });
+    const images = repoImages({ machineImage: MACHINE, imageOf: async () => ({ base: "node:22" }), toolchainsOf: async () => ({ node: "24" }), slugOf: (p) => `slug-${p}`, docker, approvals: approveAll });
+    expect(images.warnings("/r")).toEqual([]);
+    expect((await images.ensure("/r")).image).toMatch(/^hardness-runner-slug-/);
+    expect(asked).toEqual([{ node: "24" }]);
+    expect(images.warnings("/r")).toEqual(["toolchains node: the image has 22.3, luna.yaml wants 24"]);
+  });
+});
+
 describe("the image a repository's stages run in", () => {
   it("is the machine's image when the repository names no base, and docker is never asked", async () => {
     const { docker, calls } = fakeDocker();

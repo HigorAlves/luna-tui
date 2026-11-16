@@ -738,7 +738,7 @@ The machine uses the base only after a person approves that exact reference for 
 
 The machine then builds one image for that repository. It builds from a generated Dockerfile (`FROM <base>`, the layer copied from the machine's runner image, the entrypoint). Docker builds it on the host with an empty context, no network, no build argument, no secret and no mount. The build has a time limit, and the machine runs one build at a time. The tag is `hardness-runner-<slug>:<hash of the base's digest and the layer's key>`.
 
-The machine checks the base first. The base needs Linux, glibc, the host's architecture, a shell and `git` (the layer does not carry git). The machine refuses a base that fails, with the reason. The repository then runs on the machine's image.
+The machine checks the base first. The base needs Linux, glibc, the host's architecture, a shell and `git` (the layer does not carry git). The machine refuses a base that fails, with the reason. The same probe runs the version command of each tool in the repo's `toolchains`; a mismatch is a note on the repo's health, never a refusal. The repository then runs on the machine's image.
 
 Every stage container runs in that image. So do the checks runner (given the repository explicitly) and the Verify workspace of that repository. The environment hash uses its id.
 
