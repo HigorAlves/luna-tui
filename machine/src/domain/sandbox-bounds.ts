@@ -1,6 +1,6 @@
 // A repo's `sandbox` section, held within the owner's machine policy (`sandbox.yaml`). Pure: it returns the bounded section and, for each
 // thing it dropped or lowered, a reason in the repo's own vocabulary, so the person who wrote the luna.yaml can see why it did not take effect.
-import type { FactoryConfig, MachinePolicy } from "@hardness/contracts";
+import type { FactoryConfig, GuardMode, MachinePolicy, Severity } from "@hardness/contracts";
 
 import type { Trust } from "./trust.ts";
 
@@ -17,7 +17,13 @@ export interface SandboxBounds {
   runtime: { default: "runc" | "runsc"; untrusted: "runc" | "runsc" };
   maxPids: number;
   splitCache: boolean;
+  /** The stage guard per trust and the lowest severity it blocks: the policy's, or the repo's when that is stricter. */
+  guard: { trusted: GuardMode; untrusted: GuardMode; blockSeverity: Severity };
 }
+
+const MODE_STRICTNESS: readonly GuardMode[] = ["off", "log", "block"];
+/** Lowest first: a lower severity blocks more, so it is stricter. */
+const SEVERITY_ORDER: readonly Severity[] = ["low", "medium", "high", "critical"];
 
 /** The name as the proxy compares it: trimmed, lowercased, no port, no trailing dot. */
 const hostOf = (pattern: string): string => pattern.trim().toLowerCase().split(":")[0]!.replace(/\.+$/, "");
@@ -60,7 +66,8 @@ export function boundRepoHosts(hosts: readonly string[], policy: Pick<MachinePol
 
 export function boundSandbox(sandbox: RepoSandbox, policy: MachinePolicy): { sandbox: RepoSandbox; bounds: SandboxBounds } {
   const out: RepoSandbox = structuredClone(sandbox);
-  const bounds: SandboxBounds = { notes: [], egress: [], image: [], seccomp: policy.seccomp === "default" ? null : policy.seccomp, runtime: { ...policy.runtime }, maxPids: policy.limits.max_pids, splitCache: policy.cache.split_by_trust };
+  const bounds: SandboxBounds = { notes: [], egress: [], image: [], seccomp: policy.seccomp === "default" ? null : policy.seccomp, runtime: { ...policy.runtime }, maxPids: policy.limits.max_pids, splitCache: policy.cache.split_by_trust,
+    guard: { trusted: policy.guard.trusted, untrusted: policy.guard.untrusted, blockSeverity: policy.guard.block_severity } };
 
   if (out.cpu > policy.limits.max_cpu) {
     bounds.notes.push(`sandbox.cpu ${out.cpu} is capped at ${policy.limits.max_cpu} by the machine's sandbox policy (limits.max_cpu)`);
@@ -79,8 +86,28 @@ export function boundSandbox(sandbox: RepoSandbox, policy: MachinePolicy): { san
     bounds.image.push(`sandbox.image.base "${out.image.base}" is refused by the machine's sandbox policy (images.repo_base: deny); the machine's image runs`);
     out.image.base = null;
   }
+
+  for (const trust of ["trusted", "untrusted"] as const) {
+    const asked = out.guard?.[trust];
+    if (asked === undefined) continue;
+    if (MODE_STRICTNESS.indexOf(asked) > MODE_STRICTNESS.indexOf(bounds.guard[trust])) bounds.guard[trust] = asked;
+    else if (asked !== bounds.guard[trust]) bounds.notes.push(`sandbox.guard.${trust} "${asked}" is held at "${bounds.guard[trust]}" by the machine's sandbox policy (guard.${trust})`);
+  }
+  const severity = out.guard?.block_severity;
+  if (severity !== undefined) {
+    if (SEVERITY_ORDER.indexOf(severity) < SEVERITY_ORDER.indexOf(bounds.guard.blockSeverity)) bounds.guard.blockSeverity = severity;
+    else if (severity !== bounds.guard.blockSeverity) bounds.notes.push(`sandbox.guard.block_severity "${severity}" is held at "${bounds.guard.blockSeverity}" by the machine's sandbox policy (guard.block_severity)`);
+  }
+  delete out.guard;
   return { sandbox: out, bounds };
 }
+
+/** The guard for a card's trust. The judge failing blocks only for an untrusted card. */
+export const guardOf = (bounds: Pick<SandboxBounds, "guard">, trust: Trust): { mode: GuardMode; blockSeverity: Severity; failClosed: boolean } => ({
+  mode: bounds.guard[trust],
+  blockSeverity: bounds.guard.blockSeverity,
+  failClosed: trust === "untrusted",
+});
 
 /** Why the machine's policy refused the repo's base image, or null; `POST /repos/base/approve` refuses the same base. */
 export const baseRefusal = (policy: { bounds?: Pick<SandboxBounds, "image"> | undefined }): string | null => policy.bounds?.image[0] ?? null;

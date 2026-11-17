@@ -1,7 +1,7 @@
 import { DEFAULT_MACHINE_POLICY, FACTORY_DEFAULTS, MachinePolicySchema } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { boundRepoHosts, boundSandbox, baseRefusal, sandboxSizeOf } from "./sandbox-bounds.ts";
+import { boundRepoHosts, boundSandbox, baseRefusal, guardOf, sandboxSizeOf } from "./sandbox-bounds.ts";
 
 const sandbox = (over: Partial<(typeof FACTORY_DEFAULTS)["sandbox"]> = {}) => ({ ...structuredClone(FACTORY_DEFAULTS.sandbox), ...over });
 const policy = (input: unknown) => MachinePolicySchema.parse(input);
@@ -11,7 +11,7 @@ describe("boundSandbox", () => {
     const repo = sandbox({ cpu: 16, memory_gb: 64, egress: { allow: ["a.example.com", "*.b.example.com"], registries: "always" }, image: { base: "node:22" } });
     const out = boundSandbox(repo, DEFAULT_MACHINE_POLICY);
     expect(out.sandbox).toEqual(repo);
-    expect(out.bounds).toEqual({ notes: [], egress: [], image: [], seccomp: null, runtime: { default: "runc", untrusted: "runc" }, maxPids: 1024, splitCache: true });
+    expect(out.bounds).toEqual({ notes: [], egress: [], image: [], seccomp: null, runtime: { default: "runc", untrusted: "runc" }, maxPids: 1024, splitCache: true, guard: { trusted: "log", untrusted: "log", blockSeverity: "high" } });
   });
 
   it("caps cpu and memory at the policy's maximums, with a note each", () => {
@@ -82,7 +82,7 @@ describe("boundSandbox", () => {
 });
 
 describe("sandboxSizeOf", () => {
-  const base = { notes: [], egress: [], image: [], seccomp: null, runtime: { default: "runc" as const, untrusted: "runc" as const }, maxPids: 1024, splitCache: true };
+  const base = { notes: [], egress: [], image: [], seccomp: null, runtime: { default: "runc" as const, untrusted: "runc" as const }, maxPids: 1024, splitCache: true, guard: { trusted: "log" as const, untrusted: "log" as const, blockSeverity: "high" as const } };
   it("is the bounded cpu and memory, plus the seccomp path when the policy names one", () => {
     const plain = { factory: { sandbox: sandbox({ cpu: 3, memory_gb: 6 }) } };
     expect(sandboxSizeOf(plain)).toEqual({ cpu: 3, memoryGb: 6, pids: 1024, cacheTrust: "trusted" });
@@ -139,5 +139,42 @@ describe("baseRefusal", () => {
     expect(baseRefusal(refused)).toMatch(/images\.repo_base: deny/);
     expect(baseRefusal(boundSandbox(sandbox({ image: { base: "node:22" } }), DEFAULT_MACHINE_POLICY))).toBeNull();
     expect(baseRefusal({ bounds: undefined })).toBeNull();
+  });
+});
+
+describe("the guard bounds", () => {
+  const guarded = (repo: Record<string, string> | undefined, machine: unknown) => boundSandbox(sandbox({ guard: repo } as never), policy({ guard: machine }));
+
+  it("takes the policy's guard when the repo names none", () => {
+    const out = guarded(undefined, { untrusted: "block", block_severity: "medium" });
+    expect(out.bounds.guard).toEqual({ trusted: "log", untrusted: "block", blockSeverity: "medium" });
+    expect(out.bounds.notes).toEqual([]);
+  });
+
+  it("keeps the policy's block when the repo asks for off, with a note", () => {
+    const out = guarded({ untrusted: "off" }, { untrusted: "block" });
+    expect(out.bounds.guard.untrusted).toBe("block");
+    expect(out.bounds.notes).toEqual(["sandbox.guard.untrusted \"off\" is held at \"block\" by the machine's sandbox policy (guard.untrusted)"]);
+  });
+
+  it("lets a repo ask for a stricter mode than the policy", () => {
+    const out = guarded({ trusted: "block" }, { trusted: "log" });
+    expect(out.bounds.guard.trusted).toBe("block");
+    expect(out.bounds.notes).toEqual([]);
+  });
+
+  it("lets a repo block at a lower severity, and holds one that is higher", () => {
+    expect(guarded({ block_severity: "medium" }, { block_severity: "high" }).bounds.guard.blockSeverity).toBe("medium");
+    const held = guarded({ block_severity: "critical" }, { block_severity: "high" });
+    expect(held.bounds.guard.blockSeverity).toBe("high");
+    expect(held.bounds.notes).toEqual(["sandbox.guard.block_severity \"critical\" is held at \"high\" by the machine's sandbox policy (guard.block_severity)"]);
+  });
+});
+
+describe("guardOf", () => {
+  const bounds = boundSandbox(sandbox(), policy({ guard: { trusted: "off", untrusted: "block", block_severity: "medium" } })).bounds;
+  it("reads the mode for the trust, and fails closed only for untrusted", () => {
+    expect(guardOf(bounds, "trusted")).toEqual({ mode: "off", blockSeverity: "medium", failClosed: false });
+    expect(guardOf(bounds, "untrusted")).toEqual({ mode: "block", blockSeverity: "medium", failClosed: true });
   });
 });

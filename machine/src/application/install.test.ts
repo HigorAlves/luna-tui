@@ -45,7 +45,7 @@ describe("ensureInstalled for an untrusted card", () => {
   it("installs into the card's own cache volume under the policy's runtime for it", async () => {
     const { deps, runs, input } = setup();
     const base = deps.policies;
-    const bounds = { notes: [], egress: [], image: [], seccomp: null, runtime: { default: "runc" as const, untrusted: "runsc" as const }, maxPids: 400, splitCache: true };
+    const bounds = { notes: [], egress: [], image: [], seccomp: null, runtime: { default: "runc" as const, untrusted: "runsc" as const }, maxPids: 400, splitCache: true, guard: { trusted: "log" as const, untrusted: "log" as const, blockSeverity: "high" as const } };
     deps.policies = { for: async (repo) => ({ ...(await base.for(repo)), bounds }) };
     await ensureInstalled(deps, { ...input, trust: "untrusted" });
     expect(runs[0]!.cacheVolume).toBe("hardness-cache-repo-untrusted");
