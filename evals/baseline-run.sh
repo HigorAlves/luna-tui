@@ -67,6 +67,9 @@ pnpm eval --pack intake_dedup --engine jev --save-baseline
 pnpm eval --pack ticket_validity --engine claude:haiku --save-baseline
 pnpm eval --pack ticket_validity --engine codex:luna --save-baseline
 pnpm eval --pack ticket_validity --engine jev --save-baseline
+pnpm eval --pack ticket_safety --engine claude:haiku --save-baseline
+pnpm eval --pack ticket_safety --engine codex:luna --save-baseline
+pnpm eval --pack ticket_safety --engine jev --save-baseline
 pnpm eval --pack ticket_assess --engine claude:haiku --save-baseline
 pnpm eval --pack ticket_assess --engine codex:luna --save-baseline
 pnpm eval --pack ticket_assess --engine jev --save-baseline

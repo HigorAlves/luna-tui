@@ -90,6 +90,7 @@ export function renderTicket(ticket: TicketContext): string {
     `Type: ${ticket.type ?? "unknown"} · Priority: ${ticket.priority ?? "unknown"} · Reporter: ${ticket.reporter ?? "none"} · Labels: ${ticket.labels.join(", ") || "none"}`,
     `Sprint: ${ticket.sprint ?? "none"} · Due: ${ticket.dueAt ?? "none"}`,
     ticket.description,
+    ...(ticket.signals ? [`Signals: invisible ${ticket.signals.invisible}, bidi ${ticket.signals.bidi}, html comments ${ticket.signals.htmlComments}, encoded runs ${ticket.signals.encodedRuns}, link mismatch ${ticket.signals.linkMismatch}`] : []),
     "Comments:",
     ...ticket.comments.map((c) => `${c.author}: ${c.text}`),
     `Linked tickets: ${ticket.linked.join(", ") || "none"} · Epic: ${ticket.epic ?? "none"}`,

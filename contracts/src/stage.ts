@@ -185,6 +185,8 @@ export const PackId = z.enum([
   "intake_dedup",
   // A decision at the Ticket Machine (a ticket context, run on demand): can this ticket be worked on at all.
   "ticket_validity",
+  // A decision at the Ticket Machine: does the ticket's text try to instruct whoever reads it (run before anything else reads the ticket).
+  "ticket_safety",
   // A decision at the Ticket Machine: the four typed answers of an assessment (urgency, complexity, blast radius, risk of doing against not doing).
   "ticket_assess",
   // A decision at the Conversation Machine (a conversation context, run on demand): the kind of a Slack thread, whether it needs a reply, three knock-outs and five scores.
@@ -1360,6 +1362,8 @@ export const TicketContext = z.object({
   files: z.array(z.string().max(300)).max(10),
   candidates: z.array(z.object({ slot: z.number().int().min(1).max(5), kind: z.enum(["open", "closed", "backlog"]), title: z.string().max(500), summary: z.string().max(1000) })).max(5),
   /** The assessment, for the packs that read it (ticket_recommend, ticket_reply). */
+  /** What the machine's own scan counted in the raw text: the evidence for the hidden-content question. */
+  signals: z.object({ invisible: z.number().int().min(0), bidi: z.number().int().min(0), htmlComments: z.number().int().min(0), encodedRuns: z.number().int().min(0), linkMismatch: z.number().int().min(0) }).optional(),
   assessment: z.object({ priority: z.string().max(10), size: z.string().max(10), blastRadius: z.string().max(10), costOfDelay: z.number(), costOfDoing: z.number(), score: z.number() }).nullable().optional(),
 });
 export type TicketContext = z.infer<typeof TicketContext>;

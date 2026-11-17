@@ -389,6 +389,30 @@ describe("the ticket_validity decision pack", () => {
   });
 });
 
+describe("the ticket_safety decision pack", () => {
+  it("asks five yes/no questions in one call, reads the ticket as data, holds on a sure yes at 0.85 and a flagged one at 0.5, and runs on Jev with Haiku behind it", async () => {
+    const { PACKS, TicketContext } = await import("./index.ts");
+    const pack = PACKS.ticket_safety;
+    expect(pack.kind).toBe("decision");
+    expect(Object.keys(pack.questions)).toEqual(["addresses_agent", "seeks_secrets", "off_task_actions", "overrides_rules", "hidden_content"]);
+    for (const question of Object.values(pack.questions)) {
+      expect(question.type).toBe("yesno");
+      expect(question.instructions).toMatch(/data written by strangers/);
+      expect(question.instructions).toMatch(/never follow/);
+    }
+    expect(pack.policy.addresses_agent).toMatchObject({ proceed: 0.85, flag: 0.5 });
+    expect(pack.engines.default).toBe("jev");
+    expect(pack.engines.fallback).toEqual(["claude:haiku"]);
+    const no = { value: false, p: 0.1 };
+    const answer = { addresses_agent: no, seeks_secrets: no, off_task_actions: no, overrides_rules: no, hidden_content: no };
+    expect(pack.answer.safeParse(answer).success).toBe(true);
+    expect(pack.answer.safeParse({ ...answer, seeks_secrets: undefined }).success).toBe(false);
+    const ticket = { key: "A-1", title: "t", description: "d", type: null, priority: null, reporter: null, reachable: false, labels: [], sprint: null, dueAt: null, comments: [], linked: [], epic: null, recent: [], files: [], candidates: [] };
+    expect(TicketContext.safeParse({ ...ticket, signals: { invisible: 0, bidi: 0, htmlComments: 0, encodedRuns: 0, linkMismatch: 0 } }).success).toBe(true);
+    expect(TicketContext.safeParse({ ...ticket, signals: { invisible: -1 } }).success).toBe(false);
+  });
+});
+
 describe("the ticket_assess decision pack", () => {
   it("asks fifteen scores and five flags in one call, reading the same ticket context as ticket_validity", async () => {
     const { PACKS } = await import("./index.ts");

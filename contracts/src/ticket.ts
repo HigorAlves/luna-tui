@@ -64,3 +64,11 @@ export const TicketEditInput = TicketApproveInput.extend({ text: z.string().min(
 export type TicketEditInput = z.infer<typeof TicketEditInput>;
 export const TicketIgnoreInput = z.object({ draft: z.string().min(1).max(300) }).strict();
 export type TicketIgnoreInput = z.infer<typeof TicketIgnoreInput>;
+
+/** Why a ticket was held back by the safety screen: what the model answered yes to, what the machine's scan found, or that the screen itself failed. */
+export const SAFETY_REASONS = ["addresses_agent", "seeks_secrets", "off_task_actions", "overrides_rules", "hidden_content", "hidden_text", "encoded_blob", "link_mismatch", "screen_failed"] as const;
+export const SafetyReason = z.enum(SAFETY_REASONS);
+export type SafetyReason = z.infer<typeof SafetyReason>;
+
+export const TicketSafety = z.object({ verdict: z.enum(["suspicious", "unsafe"]), reasons: z.array(SafetyReason) });
+export type TicketSafety = z.infer<typeof TicketSafety>;

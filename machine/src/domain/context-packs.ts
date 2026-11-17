@@ -45,6 +45,7 @@ export const CONTEXT_OF = {
   worth_learning: { key: "ship", schema: ShipContext },
   intake_dedup: { key: "dedup", schema: DedupContext },
   ticket_validity: { key: "ticket", schema: TicketContext },
+  ticket_safety: { key: "ticket", schema: TicketContext },
   ticket_assess: { key: "ticket", schema: TicketContext },
   ticket_recommend: { key: "ticket", schema: TicketContext },
   ticket_reply: { key: "ticket", schema: TicketContext },
