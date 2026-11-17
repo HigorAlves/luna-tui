@@ -8,8 +8,10 @@ import { PgTicketStore } from "../adapters/persistence/ticket-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import type { AssessAnswer } from "../domain/ticket-score.ts";
 import { createTicketScreen } from "./ticket-screen.ts";
+import { Pipeline } from "./pipeline.ts";
+import { StubStages } from "./stages/stubs.ts";
 import { SCREENED_TEXT_LIMIT } from "../domain/ticket-screen.ts";
-import { TicketMachine, TicketNotFound, TicketRefusal, parseTicketKey, splitTargetOf, ticketSource } from "./ticket-machine.ts";
+import { HeldSafetyError, TicketMachine, sourceLookups, TicketNotFound, TicketRefusal, parseTicketKey, splitTargetOf, ticketSource } from "./ticket-machine.ts";
 import { trustOf } from "../domain/trust.ts";
 import { draftHash } from "./ticket-drafts.ts";
 import type { Tickets } from "./tickets.ts";
@@ -993,6 +995,73 @@ describe("the safety screen", () => {
     await expect(machine.edit("PAY-12", { draft: draft.id, hash: draftHash(draft), text: "hello" })).rejects.toBeInstanceOf(TicketRefusal);
     expect(cards).toEqual([]);
     expect(writes).toEqual([]);
+  });
+
+  it("refuses to card, schedule, post or approve a draft for an ARCHIVED ticket", async () => {
+    const { machine, store, cards, writes, items } = setup({ screen: {} });
+    await machine.ingest(ticket(), ctx);
+    const draft = (await store.get("PAY-12"))!.drafts[0] as unknown as Parameters<typeof draftHash>[0];
+    await store.setMachine("PAY-12", { status: "archived" });
+    await expect(machine.card("PAY-12")).rejects.toBeInstanceOf(HeldSafetyError);
+    await expect(machine.schedule("PAY-12")).rejects.toBeInstanceOf(HeldSafetyError);
+    await expect(machine.approve("PAY-12", { draft: draft.id, hash: draftHash(draft) })).rejects.toBeInstanceOf(HeldSafetyError);
+    await expect(machine.edit("PAY-12", { draft: draft.id, hash: draftHash(draft), text: "hi" })).rejects.toBeInstanceOf(HeldSafetyError);
+    expect(cards).toEqual([]);
+    expect(items).toEqual([]);
+    expect(writes).toEqual([]);
+  });
+
+  it("the pipeline refuses a task for a held or an archived ticket's source, and marks one for a released ticket's", async () => {
+    const { machine, store } = setup({ screen: { answer: injected } });
+    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true, ...sourceLookups(store) });
+    const source = { kind: "jira" as const, key: "PAY-12", url: "https://x/browse/PAY-12", issueType: null };
+    await machine.ingest(ticket(), ctx);
+    await expect(pipeline.createTask({ title: "t", source })).rejects.toBeInstanceOf(HeldSafetyError);
+    await machine.archive("PAY-12");
+    await expect(pipeline.createTask({ title: "t", source })).rejects.toBeInstanceOf(HeldSafetyError);
+    await expect(pipeline.createTaskOnce({ title: "t", source }, "k1")).rejects.toBeInstanceOf(HeldSafetyError);
+    await store.setMachine("PAY-12", { status: "assessed", links: [{ kind: "safety_released", target: "h" }] });
+    const task = await pipeline.createTask({ title: "t", source });
+    expect(task.source).toMatchObject({ kind: "jira", safetyReleased: true });
+    await pipeline.shutdown();
+  });
+
+  it("an archived ticket whose text changes is screened again and, when safe, goes on", async () => {
+    const answers = { current: injected as Record<string, { value: boolean; p: number }> };
+    const { machine, store, screenDecide } = setup({ screen: {} });
+    screenDecide.mockImplementation(async () => ({ answer: answers.current }));
+    await machine.ingest(ticket(), ctx);
+    await machine.archive("PAY-12");
+    await machine.ingest(ticket(), ctx);
+    expect((await store.get("PAY-12"))!.machineStatus).toBe("archived");
+    expect(screenDecide).toHaveBeenCalledTimes(1);
+    answers.current = safeAnswer;
+    await machine.ingest(ticket({ description: "Refund fails, now with steps.", updatedAt: "2026-11-06T10:00:00Z" }), ctx);
+    expect(screenDecide).toHaveBeenCalledTimes(2);
+    expect((await store.get("PAY-12"))!.machineStatus).toBe("assessed");
+  });
+
+  it("children of a released origin carry the release and their cards run untrusted", async () => {
+    const { machine, store, cards } = setup({ screen: { answer: injected }, split: {} });
+    await machine.ingest(ticket(), ctx);
+    await machine.release("PAY-12");
+    const { keys } = await machine.splitChildren("PAY-12", SPLIT_KIDS as never, { id: "g1" });
+    expect(keys.length).toBe(2);
+    for (const key of keys) {
+      const row = (await store.get(key))!;
+      expect(row.machineLinks.some((l) => l.kind === "safety_released")).toBe(true);
+    }
+    // The children were screened again on ingest (the stub screen holds them): a person releasing one is what makes a card, which keeps the link.
+    await machine.release(keys[0]!);
+    await machine.card(keys[0]!);
+    expect(cards.at(-1)).toMatchObject({ source: { safetyReleased: true } });
+  });
+
+  it("an unreleased origin's children carry no release", async () => {
+    const { machine, store } = setup({ split: {} });
+    await machine.ingest(ticket(), ctx);
+    const { keys } = await machine.splitChildren("PAY-12", SPLIT_KIDS as never, { id: "g1" });
+    for (const key of keys) expect((await store.get(key))!.machineLinks.some((l) => l.kind === "safety_released")).toBe(false);
   });
 
   it("shows safety on the ticket's view while held, and null after", async () => {

@@ -115,7 +115,7 @@ import { PgTicketStore } from "./adapters/persistence/ticket-store.ts";
 import { GitHubTickets } from "./adapters/tickets/github-tickets.ts";
 import { JiraTickets } from "./adapters/tickets/jira-tickets.ts";
 import { createTicketScreen } from "./application/ticket-screen.ts";
-import { TicketMachine, cardOnce, ticketSource } from "./application/ticket-machine.ts";
+import { TicketMachine, cardOnce, sourceLookups, ticketSource } from "./application/ticket-machine.ts";
 import { TicketEvents } from "./application/ticket-events.ts";
 import { INTAKE_CLIENT } from "./application/classify.ts";
 import type { DedupAnswer } from "./application/intake-dedup.ts";
@@ -521,10 +521,7 @@ const channelClaims = new ChannelClaims(
 pipeline = new Pipeline(db, runnerFor, {
   economy,
   // The second line of the ticket safety screen: a card is never made from a source whose ticket the screen holds.
-  sourceHeld: async (source) => {
-    const key = source?.kind === "github" ? `${source.repo}#${source.number}` : source?.kind === "jira" ? source.key : null;
-    return key !== null && (await new PgTicketStore(db).get(key))?.machineStatus === "held_safety";
-  },
+  ...sourceLookups(new PgTicketStore(db)),
   proposer: factProposer,
   // A card that came from a ticket is split into child tickets, created only after a person approves the split gate (never by a clock or a retry).
   splitTickets: {

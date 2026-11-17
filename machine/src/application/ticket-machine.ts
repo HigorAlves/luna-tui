@@ -211,7 +211,7 @@ export class TicketMachine implements TicketIntake {
     const prev = await this.deps.store.get(ticket.key);
     if (prev?.machineStatus && screenHashOf(prev) === contentHash(rawOf(ticket))) {
       // A hold for a failure is tried again once its window has passed; inside it the intake is told the screen failed and asks again on a later poll. An archived ticket stays out until its text changes.
-      if (!screenRetryDue(prev, this.now())) return { held: prev.machineStatus === "held_safety" || prev.machineStatus === "archived", ...(screenFailedOn(prev) ? { failed: true } : {}) };
+      if (!screenRetryDue(prev, this.now())) return { held: holding(prev.machineStatus), ...(screenFailedOn(prev) ? { failed: true } : {}) };
     }
     const out = await this.screenHold(ticket, ctx.repoPath, this.now());
     return { held: out.held, ...(out.failed ? { failed: true } : {}) };
@@ -568,7 +568,7 @@ export class TicketMachine implements TicketIntake {
       links = [...links, { kind: "split_part", target: `${prefix}${n}:${created.key}` }, { kind: "child", target: created.key }];
       await this.deps.store.setMachine(originKey, { links });
       // Linked now, from what `create` returned: a tracker that cannot read a child back by key must not leave it unlinked.
-      await this.linkChild(origin, originKey, created, text, n, children, made, floor, links.find((l) => l.kind === "repo")?.target ?? null);
+      await this.linkChild(origin, originKey, created, text, n, children, made, floor, links.find((l) => l.kind === "repo")?.target ?? null, links.find((l) => l.kind === "safety_released")?.target ?? null);
       if (split.draft) {
         const list = [...made].map(([m, key]) => ({ n: m, key })).sort((a, b) => a.n - b.n);
         await this.deps.store.updateDrafts(originKey, (current) => (current as unknown as Draft[]).map((d) => (d.id === split.draft ? { ...d, created: list } : d)) as unknown as Record<string, unknown>[]);
@@ -579,7 +579,7 @@ export class TicketMachine implements TicketIntake {
       const repo = links.find((l) => l.kind === "repo")?.target ?? null;
       const texts = this.childTexts(origin, children, made);
       // Every child is linked (all its dependencies now known) before the split counts as done; a failure here leaves it undone and a retry links the rest.
-      for (const [i, c] of children.entries()) await this.linkChild(origin, originKey, { key: keys[i]!, permalink: "" }, texts[i]!, i + 1, children, made, floor, repo);
+      for (const [i, c] of children.entries()) await this.linkChild(origin, originKey, { key: keys[i]!, permalink: "" }, texts[i]!, i + 1, children, made, floor, repo, links.find((l) => l.kind === "safety_released")?.target ?? null);
       for (const [i] of children.entries()) {
         const row = await this.deps.store.get(keys[i]!);
         if (!row || !row.machineLinks.some((l) => l.kind === "origin" && l.target === originKey)) throw new Error(`child ${keys[i]} is not linked to its origin`);
@@ -595,7 +595,7 @@ export class TicketMachine implements TicketIntake {
   }
 
   /** Stores a created child (a row built from what `create` returned, never read back) and writes its links: origin, the siblings it waits for, the floor and the repository. */
-  private async linkChild(origin: CanonicalTicket, originKey: string, created: { key: string; permalink: string }, text: { title: string; body: string }, n: number, children: SplitChild[], made: Map<number, string>, floor: "low" | "medium" | "high", repo: string | null): Promise<void> {
+  private async linkChild(origin: CanonicalTicket, originKey: string, created: { key: string; permalink: string }, text: { title: string; body: string }, n: number, children: SplitChild[], made: Map<number, string>, floor: "low" | "medium" | "high", repo: string | null, released: string | null): Promise<void> {
     const at = this.now().toISOString();
     const existing = await this.deps.store.get(created.key);
     if (!existing) {
@@ -606,7 +606,9 @@ export class TicketMachine implements TicketIntake {
       } as CanonicalTicket);
     }
     const c = children[n - 1]!;
-    await this.deps.store.setMachine(created.key, { links: [{ kind: "origin", target: originKey }, ...c.depends_on.flatMap((p) => (made.get(p) ? [{ kind: "depends_on", target: made.get(p)! }] : [])), { kind: "risk_floor", target: floor }, ...(repo ? [{ kind: "repo", target: repo }] : [])] });
+    await this.deps.store.setMachine(created.key, { links: [{ kind: "origin", target: originKey }, ...c.depends_on.flatMap((p) => (made.get(p) ? [{ kind: "depends_on", target: made.get(p)! }] : [])), { kind: "risk_floor", target: floor }, ...(repo ? [{ kind: "repo", target: repo }] : []),
+      // A child of a ticket a person released is text the release covered: it carries the release (target: the origin's), so its card runs untrusted like the origin's.
+      ...(released !== null ? [{ kind: "safety_released", target: released }] : [])] });
   }
 
   /** The ticket a card came from, when the store holds that ticket with this card as its own: what lets a card's split create tickets. Null for every other card. */
@@ -779,9 +781,30 @@ export function splitTargetOf(key: string): string | null {
   return gh ? `${gh[1]}/${gh[2]}` : null;
 }
 
-/** Refuses a tap on a ticket the safety screen holds. */
+/** The statuses that keep a ticket from a card, the backlog and a post: held by the screen, or archived by a person who read it held. Only a change to its text (screened again) takes it out. */
+const holding = (status: string | null | undefined): boolean => status === "held_safety" || status === "archived";
+
+/** Refuses a tap on a ticket the safety screen holds, or a person archived for it. */
 function heldGuard(row: TicketRow): void {
-  if (row.machineStatus === "held_safety") throw new HeldSafetyError(row.key);
+  if (holding(row.machineStatus)) throw new HeldSafetyError(row.key);
+}
+
+/**
+ * The pipeline's lookups by a card's source (the second line of the screen, at the one place every card is made): `sourceHeld` is true while the ticket behind the source is held or archived,
+ * `sourceReleased` while a person released it (the card then runs untrusted, whatever made it: a tap or an auto intake).
+ */
+export function sourceLookups(store: Pick<TicketStore, "get">): { sourceHeld: (source: TaskSource | null) => Promise<boolean>; sourceReleased: (source: TaskSource | null) => Promise<boolean> } {
+  const keyOf = (source: TaskSource | null): string | null => (source?.kind === "github" ? `${source.repo}#${source.number}` : source?.kind === "jira" ? source.key : null);
+  return {
+    sourceHeld: async (source) => {
+      const key = keyOf(source);
+      return key !== null && holding((await store.get(key))?.machineStatus);
+    },
+    sourceReleased: async (source) => {
+      const key = keyOf(source);
+      return key !== null && ((await store.get(key))?.machineLinks.some((l) => l.kind === "safety_released") ?? false);
+    },
+  };
 }
 
 const lastHeld = (row: TicketRow) => [...row.assessments].reverse().find((a) => a.outcome === "held_safety");
