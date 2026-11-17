@@ -185,6 +185,8 @@ export interface AppDeps {
   problems?: () => Promise<string[]> | string[];
   /** The machine's sandbox policy in force (`sandbox.yaml`), shown on `GET /health`; absent, not shown. */
   sandboxPolicy?: MachinePolicy;
+  /** Whether the engine relay (and so the egress proxy) is on; the stage guard needs it. Absent counts as on. */
+  engineRelay?: boolean;
 }
 
 /** `POST /foreman`: the question and the last turns of the talk. */
@@ -248,7 +250,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, compliance, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, screen, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], clock = () => new Date(), problems: problemsOf, sandboxPolicy }: AppDeps): Hono {
+export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, compliance, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, screen, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], clock = () => new Date(), problems: problemsOf, sandboxPolicy, engineRelay = true }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -344,7 +346,7 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
   // 503 with the problems when the machine cannot do its job (no GitHub token, no git identity, stub stages): the compose healthcheck and `up --wait` then fail visibly. The stage pool is still in the body.
   app.get("/health", async (c) => {
     const problems = (await problemsOf?.()) ?? [];
-    const idle = sandboxPolicy ? sandboxPolicyNotes(sandboxPolicy).notInForce : [];
+    const idle = sandboxPolicy ? sandboxPolicyNotes(sandboxPolicy, { relay: engineRelay }).notInForce : [];
     const policy = sandboxPolicy ? { sandboxPolicy, ...(idle.length > 0 ? { notInForce: idle } : {}) } : {};
     if (problems.length === 0) return c.json({ ok: true, slots: pipeline.slots, ...policy });
     return c.json({ ok: false, problems, slots: pipeline.slots, ...policy }, 503);

@@ -659,6 +659,7 @@ The files sit under `<state dir>/economy/<repo slug>/`. The slug is the folder n
 - The judge and the redirect writer see commands and file base names. They never see output.
 - The guard can end a run. It cannot change a verdict, an approval or a risk level.
 - A mask only removes access. It never adds any.
+- The stage guard checks a Claude stage's model calls, with the policy's mode for the card's trust (`guard.trusted`, `guard.untrusted`). It holds no credential and has no route out. A guard that will not start stops the stage; it is never skipped.
 - A person approves every mask and every promotion into the project context. No fact reaches the project context without the retro's draft PR.
 - The container writes `events.jsonl` and the checks mailbox. So the machine reads both as untrusted input and skips a line that has the wrong shape.
 
@@ -938,6 +939,16 @@ The stage gets a placeholder of the same kind through the secret-file path. A su
 The relay forwards only to `https://api.anthropic.com`. It allows only `POST /v1/messages` and `POST /v1/messages/count_tokens`, with any query string. These are the two calls the spike saw the SDK send. It also needs the run's placeholder in the header of its kind (`authorization: Bearer` or `x-api-key`). It swaps in the real value and streams the response unbuffered. It refuses any other method or path with 403, and logs the path (`refused: "path"`). It refuses any path with a `%` in it. The smoke test shows whether the SDK needs another path.
 
 A response whose upstream dies mid-stream ends the stage's response too, and the SDK retries. The log line says `aborted`. The relay logs one JSON line per request (method, path, status, time), never a header.
+
+**The stage guard.** A Claude stage that has tools can send its model calls through a guard first (RFC 0012, Track B). The path is stage, guard, relay, `api.anthropic.com`. The guard is SafeAgents, in its own container of the machine's guard image (`RUNNER_GUARD_IMAGE`), one per run. The stage's `ANTHROPIC_BASE_URL` points at the guard, port 8787, and the guard forwards to the relay on 3129.
+
+The guard holds no secret. The placeholder passes through it in a request header, and the relay swaps in the token after. The guard sits on the card network only, so it has no route out. It reaches the relay and nothing else. It runs with the proxy's flags (read-only, no capability, no new privileges, pid and memory limits). Its address joins `NO_PROXY` beside the proxy's.
+
+The machine starts the guard after the proxy is ready. It waits for the guard's port to accept a connection, because the "listening" log line prints before the socket binds. A guard that will not start escalates the card as `env_broken`, step `guard`. The stage never runs unguarded. The guard goes first at teardown, since a network cannot go while a container is on it, and the startup sweep removes a guard whose run is gone.
+
+The machine's policy sets the mode per trust: `guard.trusted` and `guard.untrusted` are `off`, `log` or `block`. `block_severity` sets the lowest severity that blocks. In `log` the guard records what it would have blocked and passes the call. In `block` it replaces the call with a text notice. A run gets a guard only for an agent pack with access, on a Claude engine with the relay on. The one-shot callers (`POST /runs`, Slack triage, Jira intake, the evals) hold no tools and get none. With `MACHINE_ENGINE_RELAY=off` or `MACHINE_EGRESS=off` no guard starts, and `GET /health` lists it under `notInForce`.
+
+The guard writes its journal to `<runDir>/guard/calls.jsonl`, a folder the machine reads after the stage ends.
 
 The proxy reaches `api.anthropic.com` on its own, outside its CONNECT list. So `api.anthropic.com` leaves a Claude stage's list. Hostile code in the stage can no longer send the key anywhere, nor use the API with a key of its own. It can still make calls through the relay while its stage runs. A helper on Claude inside a Codex stage gets the same treatment. `MACHINE_ENGINE_RELAY=off` restores the old behaviour. Codex, OpenAI and Jev are not relayed yet. `machine/runner/egress/relay-smoke.ts` runs one real SDK query through the relay with a real credential (RFC 0009 condition 2). See [verify-the-engine-relay.md](runbooks/verify-the-engine-relay.md).
 

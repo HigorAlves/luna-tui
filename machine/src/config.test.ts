@@ -512,5 +512,15 @@ describe("sandbox policy keys that have no effect", () => {
 
   it("names nothing when bash_sandbox is off", () => {
     expect(sandboxPolicyNotes(DEFAULT_MACHINE_POLICY)).toEqual({ notInForce: [], warnings: [] });
+    expect(sandboxPolicyNotes(DEFAULT_MACHINE_POLICY, { relay: true })).toEqual({ notInForce: [], warnings: [] });
+  });
+
+  it("names the guard when the policy asks for one but the engine relay (or the egress proxy, which it needs) is off", () => {
+    const note = "guard: needs the engine relay and the egress proxy; both must be on";
+    expect(sandboxPolicyNotes(DEFAULT_MACHINE_POLICY, { relay: false })).toEqual({ notInForce: [note], warnings: [`sandbox policy: ${note}`] });
+    const untrustedOnly = { ...DEFAULT_MACHINE_POLICY, guard: { ...DEFAULT_MACHINE_POLICY.guard, trusted: "off" as const, untrusted: "block" as const } };
+    expect(sandboxPolicyNotes(untrustedOnly, { relay: false }).notInForce).toEqual([note]);
+    const off = { ...DEFAULT_MACHINE_POLICY, guard: { ...DEFAULT_MACHINE_POLICY.guard, trusted: "off" as const, untrusted: "off" as const } };
+    expect(sandboxPolicyNotes(off, { relay: false })).toEqual({ notInForce: [], warnings: [] });
   });
 });

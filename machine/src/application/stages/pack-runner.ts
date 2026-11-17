@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { AnswerScenario, AnswerStep, type CiContext, type ComplianceReviewContext, type CoverageSummary, type DocsDriftContext, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
+import { AnswerScenario, AnswerStep, DEFAULT_MACHINE_POLICY, type CiContext, type ComplianceReviewContext, type CoverageSummary, type DocsDriftContext, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -42,8 +42,9 @@ import { redactFiles } from "../../adapters/fs/redact-files.ts";
 import { saveKept } from "../kept-sandboxes.ts";
 import { LOCKFILES, envOf } from "../../domain/env-hash.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
-import { sandboxSizeOf } from "../../domain/sandbox-bounds.ts";
-import { safetyReleasedOf, trustOf, untrustedNote } from "../../domain/trust.ts";
+import { type SandboxBounds, guardOf, sandboxSizeOf } from "../../domain/sandbox-bounds.ts";
+import type { GuardSpec } from "../../adapters/docker/guard.ts";
+import { type Trust, safetyReleasedOf, trustOf, untrustedNote } from "../../domain/trust.ts";
 import { envBrokenDetail } from "../env-broken.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
@@ -75,6 +76,8 @@ export interface AgentDeps {
   imageId?: (image: string) => Promise<string>;
   /** The base stage image. */
   image: string;
+  /** The machine's own stage guard image (`RUNNER_GUARD_IMAGE`); absent, no run is guarded (tests). */
+  guardImage?: string;
   /** Resolves the image a repository's stages run in (its own, built from its base, or `image`); absent, every repository runs in `image`. */
   repoImages?: { ensure(repoPath: string, signal?: AbortSignal, taskId?: string): Promise<{ image: string }> };
   /** The image with browsers, used by the e2e pack. */
@@ -297,6 +300,16 @@ async function foldRun(deps: AgentDeps, context: StageContext, pack: PackId, res
   } catch {
     // The economy never stops a stage.
   }
+}
+
+/** The guard a run asks for, or null. Pure. The default (no machine policy loaded) is the policy's own: `log` for both trusts. */
+export function stageGuardOf(input: { pack: (typeof PACKS)[PackId]; engineRuntime: string; relayed: boolean; image: string | undefined; bounds: SandboxBounds | undefined; trust: Trust; journalDir: string }): (GuardSpec & { image: string }) | null {
+  const { pack, bounds } = input;
+  if (!input.image || !input.relayed || input.engineRuntime !== "claude" || pack.kind !== "agent") return null;
+  const a = pack.access;
+  if (!(a.read || a.write || a.web || a.agent || a.skills || a.commands.length > 0 || a.luna.length > 0)) return null;
+  const { mode, blockSeverity } = guardOf(bounds ?? { guard: { trusted: DEFAULT_MACHINE_POLICY.guard.trusted, untrusted: DEFAULT_MACHINE_POLICY.guard.untrusted, blockSeverity: DEFAULT_MACHINE_POLICY.guard.block_severity } }, input.trust);
+  return mode === "off" ? null : { mode, blockSeverity, journalDir: input.journalDir, image: input.image };
 }
 
 /** The cards whose untrusted run has been said on the task, so it is said once. */
@@ -667,6 +680,9 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   // The run's own list: its engine's owner and each helper's, and for a browser run the hosts of the QA target(s) it may drive.
   const found = PACKS[pack];
   const owners = [credentialOwner(choice.engine), ...(found.kind === "decision" ? [] : helpersOn(found, resolveEngine(choice.engine).runtime).map((h) => credentialOwner(h.engine)))];
+  // The stage guard (RFC 0012): only an agent pack that has tools, on a Claude engine whose credential is relayed (the guard forwards to the relay).
+  // The mode is the policy's for the card's trust; `off` or a missing image means none. A resumed run re-attaches to the guard it started with.
+  const askedGuard = stageGuardOf({ pack: found, engineRuntime: resolveEngine(choice.engine).runtime, relayed: credential.relay !== undefined, image: deps.guardImage, bounds: policy.bounds, trust, journalDir: join(runDir, "guard") });
   const egress = deps.egress
     ? await guard(() => deps.egress!.for({ repoPath: task.repoPath, kind: egressKindOf(found), owners: [...new Set(owners)], ...(credential.relay ? { relayed: ["claude" as const] } : {}), targets: found.kind !== "decision" && found.network === "full" && (pack === "e2e" || pack === "recording") ? targetHosts(input.context.qaTargets ?? []) : [] }))
     : undefined;
@@ -675,6 +691,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   try {
   sandbox = await (deps.sandbox ?? runSandbox)({
     ...(egress ? { egress } : {}),
+    ...(askedGuard ? { guard: askedGuard } : {}),
     ...(secretValues ? { secrets: secretValues } : {}),
     ...(extra.redactValues ? { redactValues: extra.redactValues } : {}),
     ...(extra.alsoJoin?.length ? { alsoJoin: extra.alsoJoin } : {}),

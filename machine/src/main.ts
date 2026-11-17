@@ -155,7 +155,7 @@ if (applied.length > 0) {
 }
 
 /** Every repo's luna.yaml (or older PIPELINE.md), read on demand; shared so a bad edit warns once. */
-for (const line of sandboxPolicyNotes(config.sandboxPolicy).warnings) console.warn(line);
+for (const line of sandboxPolicyNotes(config.sandboxPolicy, { relay: config.egress.relay }).warnings) console.warn(line);
 const policies = new PolicyStore({ machinePolicy: config.sandboxPolicy });
 /** Run traces: a local Laminar (`MACHINE_TRACES`, `LMNR_*`); the no-op without a key. Built before
  *  the pipeline so the first stage run after boot is traced. */
@@ -1025,6 +1025,7 @@ const app = createApp({
   knownRepos,
   // The identity is read on each call, so a machine fixed in place turns healthy without a restart; the token and the stub reason are fixed at boot.
   sandboxPolicy: config.sandboxPolicy,
+  engineRelay: config.egress.relay,
   problems: async () => readinessProblems({ githubToken: config.githubToken, identity: await gitIdentity(process.cwd()), stubReason }),
   approveBase,
   ...(config.economy ? { economy: { port: economy, knownRepos, configOf: async (repo: string) => (await policies.for(repo)).factory.economy } } : {}),

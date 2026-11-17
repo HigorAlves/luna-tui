@@ -359,10 +359,20 @@ export function sandboxPolicyFrom(env: NodeJS.ProcessEnv, home: string): Machine
   return parsed.data;
 }
 
-/** The policy keys that are set but do nothing, and a startup warning for each. Today only `bash_sandbox: on`: the nested Bash sandbox was not built (RFC 0009). */
-export function sandboxPolicyNotes(policy: MachinePolicy): { notInForce: string[]; warnings: string[] } {
-  if (policy.bash_sandbox !== "on") return { notInForce: [], warnings: [] };
-  return { notInForce: ["bash_sandbox"], warnings: ["sandbox policy: bash_sandbox is on, but the nested Bash sandbox was not built (RFC 0009), so it has no effect"] };
+/** The policy keys that are set but do nothing, and a startup warning for each: `bash_sandbox: on` (the nested Bash sandbox was not built, RFC 0009) and a stage guard the policy asks for while the engine relay is off (the guard sits in front of the relay, so it needs the relay and the egress proxy; `relay` is false with either off). */
+export function sandboxPolicyNotes(policy: MachinePolicy, runtime: { relay: boolean } = { relay: true }): { notInForce: string[]; warnings: string[] } {
+  const notInForce: string[] = [];
+  const warnings: string[] = [];
+  if (policy.bash_sandbox === "on") {
+    notInForce.push("bash_sandbox");
+    warnings.push("sandbox policy: bash_sandbox is on, but the nested Bash sandbox was not built (RFC 0009), so it has no effect");
+  }
+  if (!runtime.relay && (policy.guard.trusted !== "off" || policy.guard.untrusted !== "off")) {
+    const note = "guard: needs the engine relay and the egress proxy; both must be on";
+    notInForce.push(note);
+    warnings.push(`sandbox policy: ${note}`);
+  }
+  return { notInForce, warnings };
 }
 
 /** The policy's seccomp profile must exist, be a readable regular file and parse as JSON: else the machine would start and then fail every stage. Throws, naming the key and the path. */

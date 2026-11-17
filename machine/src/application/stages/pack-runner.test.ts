@@ -264,6 +264,47 @@ describe("agent stages through packs", () => {
     expect(note).toHaveBeenCalledWith(bounds.notes[0]);
   });
 
+  describe("the stage guard", () => {
+    const relay = { kind: "oauth" as const, placeholder: "sk-ant-oat01-luna-relay-ph", file: "/state/r/relay/anthropic", metaFile: "/state/r/relay/meta.json" };
+    const relayed: Credentials = { check: async () => ({ available: true }), prepare: async () => ({ env: { CLAUDE_CODE_OAUTH_TOKEN: relay.placeholder }, mounts: [], relay, release: async () => {} }) };
+    const guardBounds = (trusted: string, untrusted: string, severity = "high") => ({ notes: [], egress: [], image: [], seccomp: null, runtime: { default: "runc", untrusted: "runc" }, maxPids: 1024, splitCache: true, guard: { trusted, untrusted, blockSeverity: severity } });
+    const guardedDeps = (bounds = guardBounds("log", "block", "critical"), over: Partial<AgentDeps> = {}): AgentDeps => ({ ...deps(fakeSandbox(output())), credentials: relayed, guardImage: "guard:dev", policies: { for: async () => ({ ...DEFAULT_POLICY, bounds }) } as never, ...over });
+    const stranger = (ctx: StageContext): StageContext => ({ ...ctx, task: { ...ctx.task, id: `g-${Math.random()}`, source: { kind: "github", repo: "o/a", number: 9, url: "u", authorAssociation: "NONE" } } as unknown as TaskRow });
+
+    it("gives an agent pack with access, on a relayed Claude credential, a guard in the mode its card's trust gets, with the run's own journal folder", async () => {
+      await runAgent(guardedDeps(), context("triage"), "triage");
+      expect(seen!.guard).toEqual({ mode: "log", blockSeverity: "critical", journalDir: join(stateDir, "runs", "run-1", "guard"), image: "guard:dev" });
+      await runAgent(guardedDeps(), stranger(context("triage")), "triage");
+      expect(seen!.guard).toMatchObject({ mode: "block", blockSeverity: "critical" });
+    });
+
+    it("gives none when the mode for that trust is off", async () => {
+      await runAgent(guardedDeps(guardBounds("off", "block")), context("triage"), "triage");
+      expect(seen!.guard).toBeUndefined();
+      await runAgent(guardedDeps(guardBounds("off", "block")), stranger(context("triage")), "triage");
+      expect(seen!.guard).toMatchObject({ mode: "block" });
+    });
+
+    it("gives none without a relay (another engine, or MACHINE_ENGINE_RELAY=off), for a pack with no access, or for a decision pack", async () => {
+      await runAgent({ ...guardedDeps(), credentials: fixedCredentials({ ANTHROPIC_API_KEY: "x" }) }, context("triage"), "triage");
+      expect(seen!.guard).toBeUndefined();
+      await runAgent(guardedDeps(), context("triage"), "fact_propose");
+      expect(PACKS.fact_propose.access.commands).toEqual([]);
+      expect(seen!.guard).toBeUndefined();
+    });
+
+    it("gives none when the machine has no guard image to name", async () => {
+      await runAgent(guardedDeps(undefined, { guardImage: undefined as never }), context("triage"), "triage");
+      expect(seen!.guard).toBeUndefined();
+    });
+
+    it("keeps the guard on a resumed run, which re-attaches to the one it started with", async () => {
+      await runAgent(guardedDeps(), { ...context("triage"), resume: { container: "hardness-x", inputCommit: null, engine: "claude:opus" as const } }, "triage");
+      expect(seen!.attach).toBe(true);
+      expect(seen!.guard).toMatchObject({ mode: "log", journalDir: join(stateDir, "runs", "run-1", "guard") });
+    });
+  });
+
   describe("a card from outside the repository's people", () => {
     const stranger = (ctx: StageContext, authorAssociation = "NONE"): StageContext => ({ ...ctx, task: { ...ctx.task, id: `stranger-${authorAssociation}-${Math.random()}`, source: { kind: "github", repo: "o/a", number: 9, url: "u", authorAssociation } } as unknown as TaskRow });
     const bounds = { notes: [], egress: [], image: [], seccomp: null, runtime: { default: "runc", untrusted: "runsc" }, maxPids: 300, splitCache: true };
