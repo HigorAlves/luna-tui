@@ -435,13 +435,15 @@ The machine opens one root span per run. `application/telemetry.ts` is the port.
 
 The company brain is a graph of cards, pull requests, people and decisions that the machine fills from its own records ([architecture](architecture.md#the-company-brain), [RFC 0010](rfcs/0010-company-brain-on-omnigraph.md)). It is opt-in, and Luna works the same without it.
 
-1. Run `pnpm brain`. It writes `~/.config/hardness/brain-tokens.json` once, then starts the `brain` service (`docker compose --profile brain up -d --wait brain`). The server listens on `127.0.0.1:8090`. The first start pulls an image of about 900 MB.
+1. Run `pnpm brain`. It writes `~/.config/hardness/brain-tokens.json`, then starts the `brain` service in a new container (`docker compose --profile brain up -d --force-recreate --wait brain`), which applies the `brain/` folder of this checkout. The server listens on `127.0.0.1:8090`. The first start pulls an image of about 900 MB.
 2. Set `MACHINE_BRAIN_URL` in `.env`: `http://127.0.0.1:8090` for `pnpm dev`, `http://brain:8080` for `pnpm start`.
 3. Restart the machine. `GET /brain/health` answers `enabled: true` and the server's version.
 
-The tokens file holds one token per actor: `owner`, `luna-facts`, `luna-memories` and `luna-reader`. The file is mode 0644, because the server runs as its own user and compose mounts only that one file into it. So the script makes the folder 0700, also when it already existed: the folder is what keeps the file, and the owner token in it, from other users of the host.
+The tokens file holds one token per actor: `owner`, `luna-facts`, `luna-memories`, `luna-reader` and `luna-mcp` (your own MCP client, see the runbook). A file from before an actor existed gets that token added; no token is replaced. The file is mode 0644, because the server runs as its own user and compose mounts only that one file into it. So the script makes the folder 0700, also when it already existed: the folder is what keeps the file, and the owner token in it, from other users of the host.
 
-The service holds no embedding setting and no provider key, so it calls nothing outside. Keep it that way: every model call in this repository is a pack.
+The service holds no embedding setting and no provider key, so it calls nothing outside. Keep it that way: every model call in this repository is a pack. It runs with every capability dropped and no new privileges.
+
+No stage container reaches the service while the sandbox network is on (`MACHINE_EGRESS`, on by default): the card network is internal and the proxy refuses private names and addresses. With `MACHINE_EGRESS=off` on Docker Desktop a stage can open the brain's published port, where only the bearer token guards the graph; no stage holds a token.
 
 The [runbook](runbooks/the-brain.md) covers a rebuild, an upgrade and a stuck lock.
 

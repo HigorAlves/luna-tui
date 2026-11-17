@@ -696,13 +696,16 @@ The graph is served by [omnigraph](https://github.com/ModernRelay/omnigraph) (MI
 
 ### The service
 
-`compose.yaml` has a `brain` service behind the `brain` profile. `pnpm brain` writes the tokens file once and starts it. Luna works the same without it: with `MACHINE_BRAIN_URL` unset, the port is `noBrain()`, which loads nothing and answers no rows.
+`compose.yaml` has a `brain` service behind the `brain` profile. `pnpm brain` writes the tokens file and starts it in a new container. Luna works the same without it: with `MACHINE_BRAIN_URL` unset, the port is `noBrain()`, which loads nothing and answers no rows.
 
 - The image is pinned by digest. It is `amd64` only, so an Apple Silicon host emulates it.
 - It binds `127.0.0.1` and keeps its data in the `brain-data` volume.
 - Its environment holds no embedding setting and no provider key. Embedding is the one outbound call omnigraph can make, so the server calls nothing outside. A test holds the service to this.
-- It starts through `brain/boot.sh`. The script applies the cluster in `brain/`, clears a lock, and starts the server. Omnigraph guards a cluster with a lock file. `cluster apply` keeps its lock after it exits, and a server that was killed keeps its own. Either one stops the next start. Clearing the lock is safe only because this container is the volume's one user.
-- A token selects an actor (`brain/policies/`): `luna-facts` and `luna-memories` write, `luna-reader` only reads, and `owner` is the person. The commit history of the graph then says which job wrote what.
+- It starts through `brain/boot.sh`. The script applies the cluster in `brain/`, clears a lock, and starts the server. Omnigraph guards a cluster with a lock file. `cluster apply` keeps its lock after it exits, and a server that was killed keeps its own. Either one stops the next start. Clearing the lock is safe only because this container is the volume's one user, so the script first takes a file lock on the volume and holds it while the server runs: a second container on the same volume does not start.
+- `brain/` is the checkout's folder, mounted live. So the apply runs once per container, and the container keeps its own copy of the script: a restart after a crash or the memory limit starts the server on what was applied, whatever the checkout holds by then. `pnpm brain` makes a new container.
+- It runs with every capability dropped and no new privileges.
+- No stage container reaches it while the sandbox network is on (the default): the card network is internal, and the egress proxy refuses private names and addresses. No stage holds a token either way.
+- A token selects an actor (`brain/policies/`): `luna-facts` writes the facts and `luna-memories` the claim layer, so the commit history of the graph says which job wrote what. `luna-reader` (the machine) and `luna-mcp` (the person's own MCP client) only read, and `owner` is the person. Only the owner can export the whole graph. A reader's `read` is what the server asks for on a stored query, and it also covers a query of the token's own: the policy cannot tell the two apart, so a reader token reads every repository and never goes to anything that reads untrusted text.
 
 ### The graph
 
@@ -730,14 +733,14 @@ The graph is served by [omnigraph](https://github.com/ModernRelay/omnigraph) (MI
 Three rules hold for every row:
 
 - **A row is whole.** A load replaces the row, and a field left out becomes null. So `brainNode()` gives every row every key of its type.
-- **The only free text is a title.** It is flattened to one line and capped at 200 characters, after the secret and personal-data screen cut a secret and masked an address or a phone number. No description, comment, reason or email reaches the graph. The compliance rows hold names and paths only: an incident's timeline, a control's text and an answer's text stay with the machine and the wiki, and their titles pass the secret and personal-data screen first.
+- **Free text is short, screened and listed here.** A fact row's only free text is a title: one line, at most 200 characters, after the secret and personal-data screen cut a secret and masked an address or a phone number. A component's name passes the same screen. The claim layer holds more, on purpose: a claim's statement (at most 300 characters) and its quote (at most 500, copied word for word from what the retro was shown), a lesson's title (the statement), and a rule's statement (at most 500) and section. A claim with a secret or personal data in it is refused before it reaches the graph; a rule and a lesson's title pass the screen. No description, comment or email reaches the graph any other way. The compliance rows hold names and paths only: an incident's timeline, a control's text and an answer's text stay with the machine and the wiki, and their titles pass the secret and personal-data screen first.
 - **A key is a slug,** `<system>:<native id>`. Its prefix names its type, and loading the same item twice changes nothing.
 
 A verdict is written only once its truth is known, because the graph keeps verdicts as precedents.
 
 ### How facts get in
 
-`application/brain-projector.ts` turns the machine's records into rows and loads them. It runs after a card closes and once an hour. A brain that is down never fails or slows a close.
+`application/brain-projector.ts` turns the machine's records into rows and loads them. It runs after a card closes, once an hour, and once a minute after the machine starts. A brain that is down never fails or slows a close.
 
 1. It reads the tasks, the decision records and the claims that changed since its cursor, and the `project-context.md` of each repository those tasks belong to. For those repositories it also reads the regimes `luna.yaml` declares, and, at most once a day per repository, the wiki's pages under `Compliance/Controls/`, `Compliance/Policies/` and `Compliance/Answers/`. It reads every stored incident on each run; the journal skips the ones that did not change. A source that fails is logged and skipped: a `luna.yaml` that could not be read unlinks no regime, and a wiki that is down is asked again a day later.
 2. It builds the rows with the pure functions in `domain/brain/`.
@@ -745,7 +748,7 @@ A verdict is written only once its truth is known, because the graph keeps verdi
 4. A load only adds edges. So the projector first removes an edge that moved or went away, such as a card linked to another ticket.
 5. `brainBatches()` cuts the rows into loads the server accepts. It keeps a node with its own edges, and puts a node after every node its edges point at. Omnigraph refuses a load that leaves a node under an edge's minimum, and an edge to a node it does not hold.
 6. After each load, the journal gets the rows that landed. A cursor moves only when everything landed. A task whose rows could not be built holds the tasks cursor. A verdict or a claim about that task's card, when the graph does not hold the card yet, waits and holds its own cursor behind it, for a day at most: then it goes in without its card. Every other verdict and claim goes in, so one failing task does not stop the rest.
-7. Then the hygiene queries run. Each returns zero rows on a healthy graph.
+7. Then the hygiene queries run, after every run whose loads did not fail. Each returns zero rows on a healthy graph.
 
 A card that ended is final. Once the journal holds a card as closed or archived, the projector does not build it again. The machine prunes a closed card's events and stage runs, so a later build would write its estimate, its retries and its components back as nothing.
 
@@ -792,18 +795,19 @@ flowchart TD
 
 **The code checks** (`domain/brain/claim-checks.ts`) run before any model:
 
-- The source holds the quote word for word, white space aside. The machine holds the source's text, so no claim rests on a quote that nobody can find.
+- The source holds the quote word for word, white space aside. For a retro's claim the source is what the data blocks of its prompt held: what happened, as a tool or a model wrote it. The template's own instructions are not a source. A quote found only in the card's own words (its title) passes, but the claim gets a code rule and is the person's: a ticket says what someone wanted, not what happened.
 - It holds no secret shape and no personal data.
 - The statement does not address a reader: an order to drop what came before, a "you must", a sentence that opens as a command. This lint is narrow on purpose. Whether a milder sentence is an instruction is the pack's `is_statement` question.
 
 A claim that fails is kept as `refused` with the reason, so the person sees it. The journal cuts out the secret and masks the address it was refused for. A refused claim never reaches the graph.
 
-**`memory_admit`** is a decision pack on Jev, and on `claude:haiku` with no Jev key. It reads the claim, the part of the source around the quote, and the five most similar claims the graph holds. It answers `supported`, `durable`, `scope_fits`, `is_statement`, a `risk` score, and `relation_1` to `relation_5`, one per similar claim.
+**`memory_admit`** is a decision pack on Jev, and on `claude:haiku` with no Jev key. It reads the claim, the part of the source around the quote, and the five most similar claims of the same repository. A claim about the whole org is compared with none. It runs only with the brain on: without the graph, admission is off whatever `luna.yaml` says. It answers `supported`, `durable`, `scope_fits`, `is_statement`, a `risk` score, and `relation_1` to `relation_5`, one per similar claim.
 
 **The outcome** is `admissionOutcome()`, a pure function over the answer, each question's verdict against the pack's bars, and the code rules:
 
-- **reject**: a confident answer that the source does not support it, that it is an instruction, or that it repeats a similar claim.
-- **ask**: a code rule fired (it applies to the whole org, its source was written by someone outside the org, or it is about compliance, security, access or an incident; a retro's claim counts as an outsider's when its card came from a GitHub issue or PR whose author is not an owner, member or collaborator, by the same `trustOf` that picks the sandbox), it contradicts a similar claim, its scope does not fit, the risk is high, or any answer is under the bar.
+- **ask**, first of all: a code rule fired. A claim with a code rule is always the person's, so no answer of Jev's decides it, a confident no included. The rules: it applies to the whole org, its quote is the ticket's own words, the similar claims could not be read, its source was written by someone outside the org, or it is about compliance, security, access or an incident; a retro's claim counts as an outsider's when its card came from a GitHub issue or PR whose author is not an owner, member or collaborator, by the same `trustOf` that picks the sandbox.
+- **reject**: a confident answer that the source does not support it, that it is an instruction, or that it repeats a similar claim that is verified. A repeat of a claim nobody verified asks instead.
+- **ask**: it contradicts a similar claim, its scope does not fit, the risk is high, or any answer is under the bar.
 - **flag**: the risk is medium, or an answer was only above the flag bar.
 - **verify**: everything else.
 
@@ -825,11 +829,11 @@ Rules that bind agents keep their path: the retro's `proposedRules` still reach 
 
 Nothing the brain holds reaches a pack until a repository says so. Two keys of `luna.yaml` decide it, and both are off by default, so no pack's input changes and no eval baseline moves.
 
-**`brain.precedents`** lists the decision packs that get precedents: their own earlier answers on cards like the one in front of them, with what really happened. `application/brain-precedents.ts` asks the graph's `precedents` query with the card's title and the card's repository, leaves out the card's own verdicts and keeps six. A precedent is always a card of the same repository, and a card with no repository gets none. A pack on the Claude or eve runtime reads them as a `# Precedents` section of its prompt, the lines in a data block: a title is a person's text. Jev takes its state on its own wire, so there they ride at the end of the state's description. Run a pack's eval baseline with precedents before you list it.
+**`brain.precedents`** lists the decision packs that get precedents: their own earlier answers on cards like the one in front of them, with what really happened. `application/brain-precedents.ts` asks the graph's `precedents` query with the card's title and the card's repository, leaves out the card's own verdicts and keeps six. A precedent is always a card of the same repository, and a card with no repository gets none. A pack on the Claude or eve runtime reads them as a `# Precedents` section of its prompt, the lines in a data block: a title is a person's text. Jev takes its state on its own wire, so there they are a key of their own, `precedents`, and the description stays the card's text: an issue that copies a precedents section is just an issue. The search uses the card's own title, also for a pack whose task title is the machine's ("Red check"). Run a pack's eval baseline with precedents before you list it.
 
 **`brain.tell: on`** opens two more doors:
 
-- **`brain_query`**, a tool of the two packs that hold `card_search` (`triage` and `question_council`). The agent names one of the eleven queries that `BRAIN_QUERIES` marks with `tool`, and each is confined to the task's own repository: what steers an agent's search may come from outside the org, and the graph holds every repository. A query that takes a repository gets the task's, whatever the request names. One that takes a card is refused unless `card_repo` places the card in that repository. One that takes a component is refused unless its slug is the repository's. The searches across all repositories, the incidents and the wiki answers are not tool queries. The stage container cannot reach the brain, so the tool writes a request into the checks mailbox and the machine answers through `agentQuery()`, with at most 20 rows a query and 20 queries a run. A failed query's note is its error code alone, never the server's words. With `tell` off the answer is always "skipped".
+- **`brain_query`**, a tool of the two packs that hold `card_search` (`triage` and `question_council`). The agent names one of the eleven queries that `BRAIN_QUERIES` marks with `tool`, and each is confined to the task's own repository: what steers an agent's search may come from outside the org, and the graph holds every repository. A query that takes a repository gets the task's, whatever the request names. One that takes a card is refused unless `card_repo` places the card in that repository. One that takes a component is refused unless its slug is the repository's. The searches across all repositories, the incidents and the wiki answers are not tool queries. The stage container cannot reach the brain, so the tool writes a request into the checks mailbox and the machine answers through `agentQuery()`, with at most 20 rows a query and 20 queries a run. The machine caps the request itself (a parameter of at most 300 characters), and a request it will not run gets a refusal at once: the 21st, or one that does not parse. A failed query's note is its error code alone, never the server's words. With `tell` off the answer is always "skipped".
 - **Reply drafts.** When the Conversation Machine drafts a reply for a thread of that repository, `conversation_reply` also gets up to 12 rows of what the brain holds about the thread's latest message, as a data block. Those rows are that repository's alone: its cards, lessons, rules and components, and no incident or wiki page. A draft that cites a link from a row is still dropped by the check on outgoing addresses. Citing by title works.
 
 ### Limits and not built
@@ -837,6 +841,8 @@ Nothing the brain holds reaches a pack until a repository says so. Two keys of `
 - Precedents, `brain_query` and the rows in a reply draft were never run against a model. Each is off until a repository turns it on.
 - A decision record keeps the context without the precedents, so a replay of that record does not show the pack what it saw.
 - A repository's rules are read again only when one of its cards is in a run. A change to the file with no card activity waits for the next card.
+- A reader token reads every repository, also with a query of its own: omnigraph's policy cannot tell a stored query from an ad hoc one. The machine holds it behind the port, and the runbook's MCP client gets a token of its own.
+- A forget removes a claim or a person from the graph's current state, the journal and the table. Omnigraph keeps earlier versions on its volume: the runbook says how to drop them.
 - The person's own question (`POST /brain/ask`, the board's popup) reads every repository. Only what a run or a reply draft reads is confined to one.
 - A pull request belongs to the card that opened it. A card that was only made from a pull request another card opened is not linked to it.
 - Jira and Slack count as the org's own tools for a claim's trust, as they do for the sandbox. The card keeps no author for them, so a guest there is not told apart.

@@ -464,6 +464,34 @@ Four reviewers read PR #232: security, the machine, the contracts with the facto
 
 Not changed: the tokens file stays 0644, because the server runs as uid 999 and compose mounts that one file; the folder is what keeps it from other users.
 
+## What the second review changed (2026-11-17)
+
+Six more reviewers read what the first round had not: the fix commits, the files nobody reached, the tests and evals, the docs against the code, and the service as deployed. Nothing critical. What changed:
+
+- **Pull requests the machine opened were never in the graph.** The source matched `pr.opened`, and the pipeline stores `stage.pr.opened`. The tests fed the wrong kind. Two cards that open one pull request now share one owner.
+- **A code rule beats every answer.** A confident no from Jev used to reject a claim the rules call the person's. A claim's similar claims are its own repository's, a graph that did not answer them sends the claim to the person, and a repeat of a claim nobody verified asks.
+- **A quote is evidence only from what happened.** It must be in the data blocks of the retro's prompt. The template's instructions are no source, and a quote of the card's own title makes the claim the person's.
+- **Admission is off without the graph.** A machine with no brain used to run `memory_admit` on every claim.
+- **Precedents.** They were ranked by the machine's own task title ("Red check"). On Jev they shared a string with the issue body; now they are a key of their own.
+- **The service.** Only the owner exports the graph. The MCP client has its own token. `boot.sh` applies once per container and holds a file lock on the volume. The container drops every capability.
+- **Erasure.** `POST /brain/forget` removes one claim or one person from the graph, the journal and the table, and the projector never writes them again.
+- **Smaller ones.** Claims are written as `luna-memories`. Component names, rules and lesson titles pass the screen. The journal is flushed and keeps a previous generation. A projection runs at boot. A `brain_query` the machine will not run is refused at once.
+
+### Designed here and not built
+
+The audit found four promises of this document that no list above owned:
+
+- **A postmortem's approved findings become claims.** Only the retro hands claims over.
+- **A person's Slack id, and marking someone who left as inactive.** A person row holds a login; `slack` is always null and `active` always true.
+- **An instruction on every type.** Seven of sixteen types have one.
+- **The `append` load mode for lessons.** A lesson is protected by the journal's check alone.
+
+### Limits that stay
+
+- A reader token can run a query of its own. The server asks for `read` on every stored query, and `read` covers both.
+- A forget is logical inside omnigraph: earlier versions stay on the volume until it is removed and the graph rebuilt.
+- Jira and Slack sources count as the org's own. A guest there is not told apart; the quote rule above is what stops a ticket's words from becoming a lesson alone.
+
 ### Not verified, across all waves
 
 - No pack was run against a model: `brain_ask`, `memory_admit`, the retro's `claims`, the precedents, `brain_query` and the reply drafts have eval cases, dry runs or unit tests only.
