@@ -698,6 +698,13 @@ describe("renderPrompt", () => {
     expect(renderPrompt({ pack: PACKS.status_report, input, template })).toContain("week (none) from (none) to (none)\nmetrics:\n(none)");
     const noCapacity = renderPrompt({ pack: PACKS.status_report, input: { ...input, pack: "status_report", stage: "status_report", context: { projectContext: null, status: { ...status, capacity: null } } }, template });
     expect(noCapacity).toContain("capacity:\nnot assessed");
+    // The brain's week is one line of numbers in the compliance part; absent, the part is what it was.
+    expect(prompt).not.toContain("Company brain");
+    const brain = { verifiedByJev: 4, flagged: 1, rejectedByJev: 2, waiting: 3, atRisk: 1, contested: 0 };
+    const withBrain = renderQuoted({ pack: PACKS.status_report, input: { ...input, pack: "status_report", stage: "status_report", context: { projectContext: null, status: { ...status, brain } } }, template });
+    expect(withBrain).toContain("Company brain: Jev verified 4 claims alone (1 flagged) and rejected 2; 3 wait for you; 1 lesson at risk; 0 contested.");
+    const one = renderQuoted({ pack: PACKS.status_report, input: { ...input, pack: "status_report", stage: "status_report", context: { projectContext: null, status: { ...status, brain: { ...brain, verifiedByJev: 1, flagged: 0, waiting: 1, atRisk: 2 } } } }, template });
+    expect(one).toContain("Company brain: Jev verified 1 claim alone (0 flagged) and rejected 2; 1 waits for you; 2 lessons at risk; 0 contested.");
   });
 
   it("shows foreman a card's flags, council, settled questions and trust, and the pending approvals", () => {

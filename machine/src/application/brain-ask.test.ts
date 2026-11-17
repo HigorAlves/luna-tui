@@ -33,7 +33,7 @@ describe("brainEvidence", () => {
     expect(rows.map((r) => r.slug)).toEqual(["card:a"]);
   });
 
-  it("asks the four searches with the question itself", async () => {
+  it("asks the seven searches with the question itself", async () => {
     const { brain, asked } = fake({});
     expect(await brainEvidence(brain, "what went wrong with exports?")).toEqual([]);
     expect(asked).toEqual([
@@ -41,6 +41,9 @@ describe("brainEvidence", () => {
       { name: "search_components", params: { q: "what went wrong with exports?" } },
       { name: "search_learnings", params: { q: "what went wrong with exports?" } },
       { name: "search_principles", params: { q: "what went wrong with exports?" } },
+      { name: "search_incidents", params: { q: "what went wrong with exports?" } },
+      { name: "search_controls", params: { q: "what went wrong with exports?" } },
+      { name: "search_answers", params: { q: "what went wrong with exports?" } },
     ]);
   });
 
@@ -189,5 +192,43 @@ describe("brainEvidence principles", () => {
     expect((await brainEvidence(brain, "x"))[0]!.text).toBe("Rule p1");
     const failing = fake({ search_principles: new Error("boom"), search_cards: [card("a")] });
     expect((await brainEvidence(failing.brain, "x")).map((r) => r.kind)).toEqual(["card"]);
+  });
+});
+
+describe("brainEvidence compliance", () => {
+  const incident = (id: string, over: Row = {}): Row => ({ incident: `incident:${id}`, title: `Incident ${id}`, severity: "high", status: "resolved", service: "exports", breach: true, started_at: "2026-11-10T09:00:00.000Z", resolved_at: "2026-11-11T10:00:00.000Z", ...over });
+  const control = (id: string, over: Row = {}): Row => ({ control: `control:luna-ab12/Compliance/Controls/${id}.md`, title: `Control ${id}`, kind: "control", path: `Compliance/Controls/${id}.md`, repo: "repo:luna-ab12", ...over });
+  const answer = (id: string, over: Row = {}): Row => ({ answer: `answer:luna-ab12/Compliance/Answers/${id}.md`, question: `Question ${id}?`, path: `Compliance/Answers/${id}.md`, repo: "repo:luna-ab12", ...over });
+
+  it("puts up to 3 incidents, controls and answers after the principles and before the cards, as one line", async () => {
+    const { brain } = fake({
+      search_cards: [card("a")],
+      search_principles: [{ principle: "principle:luna-ab12/p", statement: "Rule", section: null, repo: null }],
+      search_incidents: ["1", "2", "3", "4"].map((id) => incident(id)),
+      search_controls: ["1", "2", "3", "4"].map((id) => control(id)),
+      search_answers: ["1", "2", "3", "4"].map((id) => answer(id)),
+    });
+    const rows = await brainEvidence(brain, "breach");
+    expect(rows.map((r) => r.kind)).toEqual(["principle", ...Array(3).fill("incident"), ...Array(3).fill("control"), ...Array(3).fill("answer"), "card"]);
+    expect(rows[1]).toEqual({ slug: "incident:1", kind: "incident", text: "Incident 1 · high · resolved · service exports · exposed personal data: yes · started 2026-11-10 · resolved 2026-11-11" });
+    expect(rows[4]).toEqual({ slug: "control:luna-ab12/Compliance/Controls/1.md", kind: "control", text: "Control 1 · control page · Compliance/Controls/1.md · wiki of luna-ab12" });
+    expect(rows[7]).toEqual({ slug: "answer:luna-ab12/Compliance/Answers/1.md", kind: "answer", text: "Question 1? · approved answer · Compliance/Answers/1.md · wiki of luna-ab12" });
+  });
+
+  it("leaves out the parts of an incident whose value is null, and says no for a breach of false", async () => {
+    const { brain } = fake({ search_incidents: [incident("x", { service: null, breach: null, resolved_at: null, status: "open" }), incident("y", { breach: false })] });
+    const rows = await brainEvidence(brain, "q");
+    expect(rows[0]!.text).toBe("Incident x · high · open · started 2026-11-10");
+    expect(rows[1]!.text).toContain("exposed personal data: no");
+  });
+
+  it("writes a policy page as a policy page", async () => {
+    const { brain } = fake({ search_controls: [control("p", { kind: "policy" })] });
+    expect((await brainEvidence(brain, "q"))[0]!.text).toContain("· policy page ·");
+  });
+
+  it("skips a failing compliance query and keeps the others", async () => {
+    const { brain } = fake({ search_incidents: new Error("boom"), search_controls: [control("1")] });
+    expect((await brainEvidence(brain, "q")).map((r) => r.kind)).toEqual(["control"]);
   });
 });

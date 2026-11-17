@@ -649,6 +649,23 @@ export const StatusReportContext = z.object({
   }),
   /** capacity_check's answers, or null when it was not asked or failed. */
   capacity: z.object({ answers: z.object({ overAgentCapacity: z.boolean(), overReviewCapacity: z.boolean(), atRisk: z.enum(["none", "some", "many"]) }) }).nullable(),
+  /** What the company brain did in the week, as counts the machine made from its claim journal and the graph; never text of a claim. Absent unless the machine keeps a claim journal and one count is above zero. */
+  brain: z
+    .object({
+      /** Claims Jev verified alone in the week. */
+      verifiedByJev: z.number().int().min(0),
+      /** Of those, the ones Jev proposed to flag. */
+      flagged: z.number().int().min(0),
+      /** Claims Jev rejected alone in the week. */
+      rejectedByJev: z.number().int().min(0),
+      /** Claims that wait for a person now. */
+      waiting: z.number().int().min(0),
+      /** Lessons that rest on a rejected claim, now. */
+      atRisk: z.number().int().min(0),
+      /** Pairs of claims that contradict each other with neither rejected, now. */
+      contested: z.number().int().min(0),
+    })
+    .optional(),
 });
 export type StatusReportContext = z.infer<typeof StatusReportContext>;
 
@@ -700,7 +717,7 @@ export type QuestionnaireContext = z.infer<typeof QuestionnaireContext>;
 export const BrainAskRow = z.object({
   /** The node's slug: what an answer cites. */
   slug: z.string().min(1).max(300),
-  kind: z.enum(["card", "pr", "verdict", "component", "learning", "principle"]),
+  kind: z.enum(["card", "pr", "verdict", "component", "learning", "principle", "incident", "control", "answer"]),
   text: z.string().max(600),
 });
 export type BrainAskRow = z.infer<typeof BrainAskRow>;

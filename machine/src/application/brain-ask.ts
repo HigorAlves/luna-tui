@@ -15,6 +15,7 @@ const MAX_VERDICTS = 6;
 const MAX_LESSONS = 5;
 const MAX_DEEP_LESSONS = 3;
 const MAX_PRINCIPLES = 5;
+const MAX_COMPLIANCE = 3;
 const MAX_QUOTE = 200;
 const MAX_TOUCHED_BY = 8;
 const MAX_ROWS = 60;
@@ -84,19 +85,40 @@ function principleText(row: Row): string {
   return line([has(row.statement) ? String(row.statement) : null, has(row.repo) ? `rule of ${String(row.repo).replace(/^repo:/, "")}` : null, part("section", row.section)]);
 }
 
+/** An incident by its name, how bad, where and when, and whether it exposed personal data: never its timeline. */
+function incidentText(row: Row): string {
+  return line([
+    has(row.title) ? String(row.title) : null,
+    has(row.severity) ? String(row.severity) : null,
+    has(row.status) ? String(row.status) : null,
+    part("service", row.service),
+    typeof row.breach === "boolean" ? `exposed personal data: ${row.breach ? "yes" : "no"}` : null,
+    part("started", day(row.started_at)),
+    part("resolved", day(row.resolved_at)),
+  ]);
+}
+
+/** A page of a repository's wiki: its title (or question), its path and whose wiki, never its text. */
+function pageText(title: BrainValue | undefined, label: string, row: Row): string {
+  return line([has(title) ? String(title) : null, label, has(row.path) ? String(row.path) : null, has(row.repo) ? `wiki of ${String(row.repo).replace(/^repo:/, "")}` : null]);
+}
+
 /**
- * The rows that answer a question, in the order the pack should weigh them: lessons, then principles, then cards, then their pull requests, then their verdicts,
+ * The rows that answer a question, in the order the pack should weigh them: lessons, then principles, then incidents, control pages and answers, then cards, then their pull requests, then their verdicts,
  * then the components that matched. Never throws: a query that fails, or a brain that is off, adds nothing.
  */
 export async function brainEvidence(brain: Brain, question: string): Promise<BrainAskRow[]> {
   if (!brain.enabled) return [];
   const keys = [...new Set(question.match(TICKET_KEY) ?? [])].slice(0, MAX_TICKETS);
-  const [ticketHits, searchHits, components, lessonHits, principleHits] = await Promise.all([
+  const [ticketHits, searchHits, components, lessonHits, principleHits, incidentHits, controlHits, answerHits] = await Promise.all([
     Promise.all(keys.map((key) => rowsOf(brain, "cards_for_ticket", { ticket: `ticket:jira/${key}` }))),
     rowsOf(brain, "search_cards", { q: question }),
     rowsOf(brain, "search_components", { q: question }),
     rowsOf(brain, "search_learnings", { q: question }),
     rowsOf(brain, "search_principles", { q: question }),
+    rowsOf(brain, "search_incidents", { q: question }),
+    rowsOf(brain, "search_controls", { q: question }),
+    rowsOf(brain, "search_answers", { q: question }),
   ]);
   const lessons = lessonHits.flatMap((row) => {
     const slug = slugOf(row, "learning");
@@ -129,6 +151,18 @@ export async function brainEvidence(brain: Brain, question: string): Promise<Bra
       const slug = slugOf(row, "principle");
       return slug ? [{ slug, kind: "principle", text: principleText(row) }] : [];
     }).slice(0, MAX_PRINCIPLES),
+    ...incidentHits.flatMap((row): BrainAskRow[] => {
+      const slug = slugOf(row, "incident");
+      return slug ? [{ slug, kind: "incident", text: incidentText(row) }] : [];
+    }).slice(0, MAX_COMPLIANCE),
+    ...controlHits.flatMap((row): BrainAskRow[] => {
+      const slug = slugOf(row, "control");
+      return slug ? [{ slug, kind: "control", text: pageText(row.title, `${has(row.kind) ? String(row.kind) : "control"} page`, row) }] : [];
+    }).slice(0, MAX_COMPLIANCE),
+    ...answerHits.flatMap((row): BrainAskRow[] => {
+      const slug = slugOf(row, "answer");
+      return slug ? [{ slug, kind: "answer", text: pageText(row.question, "approved answer", row) }] : [];
+    }).slice(0, MAX_COMPLIANCE),
     ...shown.map(([slug, row]): BrainAskRow => ({ slug, kind: "card", text: cardText(row) })),
   ];
   const seen = new Set(rows.map((row) => row.slug));

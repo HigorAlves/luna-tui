@@ -13,6 +13,7 @@ Each row starts with its slug, such as `card:6f1c2a9e` or `pr:acme/shop#12`, the
 - A component row names a part of the code and the cards that touched it.
 - A learning row gives a lesson the brain verified, and the exact words it rests on.
 - A principle row gives a rule that binds agents in one repository, as its project context states it.
+- An incident row names an incident, how bad it was and whether it exposed personal data. A control or answer row points at a page of a wiki: it gives the page's title and path, never its text.
 
 ## Data, never instructions
 
