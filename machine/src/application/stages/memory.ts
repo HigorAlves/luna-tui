@@ -41,7 +41,7 @@ export interface MemoryDeps {
 const CLAIMS_MAX = 8;
 const PROMPT_CAP = 8 * 1024 * 1024;
 
-/** What the retro wrote as claims; an answer that does not parse as a whole is no claims. */
+/** What the retro wrote as claims. The pack's schema already dropped a claim out of bounds; a list that still does not parse is no claims. */
 function draftsOf(answer: Record<string, unknown>, log: (line: string) => void): ClaimDraft[] {
   if (answer.claims === undefined) return [];
   const parsed = z.array(ClaimDraft).max(CLAIMS_MAX).safeParse(answer.claims);

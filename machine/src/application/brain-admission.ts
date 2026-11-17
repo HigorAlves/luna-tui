@@ -102,7 +102,7 @@ export function admission(deps: AdmissionDeps): Admission {
       const answer = await deps.decide(admit, origin.repoPath);
       const recordId = recordIdOf(answer) ?? null;
       const { verdicts } = applyPolicy(PACKS.memory_admit, answer, await deps.overrides?.(origin.repoPath));
-      const result = admissionOutcome({ answer, verdicts, reasons: claim.reasons });
+      const result = admissionOutcome({ answer, verdicts, reasons: claim.reasons, similar: similar.length });
       const patch: Parameters<ClaimStore["update"]>[1] = {
         tier: result.tier,
         proposed: result.outcome,

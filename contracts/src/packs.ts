@@ -316,6 +316,11 @@ export const CiWatchAnswer = z.object({
   options: z.array(z.string()).optional(),
 });
 
+const CLAIMS_MAX = 8;
+/** The claims of a retro's answer that are whole, at most eight. The factory fails a run whose answer is off its schema, so a claim
+ *  out of bounds is dropped here: it must never cost the retro its rules and its calibration. */
+const keptClaims = (value: unknown): unknown => (Array.isArray(value) ? value.filter((claim) => ClaimDraft.safeParse(claim).success).slice(0, CLAIMS_MAX) : undefined);
+
 export const ReviewingMemoryAnswer = z.object({
   summary: z.string(),
   incidents: z.array(z.string()),
@@ -330,7 +335,7 @@ export const ReviewingMemoryAnswer = z.object({
   /** Files the change touched that the plan's map did not name. */
   graphMisses: z.array(z.string()).optional(),
   /** What the next card should know, each with the exact words it rests on; the machine checks each quote against what the retro was shown. */
-  claims: z.array(ClaimDraft).max(8).optional(),
+  claims: z.preprocess(keptClaims, z.array(ClaimDraft).max(CLAIMS_MAX).optional()),
   /** A prompt a pack should change, and how, in one sentence. */
   promptUpdates: z.array(z.object({ pack: z.string(), change: z.string() })).optional(),
   /** A runbook or an ADR the retro proposes: it reaches the repository only as a section of the draft PR a person approved. */

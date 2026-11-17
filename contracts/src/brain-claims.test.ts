@@ -56,6 +56,11 @@ describe("claimHighRiskReasons", () => {
       expect(claimHighRiskReasons({ ...base, statement: `The seed step touches the ${word} here.` }), word).toEqual(["about compliance, security, access or an incident"]);
     }
     expect(claimHighRiskReasons({ ...base, quote: "we hit an Outage on deploy" })).toEqual(["about compliance, security, access or an incident"]);
+    // the plural of a word is the same subject
+    for (const text of ["API tokens expire after one hour.", "Passwords are rotated each quarter.", "Past incidents were slow to close.", "Two breaches were reported.", "The outages log is in the wiki.", "The job accesses the bucket."])
+      expect(claimHighRiskReasons({ ...base, statement: text }), text).toEqual(["about compliance, security, access or an incident"]);
+    // and a longer word that only starts like one is not
+    for (const text of ["The tokenizer splits on spaces.", "Accessibility checks run in CI.", "The secretary pattern is unused."]) expect(claimHighRiskReasons({ ...base, statement: text }), text).toEqual([]);
   });
 
   it("does not match a word inside another word", () => {
@@ -88,7 +93,22 @@ describe("admissionOutcome", () => {
     relation_5: rel("unrelated"),
   });
   const allProceed = (): Record<string, Verdict> => Object.fromEntries(Object.keys(good()).map((k) => [k, "proceed" as Verdict]));
-  const run = (answer: Record<string, unknown> = good(), verdicts: Record<string, Verdict> = allProceed(), reasons: string[] = []) => admissionOutcome({ answer, verdicts, reasons });
+  const run = (answer: Record<string, unknown> = good(), verdicts: Record<string, Verdict> = allProceed(), reasons: string[] = [], similar = 5) => admissionOutcome({ answer, verdicts, reasons, similar });
+
+  it("never rejects on a duplicate of a similar claim that was not shown: it asks", () => {
+    // two similar claims were shown, and the answer names the fourth
+    expect(run({ ...good(), relation_4: rel("duplicate") }, allProceed(), [], 2)).toMatchObject({ outcome: "ask", duplicateOf: null });
+    expect(run({ ...good(), relation_2: rel("duplicate") }, allProceed(), [], 2)).toMatchObject({ outcome: "reject", duplicateOf: 2 });
+  });
+
+  it("asks on a contradiction of a similar claim that was not shown, and links nothing", () => {
+    expect(run({ ...good(), relation_3: rel("contradicts") }, allProceed(), [], 2)).toMatchObject({ outcome: "ask", contradicts: [] });
+    expect(run({ ...good(), relation_1: rel("contradicts") }, allProceed(), [], 2)).toMatchObject({ outcome: "ask", contradicts: [1] });
+  });
+
+  it("verifies a clean claim that had no similar claim at all", () => {
+    expect(run(good(), allProceed(), [], 0)).toMatchObject({ outcome: "verify" });
+  });
 
   it("verifies a clean claim, with its durability", () => {
     expect(run()).toEqual({ outcome: "verify", tier: "low", durable: true, contradicts: [], duplicateOf: null });

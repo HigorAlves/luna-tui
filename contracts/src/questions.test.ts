@@ -580,8 +580,28 @@ describe("the fact_propose agent pack", () => {
     expect(ReviewingMemoryAnswer.safeParse(base).success).toBe(true);
     expect(ReviewingMemoryAnswer.safeParse({ ...base, claims: [claim] }).success).toBe(true);
     expect(ReviewingMemoryAnswer.safeParse({ ...base, claims: Array(8).fill(claim) }).success).toBe(true);
-    expect(ReviewingMemoryAnswer.safeParse({ ...base, claims: Array(9).fill(claim) }).success).toBe(false);
-    expect(ReviewingMemoryAnswer.safeParse({ ...base, claims: [{ ...claim, quote: "short" }] }).success).toBe(false);
+  });
+
+  // The factory fails a run whose answer is off the schema, so a strict claim would cost the retro its rules and its calibration.
+  it("a claim out of bounds is dropped, never the retro's answer", async () => {
+    const { ReviewingMemoryAnswer } = await import("./index.ts");
+    const base = { summary: "s", incidents: [], patterns: [], proposedRules: [], calibration: { estLocBias: 0 } };
+    const claim = { statement: "The e2e suite needs the seed command first.", quote: "e2e failed until we ran seed", kind: "fact", scope: "repo" };
+    const kept = (claims: unknown) => {
+      const parsed = ReviewingMemoryAnswer.safeParse({ ...base, claims });
+      return parsed.success ? parsed.data.claims : "failed";
+    };
+    expect(kept(Array(9).fill(claim))).toHaveLength(8);
+    expect(kept([{ ...claim, quote: "short" }, claim, { ...claim, statement: "x".repeat(301) }, { statement: "no quote at all here" }, "text"])).toEqual([claim]);
+    expect(kept("not a list")).toBeUndefined();
+    expect(kept(undefined)).toBeUndefined();
+  });
+
+  it("the retro's answer schema still tells the model what a claim is", async () => {
+    const { PACKS, answerJsonSchema } = await import("./index.ts");
+    const schema = JSON.stringify(answerJsonSchema(PACKS.reviewing_memory));
+    expect(schema).toContain('"quote"');
+    expect(schema).toContain('"maxItems":8');
   });
 });
 

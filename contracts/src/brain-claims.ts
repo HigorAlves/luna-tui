@@ -91,8 +91,9 @@ const RISKY_WORDS = [
   "compliance", "soc2", "soc 2", "hipaa", "gdpr", "lgpd", "privacy", "security", "vulnerability", "vulnerabilities", "cve", "secret", "secrets",
   "credential", "credentials", "token", "password", "access", "permission", "permissions", "incident", "breach", "outage", "pii", "phi",
 ];
-// A word of its own: a letter or digit on either side means it is part of a longer word ("tokenizer", "accessibility").
-const RISKY = new RegExp(`(?<![\\p{L}\\p{N}])(?:${RISKY_WORDS.join("|").replace(/ /g, "\\s")})(?![\\p{L}\\p{N}])`, "iu");
+// A word of its own, or its plural ("tokens", "breaches"): any other letter or digit on either side means it is part of a longer
+// word ("tokenizer", "accessibility").
+const RISKY = new RegExp(`(?<![\\p{L}\\p{N}])(?:${RISKY_WORDS.join("|").replace(/ /g, "\\s")})(?:es|s)?(?![\\p{L}\\p{N}])`, "iu");
 
 /** The code rules that make a claim the person's whatever Jev says (RFC 0010, "Always the person's"). Empty when none fires. */
 export function claimHighRiskReasons(claim: { statement: string; quote: string; scope: ClaimScope; speakerTrust: ClaimSpeakerTrust }): string[] {
@@ -121,8 +122,12 @@ const scoreOf = (answer: Record<string, unknown>): number | undefined => {
   return isRecord(q) && typeof q.score === "number" && Number.isFinite(q.score) ? q.score : undefined;
 };
 
-/** What admission comes to. Pure: the machine applies it in auto mode and only records it in shadow. */
-export function admissionOutcome(input: { answer: Record<string, unknown>; verdicts: Record<string, Verdict>; reasons: string[] }): {
+/**
+ * What admission comes to. Pure: the machine applies it in auto mode and only records it in shadow. `similar` is how many similar
+ * claims the pack was shown: an answer that names a duplicate or a contradiction in a slot that held none is a confused answer,
+ * so it asks and never rejects or links.
+ */
+export function admissionOutcome(input: { answer: Record<string, unknown>; verdicts: Record<string, Verdict>; reasons: string[]; similar: number }): {
   outcome: ClaimOutcome;
   tier: ClaimTier;
   durable: boolean | null;
@@ -140,8 +145,10 @@ export function admissionOutcome(input: { answer: Record<string, unknown>; verdi
   const score = scoreOf(answerShape);
   const tier: ClaimTier = verdict("risk") === "ask" || score === undefined ? "high" : (["low", "medium", "high"] as const)[Math.min(2, Math.max(0, Math.round(score)))]!;
 
-  const contradicts = SLOTS.filter((n) => choiceOf(answerShape, `relation_${n}`) === "contradicts");
-  const duplicateOf = SLOTS.find((n) => choiceOf(answerShape, `relation_${n}`) === "duplicate" && verdict(`relation_${n}`) === "proceed") ?? null;
+  const shown = SLOTS.filter((n) => n <= input.similar);
+  const offSlot = SLOTS.some((n) => n > input.similar && choiceOf(answerShape, `relation_${n}`) !== undefined && choiceOf(answerShape, `relation_${n}`) !== "unrelated");
+  const contradicts = shown.filter((n) => choiceOf(answerShape, `relation_${n}`) === "contradicts");
+  const duplicateOf = shown.find((n) => choiceOf(answerShape, `relation_${n}`) === "duplicate" && verdict(`relation_${n}`) === "proceed") ?? null;
 
   const durable = verdict("durable") !== "ask" ? (yesno(answerShape, "durable") ?? null) : null;
   const result = (outcome: ClaimOutcome) => ({ outcome, tier, durable, contradicts: [...contradicts], duplicateOf });
@@ -149,9 +156,10 @@ export function admissionOutcome(input: { answer: Record<string, unknown>; verdi
   const confidentNo = (name: string) => verdict(name) === "proceed" && yesno(answerShape, name) === false;
   if (confidentNo("supported") || confidentNo("is_statement") || duplicateOf !== null) return result("reject");
 
-  const duplicateNotTaken = SLOTS.some((n) => choiceOf(answerShape, `relation_${n}`) === "duplicate");
+  const duplicateNotTaken = shown.some((n) => choiceOf(answerShape, `relation_${n}`) === "duplicate");
   if (
     reasons.length > 0 ||
+    offSlot ||
     contradicts.length > 0 ||
     yesno(answerShape, "scope_fits") === false ||
     tier === "high" ||
