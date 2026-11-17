@@ -41,8 +41,8 @@ export interface ClaimStore {
   findBySource(source: Pick<BrainClaim["source"], "kind" | "ref">, statement: string): Promise<BrainClaim | null>;
   /** Newest first, or with `order: "updated_asc"` the longest-unchanged first, which is what a cursor over `updated_at` pages by. `since` keeps those updated at or after it; `except` leaves one status out; `decidedBy` and `decidedSince` (at or after) keep the claims decided by that one, since then. */
   list(filter?: { status?: ClaimStatus; except?: ClaimStatus; repoPath?: string; since?: Date; decidedBy?: "code" | "jev" | "person"; decidedSince?: Date; limit?: number; order?: "updated_asc" }): Promise<BrainClaim[]>;
-  /** Changes what admission or a person settled; touches `updated_at`. Null when there is no such claim. */
-  update(id: string, patch: ClaimPatch): Promise<BrainClaim | null>;
+  /** Changes what admission or a person settled; touches `updated_at`. Null when there is no such claim, or, with `ifStatus`, when the claim is no longer in that status: someone else decided first. */
+  update(id: string, patch: ClaimPatch, options?: { ifStatus?: ClaimStatus }): Promise<BrainClaim | null>;
   stats(repoPath?: string): Promise<ClaimStats>;
 }
 

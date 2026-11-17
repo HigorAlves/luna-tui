@@ -25,5 +25,5 @@ export function brainAtBoot(options: { url: string | null; tokensPath: string })
   const lacking = NEEDED.filter((name) => typeof file[name] !== "string" || file[name] === "");
   if (lacking.length > 0) return off(`${options.tokensPath} has no ${lacking.join(", ")}`);
   const tokens = { facts: file["luna-facts"] as string, memories: file["luna-memories"] as string, reader: file["luna-reader"] as string };
-  return { brain: omnigraphBrain({ client: omnigraphClient({ baseUrl: options.url, graph: GRAPH }), tokens }), line: `brain: on, ${options.url} (graph ${GRAPH})` };
+  return { brain: omnigraphBrain({ client: omnigraphClient({ baseUrl: options.url, graph: GRAPH }), tokens, log: (line) => console.warn(line) }), line: `brain: on, ${options.url} (graph ${GRAPH})` };
 }

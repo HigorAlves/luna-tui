@@ -120,6 +120,15 @@ describe("StatusReport.build", () => {
       expect(brain.mock.calls[0]![1]).toEqual(new Date(2026, 10, 15, 23, 59, 59, 999));
     });
 
+    it("keeps an unknown count as null, and does not carry a week whose only numbers are zero or unknown", async () => {
+      const unknown = world({ brain: async () => ({ ...zero, verifiedByJev: 2, atRisk: null, contested: null }) });
+      await unknown.job.build("2026-W46");
+      expect(unknown.write.mock.calls[0]![0].brain).toEqual({ ...zero, verifiedByJev: 2, atRisk: null, contested: null });
+      const none = world({ brain: async () => ({ ...zero, atRisk: null, contested: null }) });
+      await none.job.build("2026-W46");
+      expect("brain" in none.write.mock.calls[0]![0]).toBe(false);
+    });
+
     it("leaves the key out, and the input as it was, with all zeros, with no journal, or with a source that fails", async () => {
       const base = world();
       await base.job.build("2026-W46");

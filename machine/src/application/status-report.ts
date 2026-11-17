@@ -206,7 +206,7 @@ export class StatusReport {
     if (!this.deps.brain) return undefined;
     try {
       const facts = await this.deps.brain(since, until);
-      return facts && Object.values(facts).some((n) => n > 0) ? facts : undefined;
+      return facts && Object.values(facts).some((n) => n !== null && n > 0) ? facts : undefined;
     } catch (error) {
       this.log(`status report: the brain's week skipped: ${error instanceof Error ? error.message : String(error)}`);
       return undefined;

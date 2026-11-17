@@ -116,6 +116,15 @@ describe("POST /brain/ask", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("answers 503 brain_down, not that it holds nothing, when the brain is on but its health fails", async () => {
+    const down: Brain = { ...on, health: async () => ({ ok: false, version: null, note: "unavailable" }), query: async () => ({ rows: [], note: "unavailable" }) };
+    const { calls, post } = ask(down, { known: true, reply: "x", cites: [] });
+    const res = await post({ question: "x" });
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toBe("brain_down");
+    expect(calls).toHaveLength(0);
+  });
+
   it("answers 503 brain_off, saying how to turn it on, when the brain is off", async () => {
     const { calls, post } = ask(noBrain(), { known: true, reply: "x", cites: [] });
     const res = await post({ question: "x" });
@@ -352,6 +361,15 @@ describe("GET /brain/digest", () => {
     expect(asked.sort()).toEqual(["contested_claims", "learnings_at_risk"]);
     expect(body.atRisk).toEqual([{ learning: "learning:a", title: "A lesson", claim: "claim:x" }]);
     expect(body.contested).toEqual([{ claim: "claim:p", says: "yes", contradicts: "claim:q", against: "no" }]);
+  });
+
+  it("says in a note that the lists are unknown when the graph did not answer or the brain is off, and has no note otherwise", async () => {
+    const refusing: Brain = { ...on, query: async () => ({ rows: [], note: "unavailable" }) };
+    const failed = await (await digestApp({ brain: refusing }).app.request("/brain/digest")).json();
+    expect(failed).toMatchObject({ atRisk: [], contested: [], note: "the graph did not answer: lessons at risk and contested claims are unknown" });
+    expect((await (await digestApp().app.request("/brain/digest")).json()).note).toBe("the graph did not answer: lessons at risk and contested claims are unknown");
+    const empty: Brain = { ...on, query: async (name) => ({ rows: [], note: `${name} found nothing` }) };
+    expect((await (await digestApp({ brain: empty }).app.request("/brain/digest")).json()).note).toBeNull();
   });
 
   it("leaves the two lists empty when a brain query fails, and still answers", async () => {

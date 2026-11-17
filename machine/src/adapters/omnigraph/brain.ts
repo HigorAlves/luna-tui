@@ -2,7 +2,7 @@
 // accepts, and answers shaped so a reader can rely on their keys. A read never throws.
 import { BRAIN_EDGES, type BrainRow, brainTime } from "@hardness/contracts";
 
-import { type Brain, type BrainAnswer, BrainError, type BrainValue } from "../../application/brain.ts";
+import { type Brain, type BrainAnswer, BrainError, type BrainValue, foundNothing } from "../../application/brain.ts";
 import { BRAIN_LOAD_ORDER, brainBatches } from "../../domain/brain/batches.ts";
 import type { OmnigraphClient } from "./client.ts";
 
@@ -10,6 +10,8 @@ export interface OmnigraphBrainOptions {
   client: OmnigraphClient;
   /** The facts and memories tokens write; the reader token only reads. */
   tokens: { facts: string; memories: string; reader: string };
+  /** Where the server's own words go when a read fails; a note carries the error's code alone, since it reaches agents and HTTP clients. */
+  log?: (line: string) => void;
 }
 
 // omnigraph's DateTime comes back without a zone; it is UTC.
@@ -19,7 +21,11 @@ export function omnigraphBrain(options: OmnigraphBrainOptions): Brain {
   const { client, tokens } = options;
   const secrets = [tokens.facts, tokens.memories, tokens.reader].filter((token) => token.length > 0);
   const clean = (text: string): string => secrets.reduce((said, secret) => said.split(secret).join("[token]"), text).slice(0, 200);
-  const failure = (error: unknown): string => (error instanceof BrainError ? `${error.code}: ${clean(error.message)}` : "the brain could not be reached");
+  const failure = (error: unknown, what: string): string => {
+    if (!(error instanceof BrainError)) return "the brain could not be reached";
+    options.log?.(`brain: ${what} failed (${error.code}): ${clean(error.message)}`);
+    return error.code;
+  };
 
   return {
     enabled: true,
@@ -29,7 +35,7 @@ export function omnigraphBrain(options: OmnigraphBrainOptions): Brain {
         const { ok, version } = await client.health();
         return { ok, version, note: ok ? null : "the server is not ready" };
       } catch (error) {
-        return { ok: false, version: null, note: failure(error) };
+        return { ok: false, version: null, note: failure(error, "health") };
       }
     },
 
@@ -71,9 +77,9 @@ export function omnigraphBrain(options: OmnigraphBrainOptions): Brain {
           for (const [key, value] of Object.entries(out)) if (typeof value === "string" && ZONELESS.test(value)) out[key] = brainTime(`${value}Z`);
           return out;
         });
-        return { rows: shaped, note: shaped.length === 0 ? `${name} found nothing` : null };
+        return { rows: shaped, note: shaped.length === 0 ? foundNothing(name) : null };
       } catch (error) {
-        return { rows: [], note: failure(error) };
+        return { rows: [], note: failure(error, name) };
       }
     },
   };

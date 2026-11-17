@@ -91,8 +91,7 @@ describe("omnigraphBrain.query", () => {
     });
     const answer = await omnigraphBrain({ client, tokens }).query("card_lookup", { card: "x" });
     expect(answer.rows).toEqual([]);
-    expect(answer.note).toContain("forbidden");
-    expect(answer.note).not.toContain("tok-reader");
+    expect(answer.note).toBe("forbidden");
     const odd = fake(async () => {
       throw new Error("boom tok-reader");
     });
@@ -103,13 +102,23 @@ describe("omnigraphBrain.query", () => {
 });
 
 describe("omnigraphBrain.health", () => {
+  it("says a refusal by its code alone, and logs the server's cleaned words instead", async () => {
+    const lines: string[] = [];
+    const { client } = fake(async () => {
+      throw new BrainError("no node Secret Roadmap for tok-reader", "bad_request", 400);
+    });
+    const answer = await omnigraphBrain({ client, tokens, log: (line) => lines.push(line) }).query("card_lookup", { card: "x" });
+    expect(answer.note).toBe("bad_request");
+    expect(lines).toEqual(["brain: card_lookup failed (bad_request): no node Secret Roadmap for [token]"]);
+  });
+
   it("reports the server's version and never throws", async () => {
     const { client } = fake();
     await expect(omnigraphBrain({ client, tokens }).health()).resolves.toEqual({ ok: true, version: "0.15.0", note: null });
     client.health = async () => {
       throw new BrainError("omnigraph is unreachable", "unreachable");
     };
-    await expect(omnigraphBrain({ client, tokens }).health()).resolves.toMatchObject({ ok: false, version: null, note: expect.stringContaining("unreachable") });
+    await expect(omnigraphBrain({ client, tokens }).health()).resolves.toMatchObject({ ok: false, version: null, note: "unreachable" });
   });
 });
 

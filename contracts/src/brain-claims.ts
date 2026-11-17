@@ -84,6 +84,8 @@ export const BrainDigest = z.object({
   atRisk: z.array(z.object({ learning: z.string(), title: z.string(), claim: z.string() })),
   /** Pairs of claims that say opposite things, with neither rejected. */
   contested: z.array(z.object({ claim: z.string(), says: z.string(), contradicts: z.string(), against: z.string() })),
+  /** Why the two lists above may be short: the graph did not answer or the brain is off, so they are unknown, not empty. Null when it answered. */
+  note: z.string().nullable().default(null),
 });
 export type BrainDigest = z.infer<typeof BrainDigest>;
 

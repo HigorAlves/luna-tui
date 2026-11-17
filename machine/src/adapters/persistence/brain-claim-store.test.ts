@@ -63,6 +63,15 @@ describe("PgClaimStore", () => {
     expect(await s.update("00000000-0000-4000-8000-000000000000", { status: "rejected" })).toBeNull();
   });
 
+  it("updates only a claim in the status it was read in, and answers null for one that moved on", async () => {
+    const s = store();
+    const a = (await s.add(draft()))!;
+    await s.update(a.id, { status: "verified", decidedBy: "person" });
+    expect(await s.update(a.id, { status: "rejected", decidedBy: "jev" }, { ifStatus: "unverified" })).toBeNull();
+    expect(await s.get(a.id)).toMatchObject({ status: "verified", decidedBy: "person" });
+    expect(await s.update(a.id, { status: "rejected", decidedBy: "person" }, { ifStatus: "verified" })).toMatchObject({ status: "rejected" });
+  });
+
   it("lists newest first, filters by status and repo, and caps the limit", async () => {
     const s = store();
     const a = (await s.add(draft()))!;

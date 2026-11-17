@@ -87,14 +87,15 @@ export class PgClaimStore implements ClaimStore {
     return rows.map(rowOf);
   }
 
-  async update(id: string, patch: ClaimPatch): Promise<BrainClaim | null> {
+  async update(id: string, patch: ClaimPatch, options: { ifStatus?: ClaimStatus } = {}): Promise<BrainClaim | null> {
     if (!UUID.test(id)) return null;
     const entries = (Object.entries(patch) as Array<[keyof ClaimPatch, unknown]>).filter(([k, v]) => k in COLUMN && v !== undefined);
     const params: unknown[] = [id];
     const sets = entries.map(([k, v]) => `${COLUMN[k]} = $${params.push(k === "reasons" || k === "contradicts" ? JSON.stringify(v) : v)}`);
     sets.push("updated_at = greatest(now(), updated_at + interval '1 millisecond')");
     // TypeORM answers an UPDATE ... RETURNING as [rows, count] on Postgres.
-    const [rows] = (await this.db.query(`update brain_claims set ${sets.join(", ")} where id = $1 returning *`, params)) as [Raw[], number];
+    const guard = options.ifStatus ? ` and status = $${params.push(options.ifStatus)}` : "";
+    const [rows] = (await this.db.query(`update brain_claims set ${sets.join(", ")} where id = $1${guard} returning *`, params)) as [Raw[], number];
     return rows[0] ? rowOf(rows[0]) : null;
   }
 

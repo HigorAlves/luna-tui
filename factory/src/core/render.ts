@@ -299,7 +299,7 @@ const statusText = (status: StageInput["context"]["status"]) => {
   const b = status.brain;
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   // The brain's week is the machine's own count: numbers and fixed words, no claim's text.
-  const brainLine = b ? [`Company brain: Jev verified ${plural(b.verifiedByJev, "claim", "claims")} alone (${b.flagged} flagged) and rejected ${b.rejectedByJev}; ${b.waiting} ${b.waiting === 1 ? "waits" : "wait"} for you; ${plural(b.atRisk, "lesson", "lessons")} at risk; ${b.contested} contested.`] : [];
+  const brainLine = b ? [`Company brain: Jev verified ${plural(b.verifiedByJev, "claim", "claims")} alone (${b.flagged} flagged) and rejected ${b.rejectedByJev}; ${b.waiting} ${b.waiting === 1 ? "waits" : "wait"} for you; ${b.atRisk === null ? "lessons at risk unknown" : `${plural(b.atRisk, "lesson", "lessons")} at risk`}; ${b.contested === null ? "contested unknown" : `${b.contested} contested`}.`] : [];
   const compliance = [
     ...brainLine,
     ...section("Drafts waiting for the person", c.waitingDrafts.map((d) => `- ${d.kind}: ${d.title}`)),

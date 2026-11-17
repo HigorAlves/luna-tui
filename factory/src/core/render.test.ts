@@ -703,6 +703,8 @@ describe("renderPrompt", () => {
     const brain = { verifiedByJev: 4, flagged: 1, rejectedByJev: 2, waiting: 3, atRisk: 1, contested: 0 };
     const withBrain = renderQuoted({ pack: PACKS.status_report, input: { ...input, pack: "status_report", stage: "status_report", context: { projectContext: null, status: { ...status, brain } } }, template });
     expect(withBrain).toContain("Company brain: Jev verified 4 claims alone (1 flagged) and rejected 2; 3 wait for you; 1 lesson at risk; 0 contested.");
+    const unknown = renderQuoted({ pack: PACKS.status_report, input: { ...input, pack: "status_report", stage: "status_report", context: { projectContext: null, status: { ...status, brain: { ...brain, atRisk: null, contested: null } } } }, template });
+    expect(unknown).toContain("3 wait for you; lessons at risk unknown; contested unknown.");
     const one = renderQuoted({ pack: PACKS.status_report, input: { ...input, pack: "status_report", stage: "status_report", context: { projectContext: null, status: { ...status, brain: { ...brain, verifiedByJev: 1, flagged: 0, waiting: 1, atRisk: 2 } } } }, template });
     expect(one).toContain("Company brain: Jev verified 1 claim alone (0 flagged) and rejected 2; 1 waits for you; 2 lessons at risk; 0 contested.");
   });

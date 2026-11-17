@@ -111,9 +111,12 @@ export function admission(deps: AdmissionDeps): Admission {
         recordId,
       };
       if (mode === "auto" && result.outcome !== "ask") {
-        patch.status = result.outcome === "reject" ? "rejected" : "verified";
-        patch.decidedBy = "jev";
-        patch.decidedAt = now();
+        // The claim was listed as waiting while the pack ran: a person may have decided it since, and their word stands.
+        const decided = { ...patch, status: result.outcome === "reject" ? ("rejected" as const) : ("verified" as const), decidedBy: "jev" as const, decidedAt: now() };
+        const applied = await deps.store.update(claim.id, decided, { ifStatus: "unverified" });
+        if (applied) return applied;
+        // Jev's reading is still recorded beside the person's decision.
+        return (await deps.store.update(claim.id, patch)) ?? claim;
       }
       return (await deps.store.update(claim.id, patch)) ?? claim;
     } catch (err) {
@@ -185,8 +188,9 @@ export function admission(deps: AdmissionDeps): Admission {
       const open: ClaimStatus[] = decision === "verify" ? ["unverified", "rejected"] : ["unverified", "verified"];
       if (!open.includes(claim.status)) return { problem: "not_waiting" };
       const decided = { decidedBy: "person" as const, decidedAt: now() };
-      const updated = await deps.store.update(id, decision === "verify" ? { status: "verified", durable: claim.durable ?? true, ...decided } : { status: "rejected", ...decided });
-      if (!updated) return { problem: "not_found" };
+      // Only while the claim is in the status it was read in: a tap that lost to another decision in between is told so.
+      const updated = await deps.store.update(id, decision === "verify" ? { status: "verified", durable: claim.durable ?? true, ...decided } : { status: "rejected", ...decided }, { ifStatus: claim.status });
+      if (!updated) return { problem: "not_waiting" };
       changed();
       return { claim: updated };
     },

@@ -40,6 +40,12 @@ export interface Brain {
   reset(): Promise<void>;
 }
 
+/** The note of a query that ran and found no row: an empty answer, as opposed to one that failed. */
+export const foundNothing = (name: string): string => `${name} found nothing`;
+
+/** Whether the brain answered the query: no note, or only the note of an empty answer. A failed read and a brain that is off are not answers. */
+export const answered = (name: string, answer: BrainAnswer): boolean => answer.note === null || answer.note === foundNothing(name);
+
 const OFF = "the brain is off";
 
 export function noBrain(): Brain {

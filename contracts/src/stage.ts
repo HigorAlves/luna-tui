@@ -661,9 +661,9 @@ export const StatusReportContext = z.object({
       /** Claims that wait for a person now. */
       waiting: z.number().int().min(0),
       /** Lessons that rest on a rejected claim, now. */
-      atRisk: z.number().int().min(0),
+      atRisk: z.number().int().min(0).nullable(),
       /** Pairs of claims that contradict each other with neither rejected, now. */
-      contested: z.number().int().min(0),
+      contested: z.number().int().min(0).nullable(),
     })
     .optional(),
 });

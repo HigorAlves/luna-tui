@@ -5,7 +5,7 @@ import type { Context, Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { ZodError, z } from "zod";
 
-import { type Brain, noBrain } from "../../application/brain.ts";
+import { answered, type Brain, noBrain } from "../../application/brain.ts";
 import type { Admission } from "../../application/brain-admission.ts";
 import { brainEvidence } from "../../application/brain-ask.ts";
 import type { ClaimStore } from "../../application/brain-claims.ts";
@@ -78,6 +78,11 @@ export function brainRoutes(app: Hono, deps: { brain: Brain; projector: TrackedP
     if (!deps.brain.enabled) return fail(c, 503, "brain_off", "the brain is off: set MACHINE_BRAIN_URL to a running omnigraph server (start one with `pnpm brain`) and restart the machine");
     const rows = await brainEvidence(deps.brain, question);
     // Nothing to read: no model call for nothing.
+    if (rows.length === 0) {
+      // No rows from a brain that did not answer is not a brain that holds nothing.
+      const health = await deps.brain.health();
+      if (!health.ok) return fail(c, 503, "brain_down", "the brain is on but did not answer, so what it holds about that is unknown");
+    }
     if (rows.length === 0) return c.json({ known: false, reply: "The brain holds nothing about that yet.", cites: [], dropped: [] });
     const context: BrainAskContext = { question, rows };
     let answer: BrainAskAnswer;
@@ -108,13 +113,14 @@ export function brainRoutes(app: Hono, deps: { brain: Brain; projector: TrackedP
   });
 
   const newestFirst = (a: BrainClaim, b: BrainClaim) => Date.parse(b.decidedAt ?? "") - Date.parse(a.decidedAt ?? "");
-  /** The rows of one of the machine's own queries whose columns are all strings; a brain that is off or a query that fails gives none. */
-  async function rowsOf<K extends string>(name: string, columns: readonly K[]): Promise<Array<Record<K, string>>> {
+  /** The rows of one of the machine's own queries whose columns are all strings; a brain that is off or a query that fails gives none, and `answered` false. */
+  async function rowsOf<K extends string>(name: string, columns: readonly K[]): Promise<{ rows: Array<Record<K, string>>; answered: boolean }> {
     try {
-      const { rows } = await deps.brain.query(name);
-      return rows.filter((row): row is Record<K, string> & typeof row => columns.every((column) => typeof row[column] === "string")).map((row) => Object.fromEntries(columns.map((column) => [column, row[column]])) as unknown as Record<K, string>);
+      const answer = await deps.brain.query(name);
+      const rows = answer.rows.filter((row): row is Record<K, string> & typeof row => columns.every((column) => typeof row[column] === "string")).map((row) => Object.fromEntries(columns.map((column) => [column, row[column]])) as unknown as Record<K, string>);
+      return { rows, answered: answered(name, answer) };
     } catch {
-      return [];
+      return { rows: [], answered: false };
     }
   }
 
@@ -137,8 +143,9 @@ export function brainRoutes(app: Hono, deps: { brain: Brain; projector: TrackedP
       since: since.toISOString(),
       verified: verified.sort(flaggedFirst).slice(0, DIGEST_SHOWN),
       rejected: rejected.sort(newestFirst).slice(0, DIGEST_SHOWN),
-      atRisk,
-      contested,
+      atRisk: atRisk.rows,
+      contested: contested.rows,
+      note: atRisk.answered && contested.answered ? null : "the graph did not answer: lessons at risk and contested claims are unknown",
     };
     return c.json(digest);
   });

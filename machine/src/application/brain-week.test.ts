@@ -49,9 +49,16 @@ describe("brainWeek", () => {
     ]);
   });
 
-  it("counts a query that fails as zero for that number only", async () => {
+  it("reports a graph number as unknown, never zero, when its query did not answer, and counts a plain empty answer as zero", async () => {
     const { claims } = store({ verified: [claim("a")] }, 2);
-    expect(await brainWeek({ claims, brain: brainWith({ learnings_at_risk: new Error("down"), contested_claims: 4 }), since, until })).toEqual({ verifiedByJev: 1, flagged: 0, rejectedByJev: 0, waiting: 2, atRisk: 0, contested: 4 });
+    expect(await brainWeek({ claims, brain: brainWith({ learnings_at_risk: new Error("down"), contested_claims: 4 }), since, until })).toEqual({ verifiedByJev: 1, flagged: 0, rejectedByJev: 0, waiting: 2, atRisk: null, contested: 4 });
+    const refusing: Brain = { ...noBrain(), enabled: true, query: async (name) => (name === "contested_claims" ? { rows: [], note: "unavailable" } : { rows: [], note: `${name} found nothing` }) };
+    expect(await brainWeek({ claims, brain: refusing, since, until })).toMatchObject({ atRisk: 0, contested: null });
+    expect(await brainWeek({ claims, brain: brainWith({}), since, until })).toMatchObject({ atRisk: 0, contested: 0 });
+  });
+
+  it("keeps the other numbers when a store read fails", async () => {
+    const { claims } = store({ verified: [claim("a")] }, 2);
     const failing = store({}, 5, "list");
     expect(await brainWeek({ claims: failing.claims, brain: brainWith({}), since, until })).toEqual({ verifiedByJev: 0, flagged: 0, rejectedByJev: 0, waiting: 5, atRisk: 0, contested: 0 });
     const noStats = store({ verified: [claim("a")] }, 5, "stats");
@@ -60,6 +67,6 @@ describe("brainWeek", () => {
 
   it("asks the graph nothing when the brain is off", async () => {
     const { claims } = store({}, 1);
-    expect(await brainWeek({ claims, brain: noBrain(), since, until })).toEqual({ verifiedByJev: 0, flagged: 0, rejectedByJev: 0, waiting: 1, atRisk: 0, contested: 0 });
+    expect(await brainWeek({ claims, brain: noBrain(), since, until })).toEqual({ verifiedByJev: 0, flagged: 0, rejectedByJev: 0, waiting: 1, atRisk: null, contested: null });
   });
 });

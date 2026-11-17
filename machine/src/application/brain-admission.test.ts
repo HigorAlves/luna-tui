@@ -27,9 +27,10 @@ function fakeStore(): ClaimStore & { all: BrainClaim[] } {
     get: async (id) => all.find((c) => c.id === id) ?? null,
     findBySource: async (s, statement) => all.find((c) => c.source.kind === s.kind && c.source.ref === s.ref && c.statement === statement) ?? null,
     list: async () => [...all].reverse(),
-    update: async (id, patch: ClaimPatch) => {
+    update: async (id, patch: ClaimPatch, options) => {
       const claim = all.find((c) => c.id === id);
       if (!claim) return null;
+      if (options?.ifStatus && claim.status !== options.ifStatus) return null;
       Object.assign(claim, patch);
       return { ...claim };
     },
@@ -201,6 +202,21 @@ describe("admission.propose", () => {
   });
 });
 
+describe("admission.propose, a person deciding while the pack runs", () => {
+  it("keeps the person's rejection and records Jev's reading beside it", async () => {
+    const t = setup({
+      decide: async () => {
+        const waiting = t.store.all[0]!;
+        Object.assign(waiting, { status: "rejected", decidedBy: "person", decidedAt: "2026-05-04T00:00:00.000Z" });
+        return tagged({ answer: answer(), recordId: "rec-1" });
+      },
+    });
+    const [claim] = await t.a.propose([draft()], origin());
+    expect(claim).toMatchObject({ status: "rejected", decidedBy: "person", decidedAt: "2026-05-04T00:00:00.000Z", proposed: "verify", recordId: "rec-1" });
+    expect(t.store.all[0]).toMatchObject({ status: "rejected", decidedBy: "person", proposed: "verify", tier: expect.any(String) });
+  });
+});
+
 describe("admission.remember", () => {
   const note = "The nightly job runs at two in the morning.";
   it("verifies a good note at once without asking the pack", async () => {
@@ -252,6 +268,19 @@ describe("admission.settle", () => {
     const [a, b] = await t.a.propose([draft(), draft({ statement: "A second statement about the retro stage.", quote: "Then it writes the lessons" })], origin());
     expect(await t.a.settle(a!.id, "verify")).toEqual({ claim: expect.objectContaining({ status: "verified", durable: true }) });
     expect(await t.a.settle(b!.id, "reject")).toEqual({ claim: expect.objectContaining({ status: "rejected", decidedBy: "person" }) });
+  });
+
+  it("answers not_waiting to the tap that lost a race with another decision", async () => {
+    const { t, claim } = await waiting();
+    const read = t.store.get;
+    t.store.get = async (id) => {
+      const seen = { ...(await read(id))! };
+      // Another tap lands between the read and the write.
+      Object.assign(t.store.all[0]!, { status: "verified", decidedBy: "person" });
+      return seen;
+    };
+    expect(await t.a.settle(claim.id, "reject")).toEqual({ problem: "not_waiting" });
+    expect(t.store.all[0]).toMatchObject({ status: "verified", decidedBy: "person" });
   });
 
   it("answers not_waiting for a decided claim and not_found for an unknown id", async () => {
