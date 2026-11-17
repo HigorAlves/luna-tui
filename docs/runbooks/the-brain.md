@@ -92,6 +92,7 @@ curl -s '127.0.0.1:4317/brain/digest?days=7'
 - `x` on a claim Jev verified rejects it. `a` on a claim Jev rejected verifies it. Both ask first. On the verified and rejected pages the same keys work on any claim, whoever decided it.
 - A lesson at risk rests on a claim that was rejected since. It stays in the graph, and no agent reads it any more. Nothing more is needed.
 - A contested pair says opposite things. Reject one of the two claims to settle it.
+- A line above the lists that says the graph did not answer means the last two lists are unknown, not empty. Check `GET /brain/health`.
 
 A claim you reject after Jev verified it counts as a miss. One miss makes `ready` false again, which is the signal to go back to `shadow`.
 
@@ -127,7 +128,7 @@ The server's MCP endpoint was checked with a plain MCP client (`initialize`, `to
 
 ## Rebuild the graph
 
-A rebuild empties the graph and loads the journal back. Use it after an upgrade, or when the graph and the journal disagree.
+A rebuild empties the graph and loads the journal back. Use it after an upgrade, or when the graph and the journal disagree. It reads the journal first, so a journal that cannot be read leaves the graph as it is. A rebuild that stops half way is finished by the next projection.
 
 ```sh
 curl -s -X POST 127.0.0.1:4317/brain/rebuild

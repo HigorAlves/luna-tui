@@ -279,7 +279,7 @@ Start in `shadow`. `GET /brain/claims` reports how often Jev's outcome agreed wi
 
 `tell` and `precedents` decide whether anything the brain holds reaches a pack ([architecture](architecture.md#telling-a-run)). Both are off by default, so turning the brain on changes no pack's input.
 
-- `tell: on` lets the `brain_query` tool answer in this repository's `triage` and `question_council` runs, and gives a drafted reply the brain's rows about its thread.
+- `tell: on` lets the `brain_query` tool answer in this repository's `triage` and `question_council` runs, and gives a drafted reply the brain's rows about its thread. Both read this repository's rows only.
 - `precedents` lists decision packs by id. Each one then reads its own earlier answers on similar cards, with what really happened. It changes that pack's input, so run its baseline first (`pnpm eval --pack <pack> --engine <engine>`) and compare.
 
 ### The `economy` section (the token economy)
@@ -439,7 +439,7 @@ The company brain is a graph of cards, pull requests, people and decisions that 
 2. Set `MACHINE_BRAIN_URL` in `.env`: `http://127.0.0.1:8090` for `pnpm dev`, `http://brain:8080` for `pnpm start`.
 3. Restart the machine. `GET /brain/health` answers `enabled: true` and the server's version.
 
-The tokens file holds one token per actor: `owner`, `luna-facts`, `luna-memories` and `luna-reader`. The folder is yours alone. The file is mode 0644, because the server runs as its own user and compose mounts only that one file into it.
+The tokens file holds one token per actor: `owner`, `luna-facts`, `luna-memories` and `luna-reader`. The file is mode 0644, because the server runs as its own user and compose mounts only that one file into it. So the script makes the folder 0700, also when it already existed: the folder is what keeps the file, and the owner token in it, from other users of the host.
 
 The service holds no embedding setting and no provider key, so it calls nothing outside. Keep it that way: every model call in this repository is a pack.
 

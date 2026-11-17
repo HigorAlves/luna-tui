@@ -730,7 +730,7 @@ The graph is served by [omnigraph](https://github.com/ModernRelay/omnigraph) (MI
 Three rules hold for every row:
 
 - **A row is whole.** A load replaces the row, and a field left out becomes null. So `brainNode()` gives every row every key of its type.
-- **The only free text is a title.** It is flattened to one line and capped at 200 characters. No description, comment, reason or email reaches the graph. The compliance rows hold names and paths only: an incident's timeline, a control's text and an answer's text stay with the machine and the wiki, and their titles pass the secret and personal-data screen first.
+- **The only free text is a title.** It is flattened to one line and capped at 200 characters, after the secret and personal-data screen cut a secret and masked an address or a phone number. No description, comment, reason or email reaches the graph. The compliance rows hold names and paths only: an incident's timeline, a control's text and an answer's text stay with the machine and the wiki, and their titles pass the secret and personal-data screen first.
 - **A key is a slug,** `<system>:<native id>`. Its prefix names its type, and loading the same item twice changes nothing.
 
 A verdict is written only once its truth is known, because the graph keeps verdicts as precedents.
@@ -744,12 +744,12 @@ A verdict is written only once its truth is known, because the graph keeps verdi
 3. It loads only what differs from its journal. Every load is a commit in omnigraph, even one that changes nothing.
 4. A load only adds edges. So the projector first removes an edge that moved or went away, such as a card linked to another ticket.
 5. `brainBatches()` cuts the rows into loads the server accepts. It keeps a node with its own edges, and puts a node after every node its edges point at. Omnigraph refuses a load that leaves a node under an edge's minimum, and an edge to a node it does not hold.
-6. After each load, the journal gets the rows that landed. The cursor moves only when everything landed.
+6. After each load, the journal gets the rows that landed. A cursor moves only when everything landed. A task whose rows could not be built holds the tasks cursor. A verdict or a claim about that task's card, when the graph does not hold the card yet, waits and holds its own cursor behind it, for a day at most: then it goes in without its card. Every other verdict and claim goes in, so one failing task does not stop the rest.
 7. Then the hygiene queries run. Each returns zero rows on a healthy graph.
 
 A card that ended is final. Once the journal holds a card as closed or archived, the projector does not build it again. The machine prunes a closed card's events and stage runs, so a later build would write its estimate, its retries and its components back as nothing.
 
-**The journal** is `<state dir>/brain/journal.json`: every row the brain holds, and the cursors. The machine prunes its own history (events and stage runs after `MACHINE_RETENTION_DAYS`, decision records by age and size), so the brain keeps its own copy. `POST /brain/rebuild` empties the graph and loads the journal back. It does not compute old rows again from history that is gone. A journal that is there and cannot be read stops the projector with a note. It is never read as empty, because the next write would replace it.
+**The journal** is `<state dir>/brain/journal.json`: every row the brain holds, and the cursors. The machine prunes its own history (events and stage runs after `MACHINE_RETENTION_DAYS`, decision records by age and size), so the brain keeps its own copy. `POST /brain/rebuild` reads the journal first, then empties the graph and loads the journal back. A flag in the journal marks a rebuild that began: one that stops half way is finished by the next run, before anything else. It does not compute old rows again from history that is gone. A journal that is there and cannot be read stops the projector with a note. It is never read as empty, because the next write would replace it.
 
 ### Reading it
 
@@ -803,7 +803,7 @@ A claim that fails is kept as `refused` with the reason, so the person sees it. 
 **The outcome** is `admissionOutcome()`, a pure function over the answer, each question's verdict against the pack's bars, and the code rules:
 
 - **reject**: a confident answer that the source does not support it, that it is an instruction, or that it repeats a similar claim.
-- **ask**: a code rule fired (it applies to the whole org, its source was written by someone outside the org, or it is about compliance, security, access or an incident), it contradicts a similar claim, its scope does not fit, the risk is high, or any answer is under the bar.
+- **ask**: a code rule fired (it applies to the whole org, its source was written by someone outside the org, or it is about compliance, security, access or an incident; a retro's claim counts as an outsider's when its card came from a GitHub issue or PR whose author is not an owner, member or collaborator, by the same `trustOf` that picks the sandbox), it contradicts a similar claim, its scope does not fit, the risk is high, or any answer is under the bar.
 - **flag**: the risk is medium, or an answer was only above the flag bar.
 - **verify**: everything else.
 
@@ -815,7 +815,7 @@ A claim that fails is kept as `refused` with the reason, so the person sees it. 
 
 A person's own note skips the pack. Once the code checks pass, it is verified.
 
-**Living with `auto`.** `GET /brain/digest` says what Jev did alone in the last days: the claims it verified, the flagged ones first, and the claims it rejected. It also lists the lessons at risk and the contested claims. The board's Memory view shows it as the page "since last week". A person can change a decision later: reject a verified claim, or verify a rejected one. What Jev's answer came to stays on the claim, so a claim Jev verified and the person rejected later counts as missed in the stats.
+**Living with `auto`.** `GET /brain/digest` says what Jev did alone in the last days: the claims it verified, the flagged ones first, and the claims it rejected. It also lists the lessons at risk and the contested claims. The board's Memory view shows it as the page "since last week". When the graph did not answer, the digest says so in `note` and the two lists are empty, never a false "nothing at risk". A decision is written only while the claim is in the status it was read in: a person who decides while the pack still runs keeps their decision, Jev's reading is recorded beside it, and of two taps the second gets a 409. A person can change a decision later: reject a verified claim, or verify a rejected one. What Jev's answer came to stays on the claim, so a claim Jev verified and the person rejected later counts as missed in the stats.
 
 **In the graph.** The projector copies every claim that was not refused, with its source. A verified claim that holds for the next card (`durable`) also becomes a `Learning` that rests on it. A lesson is never rewritten, deleted or loaded twice. What is contested and what is at risk are queries over the claims' status (`contested_claims`, `learnings_at_risk`), not stored fields. The queries that find lessons for an agent ask for a claim that is still verified, so a lesson whose claim was rejected stays in the graph and no agent reads it. `brain_ask` reads lessons first, each with the words it rests on.
 
@@ -825,18 +825,21 @@ Rules that bind agents keep their path: the retro's `proposedRules` still reach 
 
 Nothing the brain holds reaches a pack until a repository says so. Two keys of `luna.yaml` decide it, and both are off by default, so no pack's input changes and no eval baseline moves.
 
-**`brain.precedents`** lists the decision packs that get precedents: their own earlier answers on cards like the one in front of them, with what really happened. `application/brain-precedents.ts` asks the graph's `precedents` query with the card's title, leaves out the card's own verdicts and keeps six. A pack on the Claude or eve runtime reads them as a `# Precedents` section of its prompt. Jev takes its state on its own wire, so there they ride at the end of the state's description. Run a pack's eval baseline with precedents before you list it.
+**`brain.precedents`** lists the decision packs that get precedents: their own earlier answers on cards like the one in front of them, with what really happened. `application/brain-precedents.ts` asks the graph's `precedents` query with the card's title and the card's repository, leaves out the card's own verdicts and keeps six. A precedent is always a card of the same repository, and a card with no repository gets none. A pack on the Claude or eve runtime reads them as a `# Precedents` section of its prompt, the lines in a data block: a title is a person's text. Jev takes its state on its own wire, so there they ride at the end of the state's description. Run a pack's eval baseline with precedents before you list it.
 
 **`brain.tell: on`** opens two more doors:
 
-- **`brain_query`**, a tool of the two packs that hold `card_search` (`triage` and `question_council`). The agent names one of the queries that `BRAIN_QUERIES` marks for agents. The stage container cannot reach the brain, so the tool writes a request into the checks mailbox and the machine answers through `agentQuery()`, for the task's own repository, with at most 20 rows a query and 20 queries a run. With `tell` off the answer is always "skipped".
-- **Reply drafts.** When the Conversation Machine drafts a reply for a thread of that repository, `conversation_reply` also gets up to 12 rows of what the brain holds about the thread's latest message, as a data block. A draft that cites a link from a row is still dropped by the check on outgoing addresses. Citing by title works.
+- **`brain_query`**, a tool of the two packs that hold `card_search` (`triage` and `question_council`). The agent names one of the eleven queries that `BRAIN_QUERIES` marks with `tool`, and each is confined to the task's own repository: what steers an agent's search may come from outside the org, and the graph holds every repository. A query that takes a repository gets the task's, whatever the request names. One that takes a card is refused unless `card_repo` places the card in that repository. One that takes a component is refused unless its slug is the repository's. The searches across all repositories, the incidents and the wiki answers are not tool queries. The stage container cannot reach the brain, so the tool writes a request into the checks mailbox and the machine answers through `agentQuery()`, with at most 20 rows a query and 20 queries a run. A failed query's note is its error code alone, never the server's words. With `tell` off the answer is always "skipped".
+- **Reply drafts.** When the Conversation Machine drafts a reply for a thread of that repository, `conversation_reply` also gets up to 12 rows of what the brain holds about the thread's latest message, as a data block. Those rows are that repository's alone: its cards, lessons, rules and components, and no incident or wiki page. A draft that cites a link from a row is still dropped by the check on outgoing addresses. Citing by title works.
 
 ### Limits and not built
 
 - Precedents, `brain_query` and the rows in a reply draft were never run against a model. Each is off until a repository turns it on.
 - A decision record keeps the context without the precedents, so a replay of that record does not show the pack what it saw.
 - A repository's rules are read again only when one of its cards is in a run. A change to the file with no card activity waits for the next card.
+- The person's own question (`POST /brain/ask`, the board's popup) reads every repository. Only what a run or a reply draft reads is confined to one.
+- A pull request belongs to the card that opened it. A card that was only made from a pull request another card opened is not linked to it.
+- Jira and Slack count as the org's own tools for a claim's trust, as they do for the sandbox. The card keeps no author for them, so a guest there is not told apart.
 - A repository's regimes and wiki pages are read again only when one of its cards is in a run, like its rules. A control or answer page that left the wiki stays in the graph until `POST /brain/rebuild`: those two types have no retired status.
 - The compliance rows were loaded into a real omnigraph by the live test. The projector's path from an incident file or a wiki to the graph was run only against fakes.
 - `memory_admit` has eight eval cases and no baseline. It is in the unmeasured list, and nobody has run it against a model.

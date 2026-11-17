@@ -451,6 +451,19 @@ PR #228 and RFC 0008 (PR #229) merged into `main`, so the branch moved onto `mai
 - The projector's path from a real incident file, a real `luna.yaml` and a real wiki to the graph. Its tests use fakes.
 - The status report with the brain's line against a model.
 
+## What the review of the PR changed (2026-11-17)
+
+Four reviewers read PR #232: security, the machine, the contracts with the factory, and the board. They reported 23 findings, none critical. All are fixed in the PR, with these effects on the design.
+
+- **A run reads one repository.** The design says one graph across repositories, and the docs said `brain_query` answers for the task's repository, but the code let an agent name any repository, any card or a search over all of them. An issue on a public repository could steer triage into reading a private repository's cards, incidents and compliance answers. Now `BRAIN_QUERIES` marks eleven queries with `tool`, and the machine binds or checks the repository of each. Precedents and the rows of a reply draft are the same repository's too. The person's own question still reads everything.
+- **A person's decision stands.** A claim is listed while the pack runs, so a person could decide it and then lose to Jev's late answer. A status is now written only while the claim is in the status it was read in.
+- **An outsider's words are the person's to judge.** A retro's claim was always the machine's, so the outside-speaker rule never fired. The trust now comes from the card's source, by the machine's one `trustOf`.
+- **The projector cannot wedge.** A verdict about a card the graph never held, and a pull request two cards share, each made the server refuse every load. One failing task froze the verdict and claim cursors. A rebuild emptied the graph before it knew the journal could be read, and a rebuild that failed half way was never repaired.
+- **Down is not empty.** Ask answers 503, the digest carries a note and the weekly line says unknown when the graph did not answer.
+- **Smaller ones.** A claim out of bounds no longer fails the whole retro. The risk words match their plurals. An answer that names a similar claim that was not shown asks the person. Card, ticket and PR titles pass the secret and personal-data screen. The tokens folder is made 0700. A failed query's note is its code alone. On the board, a reply or a list that arrives late is dropped by its request number.
+
+Not changed: the tokens file stays 0644, because the server runs as uid 999 and compose mounts that one file; the folder is what keeps it from other users.
+
 ### Not verified, across all waves
 
 - No pack was run against a model: `brain_ask`, `memory_admit`, the retro's `claims`, the precedents, `brain_query` and the reply drafts have eval cases, dry runs or unit tests only.
