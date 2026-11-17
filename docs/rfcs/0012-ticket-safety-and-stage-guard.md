@@ -122,7 +122,7 @@ SafeAgents sends a call that atif-scan finds suspicious (below `block_severity`)
 
 ### What happens on a block
 
-SafeAgents replaces a blocked call with a text notice. The agent reads it and may try something else. The machine reads the guard's journal from a per-run folder that is mounted into the guard only, as untrusted input: a bounded file, a line of the wrong shape skipped. It records each entry as a card event (`guard.blocked`, `guard.flagged`, `guard.suspicious`). On an untrusted card, a `blocked` entry ends the stage as `needs_person`. On a trusted card it is an event.
+SafeAgents replaces a blocked call with a text notice. The agent reads it and may try something else. The machine reads the guard's journal from a per-run folder that is mounted into the guard only, as untrusted input: a bounded file, a line of the wrong shape skipped. It records each entry as a card event (`guard.blocked`, `guard.flagged`, `guard.suspicious`). On an untrusted card, a `blocked` entry ends the stage `escalated` with the reason `guard_blocked`. On a trusted card it is an event.
 
 If the guard will not start, the card ends `env_broken` (step `guard`), never runs unguarded. With `mode: off` there is no guard and nothing changes.
 
@@ -178,7 +178,7 @@ Reading the code corrected the design in these places:
 - **Release makes the card untrusted** with a `safetyReleased` flag on the task source, since only GitHub sources have an association.
 - **Cards the screen does not cover:** PR tasks, vulnerability and breach cards, `POST /tasks` and Notch sources. A Slack message is screened when a person taps it into a card; `slack_triage` reads it before that, and is out of scope here.
 - **The guard covers agent packs only.** The on-demand runs (`POST /runs`, Slack triage, Jira intake, evals) hold no tools and stay unguarded. With `MACHINE_ENGINE_RELAY=off` or `MACHINE_EGRESS=off` there is no guard, since its upstream is the relay; the machine warns and `/health` lists it under `notInForce`.
-- **A guard block is read after the stage ends.** The tool call is already replaced by a notice when the stage continues; an untrusted card then ends `escalated` with reason `other`.
+- **A guard block is read after the stage ends.** The tool call is already replaced by a notice when the stage continues; an untrusted card then ends `escalated` with a new reason, `guard_blocked`, which the board spells in fixed words.
 
 ## Still open
 
