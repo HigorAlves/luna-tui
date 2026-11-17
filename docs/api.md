@@ -115,6 +115,16 @@ The machine's clients are the board, Luna Notch and scripts. None is a web page.
 
 A stage logs `sandbox.egress_blocked` on the card. It logs one row for each refused (host, port, via), at most 20 for each stage. After that it logs one `{ step, more }` row. The payload is `{ step, host, port, via, reason, count }`. The `step` is `stage`, `check`, `install`, `app`, `seed` or `deploy`. The `via` is `connect`, `http` or `dns`. The `reason` is `not_listed`, `address`, `private_address`, `sni_mismatch`, `unresolved` or `head_too_large`. The host is text that a container chose. The machine flattens and caps it, and replaces the value of a secret in it. A container cannot write this kind, because the machine reserves it. The board shows it as `blocked: host:port (step, via)`.
 
+## What the stage guard saw
+
+A stage that ran behind the stage guard logs `guard.blocked`, `guard.flagged` or `guard.suspicious` on the card. Each row is one call the guard judged.
+
+The payload is `{ id, tool, signals, reason }`. The `signals` are `{ id, severity, title }`. The `reason` may be missing.
+
+The row never holds the call's arguments or the task text. The machine flattens and caps every string. A container cannot write these kinds.
+
+A stage logs at most 20 of them, then one `guard.more` row with `{ more }`. A `guard.skipped` row, `{ skipped, truncated }`, says lines were unreadable or the file was cut.
+
 ## Example session
 
 ```sh

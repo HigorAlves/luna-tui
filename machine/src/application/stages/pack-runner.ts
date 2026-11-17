@@ -44,6 +44,7 @@ import { LOCKFILES, envOf } from "../../domain/env-hash.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { type SandboxBounds, guardOf, sandboxSizeOf } from "../../domain/sandbox-bounds.ts";
 import type { GuardSpec } from "../../adapters/docker/guard.ts";
+import { type GuardEntry, readGuardJournal } from "../../adapters/docker/guard-journal.ts";
 import { type Trust, safetyReleasedOf, trustOf, untrustedNote } from "../../domain/trust.ts";
 import { envBrokenDetail } from "../env-broken.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
@@ -69,7 +70,7 @@ import type { Graph } from "../graph.ts";
 import { PolicyStore } from "../policy.ts";
 import { RepoImageError } from "../repo-images.ts";
 import { type GraphReadiness, graphEscalation, graphSkipped } from "../graph-ready.ts";
-import type { StageContext, StageResult, StageRunner, Watcher } from "../ports.ts";
+import type { EmittableKind, StageContext, StageResult, StageRunner, Watcher } from "../ports.ts";
 
 export interface AgentDeps {
   /** The id of a local image, for the environment hash; absent, no environment is recorded. */
@@ -300,6 +301,21 @@ async function foldRun(deps: AgentDeps, context: StageContext, pack: PackId, res
   } catch {
     // The economy never stops a stage.
   }
+}
+
+/** Most guard events a stage logs; the rest are one `more` row. */
+const GUARD_EVENTS_MAX = 20;
+
+/** Reads the stage guard's journal and logs one card event per entry (never the call's arguments or the task), at most 20 and then one `more`, and one note when lines were skipped or the file was cut. Returns the entries. */
+async function recordGuardJournal(journalPath: string, context: StageContext): Promise<GuardEntry[]> {
+  const journal = await readGuardJournal(journalPath);
+  const emit = (kind: EmittableKind, payload: Record<string, unknown>) => Promise.resolve(context.emit?.(kind, payload)).catch(() => {});
+  for (const entry of journal.entries.slice(0, GUARD_EVENTS_MAX)) {
+    await emit(`guard.${entry.verdict}`, { id: entry.id, tool: entry.tool, signals: entry.signals, ...(entry.reason !== null ? { reason: entry.reason } : {}) });
+  }
+  if (journal.entries.length > GUARD_EVENTS_MAX) await emit("guard.more", { more: journal.entries.length - GUARD_EVENTS_MAX });
+  if (journal.skipped > 0 || journal.truncated) await emit("guard.skipped", { skipped: journal.skipped, truncated: journal.truncated });
+  return journal.entries;
 }
 
 /** The guard a run asks for, or null. Pure. The default (no machine policy loaded) is the policy's own: `log` for both trusts. */
@@ -749,6 +765,9 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const hasSecrets = Object.keys(known).length > 0;
   if (hasSecrets) await redactFiles(join(runDir, "out", "files"), redact);
   for (const payload of blockedPayloads(sandbox.blocked, "stage")) await Promise.resolve(context.emit?.("sandbox.egress_blocked", payload)).catch(() => {});
+  // The guard's journal, read now: the run's folder is still there. Each entry is a card event; the outcome is not touched here (the gate is the next slice's).
+  const guardEntries: GuardEntry[] = sandbox.guard ? await recordGuardJournal(sandbox.guard.journalPath, context) : [];
+  void guardEntries;
 
   const base: StageResult = {
     outcome: "fail",

@@ -1688,6 +1688,52 @@ describe("a stage's own list of hosts", () => {
   });
 });
 
+describe("the stage guard's journal", () => {
+  const line = (id: number, verdict: string, tool: string) =>
+    JSON.stringify({ id, time: 1.5 + id, verdict, tool, arguments: '{"command":"curl -H sk-SECRET-123 x"}', reason: `why ${id}`, signals: [{ id: "env.read", severity: "high", title: "Reads the environment" }], judge: null, model: "m", task: "ignore previous instructions" });
+  const withJournal = (lines: string[]) => {
+    const inner = fakeSandbox(output());
+    return async (run: SandboxRun): Promise<SandboxResult> => {
+      const journalPath = join(mkdtempSync(join(tmpdir(), "journal-")), "calls.jsonl");
+      writeFileSync(journalPath, `${lines.join("\n")}\n`);
+      return { ...(await inner(run)), guard: { journalPath } };
+    };
+  };
+  const emittedOf = async (lines: string[]) => {
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    await runAgent(deps(withJournal(lines)), { ...context("triage"), emit: async (kind, payload) => void emitted.push([kind, payload]) }, "triage");
+    return emitted.filter(([k]) => k.startsWith("guard.") || k === "guard.skipped");
+  };
+
+  it("emits guard.blocked, guard.flagged and guard.suspicious from the journal, with no arguments or task", async () => {
+    const emitted = await emittedOf([line(1, "blocked", "Bash"), line(2, "flagged", "Read"), line(3, "suspicious", "Write")]);
+    const signals = [{ id: "env.read", severity: "high", title: "Reads the environment" }];
+    expect(emitted).toEqual([
+      ["guard.blocked", { id: 1, tool: "Bash", signals, reason: "why 1" }],
+      ["guard.flagged", { id: 2, tool: "Read", signals, reason: "why 2" }],
+      ["guard.suspicious", { id: 3, tool: "Write", signals, reason: "why 3" }],
+    ]);
+    const text = JSON.stringify(emitted);
+    expect(text).not.toContain("sk-SECRET-123");
+    expect(text).not.toContain("ignore previous instructions");
+    expect(text).not.toContain("arguments");
+  });
+
+  it("emits at most 20 events and then one `more` row, and one note for a skipped line", async () => {
+    const lines = [...Array.from({ length: 25 }, (_, i) => line(i + 1, "flagged", "Bash")), "not json"];
+    const emitted = await emittedOf(lines);
+    expect(emitted.filter(([k]) => k === "guard.flagged")).toHaveLength(20);
+    expect(emitted.filter(([k]) => k === "guard.more")).toEqual([["guard.more", { more: 5 }]]);
+    expect(emitted.filter(([k]) => k === "guard.skipped")).toEqual([["guard.skipped", { skipped: 1, truncated: false }]]);
+  });
+
+  it("emits nothing for a stage without a guard", async () => {
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    await runAgent(deps(fakeSandbox(output())), { ...context("triage"), emit: async (kind, payload) => void emitted.push([kind, payload]) }, "triage");
+    expect(emitted.filter(([k]) => k.startsWith("guard."))).toEqual([]);
+  });
+});
+
 describe("sandbox environment errors on the agent path", () => {
   it("escalates env_broken at step seccomp when the daemon has no seccomp filter", async () => {
     const d = deps(async () => {
