@@ -211,6 +211,8 @@ pub struct MemoryState {
     pub pending: Option<String>,
     /// Why the last fetch failed, until one succeeds.
     pub error: Option<String>,
+    /// The number of the last fetch sent; an answer with another number is an older one and is dropped.
+    pub seq: u64,
 }
 
 impl MemoryState {
@@ -352,6 +354,9 @@ pub struct Digest {
     pub at_risk: Vec<AtRisk>,
     #[serde(default)]
     pub contested: Vec<Contested>,
+    /// A sentence the machine writes when the graph did not answer, so the empty sections are not read as "none".
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 /// One row of the digest page.
@@ -1006,6 +1011,22 @@ mod tests {
         let empty: Digest = serde_json::from_str(r#"{"since":"x"}"#).unwrap();
         assert_eq!(empty.len(), 0);
         assert!(empty.rows().is_empty());
+    }
+
+    #[test]
+    fn the_digests_note_is_read_and_a_body_without_one_has_none() {
+        let with: Digest = serde_json::from_str(
+            r#"{"since":"x","note":"the graph did not answer: lessons at risk and contested claims are unknown"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            with.note.as_deref(),
+            Some("the graph did not answer: lessons at risk and contested claims are unknown")
+        );
+        let null: Digest = serde_json::from_str(r#"{"since":"x","note":null}"#).unwrap();
+        assert_eq!(null.note, None);
+        let older: Digest = serde_json::from_str(DIGEST).unwrap();
+        assert_eq!(older.note, None, "an older machine sends no note key");
     }
 
     #[test]

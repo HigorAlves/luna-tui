@@ -77,14 +77,21 @@ pub enum Incoming {
     /// The foreman's answer to a question, fetched off the UI thread.
     Foreman(Result<crate::foreman::Reply, String>),
     /// The company brain's answer to a question, fetched off the UI thread.
-    Brain(Result<crate::brain::Reply, String>),
+    Brain {
+        seq: u64,
+        result: Result<crate::brain::Reply, String>,
+    },
     /// The brain's claims of `status`, fetched off the UI thread for the Memory view; dropped when the view has moved to another status.
     MemoryClaims {
         status: crate::memory::Status,
+        seq: u64,
         result: Result<crate::memory::ClaimList, String>,
     },
     /// The week's digest, fetched off the UI thread for the Memory view's last page; dropped when the view has moved to another page.
-    MemoryDigest(Result<crate::memory::Digest, String>),
+    MemoryDigest {
+        seq: u64,
+        result: Result<crate::memory::Digest, String>,
+    },
     /// The answer to `a` or `x` in Memory on claim `id`.
     MemoryDecided {
         id: String,

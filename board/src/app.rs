@@ -778,6 +778,10 @@ pub struct App {
     pub compliance_items: Vec<ComplianceDraft>,
     /// The Memory view, open while this is `Some`, with the brain's claims it fetched.
     pub memory: Option<MemoryState>,
+    /// The last question number the brain popup sent: a reply counts only for the popup that holds its number.
+    brain_seq: u64,
+    /// The last fetch number of the Memory view, kept over closes so an answer for a closed view never fits the next one.
+    memory_seq: u64,
     /// A dispatch waiting for a clone to land: the PR's key and the action to run then.
     pending_dispatch: Option<(String, PrAction)>,
     /// A full repaint is due (`ctrl-l`): the terminal may show cells the last frame did not draw.
@@ -927,6 +931,8 @@ impl App {
             compliance: None,
             compliance_items: Vec::new(),
             memory: None,
+            brain_seq: 0,
+            memory_seq: 0,
             pending_dispatch: None,
             redraw: false,
             clones_running: BTreeSet::new(),
@@ -1259,11 +1265,13 @@ impl App {
                     self.slack_catalog_pending = false;
                 }
                 Incoming::Foreman(result) => self.take_foreman(result),
-                Incoming::Brain(result) => self.take_brain(result),
-                Incoming::MemoryClaims { status, result } => {
-                    self.take_memory_claims(status, result)
-                }
-                Incoming::MemoryDigest(result) => self.take_memory_digest(result),
+                Incoming::Brain { seq, result } => self.take_brain(seq, result),
+                Incoming::MemoryClaims {
+                    status,
+                    seq,
+                    result,
+                } => self.take_memory_claims(status, seq, result),
+                Incoming::MemoryDigest { seq, result } => self.take_memory_digest(seq, result),
                 Incoming::MemoryDecided { id, result } => self.take_memory_decided(&id, result),
             }
         }
@@ -3692,30 +3700,45 @@ impl App {
     /// Fetches the shown page off the UI thread: the status's claims, which come back as `Incoming::MemoryClaims`, or the
     /// week's digest, as `Incoming::MemoryDigest`.
     fn fetch_memory(&mut self) {
-        let Some(status) = self.memory.as_ref().map(|s| s.status) else {
+        let Some(state) = self.memory.as_mut() else {
             return;
         };
+        let status = state.status;
+        self.memory_seq += 1;
+        let seq = self.memory_seq;
+        state.seq = seq;
         let machine = self.machine.clone();
         let tx = self.tx.clone();
         thread::spawn(move || {
-            let message = if status == crate::memory::Status::Week {
-                Incoming::MemoryDigest(machine.brain_digest(MEMORY_DIGEST_DAYS))
+            if status == crate::memory::Status::Week {
+                let _ = tx.send(Incoming::MemoryDigest {
+                    seq,
+                    result: machine.brain_digest(MEMORY_DIGEST_DAYS),
+                });
+                // The digest carries no stats, so the week page also asks for the waiting claims and keeps only their
+                // numbers.
+                let waiting = crate::memory::Status::Unverified;
+                let _ = tx.send(Incoming::MemoryClaims {
+                    status: waiting,
+                    seq,
+                    result: machine.brain_claims(waiting.wire()),
+                });
             } else {
-                Incoming::MemoryClaims {
+                let _ = tx.send(Incoming::MemoryClaims {
                     status,
+                    seq,
                     result: machine.brain_claims(status.wire()),
-                }
-            };
-            let _ = tx.send(message);
+                });
+            }
         });
     }
 
     /// The digest arrived: it shows if the view is still on that page. A failure is a toast and the pane says why, as for a list.
-    fn take_memory_digest(&mut self, result: Result<crate::memory::Digest, String>) {
+    fn take_memory_digest(&mut self, seq: u64, result: Result<crate::memory::Digest, String>) {
         let Some(state) = self
             .memory
             .as_mut()
-            .filter(|s| s.status == crate::memory::Status::Week)
+            .filter(|s| s.status == crate::memory::Status::Week && s.seq == seq)
         else {
             return;
         };
@@ -3732,11 +3755,24 @@ impl App {
     fn take_memory_claims(
         &mut self,
         status: crate::memory::Status,
+        seq: u64,
         result: Result<crate::memory::ClaimList, String>,
     ) {
-        let Some(state) = self.memory.as_mut().filter(|s| s.status == status) else {
+        let Some(state) = self.memory.as_mut().filter(|s| s.seq == seq) else {
             return;
         };
+        // The week page also asks for the waiting claims, for the header's numbers; their list is not its rows.
+        if state.status == crate::memory::Status::Week
+            && status == crate::memory::Status::Unverified
+        {
+            if let Ok(list) = result {
+                state.stats = list.stats;
+            }
+            return;
+        }
+        if state.status != status {
+            return;
+        }
         match result {
             Ok(list) => state.take(list),
             Err(error) => {
@@ -7006,10 +7042,14 @@ impl App {
                 KeyCode::Esc => state.phase = Phase::Answer,
                 KeyCode::Enter => {
                     if let Some(question) = state.ask() {
+                        self.brain_seq += 1;
+                        let seq = self.brain_seq;
+                        state.seq = seq;
                         let machine = self.machine.clone();
                         let tx = self.tx.clone();
                         thread::spawn(move || {
-                            let _ = tx.send(Incoming::Brain(machine.brain_ask(&question)));
+                            let result = machine.brain_ask(&question);
+                            let _ = tx.send(Incoming::Brain { seq, result });
                         });
                     }
                 }
@@ -7030,12 +7070,13 @@ impl App {
         Outcome::Continue
     }
 
-    /// The brain answered: its reply shows, unless the popup was closed meanwhile.
-    fn take_brain(&mut self, result: Result<crate::brain::Reply, String>) {
+    /// The brain answered question number `seq`: its reply shows, unless the popup was closed meanwhile or now waits on a
+    /// later question.
+    fn take_brain(&mut self, seq: u64, result: Result<crate::brain::Reply, String>) {
         let Mode::Brain(state) = &mut self.mode else {
             return;
         };
-        if state.phase != crate::brain::Phase::Waiting {
+        if state.phase != crate::brain::Phase::Waiting || state.seq != seq {
             return;
         }
         match result {
@@ -15943,7 +15984,8 @@ mod brain_tests {
         press(app, KeyCode::Char('b'));
         type_in(app, "how big was the proxy?");
         press(app, KeyCode::Enter);
-        app.take_brain(Ok(reply(known)));
+        let seq = state(app).seq;
+        app.take_brain(seq, Ok(reply(known)));
     }
 
     #[test]
@@ -16077,7 +16119,8 @@ mod brain_tests {
             press(&mut app, KeyCode::Enter);
             let message =
                 "the company brain is off: set LUNA_BRAIN=1 on the machine and restart it";
-            app.take_brain(Err(message.into()));
+            let seq = state(&app).seq;
+            app.take_brain(seq, Err(message.into()));
             assert_eq!(state(&app).phase, Phase::Typing, "{host}");
             assert_eq!(state(&app).input, "hello", "{host}");
             let screen = render(&mut app, 120, 40);
@@ -16116,19 +16159,48 @@ mod brain_tests {
     }
 
     #[test]
+    fn the_reply_of_a_closed_question_never_shows_under_the_next_one() {
+        let mut app = App::new(dead_machine());
+        press(&mut app, KeyCode::Char('b'));
+        type_in(&mut app, "Q1");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('b'));
+        type_in(&mut app, "Q2");
+        press(&mut app, KeyCode::Enter);
+        let mut slow = reply(true);
+        slow.reply = "the answer to Q1".into();
+        app.take_brain(1, Ok(slow));
+        assert_eq!(
+            state(&app).phase,
+            Phase::Waiting,
+            "Q1's reply is not Q2's answer"
+        );
+        let mut own = reply(true);
+        own.reply = "the answer to Q2".into();
+        app.take_brain(2, Ok(own));
+        assert_eq!(state(&app).question, "Q2");
+        assert_eq!(
+            state(&app).reply.as_ref().unwrap().reply,
+            "the answer to Q2"
+        );
+    }
+
+    #[test]
     fn a_reply_after_the_popup_closed_or_moved_on_is_ignored() {
         let mut app = App::new(dead_machine());
         press(&mut app, KeyCode::Char('b'));
         type_in(&mut app, "q");
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Esc);
-        app.take_brain(Ok(reply(true)));
+        app.take_brain(1, Ok(reply(true)));
         assert!(matches!(app.mode, Mode::Normal));
-        app.take_brain(Err("late".into()));
+        app.take_brain(1, Err("late".into()));
         assert!(app.toast.is_none());
         answered(&mut app, true);
         press(&mut app, KeyCode::Char('i'));
-        app.take_brain(Ok(reply(false)));
+        let seq = state(&app).seq;
+        app.take_brain(seq, Ok(reply(false)));
         assert!(
             state(&app).reply.as_ref().unwrap().known,
             "a reply in Typing is dropped"
@@ -16328,7 +16400,7 @@ mod memory_tests {
             let ours = matches!(
                 incoming,
                 Incoming::MemoryClaims { .. }
-                    | Incoming::MemoryDigest(_)
+                    | Incoming::MemoryDigest { .. }
                     | Incoming::MemoryDecided { .. }
             );
             if ours {
@@ -16617,13 +16689,20 @@ mod memory_tests {
             );
             landed(&mut app);
             want.push(route.to_string());
+            if status == "digest" {
+                // The week page also asks for the waiting claims, for the header's numbers.
+                landed(&mut app);
+                want.push(WAITING.to_string());
+            }
             let shown = screen(&mut app);
             assert!(shown.contains(&format!(" {title} ")), "{title}: {shown}");
         }
         press(&mut app, KeyCode::Char('h'));
         assert_eq!(state(&app).status, Status::Week);
         landed(&mut app);
+        landed(&mut app);
         want.push(DIGEST.to_string());
+        want.push(WAITING.to_string());
         press(&mut app, KeyCode::Char('h'));
         assert_eq!(state(&app).status, Status::Refused);
         landed(&mut app);
@@ -16897,6 +16976,7 @@ mod memory_tests {
         };
         app.take_incoming(Incoming::MemoryClaims {
             status: Status::Rejected,
+            seq: state(&app).seq,
             result: Ok(late.clone()),
         });
         assert_eq!(
@@ -16906,15 +16986,64 @@ mod memory_tests {
         );
         app.take_incoming(Incoming::MemoryClaims {
             status: Status::Unverified,
+            seq: state(&app).seq,
             result: Err("late".into()),
         });
         app.toast = None;
         press(&mut app, KeyCode::Esc);
         app.take_incoming(Incoming::MemoryClaims {
             status: Status::Unverified,
+            seq: 1,
             result: Err("later".into()),
         });
         assert!(app.memory.is_none() && app.toast.is_none());
+    }
+
+    #[test]
+    fn an_older_list_applied_after_a_newer_one_is_dropped() {
+        let (machine, _) = brain();
+        let mut app = opened(machine);
+        let one = |id: &str| crate::memory::ClaimList {
+            claims: vec![typed(claim(id, "x", json!({})))],
+            stats: Default::default(),
+        };
+        app.fetch_memory();
+        app.fetch_memory();
+        let (first, second) = (state(&app).seq - 1, state(&app).seq);
+        app.take_incoming(Incoming::MemoryClaims {
+            status: Status::Unverified,
+            seq: second,
+            result: Ok(one("newer")),
+        });
+        app.take_incoming(Incoming::MemoryClaims {
+            status: Status::Unverified,
+            seq: first,
+            result: Ok(one("older")),
+        });
+        assert_eq!(state(&app).claims[0].id, "newer");
+    }
+
+    #[test]
+    fn an_answer_of_a_closed_view_is_dropped_by_the_view_opened_after_it() {
+        let (machine, _) = brain();
+        let mut app = opened(machine.clone());
+        let stale = state(&app).seq;
+        press(&mut app, KeyCode::Esc);
+        assert!(app.memory.is_none());
+        press(&mut app, KeyCode::Char('L'));
+        let late = crate::memory::ClaimList {
+            claims: Vec::new(),
+            stats: Default::default(),
+        };
+        app.take_incoming(Incoming::MemoryClaims {
+            status: Status::Unverified,
+            seq: stale,
+            result: Ok(late),
+        });
+        assert!(
+            !state(&app).loaded,
+            "the old view's answer is not the new view's"
+        );
     }
 
     #[test]
@@ -17047,6 +17176,9 @@ mod memory_tests {
         for _ in 0..pages {
             press(&mut app, KeyCode::Char('l'));
             landed(&mut app);
+            if state(&app).status == Status::Week {
+                landed(&mut app);
+            }
         }
         app
     }
@@ -17322,7 +17454,17 @@ mod memory_tests {
         for host in ["board", "card"] {
             let (machine, seen) = decided_machine();
             let mut app = on_page(host, machine, WEEK_PAGE);
-            assert_eq!(requests(&seen).last().map(String::as_str), Some(DIGEST));
+            assert_eq!(
+                requests(&seen)
+                    .iter()
+                    .rev()
+                    .take(2)
+                    .rev()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                vec![DIGEST.to_string(), WAITING.to_string()],
+                "the digest, then the waiting claims for the header"
+            );
             let shown = screen(&mut app);
             for want in [
                 " Since last week 5 ",
@@ -17537,12 +17679,14 @@ mod memory_tests {
             "the row leaves at once"
         );
         landed(&mut app);
-        let tail: Vec<String> = requests(&seen).into_iter().skip(5).collect();
+        landed(&mut app);
+        let tail: Vec<String> = requests(&seen).into_iter().skip(6).collect();
         assert_eq!(
             tail,
             vec![
                 "POST /brain/claims/v2/reject".to_string(),
-                DIGEST.to_string()
+                DIGEST.to_string(),
+                WAITING.to_string()
             ]
         );
         assert_eq!(state(&app).digest.len(), 5, "the machine's digest is back");
@@ -17565,12 +17709,14 @@ mod memory_tests {
         press(&mut app, KeyCode::Char('y'));
         landed(&mut app);
         landed(&mut app);
-        let tail: Vec<String> = requests(&seen).into_iter().skip(5).collect();
+        landed(&mut app);
+        let tail: Vec<String> = requests(&seen).into_iter().skip(6).collect();
         assert_eq!(
             tail,
             vec![
                 "POST /brain/claims/r1/verify".to_string(),
-                DIGEST.to_string()
+                DIGEST.to_string(),
+                WAITING.to_string()
             ]
         );
     }
@@ -17610,6 +17756,100 @@ mod memory_tests {
 
     fn state_cursor(app: &mut App, at: usize) {
         app.memory.as_mut().unwrap().cursor = at;
+    }
+
+    #[test]
+    fn a_decision_on_the_week_page_brings_the_headers_numbers_up_to_date() {
+        let decided = Arc::new(Mutex::new(false));
+        let flag = decided.clone();
+        let (machine, _) = machine_with(move |request, _| {
+            if request.starts_with("POST /brain/claims/") {
+                *flag.lock().unwrap() = true;
+                return (
+                    "200 OK",
+                    json!({"claim": claim("v1", "x", json!({"status": "rejected"}))}).to_string(),
+                );
+            }
+            let (left, decided, agreed) = if *flag.lock().unwrap() {
+                (2, 15, 13)
+            } else {
+                (3, 14, 12)
+            };
+            match request {
+                DIGEST => ("200 OK", digest().to_string()),
+                WAITING => (
+                    "200 OK",
+                    json!({"claims": waiting(), "stats": {"waiting": left, "decided": decided, "agreed": agreed, "missed": 0}})
+                        .to_string(),
+                ),
+                _ => list(&[], 0),
+            }
+        });
+        let mut app = on_page("board", machine, WEEK_PAGE);
+        assert!(screen(&mut app).contains("Memory · 3 waiting · Jev agreed with you on 12 of 14"));
+        press(&mut app, KeyCode::Char('x'));
+        press(&mut app, KeyCode::Char('y'));
+        landed(&mut app);
+        landed(&mut app);
+        landed(&mut app);
+        let shown = screen(&mut app);
+        assert!(
+            shown.contains("Memory · 2 waiting · Jev agreed with you on 13 of 15"),
+            "{shown}"
+        );
+        assert_eq!(
+            state(&app).claims.len(),
+            0,
+            "only the numbers are taken, not the list"
+        );
+    }
+
+    #[test]
+    fn the_digests_note_is_one_line_above_the_lists_and_no_note_is_no_line() {
+        let note = "the graph did not answer: lessons at risk and contested claims are unknown";
+        for (with, hostile) in [(true, false), (true, true), (false, false)] {
+            let mut body = digest();
+            if with {
+                body["note"] = json!(if hostile {
+                    format!("{note}\u{1b}[31m\nsecond line")
+                } else {
+                    note.to_string()
+                });
+            }
+            let (machine, _) = machine_with(move |request, _| {
+                if request == DIGEST {
+                    ("200 OK", body.to_string())
+                } else {
+                    list(&[], 0)
+                }
+            });
+            let mut app = on_page("board", machine, WEEK_PAGE);
+            let shown = screen(&mut app);
+            let lines: Vec<&str> = shown.lines().collect();
+            let head = lines
+                .iter()
+                .position(|l| l.contains("Memory · 3 waiting"))
+                .expect("the header");
+            if with {
+                let at = lines
+                    .iter()
+                    .position(|l| l.contains("the graph did not answer"))
+                    .unwrap_or_else(|| panic!("no note line: {shown}"));
+                assert_eq!(at, head + 1, "right under the header: {shown}");
+                assert!(!lines[at].contains('\u{1b}'), "{shown}");
+                if hostile {
+                    assert!(lines[at].contains("second line"), "one line: {shown}");
+                }
+                assert!(
+                    lines[at + 1].contains("Since last week"),
+                    "the lists follow it: {shown}"
+                );
+                assert_eq!(fg_of(&app, "the graph did not answer"), crate::theme::PEACH);
+            } else {
+                assert!(!shown.contains("the graph did not answer"), "{shown}");
+                assert!(lines[head + 1].contains("Since last week"), "{shown}");
+            }
+        }
     }
 
     #[test]
@@ -17681,10 +17921,16 @@ mod memory_tests {
         let (machine, _) = brain();
         let mut app = opened(machine);
         let late: crate::memory::Digest = serde_json::from_value(digest()).unwrap();
-        app.take_incoming(Incoming::MemoryDigest(Ok(late)));
+        app.take_incoming(Incoming::MemoryDigest {
+            seq: state(&app).seq,
+            result: Ok(late),
+        });
         assert_eq!(state(&app).digest.len(), 0);
         assert_eq!(state(&app).claims.len(), 3);
-        app.take_incoming(Incoming::MemoryDigest(Err("late".into())));
+        app.take_incoming(Incoming::MemoryDigest {
+            seq: state(&app).seq,
+            result: Err("late".into()),
+        });
         assert!(app.toast.is_none());
     }
 

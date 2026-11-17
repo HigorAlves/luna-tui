@@ -2810,8 +2810,25 @@ fn render_backlog(frame: &mut Frame, area: Rect, app: &App, state: &crate::backl
 /// the selected row's detail beside them.
 fn render_memory(frame: &mut Frame, area: Rect, state: &crate::memory::MemoryState) {
     use crate::memory::{Entry, Row, Status, Tone};
-    let [header_area, body] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
+    // On the week page a note from the machine (the graph did not answer) is one warning line under the header.
+    let note = (state.status == Status::Week && state.loaded)
+        .then_some(state.digest.note.as_deref())
+        .flatten()
+        .map(|note| text::sanitize(note, false))
+        .filter(|note| !note.trim().is_empty());
+    let [header_area, note_area, body] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(u16::from(note.is_some())),
+        Constraint::Min(0),
+    ])
+    .areas(area);
+    if let Some(note) = note {
+        let note = truncate(&format!(" {note}"), note_area.width as usize);
+        frame.render_widget(
+            Paragraph::new(Span::from(note).style(theme::needs_you())),
+            note_area,
+        );
+    }
     let mut head = Vec::new();
     if state.loaded || state.stats != crate::memory::Stats::default() {
         head.push(

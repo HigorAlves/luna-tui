@@ -51,6 +51,8 @@ pub struct State {
     pub reply: Option<Reply>,
     /// Why the last call failed, until the person types again.
     pub error: Option<String>,
+    /// The number of the question in flight; a reply with another number answers a question this popup no longer holds.
+    pub seq: u64,
 }
 
 impl State {
@@ -62,6 +64,7 @@ impl State {
             question: String::new(),
             reply: None,
             error: None,
+            seq: 0,
         }
     }
 
