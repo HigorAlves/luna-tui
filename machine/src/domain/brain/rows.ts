@@ -4,6 +4,7 @@
 // free text beyond a flattened title ever goes in: not a description, a criterion, a reason or a note.
 import { brainEdge, brainNode, brainSlug, brainTime, type BrainRow, type ShipContext } from "@hardness/contracts";
 
+import { maskPii, screen } from "../secrets-check.ts";
 import type { TaskRow } from "../task.ts";
 
 export interface BrainRepo {
@@ -21,6 +22,9 @@ export const TITLE_MAX = 200;
 export function flatTitle(text: string): string {
   return text.replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").trim().slice(0, TITLE_MAX).trim() || "(untitled)";
 }
+
+/** A title as a row keeps it when a person or a tool wrote it: a secret cut out, an address or phone number masked, one line, at most 200 characters. */
+export const safeTitle = (text: string): string => flatTitle(maskPii(screen(text.replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ")).text));
 
 export function repoRows(repo: BrainRepo): BrainRow[] {
   return [brainNode("Repo", { slug: brainSlug("repo", repo.slug), name: repo.name })];
@@ -41,7 +45,7 @@ export function cardRows(task: TaskRow, context: { repo: BrainRepo | null; retro
   const rows: BrainRow[] = [
     brainNode("Card", {
       slug,
-      title: flatTitle(task.title),
+      title: safeTitle(task.title),
       state: task.state === "closed" ? "closed" : task.state === "archived" ? "archived" : "open",
       route: task.route,
       size: retro?.predicted.size ?? null,
@@ -60,7 +64,7 @@ export function cardRows(task: TaskRow, context: { repo: BrainRepo | null; retro
 
 /** At most one Ticket per card: a Jira link wins over a GitHub issue source; a pull request or any other source gives none. */
 export function ticketRows(task: TaskRow): BrainRow[] {
-  const title = flatTitle(task.title);
+  const title = safeTitle(task.title);
   const ticket = (slug: string, tracker: "jira" | "github", key: string, url: string): BrainRow[] => [
     brainNode("Ticket", { slug, tracker, key, title, url }),
     brainEdge("CardForTicket", cardSlug(task.id), slug),
@@ -84,6 +88,8 @@ export interface BrainPull {
   url: string;
   mergedAt: Date | string | null;
   author: string | null;
+  /** A `pr.opened` event of the card named it. False when the card only came from it (an address card's source): the card that opened a PR owns it. */
+  opened: boolean;
 }
 
 /** The author's Person row comes first, so a load finds the node an edge points at. */
@@ -97,7 +103,7 @@ export function prRows(pull: BrainPull, cardId: string | null): BrainRow[] {
     brainNode("PR", {
       slug,
       number: pull.number,
-      title: flatTitle(pull.title),
+      title: safeTitle(pull.title),
       state: pull.state,
       url: pull.url,
       merged_at: pull.mergedAt ? brainTime(pull.mergedAt) : null,

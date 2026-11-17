@@ -22,7 +22,8 @@ function confidence(pack: DecisionRecord["pack"], question: string, answer: unkn
   return typeof sure === "number" && Number.isFinite(sure) ? sure : null;
 }
 
-export function verdictRows(record: DecisionRecord): BrainRow[] {
+/** `hasCard`: the graph holds the card of the record's task, or this load carries it; the server refuses an edge to a node it does not have. */
+export function verdictRows(record: DecisionRecord, context: { hasCard: boolean }): BrainRow[] {
   const { truth } = record;
   if (!truth) return [];
   const rows: BrainRow[] = [];
@@ -45,7 +46,7 @@ export function verdictRows(record: DecisionRecord): BrainRow[] {
         decided_at: brainTime(record.at),
       }),
     );
-    if (record.taskId) rows.push(brainEdge("VerdictOn", slug, brainSlug("card", record.taskId)));
+    if (record.taskId && context.hasCard) rows.push(brainEdge("VerdictOn", slug, brainSlug("card", record.taskId)));
   }
   return rows;
 }

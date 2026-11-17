@@ -3,7 +3,7 @@
 // graph holds or this load carries, since the server refuses an edge to a node it does not have.
 import { brainEdge, brainNode, brainSlug, brainTime, type BrainClaim, type BrainRow } from "@hardness/contracts";
 
-import { flatTitle, repoRows, type BrainRepo } from "./rows.ts";
+import { repoRows, safeTitle, type BrainRepo } from "./rows.ts";
 import { personRows } from "./rows-people.ts";
 
 export function claimRows(
@@ -14,6 +14,8 @@ export function claimRows(
     hasCard: boolean;
     /** Another claim is in the graph or in this load. */
     knows: (claimId: string) => boolean;
+    /** When a card's Source happened: the same for every claim of the card, so one claim after another does not rewrite the row. A note keeps its claim's time. */
+    sourceAt: Date | string;
   },
 ): BrainRow[] {
   if (claim.status === "refused") return [];
@@ -23,7 +25,7 @@ export function claimRows(
 
   const isCard = claim.source.kind === "card";
   const source = brainSlug("source", isCard ? `card/${claim.source.ref}` : `note/${claim.id}`);
-  rows.push(brainNode("Source", { slug: source, kind: isCard ? "card" : "note", title: isCard ? flatTitle(claim.source.title) : "A note", occurred_at: brainTime(claim.createdAt) }));
+  rows.push(brainNode("Source", { slug: source, kind: isCard ? "card" : "note", title: isCard ? safeTitle(claim.source.title) : "A note", occurred_at: brainTime(isCard ? context.sourceAt : claim.createdAt) }));
   if (isCard && context.hasCard) rows.push(brainEdge("SourceOfCard", source, brainSlug("card", claim.source.ref)));
 
   const speaker = claim.speaker?.trim() ? claim.speaker : null;

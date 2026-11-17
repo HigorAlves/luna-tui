@@ -16,6 +16,7 @@ const State = z.object({
   cursor: z.object({ tasks: z.string().nullable(), verdicts: z.string().nullable(), claims: z.string().nullable().default(null), wiki: z.record(z.string(), z.string()).default({}) }),
   nodes: z.record(z.string(), z.object({ type: z.string(), data: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])) })),
   edges: z.array(z.object({ edge: z.string(), from: z.string(), to: z.string() })),
+  rebuild: z.literal(true).optional(),
 });
 
 const emptyState = (): BrainState => ({ cursor: { tasks: null, verdicts: null, claims: null, wiki: {} }, nodes: {}, edges: [] });

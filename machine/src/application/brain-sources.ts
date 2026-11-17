@@ -65,14 +65,17 @@ export function brainSources(deps: BrainSourceDeps): BrainSources {
       const events = await deps.events(task.id);
       const merged = events.filter((event) => event.kind === "ship.merged");
       const ended = task.state === "closed" || task.state === "archived";
-      const found = new Map<string, { url: string; repo: string; number: number }>();
+      const found = new Map<string, { url: string; repo: string; number: number; opened: boolean }>();
       for (const event of events) {
         if (event.kind !== "pr.opened") continue;
         const parsed = parsePullUrl(event.payload.url);
-        if (parsed && typeof event.payload.url === "string") found.set(`${parsed.repo}#${parsed.number}`, { url: event.payload.url, ...parsed });
+        if (parsed && typeof event.payload.url === "string") found.set(`${parsed.repo}#${parsed.number}`, { url: event.payload.url, ...parsed, opened: true });
       }
       const source = task.source;
-      if (source?.kind === "github_pr") found.set(`${source.repo}#${source.number}`, { url: source.url, repo: source.repo, number: source.number });
+      if (source?.kind === "github_pr") {
+        const key = `${source.repo}#${source.number}`;
+        found.set(key, { url: source.url, repo: source.repo, number: source.number, opened: found.get(key)?.opened ?? false });
+      }
       return [...found.values()].map((pull) => {
         // A ship.merged that names another pull request is not this one's; one that names none is.
         const landed = merged.findLast((event) => event.payload.prUrl === undefined || event.payload.prUrl === pull.url);
@@ -84,6 +87,7 @@ export function brainSources(deps: BrainSourceDeps): BrainSources {
           url: pull.url,
           mergedAt: landed ? landed.at : null,
           author: null,
+          opened: pull.opened,
         };
       });
     },

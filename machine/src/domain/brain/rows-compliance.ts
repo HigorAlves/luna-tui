@@ -6,16 +6,12 @@ import { ComplianceRegime, brainEdge, brainNode, brainSlug, brainTime, type Brai
 
 import { assessedBreach } from "../breach.ts";
 import type { Incident } from "../incident.ts";
-import { maskPii, screen } from "../secrets-check.ts";
-import { flatTitle, repoRows, type BrainRepo } from "./rows.ts";
+import { repoRows, safeTitle, type BrainRepo } from "./rows.ts";
 
 const REGIME_NAME: Record<ComplianceRegime, string> = { soc2: "SOC 2", hipaa: "HIPAA", gdpr: "GDPR", lgpd: "LGPD", us_privacy: "US privacy" };
 const KNOWN = new Set<string>(ComplianceRegime.options);
 
 const regimeRow = (id: string): BrainRow => brainNode("Regime", { slug: brainSlug("regime", id), name: REGIME_NAME[id as ComplianceRegime] });
-
-/** A title or question as a row keeps it: a secret cut out, an address or phone number masked, one line, at most 200 characters. */
-const safeTitle = (text: string): string => flatTitle(maskPii(screen(text.replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ")).text));
 
 /** The repository's row, then a Regime row and an edge for each regime of the enum the list names; any other name is dropped. */
 export function regimeRows(repo: BrainRepo, regimes: readonly string[]): BrainRow[] {

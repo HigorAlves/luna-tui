@@ -48,6 +48,16 @@ describe("brainJournal", () => {
     expect((await journal.read()).cursor).toEqual({ tasks: "t", verdicts: "v", claims: null, wiki: {} });
   });
 
+  // A rebuild that was cut short leaves this flag; a journal from before it has no key, which is not set.
+  it("keeps the rebuild flag through a write and a read, and reads a file without the key as not set", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "brain-journal-"));
+    const journal = brainJournal(dir);
+    await journal.write({ ...empty, rebuild: true });
+    expect((await journal.read()).rebuild).toBe(true);
+    await writeFile(join(dir, "brain", "journal.json"), JSON.stringify(empty));
+    expect((await journal.read()).rebuild).toBeFalsy();
+  });
+
   it("serves two writes one at a time, leaving the last", async () => {
     const dir = await mkdtemp(join(tmpdir(), "brain-journal-"));
     const journal = brainJournal(dir);

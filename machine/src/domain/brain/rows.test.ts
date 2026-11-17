@@ -145,7 +145,7 @@ describe("ticketRows", () => {
 });
 
 describe("prRows", () => {
-  const pull: BrainPull = { repo: "o/r", number: 12, title: "Add\nexport", state: "merged", url: "https://g/pull/12", mergedAt: "2026-03-01T10:00:00Z", author: "Octo-Cat" };
+  const pull: BrainPull = { repo: "o/r", number: 12, title: "Add\nexport", state: "merged", url: "https://g/pull/12", mergedAt: "2026-03-01T10:00:00Z", author: "Octo-Cat", opened: true };
 
   it("lists Person, PR, PrAuthoredBy and PrForCard in that order", () => {
     const rows = prRows(pull, "t-1");
@@ -162,5 +162,26 @@ describe("prRows", () => {
     const rows = prRows({ ...pull, state: "open", mergedAt: null, author: null }, null);
     expect(rows).toHaveLength(1);
     expect(nodes(rows)[0]!.data.merged_at).toBeNull();
+  });
+});
+
+describe("titles are screened", () => {
+  const title = "Login fails for jane.doe@client.com, token=abcdefghijklmnop1234 and key AKIAIOSFODNN7EXAMPLE";
+  const clean = (value: unknown) => {
+    expect(value).not.toContain("jane.doe@client.com");
+    expect(value).not.toContain("abcdefghijklmnop1234");
+    expect(value).not.toContain("AKIAIOSFODNN7EXAMPLE");
+  };
+
+  it("keeps a secret and an address out of the Card, Ticket and PR titles", () => {
+    const t = task({ title, jira: { key: "LUN-1", url: "https://jira.example/LUN-1" } as TaskRow["jira"] });
+    clean(card(cardRows(t, { repo: null, retro: null })).data.title);
+    clean(nodes(ticketRows(t)).find((n) => n.type === "Ticket")!.data.title);
+    const pull: BrainPull = { repo: "acme/shop", number: 7, title, state: "open", url: "https://github.com/acme/shop/pull/7", mergedAt: null, author: null, opened: true };
+    clean(nodes(prRows(pull, "t-1")).find((n) => n.type === "PR")!.data.title);
+  });
+
+  it("leaves a ticket key and a version in a title alone", () => {
+    expect(card(cardRows(task({ title: "LUN-123: bump node to v22.11.0" }), { repo: null, retro: null })).data.title).toBe("LUN-123: bump node to v22.11.0");
   });
 });

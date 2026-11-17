@@ -36,7 +36,7 @@ describe("pullsOf", () => {
   it("gives a merged pull request with the ship.merged time for a card that opened one and shipped it", async () => {
     const merged = event("ship.merged", { prUrl: "https://github.com/acme/shop/pull/7", number: 7 }, "2026-01-04T10:00:00Z");
     const pulls = await brainSources(deps({ events: async () => [opened, merged] })).pullsOf(task("a", { state: "closed" }));
-    expect(pulls).toEqual([{ repo: "acme/shop", number: 7, title: "Task a", state: "merged", url: "https://github.com/acme/shop/pull/7", mergedAt: new Date("2026-01-04T10:00:00Z"), author: null }]);
+    expect(pulls).toEqual([{ repo: "acme/shop", number: 7, title: "Task a", state: "merged", url: "https://github.com/acme/shop/pull/7", mergedAt: new Date("2026-01-04T10:00:00Z"), author: null, opened: true }]);
   });
 
   it("is open for a card still going, closed for a closed or archived card that never merged", async () => {
@@ -54,6 +54,15 @@ describe("pullsOf", () => {
     const pr = task("p", { source: { kind: "github_pr", repo: "acme/shop", number: 9, url: "https://github.com/acme/shop/pull/9", headRef: "h", baseRef: "main" } });
     const both = await brainSources(deps({ events: async () => [opened, opened] })).pullsOf({ ...pr, source: pr.source });
     expect(both.map((p) => p.number).sort()).toEqual([7, 9]);
+  });
+
+  it("marks a pull the card opened, and one it only came from", async () => {
+    const source = { kind: "github_pr" as const, repo: "acme/shop", number: 9, url: "https://github.com/acme/shop/pull/9", headRef: "h", baseRef: "main" };
+    const pulls = await brainSources(deps({ events: async () => [opened] })).pullsOf(task("p", { source }));
+    expect(pulls.map((p) => [p.number, p.opened]).sort()).toEqual([[7, true], [9, false]]);
+    // a card that opened the very pull it came from owns it
+    const same = event("pr.opened", { url: source.url, number: 9 }, "2026-01-02T00:00:00Z");
+    expect((await brainSources(deps({ events: async () => [same] })).pullsOf(task("p", { source })))[0]).toMatchObject({ number: 9, opened: true });
   });
 
   it("skips a pull request url it cannot read", async () => {

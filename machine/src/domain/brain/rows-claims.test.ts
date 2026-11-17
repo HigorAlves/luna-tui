@@ -14,7 +14,7 @@ const claim = (over: Partial<BrainClaim> = {}): BrainClaim => ({
   status: "unverified", refusal: null, tier: null, proposed: null, reasons: [], durable: null, contradicts: [], recordId: null, decidedBy: null, decidedAt: null,
   createdAt: "2026-01-02T03:04:05.000Z", ...over,
 });
-const context = (over: Partial<Parameters<typeof claimRows>[1]> = {}) => ({ repo, hasCard: true, knows: () => false, ...over });
+const context = (over: Partial<Parameters<typeof claimRows>[1]> = {}) => ({ repo, hasCard: true, knows: () => false, sourceAt: "2026-01-02T03:04:05.000Z", ...over });
 
 describe("claimRows", () => {
   it("gives a refused claim no row", () => {
@@ -35,6 +35,20 @@ describe("claimRows", () => {
 
   it("gives SourceOfCard only when the card is in the graph", () => {
     expect(order(claimRows(claim(), context({ hasCard: false })))).not.toContain("SourceOfCard");
+  });
+
+  it("takes a card Source's time from the context, not from the claim, and a note's from its claim", () => {
+    const card = claimRows(claim({ createdAt: "2026-01-02T10:05:00.000Z" }), context({ sourceAt: "2026-01-02T10:00:00.000Z" }));
+    expect(nodes(card).find((n) => n.type === "Source")!.data.occurred_at).toBe("2026-01-02T10:00:00.000Z");
+    const note = claimRows(claim({ source: { kind: "note", ref: "n1", title: "A note" }, createdAt: "2026-01-02T10:05:00.000Z" }), context({ sourceAt: "2026-01-02T10:00:00.000Z" }));
+    expect(nodes(note).find((n) => n.type === "Source")!.data.occurred_at).toBe("2026-01-02T10:05:00.000Z");
+  });
+
+  it("screens the card Source's title for a secret and an address", () => {
+    const rows = claimRows(claim({ source: { kind: "card", ref: "t1", title: "Mail jane.doe@client.com key AKIAIOSFODNN7EXAMPLE" } }), context());
+    const title = String(nodes(rows).find((n) => n.type === "Source")!.data.title);
+    expect(title).not.toContain("jane.doe@client.com");
+    expect(title).not.toContain("AKIAIOSFODNN7EXAMPLE");
   });
 
   it("gives a note its own Source and no repo edge without a repository", () => {
