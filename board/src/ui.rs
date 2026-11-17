@@ -2791,6 +2791,19 @@ fn render_economy(frame: &mut Frame, area: Rect, app: &App, state: &crate::econo
     );
 }
 
+/// A held ticket's badge: a rounded chip (`◖unsafe◗`) in red or yellow, or `[unsafe]` without colour. Only ever one of the two fixed words.
+fn badge_spans(word: &'static str, no_color: bool) -> Vec<Span<'static>> {
+    if no_color {
+        return vec![Span::from(format!("[{word}]"))];
+    }
+    let color = if word == "unsafe" { RED } else { YELLOW };
+    vec![
+        Span::from("◖").fg(color),
+        Span::from(word).fg(BASE).bg(color).bold(),
+        Span::from("◗").fg(color),
+    ]
+}
+
 /// The Tickets view: one row per ticket in scope, the selected one's scores, links and waiting draft beside it.
 fn render_tickets(frame: &mut Frame, area: Rect, app: &App, state: &crate::tickets::TicketsState) {
     let items = &app.ticket_items;
@@ -2811,22 +2824,51 @@ fn render_tickets(frame: &mut Frame, area: Rect, app: &App, state: &crate::ticke
         .saturating_sub(visible / 2)
         .min(items.len().saturating_sub(visible));
     for (row, item) in items.iter().enumerate().skip(start).take(visible) {
-        let text = truncate(&item.row(), inner.width.saturating_sub(2) as usize);
-        lines.push(if row == selected {
-            Line::from(
-                Span::from(format!("▸ {text}"))
-                    .fg(c(BASE))
-                    .bg(c(ACCENT))
-                    .bold(),
+        // A held ticket's badge goes before its row; its cells come off the row's width.
+        let badge = item
+            .badge()
+            .map(|word| badge_spans(word, env::var_os("NO_COLOR").is_some()))
+            .unwrap_or_default();
+        let badge_width = match badge
+            .iter()
+            .map(|s| s.content.chars().count())
+            .sum::<usize>()
+        {
+            0 => 0,
+            n => n + 1,
+        };
+        let text = truncate(
+            &item.row(),
+            (inner.width.saturating_sub(2) as usize).saturating_sub(badge_width),
+        );
+        let (mark, body) = if row == selected {
+            (
+                Span::from("▸ ").fg(c(BASE)).bg(c(ACCENT)).bold(),
+                Span::from(text).fg(c(BASE)).bg(c(ACCENT)).bold(),
             )
         } else {
-            Line::from(Span::from(format!("  {text}")).fg(c(SUBTEXT0)))
-        });
+            (
+                Span::from("  ").fg(c(SUBTEXT0)),
+                Span::from(text).fg(c(SUBTEXT0)),
+            )
+        };
+        let mut line = vec![mark];
+        if badge_width > 0 {
+            line.extend(badge);
+            line.push(Span::from(" ").style(body.style));
+        }
+        line.push(body);
+        lines.push(Line::from(line));
     }
     frame.render_widget(Paragraph::new(lines).block(block), list_area);
+    let held = items.get(selected).and_then(|i| i.badge());
     let side = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(c(MUTED)))
+        .border_style(Style::new().fg(c(match held {
+            Some("unsafe") => RED,
+            Some(_) => YELLOW,
+            None => MUTED,
+        })))
         .padding(Padding::horizontal(1))
         .title(Line::from(" Ticket ").bold());
     let lines = match items.get(selected) {
@@ -8733,5 +8775,112 @@ mod help_over_task_tests {
             matches!(&app.mode, crate::app::Mode::Detail(_)),
             "back in the task"
         );
+    }
+}
+
+#[cfg(test)]
+mod held_ticket_tests {
+    use crate::tickets::TicketEntry;
+    use crate::{app::App, tickets::TicketsState, ui};
+    use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
+
+    fn held_app(verdict: &str, reasons: serde_json::Value) -> App {
+        let mut app = crate::testkit::full_board_app();
+        app.tickets = Some(TicketsState { cursor: 0 });
+        app.ticket_items = vec![
+            serde_json::from_value::<TicketEntry>(serde_json::json!({
+                "key":"PAY-9","canonical":{"title":"Refund fails"},"status":"held_safety",
+                "safety":{"verdict":verdict,"reasons":reasons}}))
+            .unwrap(),
+        ];
+        app
+    }
+
+    fn draw(app: &App) -> Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(140, 20)).unwrap();
+        terminal.draw(|f| ui::draw(f, app)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    fn row(buf: &Buffer, y: u16) -> String {
+        (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect()
+    }
+
+    /// The first cell on the screen whose row holds `needle` and whose symbol is the start of it.
+    fn find(buf: &Buffer, needle: &str) -> Option<(u16, u16)> {
+        (0..buf.area.height).find_map(|y| {
+            let line: Vec<&str> = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+            let joined = line.concat();
+            let at = joined.find(needle)?;
+            Some((joined[..at].chars().count() as u16, y))
+        })
+    }
+
+    #[test]
+    fn an_unsafe_ticket_has_a_red_rounded_badge_a_red_border_and_one_fixed_line_per_reason() {
+        // The colours are what this asserts; with NO_COLOR there are none.
+        if std::env::var_os("NO_COLOR").is_some() {
+            return;
+        }
+        let buf = draw(&held_app(
+            "unsafe",
+            serde_json::json!(["seeks_secrets", "overrides_rules"]),
+        ));
+        let (x, y) = find(&buf, "◖unsafe◗").expect("the badge on the row");
+        assert_eq!(buf[(x + 1, y)].bg, ui::RED);
+        assert_eq!(buf[(x + 1, y)].fg, ui::BASE);
+        assert_eq!(buf[(x, y)].fg, ui::RED);
+        assert_eq!(buf[(x + 7, y)].fg, ui::RED);
+        let screen: String = (0..buf.area.height)
+            .map(|y| row(&buf, y))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            screen.contains("Asks for credentials or secrets")
+                && screen.contains("Tries to change how the reader behaves")
+                && screen.contains("Held: nothing is posted"),
+            "{screen}"
+        );
+        // The detail pane's top-left corner is the second rounded corner on the title row.
+        let (tx, ty) = find(&buf, " Ticket ").unwrap();
+        assert_eq!(buf[(tx - 1, ty)].symbol(), "╭");
+        assert_eq!(buf[(tx - 1, ty)].fg, ui::RED);
+    }
+
+    #[test]
+    fn a_suspicious_ticket_is_yellow() {
+        if std::env::var_os("NO_COLOR").is_some() {
+            return;
+        }
+        let buf = draw(&held_app("suspicious", serde_json::json!(["hidden_text"])));
+        let (x, y) = find(&buf, "◖suspicious◗").expect("the badge on the row");
+        assert_eq!(buf[(x + 1, y)].bg, ui::YELLOW);
+        let (tx, ty) = find(&buf, " Ticket ").unwrap();
+        assert_eq!(buf[(tx - 1, ty)].fg, ui::YELLOW);
+        assert!(
+            row(&buf, ty + 3).contains("Contains invisible or direction-changing characters")
+                || (ty..ty + 6).any(|y| row(&buf, y)
+                    .contains("Contains invisible or direction-changing characters"))
+        );
+    }
+
+    #[test]
+    fn without_colour_the_badge_is_bracketed_words() {
+        let text = |no_color| -> String {
+            ui::badge_spans("suspicious", no_color)
+                .iter()
+                .map(|s| s.content.to_string())
+                .collect()
+        };
+        assert_eq!(text(true), "[suspicious]");
+        assert_eq!(text(false), "◖suspicious◗");
+    }
+
+    #[test]
+    fn a_ticket_that_is_not_held_has_no_badge() {
+        let mut app = held_app("unsafe", serde_json::json!([]));
+        app.ticket_items[0].safety = None;
+        let buf = draw(&app);
+        assert!(find(&buf, "◖").is_none() && find(&buf, "[unsafe]").is_none());
     }
 }

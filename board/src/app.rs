@@ -3871,8 +3871,9 @@ impl App {
 
     /// The keys `handle_tickets` matches.
     #[cfg(test)]
-    pub(crate) const HANDLED_TICKETS: &[&str] =
-        &["esc", "K", "q", "?", "j", "k", "R", "a", "e", "x", "c", "s"];
+    pub(crate) const HANDLED_TICKETS: &[&str] = &[
+        "esc", "K", "q", "?", "j", "k", "R", "a", "e", "x", "c", "s", "r", "X",
+    ];
 
     /// `:ticket-edit <text>`: the person's own text is posted in place of the selected ticket's waiting draft. The machine flattens it and refuses a token.
     fn ticket_edit(&mut self, rest: &str) {
@@ -3901,7 +3902,7 @@ impl App {
         }
     }
 
-    /// The Tickets view's keys: move, approve, edit (prefills the command line), ignore, card, schedule, refetch. Each tap sends the draft's hash.
+    /// The Tickets view's keys: move, approve, edit (prefills the command line), ignore, card, schedule, refetch, and on a held ticket release or archive. Each tap sends the draft's hash.
     fn handle_tickets(&mut self, key: KeyEvent) -> Outcome {
         let Some(state) = self.tickets.clone() else {
             return Outcome::Continue;
@@ -3921,6 +3922,31 @@ impl App {
                 })
             }
             KeyCode::Char('R') => self.refresh_tickets(),
+            KeyCode::Char(c @ ('r' | 'X')) => {
+                let Some(t) = self.ticket_under_cursor() else {
+                    self.notify("no ticket selected", true);
+                    return Outcome::Continue;
+                };
+                if t.safety.is_none() {
+                    self.notify("not held by the safety screen", true);
+                    return Outcome::Continue;
+                }
+                let (action, done) = if c == 'r' {
+                    ("safety/release", "released: it goes on as untrusted")
+                } else {
+                    ("safety/archive", "archived: nothing was posted")
+                };
+                match self
+                    .machine
+                    .ticket_act(&t.key, action, serde_json::json!({}))
+                {
+                    Ok(()) => {
+                        self.notify(done, false);
+                        self.refresh_tickets();
+                    }
+                    Err(error) => self.notify(format!("tickets: {error}"), true),
+                }
+            }
             KeyCode::Char(c @ ('a' | 'e' | 'x' | 'c' | 's')) => {
                 let Some(t) = self.ticket_under_cursor() else {
                     self.notify("no ticket selected", true);
