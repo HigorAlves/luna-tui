@@ -66,6 +66,7 @@ function setup(over: { screen?: { answer?: Record<string, { value: boolean; p: n
     return over.size?.answer ?? sizeAnswer(2);
   });
   const store = new PgTicketStore(db);
+  const clock = { at: new Date("2026-11-05T12:00:00Z") };
   const screenDecide = vi.fn(async (_context: TicketContext, _repoPath: string | null) => {
     if (over.screen?.fail === "throw") throw new Error("no engine");
     if (over.screen?.fail === "null") return null;
@@ -83,10 +84,10 @@ function setup(over: { screen?: { answer?: Record<string, { value: boolean; p: n
     validity: { decide: decide.validity }, assess: { decide: decide.assess }, recommend: { decide: decide.recommend }, reply: { write: decide.write },
     truth: { learned: async (f) => (learned.push(f), true), draft: async (e) => void kept.push(e) },
     backlog: { upsertFromSource: async (input, o) => { const i = items.findIndex((x) => JSON.stringify(x.sources) === JSON.stringify(input.sources)); if (i >= 0) { items[i] = { ...input, id: "b1" }; return { id: "b1", created: false }; } if (!o.createIfMissing) return null; items.push({ ...input, id: "b1" }); return { id: "b1", created: true }; } },
-    now: () => new Date("2026-11-05T12:00:00Z"),
+    now: () => clock.at,
     ...(intakeLabel ? { intakeLabel } : {}),
   });
-  return { machine, store, writes, cards, decide, items, learned, kept, port, sizeDecide, creates, screenDecide };
+  return { machine, store, writes, cards, decide, items, learned, kept, port, sizeDecide, creates, screenDecide, clock };
 }
 const ctx = { repoPath: "/r/a", question: false };
 const safeAnswer = { addresses_agent: no, seeks_secrets: no, off_task_actions: no, overrides_rules: no, hidden_content: no };
@@ -929,16 +930,39 @@ describe("the safety screen", () => {
     expect(decide.validity).toHaveBeenCalledTimes(2);
   });
 
-  it("a held ticket is not screened again while it is unchanged, but a held screen_failed one is retried", async () => {
+  it("a held ticket is not screened again while it is unchanged", async () => {
     const held = setup({ screen: { answer: injected } });
     await held.machine.ingest(ticket(), ctx);
     await held.machine.ingest(ticket(), ctx);
     expect(held.screenDecide).toHaveBeenCalledTimes(1);
-    await db.query("truncate tickets");
-    const failed = setup({ screen: { fail: "null" } });
-    await failed.machine.ingest(ticket(), ctx);
-    await failed.machine.ingest(ticket(), ctx);
-    expect(failed.screenDecide).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a held screen_failed ticket at most once in ten minutes, on a poll through ingest or through screenAndHold", async () => {
+    for (const poll of ["ingest", "screenAndHold"] as const) {
+      await db.query("truncate tickets");
+      const { machine, screenDecide, clock } = setup({ screen: { fail: "null" } });
+      const again = () => (poll === "ingest" ? machine.ingest(ticket(), ctx) : machine.screenAndHold(ticket(), { repoPath: "/r/a" }));
+      await again();
+      expect(screenDecide).toHaveBeenCalledTimes(1);
+      clock.at = new Date(clock.at.getTime() + 9 * 60_000);
+      expect(await again()).toEqual(poll === "ingest" ? undefined : { held: true, failed: true });
+      expect(screenDecide).toHaveBeenCalledTimes(1);
+      clock.at = new Date(clock.at.getTime() + 2 * 60_000);
+      await again();
+      expect(screenDecide).toHaveBeenCalledTimes(2);
+      await again();
+      expect(screenDecide).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  it("a card and a backlog item made from a released ticket carry safetyReleased on their source", async () => {
+    const { machine, cards, items } = setup({ screen: { answer: injected } });
+    await machine.ingest(ticket(), ctx);
+    await machine.release("PAY-12");
+    await machine.schedule("PAY-12");
+    expect(items[0]!.sources).toEqual([expect.objectContaining({ kind: "jira", safetyReleased: true })]);
+    await machine.card("PAY-12");
+    expect(cards[0]).toMatchObject({ source: { kind: "jira", key: "PAY-12", safetyReleased: true } });
   });
 
   it("a released ingest skips the screen", async () => {

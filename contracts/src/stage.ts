@@ -16,10 +16,10 @@ import { ConfidencePolicySchema } from "./questions.ts";
 export const StageOutcome = z.enum(["pass", "fail", "needs_input", "test_change", "escalated"]);
 export type StageOutcome = z.infer<typeof StageOutcome>;
 
-/** Where a task came from: a tracker issue, or an open PR acted on from the PR inbox. */
+/** Where a task came from: a tracker issue, or an open PR acted on from the PR inbox. `safetyReleased` (github, jira, slack): the safety screen held the ticket and a person released it, so its card runs untrusted whatever the source (`trustOf`). */
 export const TaskSource = z.discriminatedUnion("kind", [
   /** `labels` are the issue's own at intake: the card keeps them so a `security` label still knocks the priority out to P0 when triage reads the signals again. */
-  z.object({ kind: z.literal("github"), repo: z.string(), number: z.number().int(), url: z.string(), labels: z.array(z.string()).optional(), authorAssociation: z.string().optional() }),
+  z.object({ kind: z.literal("github"), repo: z.string(), number: z.number().int(), url: z.string(), labels: z.array(z.string()).optional(), authorAssociation: z.string().optional(), safetyReleased: z.boolean().optional() }),
   /** A Dependabot or code-scanning alert a vulnerability card stands for. `alert` is the alert's own number, a count apart from issues and PRs: nothing reads it as `#N`. `labels` carry `security` for a critical one, as an issue's do. */
   z.object({ kind: z.literal("github_alert"), repo: z.string(), alert: z.number().int(), tool: z.enum(["dependabot", "code_scanning"]), url: z.string(), labels: z.array(z.string()).optional() }),
   /** The breach-notification card of an incident (`id` is the incident's own id). `labels` carry `security`, as an issue's do, so triage reads the card as P0. */
@@ -35,9 +35,9 @@ export const TaskSource = z.discriminatedUnion("kind", [
     authorAssociation: z.string().optional(),
   }),
   /** A ticket made from a Slack message (`t` in the board's Slack inbox). */
-  z.object({ kind: z.literal("slack"), channel: z.string(), ts: z.string(), permalink: z.string() }),
+  z.object({ kind: z.literal("slack"), channel: z.string(), ts: z.string(), permalink: z.string(), safetyReleased: z.boolean().optional() }),
   /** A ticket imported from a Jira issue by intake. `issueType` is Jira's type name, e.g. `Bug`. */
-  z.object({ kind: z.literal("jira"), key: z.string(), url: z.string(), issueType: z.string().nullable(), labels: z.array(z.string()).optional() }),
+  z.object({ kind: z.literal("jira"), key: z.string(), url: z.string(), issueType: z.string().nullable(), labels: z.array(z.string()).optional(), safetyReleased: z.boolean().optional() }),
   /** A Luna Notch ticket run on the machine: `ref` is its board key (`LUNA-14`), `id` its uuid.
    *  The notch talks to Jira, Slack and Teams about it; `jiraKey` only names the branch. */
   z.object({ kind: z.literal("notch"), ref: z.string().min(1), id: z.string().min(1), jiraKey: z.string().nullable().optional() }),

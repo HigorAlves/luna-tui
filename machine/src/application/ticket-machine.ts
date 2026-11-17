@@ -58,6 +58,14 @@ export class HeldSafetyError extends TicketRefusal {
   }
 }
 
+/** A person tried to release or archive a ticket the safety screen does not hold. */
+export class NotHeldError extends TicketRefusal {
+  constructor(key: string) {
+    super(`${key.slice(0, 80)} is not held by the safety screen: there is nothing to release or archive`);
+    this.name = "NotHeldError";
+  }
+}
+
 const JIRA_KEY = /^[A-Z][A-Z0-9_]{0,40}-\d{1,9}$/;
 const GITHUB_KEY = /^([\w.-]{1,100})\/([\w.-]{1,100})#(\d{1,9})$/;
 
@@ -151,6 +159,15 @@ export const ticketSource = (t: CanonicalTicket): TaskSource => {
 };
 const sourceOf = ticketSource;
 
+/** The source a card or backlog item of this row carries: the ticket's own, marked `safetyReleased` when a person released it from the safety hold. */
+const sourceOfRow = (row: Pick<TicketRow, "machineLinks">, t: CanonicalTicket): TaskSource => {
+  const source = ticketSource(t);
+  return row.machineLinks.some((l) => l.kind === "safety_released") && (source.kind === "github" || source.kind === "jira") ? { ...source, safetyReleased: true } : source;
+};
+
+/** A held `screen_failed` ticket is screened again at most this often: a model outage costs one call per ticket per window, not one per poll. */
+const SCREEN_RETRY_MS = 10 * 60_000;
+
 /** The repository a ticket is linked to, when one is. */
 const repoOf = (row: Pick<TicketRow, "machineLinks">): string | null => row.machineLinks.find((l) => l.kind === "repo")?.target ?? null;
 
@@ -192,7 +209,10 @@ export class TicketMachine implements TicketIntake {
   async screenAndHold(ticket: CanonicalTicket, ctx: { repoPath: string | null }): Promise<{ held: boolean; failed?: boolean }> {
     if (!this.deps.screen) return { held: false };
     const prev = await this.deps.store.get(ticket.key);
-    if (prev?.machineStatus && screenHashOf(prev) === contentHash(rawOf(ticket)) && !screenFailedOn(prev)) return { held: prev.machineStatus === "held_safety" };
+    if (prev?.machineStatus && screenHashOf(prev) === contentHash(rawOf(ticket))) {
+      // A hold for a failure is tried again once its window has passed; inside it the intake is told the screen failed and asks again on a later poll. An archived ticket stays out until its text changes.
+      if (!screenRetryDue(prev, this.now())) return { held: prev.machineStatus === "held_safety" || prev.machineStatus === "archived", ...(screenFailedOn(prev) ? { failed: true } : {}) };
+    }
     const out = await this.screenHold(ticket, ctx.repoPath, this.now());
     return { held: out.held, ...(out.failed ? { failed: true } : {}) };
   }
@@ -202,7 +222,7 @@ export class TicketMachine implements TicketIntake {
     const { store } = this.deps;
     const prev = await store.get(ticket.key);
     // Unchanged is the same `updatedAt` AND (with a screen) the same text: GitHub tickets carry no `updatedAt`, so the hash is what sees an edit. A held `screen_failed` is tried again.
-    const unchanged = (row: TicketRow) => row.canonical.updatedAt === ticket.updatedAt && (!this.deps.screen || (screenHashOf(row) === contentHash(rawOf(ticket)) && !screenFailedOn(row)));
+    const unchanged = (row: TicketRow) => row.canonical.updatedAt === ticket.updatedAt && (!this.deps.screen || (screenHashOf(row) === contentHash(rawOf(ticket)) && !screenRetryDue(row, this.now())));
     if (!ctx.force && prev?.machineStatus && prev.machineStatus !== "validity_failed" && unchanged(prev)) return;
     await store.read(ticket);
     const at = this.now();
@@ -337,7 +357,7 @@ export class TicketMachine implements TicketIntake {
       if (!id) throw new TicketRefusal(`${target} is not in the backlog or a card yet: schedule it first`);
       dependsOn.push(id);
     }
-    const placed = await this.deps.backlog.upsertFromSource(backlogInput(row.canonical, repo, last as unknown as AssessmentRecord, dependsOn), { createIfMissing: true });
+    const placed = await this.deps.backlog.upsertFromSource(backlogInput(row.canonical, repo, last as unknown as AssessmentRecord, dependsOn, sourceOfRow(row, row.canonical)), { createIfMissing: true });
     if (!placed) throw new TicketRefusal("the backlog did not take the ticket");
     await this.deps.store.setMachine(key, { status: "scheduled" });
     await this.acknowledge(key);
@@ -365,6 +385,35 @@ export class TicketMachine implements TicketIntake {
         return (busy ? ds : [...ds.filter((d) => d.id !== draft.id), draft]) as unknown as Record<string, unknown>[];
       });
     }
+  }
+
+  /**
+   * A person reads a held ticket and lets it go on. The decision behind the hold learns what the person said (every question it answered yes to was wrong), the ticket is marked released
+   * (its card runs untrusted), and it goes on to validity as an ingest that skips the screen. Posts nothing.
+   */
+  async release(key: string): Promise<TicketView> {
+    const row = await this.row(key);
+    if (row.machineStatus !== "held_safety") throw new NotHeldError(row.key);
+    const held = lastHeld(row);
+    const repo = repoOf(row);
+    const recordId = typeof held?.recordId === "string" ? held.recordId : null;
+    if (recordId && this.deps.truth) {
+      const asked = Object.keys(PACKS.ticket_safety.questions);
+      const label = Object.fromEntries(((held?.reasons as unknown[] | undefined) ?? []).filter((r): r is string => typeof r === "string" && asked.includes(r)).map((q) => [q, { value: false }]));
+      await this.deps.truth.learned({ pack: "ticket_safety", recordId, label, kind: "person", source: "safety_release", repoPath: repo }).catch(() => false);
+    }
+    await this.deps.store.setMachine(row.key, { links: [...row.machineLinks.filter((l) => l.kind !== "safety_released"), { kind: "safety_released", target: typeof held?.hash === "string" ? held.hash : "" }] });
+    await this.ingest(row.canonical, { repoPath: repo, question: false, force: true, released: true });
+    return this.view(row.key);
+  }
+
+  /** A person reads a held ticket and puts it away. Nothing is written to the tracker, no draft is made and no truth is kept (an archive does not say which question was right). */
+  async archive(key: string): Promise<TicketView> {
+    const row = await this.row(key);
+    if (row.machineStatus !== "held_safety") throw new NotHeldError(row.key);
+    await this.deps.store.setMachine(row.key, { status: "archived" });
+    await this.acknowledge(row.key);
+    return this.view(row.key);
   }
 
   async list(): Promise<TicketView[]> {
@@ -431,7 +480,7 @@ export class TicketMachine implements TicketIntake {
       title: t.title,
       description: t.description,
       ...(repo ? { repoPath: repo } : {}),
-      source: sourceOf(t),
+      source: sourceOfRow(row, t),
       // Linked only to its own source: no Jira key is looked for in the text a stranger wrote.
       noJiraDetection: true,
       ...(t.reporter ? { reporter: { id: t.reporter.id, channel: t.tool } } : {}),
@@ -710,12 +759,12 @@ function activityOf(row: TicketRow): Date {
 }
 
 /** The backlog item for a ticket: its five urgency sub-scores as the scores, its size, and its ticket as the source. */
-function backlogInput(t: CanonicalTicket, repo: string | null, r: AssessmentRecord, dependsOn: string[] = []): BacklogAddInput {
+function backlogInput(t: CanonicalTicket, repo: string | null, r: AssessmentRecord, dependsOn: string[] = [], source: TaskSource = sourceOf(t)): BacklogAddInput {
   const v = (k: "who" | "what" | "impact" | "time" | "demand") => Math.min(3, Math.max(1, r.subScores[k].value));
   return {
     title: t.title.slice(0, 300),
     text: t.description.slice(0, 4000),
-    sources: [sourceOf(t)],
+    sources: [source],
     repo,
     scores: { who: v("who"), what: v("what"), impact: v("impact"), time: v("time"), demand: v("demand") },
     size: r.size,
@@ -746,8 +795,15 @@ function screenHashOf(row: TicketRow): string | undefined {
   return undefined;
 }
 
-/** A ticket held only because the screen could not answer: it is tried again whatever its text. */
+/** A ticket held only because the screen could not answer. */
 const screenFailedOn = (row: TicketRow): boolean => row.machineStatus === "held_safety" && ((lastHeld(row)?.reasons as unknown[] | undefined) ?? []).includes("screen_failed");
+
+/** A ticket held for a failed screen is tried again whatever its text, but not before `SCREEN_RETRY_MS` after the hold (the hold entry's own `at`). */
+function screenRetryDue(row: TicketRow, now: Date): boolean {
+  if (!screenFailedOn(row)) return false;
+  const at = new Date(String(lastHeld(row)?.at ?? ""));
+  return Number.isNaN(at.getTime()) || now.getTime() - at.getTime() >= SCREEN_RETRY_MS;
+}
 
 /** Why the screen holds the ticket, from its last held entry, while its status is `held_safety`. */
 function safetyOf(row: TicketRow): TicketSafety | null {

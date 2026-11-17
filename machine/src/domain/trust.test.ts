@@ -40,3 +40,16 @@ describe("trustOf", () => {
     expect(trustOf({})).toBe("trusted");
   });
 });
+
+describe("trustOf for a released ticket", () => {
+  it("does not trust a card whose held ticket a person released, whatever the source", () => {
+    expect(trustOf({ source: { kind: "jira", key: "A-1", url: "u", issueType: null, safetyReleased: true } })).toBe("untrusted");
+    expect(trustOf({ source: { kind: "slack", channel: "c", ts: "1", permalink: "p", safetyReleased: true } })).toBe("untrusted");
+    expect(trustOf({ source: { kind: "github", repo: "o/r", number: 1, url: "u", authorAssociation: "OWNER", safetyReleased: true } })).toBe("untrusted");
+    expect(trustOf({ source: { kind: "jira", key: "A-1", url: "u", issueType: null, safetyReleased: false } })).toBe("trusted");
+  });
+
+  it("says in the note that a person released a held ticket", () => {
+    expect(untrustedNote({ cacheTrust: "untrusted", runtime: "runsc", released: true })).toBe("This card runs untrusted (a person released this ticket after the safety screen held it): its own cache volume and the runsc container runtime.");
+  });
+});

@@ -76,7 +76,7 @@ import type { Vulns } from "../../application/vulns.ts";
 import type { ReleaseNotes } from "../../application/release-notes.ts";
 import { type ComplianceDrafts, type CompliancePublisher, DraftNeedsRepoError, DraftNotFoundError, DraftRefusedError, DraftStatusError, StaleDraftError } from "../../application/compliance-drafts.ts";
 import { type TicketScreen, ticketOfText } from "../../application/ticket-screen.ts";
-import { HeldSafetyError, type TicketMachine, TicketNotFound, TicketRefusal } from "../../application/ticket-machine.ts";
+import { HeldSafetyError, NotHeldError, type TicketMachine, TicketNotFound, TicketRefusal } from "../../application/ticket-machine.ts";
 import { streamSSE } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { DataSource } from "typeorm";
@@ -271,6 +271,7 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     if (error instanceof TicketNotFound) return fail(c, 404, "not_found", error.message);
     // A refusal that is a safety hold keeps its own code: it is a subclass of `TicketRefusal`, so it is asked first.
     if (error instanceof HeldSafetyError) return fail(c, 409, "held_safety", error.message);
+    if (error instanceof NotHeldError) return fail(c, 409, "not_held", error.message);
     if (error instanceof TicketRefusal) return fail(c, 409, "ticket_refused", error.message);
     if (error instanceof BacklogItemNotFoundError) return fail(c, 404, "not_found", error.message);
     if (error instanceof NotSchedulableError) return fail(c, 409, "not_schedulable", error.message, { blockedBy: error.blockedBy });
@@ -787,6 +788,8 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     app.post("/tickets/:key/edit", async (c) => (await tickets.edit(key(c), await body(c, TicketEditInput)), c.json(await tickets.view(key(c)))));
     app.post("/tickets/:key/ignore", async (c) => (await tickets.ignore(key(c), await body(c, TicketIgnoreInput)), c.json(await tickets.view(key(c)))));
     app.post("/tickets/:key/backlog", async (c) => c.json(await tickets.schedule(key(c)), 201));
+    app.post("/tickets/:key/safety/release", async (c) => c.json(await tickets.release(key(c))));
+    app.post("/tickets/:key/safety/archive", async (c) => c.json(await tickets.archive(key(c))));
     app.post("/tickets/:key/card", async (c) => c.json(await tickets.card(key(c)), 201));
   }
 

@@ -43,7 +43,7 @@ import { saveKept } from "../kept-sandboxes.ts";
 import { LOCKFILES, envOf } from "../../domain/env-hash.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { sandboxSizeOf } from "../../domain/sandbox-bounds.ts";
-import { trustOf, untrustedNote } from "../../domain/trust.ts";
+import { safetyReleasedOf, trustOf, untrustedNote } from "../../domain/trust.ts";
 import { envBrokenDetail } from "../env-broken.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
@@ -317,7 +317,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const size = sandboxSizeOf(policy, trust);
   if (trust === "untrusted" && !untrustedNoted.has(task.id)) {
     untrustedNoted.add(task.id);
-    await context.note?.(untrustedNote(size)).catch(() => {});
+    await context.note?.(untrustedNote({ ...size, released: safetyReleasedOf(task.source) })).catch(() => {});
   }
   // The repository's own image, built from the base its luna.yaml names; a build that fails is an environment problem with the reason.
   let stageImage = extra.image ?? deps.image;
