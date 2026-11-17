@@ -25,7 +25,7 @@ function fake(invoke: OmnigraphClient["invoke"] = async () => ({ columns: [], ro
     },
     mutate: async (token, query, params) => {
       mutated.push({ token, query, params });
-      return { nodes: 0, edges: 2 };
+      return { nodes: 1, edges: 2 };
     },
   };
   return { client, loads, invoked, mutated };
@@ -60,6 +60,30 @@ describe("omnigraphBrain.load", () => {
       throw new BrainError("exists", "conflict", 409);
     };
     await expect(omnigraphBrain({ client, tokens }).load([repo(1)], { mode: "append" })).rejects.toMatchObject({ code: "conflict", status: 409 });
+  });
+
+  it("logs a refused load's cleaned message, and throws the same error", async () => {
+    const lines: string[] = [];
+    const { client } = fake();
+    const refusal = new BrainError("edge to missing node repo:9 (tok-facts)", "load_refused", 422);
+    client.load = async () => {
+      throw refusal;
+    };
+    const error = await omnigraphBrain({ client, tokens, log: (line) => lines.push(line) }).load([repo(1)]).catch((caught) => caught);
+    expect(error).toBe(refusal);
+    expect(lines).toEqual(["brain: load failed (load_refused): edge to missing node repo:9 ([token])"]);
+  });
+
+  it("logs a refused unlink's cleaned message, and throws the same error", async () => {
+    const lines: string[] = [];
+    const { client } = fake();
+    const refusal = new BrainError("cannot delete for tok-facts", "bad_request", 400);
+    client.mutate = async () => {
+      throw refusal;
+    };
+    const error = await omnigraphBrain({ client, tokens, log: (line) => lines.push(line) }).unlink("CardInRepo", "card:a", "repo:b").catch((caught) => caught);
+    expect(error).toBe(refusal);
+    expect(lines).toEqual(["brain: unlink failed (bad_request): cannot delete for [token]"]);
   });
 });
 
@@ -153,5 +177,35 @@ describe("omnigraphBrain.unlink and reset", () => {
     expect(types.indexOf("Card")).toBeLessThan(types.indexOf("Repo"));
     expect(types.indexOf("Actor")).toBeLessThan(types.indexOf("Person"));
     expect(mutated.every((call) => call.token === "tok-facts")).toBe(true);
+  });
+});
+
+describe("omnigraphBrain.remove", () => {
+  it("deletes one node per mutation, the type from the contracts and the slug as a parameter, and counts affected nodes", async () => {
+    const { client, mutated } = fake();
+    const brain = omnigraphBrain({ client, tokens });
+    await expect(brain.remove([{ type: "Person", slug: "person:ada" }, { type: "Claim", slug: "claim:1" }])).resolves.toBe(2);
+    expect(mutated).toEqual([
+      { token: "tok-facts", query: "query forget($slug: String) { delete Person where slug = $slug }", params: { slug: "person:ada" } },
+      { token: "tok-facts", query: "query forget($slug: String) { delete Claim where slug = $slug }", params: { slug: "claim:1" } },
+    ]);
+  });
+
+  it("refuses a type that is not in the contracts, without a request", async () => {
+    const { client, mutated } = fake();
+    await expect(omnigraphBrain({ client, tokens }).remove([{ type: 'X where slug != "" }' as never, slug: "a" }])).rejects.toMatchObject({ code: "bad_request" });
+    expect(mutated).toEqual([]);
+  });
+
+  it("logs a refusal's cleaned message, and throws the same error", async () => {
+    const lines: string[] = [];
+    const { client } = fake();
+    const refusal = new BrainError("cannot delete for tok-facts", "bad_request", 400);
+    client.mutate = async () => {
+      throw refusal;
+    };
+    const error = await omnigraphBrain({ client, tokens, log: (line) => lines.push(line) }).remove([{ type: "Person", slug: "person:ada" }]).catch((caught) => caught);
+    expect(error).toBe(refusal);
+    expect(lines).toEqual(["brain: remove failed (bad_request): cannot delete for [token]"]);
   });
 });

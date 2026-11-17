@@ -1,6 +1,6 @@
 // The company brain's port (RFC 0010): a typed graph the machine writes to and reads from. Writes
 // are loads of rows; reads are named queries only, so no caller composes a query of its own.
-import { BRAIN_QUERIES, type BrainEdgeName, type BrainRow } from "@hardness/contracts";
+import { BRAIN_QUERIES, type BrainEdgeName, type BrainNodeType, type BrainRow } from "@hardness/contracts";
 
 export type BrainLoadMode = "merge" | "append" | "overwrite";
 /** Which token a load carries, so the commit history says who wrote. */
@@ -36,6 +36,8 @@ export interface Brain {
   query(name: string, params?: Record<string, string | number>): Promise<BrainAnswer>;
   /** Removes one edge, or every edge of that name that starts at `from` when `to` is left out: a load only adds edges, so an edge that moved or went away is removed first. Returns how many went. Throws BrainError. */
   unlink(edge: BrainEdgeName, from: string, to?: string): Promise<number>;
+  /** Deletes nodes by type and slug, with the edges they hold. Returns how many nodes went. Throws BrainError. */
+  remove(nodes: Array<{ type: BrainNodeType; slug: string }>): Promise<number>;
   /** Empties the graph, for a rebuild. Throws BrainError. */
   reset(): Promise<void>;
 }
@@ -55,6 +57,7 @@ export function noBrain(): Brain {
     load: async () => ({ entities: 0, commit: null }),
     query: async () => ({ rows: [], note: OFF }),
     unlink: async () => 0,
+    remove: async () => 0,
     reset: async () => {},
   };
 }
@@ -66,7 +69,7 @@ export function agentRefusal(name: string, params: Record<string, string | numbe
   const query = BRAIN_QUERIES.find((candidate) => candidate.name === name);
   if (!query || !query.agent) return `${name} is not a query an agent may run`;
   for (const key of Object.keys(params)) {
-    if (!(key in query.params)) return `${name} has no parameter ${key}`;
+    if (!Object.hasOwn(query.params, key)) return `${name} has no parameter ${key}`;
   }
   for (const [key, type] of Object.entries(query.params)) {
     const value = params[key];

@@ -67,7 +67,8 @@ export function brainSources(deps: BrainSourceDeps): BrainSources {
       const ended = task.state === "closed" || task.state === "archived";
       const found = new Map<string, { url: string; repo: string; number: number; opened: boolean }>();
       for (const event of events) {
-        if (event.kind !== "pr.opened") continue;
+        // The pipeline stores a stage's own events under a `stage.` prefix; the bare kind is kept for older rows.
+        if (event.kind !== "stage.pr.opened" && event.kind !== "pr.opened") continue;
         const parsed = parsePullUrl(event.payload.url);
         if (parsed && typeof event.payload.url === "string") found.set(`${parsed.repo}#${parsed.number}`, { url: event.payload.url, ...parsed, opened: true });
       }
@@ -115,16 +116,13 @@ export function brainSources(deps: BrainSourceDeps): BrainSources {
     // A failure is not an empty list: it is null, which unlinks nothing.
     regimesOf: async (repoPath) => deps.regimes(repoPath).catch(() => null),
 
-    // One failed folder is a failed pass: a half-read wiki must not look like a wiki that lost its pages.
+    // One read of `Compliance/` (each read is a git fetch), then the three folders the brain points at. A failed read is a failed pass:
+    // it must not look like a wiki that lost its pages.
     wikiPagesOf: async (repoPath) => {
       try {
-        const pages: { path: string; text: string }[] = [];
-        for (const folder of WIKI_FOLDERS) {
-          const found = await deps.wikiPages(repoPath, folder);
-          if (found === null) return null;
-          pages.push(...found);
-        }
-        return pages;
+        const found = await deps.wikiPages(repoPath, "Compliance/");
+        if (found === null) return null;
+        return WIKI_FOLDERS.flatMap((folder) => found.filter((page) => page.path.startsWith(folder)));
       } catch {
         return null;
       }

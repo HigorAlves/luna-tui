@@ -3,7 +3,7 @@
 // type has no email, and the row is built from named fields, so an extra key a caller passes is lost.
 import { brainEdge, brainNode, brainSlug, type BrainRow } from "@hardness/contracts";
 
-import type { BrainRepo } from "./rows.ts";
+import { safeTitle, type BrainRepo } from "./rows.ts";
 
 const login = (value: string): string => value.trim().toLowerCase();
 
@@ -43,8 +43,10 @@ export function componentRows(names: readonly string[], repo: BrainRepo, cardId:
   const seen = new Set<string>();
   const rows: BrainRow[] = [];
   for (const raw of names) {
-    const name = raw.trim().slice(0, NAME_MAX).trim();
-    if (name === "") continue;
+    if (raw.trim() === "") continue;
+    // A model wrote the name: screened first, so a newline or an address never reaches a row. The slug is built from the screened name,
+    // which is a fixed function of the raw one, so it stays stable and valid (`slugPart` flattens whatever the screen leaves, such as `[redacted]`).
+    const name = safeTitle(raw).slice(0, NAME_MAX).trim();
     const slug = brainSlug("component", `${repo.slug}/${slugPart(name)}`);
     if (seen.has(slug)) continue;
     if (seen.size === COMPONENTS_MAX) break;

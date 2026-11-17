@@ -4,7 +4,7 @@
 import { createHash } from "node:crypto";
 import { brainEdge, brainNode, brainSlug, brainTime, type BrainNodeRow, type BrainRow } from "@hardness/contracts";
 
-import { repoRows, type BrainRepo } from "./rows.ts";
+import { repoRows, safeText, type BrainRepo } from "./rows.ts";
 
 /** The longest statement and section a row keeps. */
 export const STATEMENT_MAX = 500;
@@ -26,7 +26,7 @@ function rulesOf(text: string): Rule[] {
   let open: string[] | null = null;
   const close = () => {
     if (open) {
-      const statement = oneLine(open.join(" ")).slice(0, STATEMENT_MAX).trim();
+      const statement = safeText(oneLine(open.join(" "))).slice(0, STATEMENT_MAX).trim();
       if (statement && !seen.has(statement)) {
         seen.add(statement);
         rules.push({ statement, section });
@@ -38,7 +38,7 @@ function rulesOf(text: string): Rule[] {
     const heading = /^##\s+(.*)$/.exec(line);
     if (heading || /^#{1,6}\s/.test(line)) {
       close();
-      if (heading) section = oneLine(heading[1]!).slice(0, SECTION_MAX).trim() || NO_SECTION;
+      if (heading) section = safeText(oneLine(heading[1]!)).slice(0, SECTION_MAX).trim() || NO_SECTION;
       continue;
     }
     const item = /^-(?:\s+(.*))?$/.exec(line);

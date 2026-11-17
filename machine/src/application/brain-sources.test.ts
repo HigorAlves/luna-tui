@@ -31,7 +31,7 @@ const record = (id: string, at: string, truthAt?: string, over: Partial<Decision
   ({ schema: 1, id, pack: "ci_failure_class", at, answer: {}, context: {}, ...(truthAt ? { truth: { label: {}, source: "x", at: truthAt } } : {}), ...over }) as DecisionRecord;
 
 describe("pullsOf", () => {
-  const opened = event("pr.opened", { url: "https://github.com/acme/shop/pull/7", number: 7 }, "2026-01-02T00:00:00Z");
+  const opened = event("stage.pr.opened", { url: "https://github.com/acme/shop/pull/7", number: 7 }, "2026-01-02T00:00:00Z");
 
   it("gives a merged pull request with the ship.merged time for a card that opened one and shipped it", async () => {
     const merged = event("ship.merged", { prUrl: "https://github.com/acme/shop/pull/7", number: 7 }, "2026-01-04T10:00:00Z");
@@ -44,6 +44,11 @@ describe("pullsOf", () => {
     expect((await source("implementing"))[0]).toMatchObject({ state: "open", mergedAt: null });
     expect((await source("archived"))[0]).toMatchObject({ state: "closed" });
     expect((await source("closed"))[0]).toMatchObject({ state: "closed" });
+  });
+
+  it("still accepts the bare kind", async () => {
+    const bare = event("pr.opened", { url: "https://github.com/acme/shop/pull/7", number: 7 }, "2026-01-02T00:00:00Z");
+    expect((await brainSources(deps({ events: async () => [bare] })).pullsOf(task("a"))).map((p) => p.number)).toEqual([7]);
   });
 
   it("gives nothing for a card with neither event", async () => {
@@ -61,12 +66,12 @@ describe("pullsOf", () => {
     const pulls = await brainSources(deps({ events: async () => [opened] })).pullsOf(task("p", { source }));
     expect(pulls.map((p) => [p.number, p.opened]).sort()).toEqual([[7, true], [9, false]]);
     // a card that opened the very pull it came from owns it
-    const same = event("pr.opened", { url: source.url, number: 9 }, "2026-01-02T00:00:00Z");
+    const same = event("stage.pr.opened", { url: source.url, number: 9 }, "2026-01-02T00:00:00Z");
     expect((await brainSources(deps({ events: async () => [same] })).pullsOf(task("p", { source })))[0]).toMatchObject({ number: 9, opened: true });
   });
 
   it("skips a pull request url it cannot read", async () => {
-    const bad = event("pr.opened", { url: "not a url", number: 1 }, "2026-01-02T00:00:00Z");
+    const bad = event("stage.pr.opened", { url: "not a url", number: 1 }, "2026-01-02T00:00:00Z");
     expect(await brainSources(deps({ events: async () => [bad] })).pullsOf(task("a"))).toEqual([]);
   });
 });
@@ -157,17 +162,17 @@ describe("regimesOf", () => {
 });
 
 describe("wikiPagesOf", () => {
-  it("gathers the three Compliance folders in order", async () => {
+  it("reads the wiki once under Compliance/ and keeps the pages of the three folders it wants", async () => {
     const asked: string[] = [];
-    const pages = await brainSources(deps({ wikiPages: async (_path, prefix) => (asked.push(prefix), [{ path: `${prefix}x.md`, text: "t" }]) })).wikiPagesOf("/work/luna");
-    expect(asked).toEqual(["Compliance/Controls/", "Compliance/Policies/", "Compliance/Answers/"]);
+    const all = ["Compliance/Controls/x.md", "Compliance/Policies/x.md", "Compliance/Answers/x.md", "Compliance/Other/x.md", "Home.md"].map((path) => ({ path, text: "t" }));
+    const pages = await brainSources(deps({ wikiPages: async (_path, prefix) => (asked.push(prefix), all) })).wikiPagesOf("/work/luna");
+    expect(asked).toEqual(["Compliance/"]);
     expect(pages?.map((page) => page.path)).toEqual(["Compliance/Controls/x.md", "Compliance/Policies/x.md", "Compliance/Answers/x.md"]);
   });
 
-  it("is null when the repository has no known slug, or any read throws", async () => {
+  it("is null when the repository has no known slug, or the read throws", async () => {
     expect(await brainSources(deps({ wikiPages: async () => null })).wikiPagesOf("/work/luna")).toBeNull();
-    let n = 0;
-    expect(await brainSources(deps({ wikiPages: async () => (++n === 2 ? Promise.reject(new Error("net")) : []) })).wikiPagesOf("/work/luna")).toBeNull();
+    expect(await brainSources(deps({ wikiPages: async () => Promise.reject(new Error("net")) })).wikiPagesOf("/work/luna")).toBeNull();
   });
 });
 

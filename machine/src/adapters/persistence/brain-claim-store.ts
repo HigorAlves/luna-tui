@@ -38,6 +38,7 @@ const rowOf = (r: Raw): BrainClaim => ({
   decidedBy: (r.decided_by as BrainClaim["decidedBy"]) ?? null,
   decidedAt: r.decided_at ? iso(r.decided_at) : null,
   createdAt: iso(r.created_at),
+  updatedAt: iso(r.updated_at),
 });
 
 const COLUMN: Record<keyof ClaimPatch, string> = {
@@ -87,16 +88,36 @@ export class PgClaimStore implements ClaimStore {
     return rows.map(rowOf);
   }
 
-  async update(id: string, patch: ClaimPatch, options: { ifStatus?: ClaimStatus } = {}): Promise<BrainClaim | null> {
+  async update(id: string, patch: ClaimPatch, options: { ifStatus?: ClaimStatus; keepDurable?: boolean } = {}): Promise<BrainClaim | null> {
     if (!UUID.test(id)) return null;
     const entries = (Object.entries(patch) as Array<[keyof ClaimPatch, unknown]>).filter(([k, v]) => k in COLUMN && v !== undefined);
     const params: unknown[] = [id];
-    const sets = entries.map(([k, v]) => `${COLUMN[k]} = $${params.push(k === "reasons" || k === "contradicts" ? JSON.stringify(v) : v)}`);
+    // `keepDurable` decides in SQL, on the row as it is now: a reading that landed after the caller read the claim stays.
+    const sets = entries.map(([k, v]) => {
+      const slot = `$${params.push(k === "reasons" || k === "contradicts" ? JSON.stringify(v) : v)}`;
+      return k === "durable" && options.keepDurable ? `durable = coalesce(durable, ${slot})` : `${COLUMN[k]} = ${slot}`;
+    });
     sets.push("updated_at = greatest(now(), updated_at + interval '1 millisecond')");
     // TypeORM answers an UPDATE ... RETURNING as [rows, count] on Postgres.
     const guard = options.ifStatus ? ` and status = $${params.push(options.ifStatus)}` : "";
     const [rows] = (await this.db.query(`update brain_claims set ${sets.join(", ")} where id = $1${guard} returning *`, params)) as [Raw[], number];
     return rows[0] ? rowOf(rows[0]) : null;
+  }
+
+  async delete(id: string): Promise<boolean> {
+    if (!UUID.test(id)) return false;
+    // TypeORM answers a DELETE ... RETURNING as [rows, count] on Postgres.
+    const [rows] = (await this.db.query("delete from brain_claims where id = $1 returning id", [id])) as [Raw[], number];
+    return rows.length > 0;
+  }
+
+  async forgetSpeaker(login: string): Promise<number> {
+    // The speaker is the only column that holds a login. `updated_at` moves so the projector reads the claim again and drops its edge.
+    const [rows] = (await this.db.query(
+      "update brain_claims set speaker = null, updated_at = greatest(now(), updated_at + interval '1 millisecond') where lower(btrim(speaker)) = $1 returning id",
+      [login.trim().toLowerCase()],
+    )) as [Raw[], number];
+    return rows.length;
   }
 
   async stats(repoPath?: string): Promise<ClaimStats> {

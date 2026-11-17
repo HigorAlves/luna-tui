@@ -11,6 +11,7 @@ function spy() {
     health: async () => ({ ok: true, version: "x", note: null }),
     load: async () => ({ entities: 0, commit: null }),
     unlink: async () => 0,
+    remove: async () => 0,
     reset: async () => {},
     query: async (name, params) => {
       asked.push({ name, params });
@@ -59,6 +60,15 @@ describe("agentQuery", () => {
     expect(wrongString.note).toContain("card");
     const missing = await agentQuery(brain, "card_lookup");
     expect(missing.rows).toEqual([]);
+    expect(asked).toEqual([]);
+  });
+
+  it("does not take a name from the prototype chain for a declared parameter", async () => {
+    const { brain, asked } = spy();
+    for (const key of ["constructor", "toString", "hasOwnProperty"]) {
+      const answer = await agentQuery(brain, "card_lookup", { card: "card:1", [key]: "x" });
+      expect(answer.note, key).toContain(key);
+    }
     expect(asked).toEqual([]);
   });
 });

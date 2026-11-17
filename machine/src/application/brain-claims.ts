@@ -41,9 +41,13 @@ export interface ClaimStore {
   findBySource(source: Pick<BrainClaim["source"], "kind" | "ref">, statement: string): Promise<BrainClaim | null>;
   /** Newest first, or with `order: "updated_asc"` the longest-unchanged first, which is what a cursor over `updated_at` pages by. `since` keeps those updated at or after it; `except` leaves one status out; `decidedBy` and `decidedSince` (at or after) keep the claims decided by that one, since then. */
   list(filter?: { status?: ClaimStatus; except?: ClaimStatus; repoPath?: string; since?: Date; decidedBy?: "code" | "jev" | "person"; decidedSince?: Date; limit?: number; order?: "updated_asc" }): Promise<BrainClaim[]>;
-  /** Changes what admission or a person settled; touches `updated_at`. Null when there is no such claim, or, with `ifStatus`, when the claim is no longer in that status: someone else decided first. */
-  update(id: string, patch: ClaimPatch, options?: { ifStatus?: ClaimStatus }): Promise<BrainClaim | null>;
+  /** Changes what admission or a person settled; touches `updated_at`. Null when there is no such claim, or, with `ifStatus`, when the claim is no longer in that status: someone else decided first. With `keepDurable`, a `durable` already stored stays and the patch's only fills a null. */
+  update(id: string, patch: ClaimPatch, options?: { ifStatus?: ClaimStatus; keepDurable?: boolean }): Promise<BrainClaim | null>;
   stats(repoPath?: string): Promise<ClaimStats>;
+  /** Erases a claim's row. False when there is no such claim. */
+  delete(id: string): Promise<boolean>;
+  /** Blanks the speaker of every claim that names this login (compared lower-cased and trimmed), touching `updated_at`. Returns how many changed. */
+  forgetSpeaker(login: string): Promise<number>;
 }
 
 /** A machine started without a database: holds nothing, never throws. */
@@ -55,5 +59,7 @@ export function noClaims(): ClaimStore {
     list: async () => [],
     update: async () => null,
     stats: async () => ({ waiting: 0, decided: 0, agreed: 0, missed: 0, ready: false }),
+    delete: async () => false,
+    forgetSpeaker: async () => 0,
   };
 }

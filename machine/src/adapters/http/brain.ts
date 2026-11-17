@@ -7,27 +7,30 @@ import { ZodError, z } from "zod";
 
 import { answered, type Brain, noBrain } from "../../application/brain.ts";
 import type { Admission } from "../../application/brain-admission.ts";
-import { brainEvidence } from "../../application/brain-ask.ts";
+import { brainSearch } from "../../application/brain-ask.ts";
 import type { ClaimStore } from "../../application/brain-claims.ts";
 import { type PackRunsPort, RunFailedError } from "../../application/pack-runs.ts";
-import type { ProjectionResult } from "../../application/brain-projector.ts";
+import { brainForget } from "../../application/brain-forget.ts";
+import type { ForgetResult, ProjectionResult } from "../../application/brain-projector.ts";
 
 export interface TrackedProjector {
   run(): Promise<ProjectionResult>;
   rebuild(): Promise<ProjectionResult>;
+  /** Erases rows by slug from the graph and the journal; it is not a projection, so it does not touch `last`. */
+  forget(slugs: string[]): Promise<ForgetResult>;
   /** The last projection of any kind, with when it ended; null before the first. */
   last(): { at: string; result: ProjectionResult } | null;
 }
 
 /** Remembers the last result of a projector, whoever started the run: a close, the clock or a route. */
-export function trackProjector(projector: { run(): Promise<ProjectionResult>; rebuild(): Promise<ProjectionResult> }, now: () => Date = () => new Date()): TrackedProjector {
+export function trackProjector(projector: { run(): Promise<ProjectionResult>; rebuild(): Promise<ProjectionResult>; forget?(slugs: string[]): Promise<ForgetResult> }, now: () => Date = () => new Date()): TrackedProjector {
   let last: { at: string; result: ProjectionResult } | null = null;
   const remember = async (job: () => Promise<ProjectionResult>): Promise<ProjectionResult> => {
     const result = await job();
     last = { at: now().toISOString(), result };
     return result;
   };
-  return { run: () => remember(() => projector.run()), rebuild: () => remember(() => projector.rebuild()), last: () => last };
+  return { run: () => remember(() => projector.run()), rebuild: () => remember(() => projector.rebuild()), forget: (slugs) => (projector.forget ? projector.forget(slugs) : Promise.resolve({ nodes: 0, edges: 0, note: null })), last: () => last };
 }
 
 /** What an app with no brain wired answers. */
@@ -59,6 +62,9 @@ const RejectInput = z.object({ reason: z.string().max(1000).optional() });
 /** `POST /brain/remember`: a person's own note. */
 const RememberInput = z.object({ text: z.string().trim().min(1).max(2000), repo: z.string().startsWith("/", "repo must be an absolute path").optional() });
 
+/** `POST /brain/forget`: exactly one of a claim's id or a GitHub login (a bot's ends in `[bot]`). */
+const ForgetInput = z.union([z.strictObject({ claim: z.uuid() }), z.strictObject({ login: z.string().trim().regex(/^[a-z\d](?:[a-z\d-]{0,38})(?:\[bot\])?$/i, "login must be a GitHub login") })]);
+
 const fail = (c: Context, status: 400 | 404 | 409 | 502 | 503, error: string, message: string) => c.json<ApiError>({ error, message }, status as ContentfulStatusCode);
 
 export function brainRoutes(app: Hono, deps: { brain: Brain; projector: TrackedProjector; runs?: PackRunsPort; claims?: ClaimStore; admission?: Admission; speaker?: () => Promise<string | null>; now?: () => Date }): void {
@@ -76,10 +82,11 @@ export function brainRoutes(app: Hono, deps: { brain: Brain; projector: TrackedP
     const { question } = parsed.data;
     if (!deps.runs) return fail(c, 503, "agents_off", "this machine runs no packs: agents are off (MACHINE_AGENTS=off)");
     if (!deps.brain.enabled) return fail(c, 503, "brain_off", "the brain is off: set MACHINE_BRAIN_URL to a running omnigraph server (start one with `pnpm brain`) and restart the machine");
-    const rows = await brainEvidence(deps.brain, question);
+    const { rows, answered: brainAnswered } = await brainSearch(deps.brain, question);
     // Nothing to read: no model call for nothing.
     if (rows.length === 0) {
-      // No rows from a brain that did not answer is not a brain that holds nothing.
+      // No rows from a brain that did not answer is not a brain that holds nothing: a healthy server can still fail every query (a wrong reader token, a query it lacks).
+      if (!brainAnswered) return fail(c, 503, "brain_down", "the brain is on but did not answer, so what it holds about that is unknown");
       const health = await deps.brain.health();
       if (!health.ok) return fail(c, 503, "brain_down", "the brain is on but did not answer, so what it holds about that is unknown");
     }
@@ -170,6 +177,21 @@ export function brainRoutes(app: Hono, deps: { brain: Brain; projector: TrackedP
   };
   app.post("/brain/claims/:id/verify", settle("verify"));
   app.post("/brain/claims/:id/reject", settle("reject"));
+
+  /** Erases a claim, or a person's login, from the graph, the journal and the claim table. A refusal of the graph changes nothing, so the person can try again. */
+  app.post("/brain/forget", async (c) => {
+    if (!deps.claims) return claimsOff(c);
+    const parsed = ForgetInput.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return invalid(c, parsed.error);
+    const forgetter = brainForget({ projector: deps.projector, claims: deps.claims });
+    const done = await ("claim" in parsed.data ? forgetter.claim(parsed.data.claim) : forgetter.person(parsed.data.login));
+    if ("problem" in done) {
+      if (done.problem === "not_found") return fail(c, 404, "not_found", "no such claim");
+      if (done.problem === "invalid") return fail(c, 400, "invalid_request", "login must be a GitHub login");
+      return fail(c, 502, "brain_forget_failed", `the graph refused (${done.note}): nothing was changed, try again`);
+    }
+    return c.json(done);
+  });
 
   app.post("/brain/remember", async (c) => {
     if (!deps.claims || !deps.admission) return claimsOff(c);

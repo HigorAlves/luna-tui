@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -66,5 +66,51 @@ describe("brainJournal", () => {
     await Promise.all([journal.write(a), journal.write(b)]);
     expect((await journal.read()).cursor.tasks).toBe("b");
     expect(JSON.parse(await readFile(join(dir, "brain", "journal.json"), "utf8")).cursor.tasks).toBe("b");
+  });
+
+  it("keeps the previous journal as journal.json.bak, and the journal itself is there between any two writes", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "brain-journal-"));
+    const journal = brainJournal(dir);
+    const first = { ...empty, cursor: { tasks: "first", verdicts: null, claims: null, wiki: {} } };
+    const second = { ...empty, cursor: { tasks: "second", verdicts: null, claims: null, wiki: {} } };
+    await journal.write(first);
+    await journal.write(second);
+    expect(JSON.parse(await readFile(join(dir, "brain", "journal.json.bak"), "utf8")).cursor.tasks).toBe("first");
+    expect(JSON.parse(await readFile(join(dir, "brain", "journal.json"), "utf8")).cursor.tasks).toBe("second");
+    expect((await stat(join(dir, "brain", "journal.json.bak"))).mode & 0o777).toBe(0o600);
+  });
+
+  // A journal that went missing next to a .bak is a loss to look at, not a new start.
+  it("refuses to start empty when journal.json is gone and a .bak is there, and names the .bak", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "brain-journal-"));
+    const journal = brainJournal(dir);
+    await journal.write(empty);
+    await journal.write(empty);
+    await rm(join(dir, "brain", "journal.json"));
+    await expect(journal.read()).rejects.toThrow(/journal\.json\.bak/);
+  });
+
+  // A forgotten slug must never be written again; a file from before the key has none.
+  it("keeps the forgotten slugs through a write and a read, and reads a file without the key as none", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "brain-journal-"));
+    const journal = brainJournal(dir);
+    await journal.write({ ...empty, forgotten: ["person:ada"] });
+    expect((await journal.read()).forgotten).toEqual(["person:ada"]);
+    await writeFile(join(dir, "brain", "journal.json"), JSON.stringify(empty));
+    expect((await journal.read()).forgotten).toBeUndefined();
+  });
+
+  it("removes the previous generation when asked, so it holds nothing that was forgotten", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "brain-journal-"));
+    const journal = brainJournal(dir);
+    await journal.write({ ...empty, nodes: { "person:ada": { type: "Person" as const, data: { slug: "person:ada", login: "ada" } } } });
+    await journal.write(empty);
+    await expect(access(join(dir, "brain", "journal.json.bak"))).resolves.toBeUndefined();
+    await journal.write({ ...empty, forgotten: ["person:ada"] }, { dropPrevious: true });
+    await expect(access(join(dir, "brain", "journal.json.bak"))).rejects.toThrow();
+    expect(JSON.parse(await readFile(join(dir, "brain", "journal.json"), "utf8")).forgotten).toEqual(["person:ada"]);
+    // The next ordinary write starts a .bak again.
+    await journal.write(empty);
+    expect(JSON.parse(await readFile(join(dir, "brain", "journal.json.bak"), "utf8")).forgotten).toEqual(["person:ada"]);
   });
 });

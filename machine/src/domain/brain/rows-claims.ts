@@ -3,7 +3,7 @@
 // graph holds or this load carries, since the server refuses an edge to a node it does not have.
 import { brainEdge, brainNode, brainSlug, brainTime, type BrainClaim, type BrainRow } from "@hardness/contracts";
 
-import { repoRows, safeTitle, type BrainRepo } from "./rows.ts";
+import { repoRows, safeText, safeTitle, type BrainRepo } from "./rows.ts";
 import { personRows } from "./rows-people.ts";
 
 export function claimRows(
@@ -54,7 +54,7 @@ export function claimRows(
   if (claim.status === "verified" && claim.durable === true) {
     const learning = brainSlug("learning", claim.id);
     rows.push(
-      brainNode("Learning", { slug: learning, title: claim.statement, kind: claim.kind, scope: claim.scope, recorded_at: brainTime(claim.decidedAt ?? claim.createdAt) }),
+      brainNode("Learning", { slug: learning, title: safeText(claim.statement).trim(), kind: claim.kind, scope: claim.scope, recorded_at: brainTime(claim.decidedAt ?? claim.createdAt) }),
       brainEdge("BasedOn", learning, slug),
     );
     if (repo) rows.push(brainEdge("LearningAboutRepo", learning, brainSlug("repo", repo.slug)));

@@ -73,4 +73,11 @@ describe("principleRows", () => {
     const held = principles(principleRows(FILE, repo, { at, held: [] }));
     expect(principleRows(null, repo, { at, held })).toEqual([]);
   });
+
+  it("screens a rule and its section: a token is cut and an address masked", () => {
+    const text = "## Keys: token=abcdefghijklmnop1234\n- Ask ops at ops@example.com and use token=zyxwvutsrqponmlk9876 never.\n";
+    const json = JSON.stringify(principleRows(text, repo, { at, held: [] }));
+    for (const raw of ["abcdefghijklmnop1234", "zyxwvutsrqponmlk9876", "ops@example.com"]) expect(json).not.toContain(raw);
+    expect(json).toContain("[email]");
+  });
 });

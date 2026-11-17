@@ -1,6 +1,6 @@
 // The Brain port over omnigraph-server (RFC 0010): one token per role, rows cut to what the server
 // accepts, and answers shaped so a reader can rely on their keys. A read never throws.
-import { BRAIN_EDGES, type BrainRow, brainTime } from "@hardness/contracts";
+import { BRAIN_EDGES, BRAIN_NODES, type BrainRow, brainTime } from "@hardness/contracts";
 
 import { type Brain, type BrainAnswer, BrainError, type BrainValue, foundNothing } from "../../application/brain.ts";
 import { BRAIN_LOAD_ORDER, brainBatches } from "../../domain/brain/batches.ts";
@@ -27,6 +27,16 @@ export function omnigraphBrain(options: OmnigraphBrainOptions): Brain {
     return error.code;
   };
 
+  /** A write that fails says its server's words in the log, since the runbook sends a person there; the error goes on unchanged. */
+  const logged = async <T>(what: string, write: () => Promise<T>): Promise<T> => {
+    try {
+      return await write();
+    } catch (error) {
+      failure(error, what);
+      throw error;
+    }
+  };
+
   return {
     enabled: true,
 
@@ -48,18 +58,29 @@ export function omnigraphBrain(options: OmnigraphBrainOptions): Brain {
       }
       if (one.length > 1) throw new BrainError("the rows exceed what one load accepts", "too_large");
       const token = loadOptions.actor === "memories" ? tokens.memories : tokens.facts;
-      return client.load(token, rows, loadOptions.mode ?? "merge");
+      return logged("load", () => client.load(token, rows, loadOptions.mode ?? "merge"));
     },
 
-    // The two deletes below are the only queries written outside brain/queries: an edge or a type name comes
+    // The deletes below are the only queries written outside brain/queries: an edge or a type name comes
     // from the contracts' tables, and a slug travels as a parameter, so no caller's text is in the query.
     async unlink(edge, from, to) {
       if (!(edge in BRAIN_EDGES)) throw new BrainError(`no edge named ${String(edge)}`, "bad_request");
-      const removed =
+      const removed = await logged("unlink", () =>
         to === undefined
-          ? await client.mutate(tokens.facts, `query unlink($from: String) { delete ${edge} where from = $from }`, { from })
-          : await client.mutate(tokens.facts, `query unlink($from: String, $to: String) { delete ${edge} where from = $from and to = $to }`, { from, to });
+          ? client.mutate(tokens.facts, `query unlink($from: String) { delete ${edge} where from = $from }`, { from })
+          : client.mutate(tokens.facts, `query unlink($from: String, $to: String) { delete ${edge} where from = $from and to = $to }`, { from, to }),
+      );
       return removed.edges;
+    },
+
+    async remove(nodes) {
+      for (const { type } of nodes) if (!Object.hasOwn(BRAIN_NODES, type)) throw new BrainError(`no node type named ${String(type)}`, "bad_request");
+      let removed = 0;
+      for (const { type, slug } of nodes) {
+        const answer = await logged("remove", () => client.mutate(tokens.facts, `query forget($slug: String) { delete ${type} where slug = $slug }`, { slug }));
+        removed += answer.nodes;
+      }
+      return removed;
     },
 
     async reset() {

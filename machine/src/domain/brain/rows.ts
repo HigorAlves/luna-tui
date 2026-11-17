@@ -24,7 +24,10 @@ export function flatTitle(text: string): string {
 }
 
 /** A title as a row keeps it when a person or a tool wrote it: a secret cut out, an address or phone number masked, one line, at most 200 characters. */
-export const safeTitle = (text: string): string => flatTitle(maskPii(screen(text.replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ")).text));
+export const safeTitle = (text: string): string => flatTitle(safeText(text));
+
+/** The same screen with no cap, for text that keeps its own: a secret cut, an address or phone number masked, control characters as spaces. */
+export const safeText = (text: string): string => maskPii(screen(text.replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ")).text);
 
 export function repoRows(repo: BrainRepo): BrainRow[] {
   return [brainNode("Repo", { slug: brainSlug("repo", repo.slug), name: repo.name })];

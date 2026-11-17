@@ -108,11 +108,20 @@ describe("POST /brain/ask", () => {
     expect(await (await post({ question: "x" })).json()).toEqual({ known: false, reply: "Trust me.", cites: [], dropped: ["card:ghost"] });
   });
 
-  it("answers that the brain holds nothing, without running the pack, when no row is found", async () => {
-    const { calls, post } = ask(on, { known: true, reply: "x", cites: [] });
+  it("answers that the brain holds nothing, without running the pack, when it answered and found no row", async () => {
+    const { calls, post } = ask({ ...on, query: async () => ({ rows: [], note: null }) }, { known: true, reply: "x", cites: [] });
     const res = await post({ question: "x" });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ known: false, reply: "The brain holds nothing about that yet.", cites: [], dropped: [] });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("answers 503 brain_down when the server is healthy but no query answered: a wrong token, or a query it does not have", async () => {
+    const failing: Brain = { ...on, query: async () => ({ rows: [], note: "401 unauthorized" }) };
+    const { calls, post } = ask(failing, { known: true, reply: "x", cites: [] });
+    const res = await post({ question: "x" });
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toBe("brain_down");
     expect(calls).toHaveLength(0);
   });
 
@@ -174,6 +183,7 @@ describe("the claim routes", () => {
       add: async () => null, get: async () => null, findBySource: async () => null, update: async () => null,
       list: async (filter) => (listed.push(filter), [claim()]),
       stats: async (repoPath) => (statsFor.push(repoPath), { waiting: 1, decided: 4, agreed: 3, missed: 1, ready: false }),
+      delete: async () => false, forgetSpeaker: async () => 0,
     };
     const admission: Admission = {
       propose: async () => [],
@@ -396,3 +406,78 @@ describe("GET /brain/digest", () => {
   });
 });
 
+describe("POST /brain/forget", () => {
+  const ID = "5b1c1b1e-0000-4000-8000-000000000001";
+  const held = { id: ID, source: { kind: "note", ref: "n", title: "A note" } } as BrainClaim;
+
+  function forgetApp(options: { held?: BrainClaim | null; note?: string | null; claims?: boolean } = {}) {
+    const calls: string[] = [];
+    const claims: ClaimStore = {
+      ...noClaims(),
+      get: async () => (options.held === undefined ? held : options.held),
+      delete: async (id) => (calls.push(`delete ${id}`), true),
+      forgetSpeaker: async (login) => (calls.push(`speaker ${login}`), 4),
+    };
+    const projector = trackProjector({
+      run: async () => result(),
+      rebuild: async () => result(),
+      forget: async (slugs) => (calls.push(`forget ${slugs.join(",")}`), { nodes: slugs.length, edges: 2, note: options.note ?? null }),
+    });
+    const app = new Hono();
+    brainRoutes(app, { brain: noBrain(), projector, ...(options.claims === false ? {} : { claims }) });
+    const post = (body: unknown) => app.request("/brain/forget", { method: "POST", headers: { "content-type": "application/json" }, body: typeof body === "string" ? body : JSON.stringify(body) });
+    return { calls, post };
+  }
+
+  it("forgets a claim and answers what went", async () => {
+    const t = forgetApp();
+    const res = await t.post({ claim: ID });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ forgotten: { nodes: 3, edges: 2 }, claims: 1 });
+    expect(t.calls).toEqual([`forget claim:${ID},learning:${ID},source:note/${ID}`, `delete ${ID}`]);
+  });
+
+  it("forgets a login and answers how many claims lost their speaker", async () => {
+    const t = forgetApp();
+    const res = await t.post({ login: "Octo-Cat" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ forgotten: { nodes: 1, edges: 2 }, claims: 4 });
+    expect(t.calls).toEqual(["forget person:octo-cat", "speaker octo-cat"]);
+  });
+
+  it("answers 400 invalid_request for a body that is not exactly one of claim or login", async () => {
+    const t = forgetApp();
+    for (const body of [{}, { claim: "not-a-uuid" }, { login: "two words" }, { login: "" }, { claim: ID, login: "octo" }, { claim: ID, extra: 1 }, { login: 3 }, "not json"]) {
+      const res = await t.post(body);
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe("invalid_request");
+    }
+    expect(t.calls).toEqual([]);
+  });
+
+  it("answers 404 not_found for a claim the table does not hold", async () => {
+    const t = forgetApp({ held: null });
+    const res = await t.post({ claim: ID });
+    expect(res.status).toBe(404);
+    expect((await res.json()).error).toBe("not_found");
+    expect(t.calls).toEqual([]);
+  });
+
+  it("answers 503 brain_claims_off when the machine has no claim journal", async () => {
+    const res = await forgetApp({ claims: false }).post({ claim: ID });
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toBe("brain_claims_off");
+  });
+
+  it("answers 502 brain_forget_failed with the code when the graph refused, and leaves the table alone", async () => {
+    const t = forgetApp({ note: "unlink_refused" });
+    for (const body of [{ claim: ID }, { login: "octo" }]) {
+      const res = await t.post(body);
+      expect(res.status).toBe(502);
+      const answer = await res.json();
+      expect(answer.error).toBe("brain_forget_failed");
+      expect(answer.message).toContain("unlink_refused");
+    }
+    expect(t.calls.every((call) => call.startsWith("forget"))).toBe(true);
+  });
+});

@@ -37,40 +37,51 @@ function task(id: string, over: Partial<TaskRow> = {}): TaskRow {
 const jira = (key: string) => ({ key, url: `https://jira.example/${key}` }) as TaskRow["jira"];
 
 /** A brain that records what it is asked. `failLoad` makes the nth load throw. */
-function fakeBrain(options: { failLoad?: number; hygiene?: Record<string, number> } = {}) {
+function fakeBrain(options: { failLoad?: number; failUnlink?: boolean; failRemove?: boolean; hygiene?: Record<string, number> } = {}) {
   const calls: string[] = [];
   const loads: BrainRow[][] = [];
+  const actors: Array<string | undefined> = [];
   const unlinks: Array<{ edge: BrainEdgeName; from: string; to?: string }> = [];
+  const removed: Array<{ type: string; slug: string }> = [];
   let n = 0;
   const brain: Brain = {
     enabled: true,
     health: async () => ({ ok: true, version: "x", note: null }),
-    load: async (rows) => {
+    load: async (rows, loadOptions) => {
       n += 1;
       if (n === options.failLoad) throw new BrainError("refused", "load_refused", 422);
       calls.push("load");
       loads.push(rows);
+      actors.push(loadOptions?.actor);
       return { entities: rows.length, commit: "c" };
     },
     query: async (name): Promise<BrainAnswer> => ({ rows: Array.from({ length: options.hygiene?.[name] ?? 0 }, () => ({ x: 1 })), note: null }),
     unlink: async (edge, from, to) => {
+      if (options.failUnlink) throw new BrainError("refused", "unlink_refused", 422);
       calls.push("unlink");
       unlinks.push({ edge, from, to });
       return 1;
+    },
+    remove: async (nodes) => {
+      if (options.failRemove) throw new BrainError("refused", "remove_refused", 422);
+      calls.push("remove");
+      removed.push(...nodes);
+      return nodes.length;
     },
     reset: async () => {
       calls.push("reset");
     },
   };
-  return { brain, calls, loads, unlinks };
+  return { brain, calls, loads, actors, unlinks, removed };
 }
 
 function memoryJournal(start?: BrainState) {
-  const state = { current: start ?? { cursor: { tasks: null, verdicts: null, claims: null, wiki: {} }, nodes: {}, edges: [] } as BrainState, writes: 0 };
+  const state = { current: start ?? { cursor: { tasks: null, verdicts: null, claims: null, wiki: {} }, nodes: {}, edges: [] } as BrainState, writes: 0, dropped: 0 };
   const journal: BrainJournal = {
     read: async () => structuredClone(state.current),
-    write: async (next) => {
+    write: async (next, options) => {
       state.writes += 1;
+      if (options?.dropPrevious) state.dropped += 1;
       state.current = structuredClone(next);
     },
   };
@@ -241,7 +252,7 @@ describe("brainProjector.run", () => {
     expect(state.current.cursor.verdicts).toBe("2026-03-01T00:00:00.000Z");
   });
 
-  it("reports a hygiene query that returned rows, in the result and the log, only after a change", async () => {
+  it("runs the hygiene queries at the end of every run whose loads did not fail, so a dirty result is not replaced by an empty one", async () => {
     const { brain } = fakeBrain({ hygiene: { prs_without_card: 2 } });
     const { journal } = memoryJournal();
     const lines: string[] = [];
@@ -250,7 +261,16 @@ describe("brainProjector.run", () => {
     expect(first.hygiene).toContainEqual({ query: "prs_without_card", rows: 2 });
     expect(lines.some((line) => line.includes("prs_without_card"))).toBe(true);
     const second = await projector.run();
-    expect(second.hygiene).toEqual([]);
+    expect(second.loaded).toBe(0);
+    expect(second.hygiene).toContainEqual({ query: "prs_without_card", rows: 2 });
+  });
+
+  it("runs no hygiene query when a load failed", async () => {
+    const { brain } = fakeBrain({ failLoad: 1, hygiene: { prs_without_card: 2 } });
+    const { journal } = memoryJournal();
+    const result = await brainProjector({ brain, sources: sources([task("a")]), journal }).run();
+    expect(result.note).toContain("load_refused");
+    expect(result.hygiene).toEqual([]);
   });
 
   it("never throws: a source failure becomes the note", async () => {
@@ -957,5 +977,265 @@ describe("brainProjector.run, a card's Source", () => {
     claims = [claim("c3", { createdAt: "2026-04-01T10:07:00.000Z" })];
     await projector.run();
     expect(sourceRows(loads.flat())).toEqual([]);
+  });
+});
+
+describe("brainProjector.run, two cards that opened one pull request", () => {
+  const pull = (title: string): BrainPull => ({ repo: "acme/shop", number: 7, title, state: "open", url: "https://github.com/acme/shop/pull/7", mergedAt: null, author: null, opened: true });
+  const prs = (rows: BrainRow[]) => rows.filter((row) => "type" in row && row.type === "PR").map((row) => ("type" in row ? row.data : {}));
+  const forCard = (rows: BrainRow[]) => rows.filter((row) => "edge" in row && row.edge === "PrForCard");
+  const pullsOf = async (t: TaskRow) => [pull(`${t.id} title`)];
+
+  it("builds the PR once, for the first card in task order", async () => {
+    const { brain, loads } = fakeBrain();
+    const { journal } = memoryJournal();
+    await brainProjector({ brain, sources: sources([task("a"), task("b")], { pullsOf }), journal }).run();
+    expect(prs(loads.flat())).toMatchObject([{ slug: "pr:acme/shop#7", title: "a title" }]);
+    expect(forCard(loads.flat())).toEqual([{ edge: "PrForCard", from: "pr:acme/shop#7", to: "card:a" }]);
+  });
+
+  it("keeps the PR with the card the journal names, and unlinks nothing", async () => {
+    const { brain, loads, unlinks } = fakeBrain();
+    const { journal } = memoryJournal();
+    await brainProjector({ brain, sources: sources([task("b")], { pullsOf }), journal }).run();
+    loads.length = 0;
+    const later = new Date("2026-02-01T00:00:00.000Z");
+    await brainProjector({ brain, sources: sources([task("a", { updatedAt: later }), task("b", { updatedAt: later })], { pullsOf }), journal }).run();
+    expect(forCard(loads.flat())).toEqual([]);
+    expect(unlinks).toEqual([]);
+    expect(prs(loads.flat())).toEqual([]);
+  });
+
+  it("skips a source-only pull when any card of the run opened it", async () => {
+    const { brain, loads } = fakeBrain();
+    const { journal } = memoryJournal();
+    const sourceOnly = async (t: TaskRow) => [{ ...pull(`${t.id} title`), opened: t.id === "b" }];
+    await brainProjector({ brain, sources: sources([task("a"), task("b")], { pullsOf: sourceOnly }), journal }).run();
+    expect(forCard(loads.flat())).toEqual([{ edge: "PrForCard", from: "pr:acme/shop#7", to: "card:b" }]);
+  });
+});
+
+describe("brainProjector.run, a record the graph already has", () => {
+  const failing = async (t: TaskRow): Promise<BrainPull[]> => {
+    if (t.id === "bad") throw new Error("boom");
+    return [];
+  };
+
+  it("loads a changed claim about a skipped card the graph does not hold, when the journal holds the claim", async () => {
+    const { brain, loads } = fakeBrain();
+    const { journal } = memoryJournal();
+    const about = (over: Partial<BrainClaim>) => claim("c1", { source: { kind: "card", ref: "bad", title: "Task bad" }, ...over });
+    // It went in earlier without its card, a day after it was made.
+    await brainProjector({ brain, sources: sources([task("bad")], { pullsOf: failing, claims: async () => [about({})] }), journal, log: () => {}, now: () => new Date("2026-05-01T00:00:00.000Z") }).run();
+    loads.length = 0;
+    const decided = "2026-05-02T10:00:00.000Z";
+    const changed = about({ status: "rejected", decidedBy: "person", decidedAt: decided });
+    await brainProjector({ brain, sources: sources([task("bad")], { pullsOf: failing, claims: async () => [changed] }), journal, log: () => {}, now: () => new Date("2026-05-02T10:01:00.000Z") }).run();
+    expect(loads.flat().filter((row) => "type" in row).map((row) => ("type" in row ? [row.type, row.data.status] : []))).toContainEqual(["Claim", "rejected"]);
+  });
+
+  it("loads a verdict the journal holds about a skipped card the graph does not hold", async () => {
+    const { brain, loads } = fakeBrain();
+    const { journal } = memoryJournal();
+    const record = (at: string) => verdictRecord("v1", "bad", at);
+    await brainProjector({ brain, sources: sources([task("bad")], { pullsOf: failing, verdicts: async () => [record("2026-05-01T00:00:00.000Z")] }), journal, log: () => {}, now: () => new Date("2026-05-03T00:00:00.000Z") }).run();
+    loads.length = 0;
+    const corrected = { ...record("2026-05-01T00:00:00.000Z"), truth: { label: { worth: { value: true } }, source: "person", at: "2026-05-03T10:00:00.000Z" } } as unknown as DecisionRecord;
+    await brainProjector({ brain, sources: sources([task("bad")], { pullsOf: failing, verdicts: async () => [corrected] }), journal, log: () => {}, now: () => new Date("2026-05-03T10:01:00.000Z") }).run();
+    expect(slugsOf(loads.flat())).toContain("verdict:worth_learning/v1/worth");
+  });
+});
+
+describe("brainProjector.run, the wiki time when a load fails", () => {
+  const PAGES = [{ path: "Compliance/Controls/Access.md", text: "# Access control" }];
+
+  it("is in the journal though the run failed, and the next run an hour later does not read the wiki", async () => {
+    const T0 = new Date("2026-11-10T09:00:00.000Z");
+    const clock = { at: T0 };
+    const asked: string[] = [];
+    const { journal, state } = memoryJournal();
+    const wikiPagesOf = async (path: string) => (asked.push(path), PAGES);
+    const broken = brainProjector({ brain: fakeBrain({ failLoad: 1 }).brain, journal, now: () => clock.at, sources: sources([task("a")], { wikiPagesOf }) });
+    expect((await broken.run()).note).toContain("load_refused");
+    expect(state.current.cursor.wiki).toEqual({ "luna-ab12": T0.toISOString() });
+    clock.at = new Date(T0.getTime() + 3_600_000);
+    await brainProjector({ brain: fakeBrain().brain, journal, now: () => clock.at, sources: sources([task("a")], { wikiPagesOf }) }).run();
+    expect(asked).toEqual(["/work/luna"]);
+  });
+});
+
+describe("brainProjector.run, the actor of a load", () => {
+  it("loads the card's batch as the facts actor and the claim's after it as the memories actor", async () => {
+    const { brain, loads, actors } = fakeBrain();
+    const { journal } = memoryJournal();
+    await brainProjector({ brain, sources: sources([task("a")], { claims: async () => [claim("c1", { speaker: "Octo" })] }), journal }).run();
+    expect(actors).toEqual([undefined, "memories"]);
+    expect(typed(loads[0]!).some((row) => row.startsWith("Card:card:a"))).toBe(true);
+    expect(typed(loads[0]!).some((row) => row.startsWith("Person:person:octo"))).toBe(true);
+    expect(typed(loads[0]!).some((row) => row.startsWith("Claim:") || row.startsWith("Source:") || row.startsWith("ClaimFrom:"))).toBe(false);
+    expect(typed(loads[1]!)).toEqual(expect.arrayContaining(["Source:source:card/a", "Claim:claim:c1", "ClaimFrom:claim:c1>source:card/a", "SourceOfCard:source:card/a>card:a", "ClaimedBy:claim:c1>person:octo"]));
+    expect(typed(loads[1]!).some((row) => row.startsWith("Card:") || row.startsWith("Person:") || row.startsWith("Repo:"))).toBe(false);
+  });
+
+  it("restores the claim layer as the memories actor too", async () => {
+    const first = fakeBrain();
+    const { journal } = memoryJournal();
+    await brainProjector({ brain: first.brain, sources: sources([task("a")], { claims: async () => [claim("c1")] }), journal }).run();
+    const second = fakeBrain();
+    await brainProjector({ brain: second.brain, sources: sources([]), journal }).rebuild();
+    expect(second.actors).toEqual([undefined, "memories"]);
+  });
+});
+
+describe("brainProjector.run, the claims cursor", () => {
+  it("follows the store's updatedAt when the claim has one", async () => {
+    const { brain } = fakeBrain();
+    const { journal, state } = memoryJournal();
+    // `updatedAt` is the store's own clock; the cast goes when BrainClaim carries the field.
+    const stored = { ...claim("c1"), updatedAt: "2026-06-01T00:00:00.000Z" } as BrainClaim;
+    await brainProjector({ brain, sources: sources([], { claims: async () => [stored] }), journal }).run();
+    expect(state.current.cursor.claims).toBe("2026-06-01T00:00:00.000Z");
+  });
+});
+
+describe("brainProjector.forget", () => {
+  const speaking = [task("a")];
+  const said = (id: string) => claim(id, { speaker: "Octo", createdAt: `2026-04-0${id.slice(1)}T00:00:00.000Z` });
+  const withSpeaker = (claims: BrainClaim[]) => sources(speaking, { claims: async () => claims });
+  const mentions = (rows: BrainRow[]) => typed(rows).filter((row) => row.includes("person:octo"));
+
+  async function filled() {
+    const graph = fakeBrain();
+    const held = memoryJournal();
+    await brainProjector({ brain: graph.brain, sources: withSpeaker([said("c1")]), journal: held.journal }).run();
+    expect(mentions(Object.values(held.state.current.nodes))).toEqual(["Person:person:octo"]);
+    return { held };
+  }
+
+  it("unlinks the edges that touch the slugs, then removes the nodes, then edits the journal and drops its previous generation", async () => {
+    const { held } = await filled();
+    const graph = fakeBrain();
+    const writes = held.state.writes;
+    const result = await brainProjector({ brain: graph.brain, sources: sources([]), journal: held.journal }).forget(["person:octo"]);
+    expect(result).toEqual({ nodes: 1, edges: 1, note: null });
+    expect(graph.unlinks).toEqual([{ edge: "ClaimedBy", from: "claim:c1", to: "person:octo" }]);
+    expect(graph.removed).toEqual([{ type: "Person", slug: "person:octo" }]);
+    expect(graph.calls).toEqual(["unlink", "remove"]);
+    expect(held.state.current.nodes["person:octo"]).toBeUndefined();
+    expect(held.state.current.nodes["claim:c1"]).toBeDefined();
+    expect(held.state.current.edges.some((edge) => edge.from === "person:octo" || edge.to === "person:octo")).toBe(false);
+    expect(held.state.current.forgotten).toEqual(["person:octo"]);
+    expect(held.state.writes).toBe(writes + 1);
+    expect(held.state.dropped).toBe(1);
+  });
+
+  it("is not undone by a run over sources that still produce those rows", async () => {
+    const { held } = await filled();
+    await brainProjector({ brain: fakeBrain().brain, sources: sources([]), journal: held.journal }).forget(["person:octo"]);
+    const graph = fakeBrain();
+    const result = await brainProjector({ brain: graph.brain, sources: withSpeaker([said("c1"), said("c2")]), journal: held.journal }).run();
+    expect(result.note).toBeNull();
+    expect(mentions(graph.loads.flat())).toEqual([]);
+    expect(typed(graph.loads.flat())).toEqual(expect.arrayContaining(["Claim:claim:c2", "ClaimFrom:claim:c2>source:card/a"]));
+    expect(held.state.current.nodes["person:octo"]).toBeUndefined();
+    expect(held.state.current.edges.some((edge) => edge.edge === "ClaimedBy")).toBe(false);
+  });
+
+  it("is not undone by a rebuild", async () => {
+    const { held } = await filled();
+    await brainProjector({ brain: fakeBrain().brain, sources: sources([]), journal: held.journal }).forget(["person:octo"]);
+    const graph = fakeBrain();
+    await brainProjector({ brain: graph.brain, sources: withSpeaker([said("c1")]), journal: held.journal }).rebuild();
+    expect(graph.calls[0]).toBe("reset");
+    expect(mentions(graph.loads.flat())).toEqual([]);
+    expect(typed(graph.loads.flat())).toContain("Claim:claim:c1");
+  });
+
+  it("forgets a claim with its source note and lesson, and leaves the rest", async () => {
+    const graph = fakeBrain();
+    const held = memoryJournal();
+    const verified = { status: "verified", durable: true, decidedBy: "jev", decidedAt: "2026-04-02T00:00:00.000Z" } as const;
+    await brainProjector({ brain: graph.brain, sources: withSpeaker([claim("c1", verified), claim("c2")]), journal: held.journal }).run();
+    expect(Object.keys(held.state.current.nodes)).toEqual(expect.arrayContaining(["claim:c1", "learning:c1"]));
+    const result = await brainProjector({ brain: graph.brain, sources: sources([]), journal: held.journal }).forget(["claim:c1", "learning:c1", "source:note/c1"]);
+    expect(result.note).toBeNull();
+    expect(result.nodes).toBe(2);
+    expect(graph.removed.map((node) => node.slug).sort()).toEqual(["claim:c1", "learning:c1"]);
+    expect(Object.keys(held.state.current.nodes)).toEqual(expect.arrayContaining(["claim:c2", "source:card/a"]));
+    expect(held.state.current.forgotten).toEqual(["claim:c1", "learning:c1", "source:note/c1"]);
+  });
+
+  it("leaves the journal untouched and reports the code when the graph refuses, so the caller can try again", async () => {
+    const { held } = await filled();
+    const before = structuredClone(held.state.current);
+    const writes = held.state.writes;
+    const lines: string[] = [];
+    for (const refuse of [{ failUnlink: true }, { failRemove: true }]) {
+      const result = await brainProjector({ brain: fakeBrain(refuse).brain, sources: sources([]), journal: held.journal, log: (line) => lines.push(line) }).forget(["person:octo"]);
+      expect(result.note).toBe(refuse.failUnlink ? "unlink_refused" : "remove_refused");
+      expect(held.state.current).toEqual(before);
+      expect(held.state.writes).toBe(writes);
+    }
+    expect(lines.length).toBe(2);
+    const again = await brainProjector({ brain: fakeBrain().brain, sources: sources([]), journal: held.journal }).forget(["person:octo"]);
+    expect(again).toEqual({ nodes: 1, edges: 1, note: null });
+  });
+
+  it("still edits the journal with the brain off, so a later rebuild does not bring the rows back", async () => {
+    const { held } = await filled();
+    const result = await brainProjector({ brain: noBrain(), sources: sources([]), journal: held.journal }).forget(["person:octo"]);
+    expect(result).toEqual({ nodes: 1, edges: 1, note: null });
+    expect(held.state.current.nodes["person:octo"]).toBeUndefined();
+    expect(held.state.current.forgotten).toEqual(["person:octo"]);
+    expect(held.state.dropped).toBe(1);
+  });
+
+  it("adds a slug the journal does not hold, once", async () => {
+    const held = memoryJournal();
+    const graph = fakeBrain();
+    const projector = brainProjector({ brain: graph.brain, sources: sources([]), journal: held.journal });
+    expect(await projector.forget(["person:nobody", "person:nobody"])).toEqual({ nodes: 0, edges: 0, note: null });
+    await projector.forget(["person:nobody", "person:other"]);
+    expect(held.state.current.forgotten).toEqual(["person:nobody", "person:other"]);
+    expect(graph.removed).toEqual([]);
+  });
+
+  it("is served in the same queue as a run", async () => {
+    const order: string[] = [];
+    const { held } = await filled();
+    const slow: BrainJournal = {
+      read: async () => {
+        order.push("read");
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return held.journal.read();
+      },
+      write: async (next, options) => {
+        order.push("write");
+        await held.journal.write(next, options);
+      },
+    };
+    const projector = brainProjector({ brain: fakeBrain().brain, sources: sources([]), journal: slow });
+    await Promise.all([projector.forget(["person:octo"]), projector.run()]);
+    expect(order.slice(0, 3)).toEqual(["read", "write", "read"]);
+  });
+
+  // The two cases forget is for (a person, a claim) hold no minimum; this is the general case.
+  it("drops a built node whose required edge pointed at a forgotten slug, and what rests on it, and logs it", async () => {
+    const graph = fakeBrain();
+    const held = memoryJournal({ cursor: { tasks: null, verdicts: null, claims: null, wiki: {} }, nodes: {}, edges: [], forgotten: ["repo:luna-ab12"] });
+    const lines: string[] = [];
+    await brainProjector({ brain: graph.brain, sources: sources([task("a")], { componentsOf: async () => ["api"] }), journal: held.journal, log: (line) => lines.push(line) }).run();
+    const rows = typed(graph.loads.flat());
+    expect(rows).toContain("Card:card:a");
+    expect(rows.filter((row) => row.includes("component:") || row.includes("repo:luna-ab12"))).toEqual([]);
+    expect(lines.some((line) => line.includes("component:luna-ab12/api"))).toBe(true);
+  });
+
+  it("drops a lesson whose only claim was forgotten", async () => {
+    const graph = fakeBrain();
+    const held = memoryJournal({ cursor: { tasks: null, verdicts: null, claims: null, wiki: {} }, nodes: {}, edges: [], forgotten: ["claim:c1"] });
+    const verified = { status: "verified", durable: true, decidedBy: "jev", decidedAt: "2026-04-02T00:00:00.000Z" } as const;
+    await brainProjector({ brain: graph.brain, sources: withSpeaker([claim("c1", verified)]), journal: held.journal }).run();
+    expect(typed(graph.loads.flat()).filter((row) => row.includes("c1"))).toEqual([]);
   });
 });

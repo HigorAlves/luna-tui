@@ -88,4 +88,12 @@ describe("claimRows", () => {
     const c = claim({ status: "verified", durable: true, speaker: "a" });
     expect(claimRows(c, context())).toEqual(claimRows(c, context()));
   });
+
+  it("screens a lesson's title, but keeps the whole statement length", () => {
+    const statement = `Mail ops@example.com about token=abcdefghijklmnop1234. ${"x".repeat(300)}`;
+    const rows = claimRows(claim({ statement, status: "verified", durable: true, decidedAt: "2026-01-03T00:00:00.000Z" }), context());
+    const lesson = nodes(rows).find((row) => row.type === "Learning")!;
+    expect(String(lesson.data.title)).not.toMatch(/example\.com|abcdefghijklmnop1234/);
+    expect(String(lesson.data.title).length).toBeGreaterThan(200);
+  });
 });

@@ -53,3 +53,21 @@ describe("the claim routes through createApp", () => {
     }
   });
 });
+
+describe("POST /brain/forget through createApp", () => {
+  const off = { tasks: 0, loaded: 0, skipped: 0, unlinked: 0, hygiene: [], note: null };
+  const app = () => createApp({ db, pipeline, bus: new Bus(), access: { host: "127.0.0.1", port: 4318, token: "secret" }, brain: { brain: noBrain(), projector: trackProjector({ run: async () => off, rebuild: async () => off }), claims: noClaims() } });
+  const post = (headers: Record<string, string>, body = JSON.stringify({ login: "octo" })) => app().request("/brain/forget", { method: "POST", headers: { host: "127.0.0.1:4318", "content-type": "application/json", ...headers }, body });
+
+  it("sits behind the same guard as the other routes: the token, the host, the origin and the body type", async () => {
+    expect((await post({})).status).toBe(401);
+    expect((await post({ authorization: "Bearer wrong" })).status).toBe(401);
+    expect((await post({ authorization: "Bearer secret", host: "evil.example" })).status).toBe(403);
+    expect((await post({ authorization: "Bearer secret", origin: "http://evil.example" })).status).toBe(403);
+    expect((await post({ authorization: "Bearer secret", "content-type": "text/plain" })).status).toBe(415);
+    const ok = await post({ authorization: "Bearer secret" });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ forgotten: { nodes: 0, edges: 0 }, claims: 0 });
+  });
+});
+
