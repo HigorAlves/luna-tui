@@ -166,6 +166,20 @@ One PR, one commit per row, the suite green after each. The order puts Track A f
 - **`claude:haiku` as the default engine.** Jev is cheaper and a good fit for typed yes-or-no answers; haiku is the fallback only.
 - **Two PRs.** The owner chose one, so the screen and the guard land together.
 
+## Findings from planning
+
+Reading the code corrected the design in these places:
+
+- **The pre-pass runs on raw text**, before `safe()`, which inserts zero-width characters and rewrites links. HTML comments count as a signal only when they hold real prose, since every GitHub issue template has them.
+- **A held ticket always has a ticket row**, on every path, so the board can show and release it. `safety` is a field of `GET /tickets`, not of the task API: a held ticket has no task.
+- **An edited GitHub issue needs a content hash.** GitHub tickets carry no `updatedAt`, so `ingest`'s skip rule never re-screens them. The record stores a hash and the skip needs both to match.
+- **The screen runs before the classifier**, which already reads the ticket text ahead of `ingest`.
+- **`pipeline.createTask` refuses a held source** as a second line.
+- **Release makes the card untrusted** with a `safetyReleased` flag on the task source, since only GitHub sources have an association.
+- **Cards the screen does not cover:** PR tasks, vulnerability and breach cards, `POST /tasks` and Notch sources. A Slack message is screened when a person taps it into a card; `slack_triage` reads it before that, and is out of scope here.
+- **The guard covers agent packs only.** The on-demand runs (`POST /runs`, Slack triage, Jira intake, evals) hold no tools and stay unguarded. With `MACHINE_ENGINE_RELAY=off` or `MACHINE_EGRESS=off` there is no guard, since its upstream is the relay; the machine warns and `/health` lists it under `notInForce`.
+- **A guard block is read after the stage ends.** The tool call is already replaced by a notice when the stage continues; an untrusted card then ends `escalated` with reason `other`.
+
 ## Still open
 
 - The insertion points for every ticket source (A3 verifies each).
