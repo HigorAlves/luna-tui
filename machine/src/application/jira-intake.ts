@@ -176,6 +176,7 @@ export class JiraIntake {
 
   /** The ticket machine's path: the issue becomes a ticket object with its drafts. Nothing is written to Jira and no card is made. */
   private async hold(issue: JiraIssue, repoPath: string): Promise<void> {
+    if (await this.held(issue, repoPath)) return;
     const classification = (await this.options.classifier?.classify(issueContext(issue)).catch(() => null)) ?? null;
     if (await this.requested(issue, classification)) {
       // A questionnaire is not a ticket: it lives in the Compliance view.
@@ -184,11 +185,25 @@ export class JiraIntake {
       return;
     }
     const overrides = (await this.options.policies.for(repoPath)).decisions.triage_signals ?? {};
-    await this.options.tickets!.ingest(canonicalTicketOf({ tool: "jira", issue }), { repoPath, question: confidentQuestion(classification, overrides) });
+    await this.options.tickets!.ingest(canonicalTicketOf({ tool: "jira", issue }), { repoPath, question: confidentQuestion(classification, overrides), ...(this.options.tickets!.screenAndHold ? { screened: true } : {}) });
     this.answered.set(issue.key, issue.updated);
   }
 
+  /**
+   * The safety screen, before the classifier or anything else reads the issue's text: an issue that is not safe has a held ticket row and goes no further (no brief, no comment, no card).
+   * Without a ticket machine (it is the one that keeps the row) nothing is screened here. A held issue is remembered by `updated` like an answered one, so an edit reads it again; one held only
+   * because the screen could not answer is not remembered, and the next poll tries again.
+   */
+  private async held(issue: JiraIssue, repoPath: string): Promise<boolean> {
+    const out = await this.options.tickets?.screenAndHold?.(canonicalTicketOf({ tool: "jira", issue }), { repoPath });
+    if (!out?.held) return false;
+    if (!out.failed) this.answered.set(issue.key, issue.updated);
+    this.log(`jira intake: ${issue.key} held by the safety screen`);
+    return true;
+  }
+
   private async consider(issue: JiraIssue, repoPath: string, comments: "none" | "milestones" | "gates"): Promise<void> {
+    if (await this.held(issue, repoPath)) return;
     const classification = (await this.options.classifier?.classify(issueContext(issue))) ?? null;
     if (await this.requested(issue, classification)) {
       // A questionnaire is not agent work: it lives in the Compliance view, not on the board.

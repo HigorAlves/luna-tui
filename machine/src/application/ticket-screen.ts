@@ -21,6 +21,16 @@ export interface TicketScreen {
 /** What the screen reads of a ticket: its text as the tool sent it. */
 export const rawOf = (ticket: CanonicalTicket): RawTicket => ({ title: ticket.title, description: ticket.description, comments: ticket.comments.map((c) => c.text) });
 
+/**
+ * Text that is not a tracker's ticket (a Slack message, the ticket of a `POST /runs`) in the shape the screen reads. Only the words are read: the `tool` is a placeholder and carries no meaning.
+ */
+export function ticketOfText(text: { key: string; title: string; description: string; comments?: Array<{ author: string; text: string }> }): CanonicalTicket {
+  return {
+    tool: "github", id: text.key, key: text.key, title: text.title, description: text.description, type: null, status: null, priority: null, reporter: null, assignee: null, labels: [], components: [],
+    links: { blocks: [], duplicates: [], epic: null }, comments: (text.comments ?? []).map((c) => ({ author: c.author, text: c.text, at: null })), attachments: [], sprint: null, dueAt: null, createdAt: null, updatedAt: null, permalink: "",
+  };
+}
+
 const empty = { linked: [], epic: null, recent: [], files: [], shortlist: [] };
 
 /** An answer holds every question as a yes/no with a probability; anything else is no answer (a missing one would read as a no). */

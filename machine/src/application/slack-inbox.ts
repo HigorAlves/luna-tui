@@ -67,6 +67,8 @@ import { type ChannelInfo, type Conversation, type RawMessage, type Slack, type 
 import type { SlackStore } from "./slack-store.ts";
 import { type TriageItem, TriageRunError, type Triager } from "./slack-triage.ts";
 import { Ticker } from "./ticker.ts";
+import { type TicketScreen, ticketOfText } from "./ticket-screen.ts";
+import { HeldSafetyError } from "./ticket-machine.ts";
 
 /** What the HTTP routes need from the inbox; the real class and a test fake both fit. */
 export interface SlackInboxPort {
@@ -142,6 +144,8 @@ export interface SlackInboxOptions {
   /** The PR inbox's view of a PR named in a message, if it is in there. */
   linkPr: (refs: { repo: string; number: number }[]) => SlackItem["linked"]["pr"];
   createTask: (input: NewTask) => Promise<TaskRow>;
+  /** The ticket safety screen (RFC 0012), run on a message's text before a person's tap makes a card of it. Absent, nothing is screened. */
+  screen?: TicketScreen;
   /** `MACHINE_SLACK_MARK_READ=on`: done also moves your read cursor in Slack. */
   markRead: boolean;
   rulesPath: string;
@@ -1220,6 +1224,13 @@ export class SlackInbox implements SlackInboxPort {
   async toTask(id: string, input: SlackTaskInput, _tap: Tap): Promise<TaskRow> {
     const row = await this.get(id);
     if (row.linked.taskId && (await this.options.findTask(row.linked.taskId))) throw new AlreadyTaskError(id, row.linked.taskId);
+    // The safety screen reads the message (and the thread the card would carry) before a card is made of it. Slack has no ticket row to hold: a hold makes no card and the tap is answered
+    // with fixed words, never model text. The text is screened whole even where the card would carry none of it (a private conversation): the screen is the stricter reading.
+    // Out of this screen, by design: `slack_triage` and the conversation packs read Slack text before any tap; RFC 0012 covers what becomes a card, not what is read to rank a message.
+    if (this.options.screen) {
+      const screened = await this.options.screen.screen(ticketOfText({ key: `slack:${row.channel.id}:${row.slackTs}`, title: firstLine(row.text), description: [...row.context.map((m) => m.text), row.text].join("\n") }), null);
+      if (screened.verdict !== "safe") throw new HeldSafetyError(row.id, "held: the message may carry instructions for the agent");
+    }
     const where = row.channel.kind === "dm" ? `DM with @${row.channel.name}` : `#${row.channel.name}`;
     // A conversation the machine classified, or a private one, becomes a card from `candidateOf`: the thread masked and capped, and for a private one no text at all.
     // The card is made here and nowhere else: a relation's action never calls `createTask`.

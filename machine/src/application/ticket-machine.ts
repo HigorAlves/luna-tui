@@ -26,7 +26,12 @@ import type { TicketRow, TicketStore, Tickets } from "./tickets.ts";
 
 /** What the intakes hand a ticket to. */
 export interface TicketIntake {
-  ingest(ticket: CanonicalTicket, ctx: { repoPath: string | null; question: boolean; force?: boolean; released?: boolean }): Promise<unknown>;
+  ingest(ticket: CanonicalTicket, ctx: { repoPath: string | null; question: boolean; force?: boolean; released?: boolean; screened?: boolean }): Promise<unknown>;
+  /**
+   * The safety screen alone, for an intake that reads a ticket's text before it ingests it (the classifier does): a ticket that is not safe is held (a ticket row, status `held_safety`)
+   * and `held` is true; `failed` says the screen could not answer, so the intake tries again on its next poll. Absent, or no screen wired, nothing is screened here.
+   */
+  screenAndHold?(ticket: CanonicalTicket, ctx: { repoPath: string | null }): Promise<{ held: boolean; failed?: boolean }>;
 }
 
 export class TicketNotFound extends Error {
@@ -46,8 +51,9 @@ export class TicketRefusal extends Error {
 
 /** The machine will not do this for a ticket the safety screen holds: a person releases or archives it first. */
 export class HeldSafetyError extends TicketRefusal {
-  constructor(key: string) {
-    super(`${key.slice(0, 80)} is held by the safety screen: release or archive it first`);
+  /** `message` is for a source with no ticket row to release (a Slack message): fixed words, never model text. */
+  constructor(key: string, message?: string) {
+    super(message ?? `${key.slice(0, 80)} is held by the safety screen: release or archive it first`);
     this.name = "HeldSafetyError";
   }
 }
@@ -166,8 +172,33 @@ export class TicketMachine implements TicketIntake {
     }
   }
 
+  /** Screens a ticket and holds it when it is not safe: its row gets `held_safety`, the unposted drafts go, nothing is written to the tracker. */
+  private async screenHold(ticket: CanonicalTicket, repoPath: string | null, at: Date): Promise<{ held: boolean; hash: string; failed: boolean }> {
+    const { store } = this.deps;
+    const screened = await this.deps.screen!.screen(ticket, repoPath);
+    if (screened.verdict === "safe") return { held: false, hash: screened.hash, failed: false };
+    await store.read(ticket);
+    await store.appendAssessment(ticket.key, { at: at.toISOString(), outcome: "held_safety", verdict: screened.verdict, reasons: screened.reasons, hash: screened.hash, ...(screened.recordId ? { recordId: screened.recordId } : {}) });
+    await store.updateDrafts(ticket.key, (current) => (current as unknown as Draft[]).filter((d) => d.status === "posting" || d.status === "posted") as unknown as Record<string, unknown>[]);
+    const kept = ((await store.get(ticket.key))?.machineLinks ?? []).filter((l) => l.kind !== "repo");
+    await store.setMachine(ticket.key, { status: "held_safety", ...(repoPath ? { links: [...kept, { kind: "repo", target: repoPath }] } : {}) });
+    return { held: true, hash: screened.hash, failed: (screened.reasons as string[]).includes("screen_failed") };
+  }
+
+  /**
+   * The safety screen on its own, before validity: for an intake that must keep a ticket's text from its classifier. A ticket whose text is the one the screen last read (and was not held for a failure)
+   * is not screened again: its row says what became of it. Without a screen nothing is held.
+   */
+  async screenAndHold(ticket: CanonicalTicket, ctx: { repoPath: string | null }): Promise<{ held: boolean; failed?: boolean }> {
+    if (!this.deps.screen) return { held: false };
+    const prev = await this.deps.store.get(ticket.key);
+    if (prev?.machineStatus && screenHashOf(prev) === contentHash(rawOf(ticket)) && !screenFailedOn(prev)) return { held: prev.machineStatus === "held_safety" };
+    const out = await this.screenHold(ticket, ctx.repoPath, this.now());
+    return { held: out.held, ...(out.failed ? { failed: true } : {}) };
+  }
+
   /** Reads a ticket and holds its drafts. Writes nothing to the tracker and makes no card. */
-  async ingest(ticket: CanonicalTicket, ctx: { repoPath: string | null; question: boolean; force?: boolean; released?: boolean }): Promise<void> {
+  async ingest(ticket: CanonicalTicket, ctx: { repoPath: string | null; question: boolean; force?: boolean; released?: boolean; screened?: boolean }): Promise<void> {
     const { store } = this.deps;
     const prev = await store.get(ticket.key);
     // Unchanged is the same `updatedAt` AND (with a screen) the same text: GitHub tickets carry no `updatedAt`, so the hash is what sees an edit. A held `screen_failed` is tried again.
@@ -178,18 +209,12 @@ export class TicketMachine implements TicketIntake {
     // The acknowledge clock starts when the machine first saw the ticket, on the machine's own clock (the row's `createdAt` is the database's).
     if (!prev) await this.mergeClocks(ticket.key, { firstSeenAt: at.toISOString() });
     // The safety screen reads the ticket before anything else does: a ticket that is not safe is held, with nothing drafted, posted or carded.
-    // A released ticket was read by a person: the hash of its text is kept all the same, so the next unchanged ingest does not hold it again.
-    let screenHash: string | null = this.deps.screen && ctx.released ? contentHash(rawOf(ticket)) : null;
-    if (this.deps.screen && !ctx.released) {
-      const screened = await this.deps.screen.screen(ticket, ctx.repoPath);
+    // A released ticket was read by a person, and a `screened` one was read by the intake a moment ago: the hash of its text is kept all the same, so the next unchanged ingest does not hold it again.
+    let screenHash: string | null = this.deps.screen && (ctx.released || ctx.screened) ? contentHash(rawOf(ticket)) : null;
+    if (this.deps.screen && !ctx.released && !ctx.screened) {
+      const screened = await this.screenHold(ticket, ctx.repoPath, at);
       screenHash = screened.hash;
-      if (screened.verdict !== "safe") {
-        await store.appendAssessment(ticket.key, { at: at.toISOString(), outcome: "held_safety", verdict: screened.verdict, reasons: screened.reasons, hash: screened.hash, ...(screened.recordId ? { recordId: screened.recordId } : {}) });
-        await store.updateDrafts(ticket.key, (current) => (current as unknown as Draft[]).filter((d) => d.status === "posting" || d.status === "posted") as unknown as Record<string, unknown>[]);
-        const kept = ((await store.get(ticket.key))?.machineLinks ?? []).filter((l) => l.kind !== "repo");
-        await store.setMachine(ticket.key, { status: "held_safety", ...(ctx.repoPath ? { links: [...kept, { kind: "repo", target: ctx.repoPath }] } : {}) });
-        return;
-      }
+      if (screened.held) return;
     }
     let refused: string | null = null;
     const done = async (status: string, assessment: Record<string, unknown>, drafts: Draft[]) => {

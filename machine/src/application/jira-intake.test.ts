@@ -10,6 +10,7 @@ import type { JiraIssue } from "./jira.ts";
 import { JiraIntake, briefComment, reposUnder } from "./jira-intake.ts";
 import { Pipeline } from "./pipeline.ts";
 import { StubStages } from "./stages/stubs.ts";
+import { holding, screeningMachine } from "../test/screening-machine.ts";
 
 let db: DataSource;
 beforeAll(async () => {
@@ -32,7 +33,7 @@ const verdicts: Record<string, JiraIntakeAnswer> = {
 
 const classified = (kind: string, confidence = 0.9): TaskClassification => ({ kind, area: "machine", ready: kind !== "question", size: 1, confidence, at: "2026-10-28T12:00:00.000Z", model: "typesafe-ai/jev" });
 
-function wire(over: { questionnaires?: { fromJira: (issue: JiraIssue) => Promise<unknown> }; tickets?: { ingest: (...args: never[]) => Promise<unknown> }; triager?: boolean; comments?: JiraPolicy["comments"]; classify?: (issue: IssueContext) => TaskClassification | null | Promise<TaskClassification | null> } = {}) {
+function wire(over: { questionnaires?: { fromJira: (issue: JiraIssue) => Promise<unknown> }; tickets?: { ingest: (...args: never[]) => Promise<unknown>; screenAndHold?: (...args: never[]) => Promise<unknown> }; auto?: boolean; triager?: boolean; comments?: JiraPolicy["comments"]; classify?: (issue: IssueContext) => TaskClassification | null | Promise<TaskClassification | null> } = {}) {
   const jira = fakeJira({
     issues: [
       { key: "PLAT-1", summary: "Login page", description: "Users sign in.\n\n- [ ] bad password errors", issueType: "Story" },
@@ -53,7 +54,7 @@ function wire(over: { questionnaires?: { fromJira: (issue: JiraIssue) => Promise
   const intake = new JiraIntake({
     pipeline,
     jira,
-    policies: { for: async () => ({ ...DEFAULT_POLICY, jira: { ...policy, comments: over.comments ?? "milestones" } }) },
+    policies: { for: async () => ({ ...DEFAULT_POLICY, ...(over.auto ? { factory: { ...DEFAULT_POLICY.factory, tickets: { ...DEFAULT_POLICY.factory.tickets, auto: "on" as const } } } : {}), jira: { ...policy, comments: over.comments ?? "milestones" } }) },
     repos: async () => ["/r/a", "/r/a"],
     triager,
     ...(classifier ? { classifier } : {}),
@@ -239,5 +240,62 @@ describe("JiraIntake", () => {
     expect(repos).toEqual(["/Users/me/Developer/a", "/Users/me/Developer/c"]);
     expect(await reposUnder("/nope", { readdir: async () => { throw new Error("ENOENT"); }, exists: () => true })).toEqual([]);
     expect(briefComment({ verdict: "needs_brief", reason: "the issue names a service this repo does not have" })).toContain("- the issue names a service this repo does not have");
+  });
+});
+
+describe("JiraIntake with the safety screen", () => {
+  beforeEach(async () => {
+    await db.query("truncate tickets");
+  });
+
+  it("hold(): screens before the classifier reads the issue; a held issue has a held_safety row, no ticket work, no card", async () => {
+    const { screen } = holding("suspicious");
+    const { machine, store } = screeningMachine(db, screen);
+    const { intake, read, triaged, pipeline } = wire({ tickets: machine as never, classify: () => classified("feature") });
+    await intake.tick();
+    expect(read).toEqual([]);
+    expect(triaged).toEqual([]);
+    expect(await pipeline.list()).toEqual([]);
+    expect((await store.get("PLAT-1"))!.machineStatus).toBe("held_safety");
+    expect((await store.get("PLAT-3"))!.assessments[0]).toMatchObject({ outcome: "held_safety" });
+  });
+
+  it("consider(): screens before the classifier and the jira_intake triager; no card, no comment on the issue", async () => {
+    const { screen } = holding("unsafe", ["seeks_secrets"]);
+    const { machine, store } = screeningMachine(db, screen);
+    const { intake, read, triaged, pipeline, jira } = wire({ tickets: machine as never, auto: true, classify: () => classified("feature") });
+    await intake.tick();
+    expect(read).toEqual([]);
+    expect(triaged).toEqual([]);
+    expect(await pipeline.list()).toEqual([]);
+    expect(jira.comments["PLAT-1"]).toBeUndefined();
+    expect((await store.get("PLAT-1"))!.machineStatus).toBe("held_safety");
+  });
+
+  it("a held issue is not screened again while unchanged, but a held screen_failed one is retried on the next poll", async () => {
+    const held = holding("suspicious");
+    await wire({ tickets: screeningMachine(db, held.screen).machine as never }).intake.tick();
+    const first = held.calls.length;
+    const again = wire({ tickets: screeningMachine(db, held.screen).machine as never });
+    await again.intake.tick();
+    await again.intake.pollRepo("/r/a", "project = PLAT");
+    await db.query("truncate tickets");
+    const failed = holding("suspicious", ["screen_failed"]);
+    const w = wire({ tickets: screeningMachine(db, failed.screen).machine as never });
+    await w.intake.tick();
+    const afterOne = failed.calls.length;
+    await w.intake.pollRepo("/r/a", "project = PLAT");
+    expect(failed.calls.length).toBe(afterOne * 2);
+    expect(first).toBeGreaterThan(0);
+  });
+
+  it("a safe issue behaves as before: classified, triaged, a card", async () => {
+    const screened: string[] = [];
+    const tickets = { screenAndHold: async (t: { key: string }) => (screened.push(t.key), { held: false }), ingest: async () => undefined };
+    const { intake, triaged, pipeline } = wire({ tickets, auto: true, classify: () => classified("feature") });
+    await intake.tick();
+    expect(screened).toEqual(["PLAT-1", "PLAT-2", "PLAT-3"]);
+    expect(triaged).toEqual(["PLAT-1", "PLAT-2", "PLAT-3"]);
+    expect(await pipeline.list()).toHaveLength(1);
   });
 });

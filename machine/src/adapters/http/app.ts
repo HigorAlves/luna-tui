@@ -59,7 +59,7 @@ import {
 } from "@hardness/contracts";
 import type { MachinePolicy } from "@hardness/contracts";
 import { EconomyApproveInput, type EconomyConfig, EconomyRepoInput, EconomyRestoreInput } from "@hardness/contracts";
-import { ForemanAnswer, type ForemanSuggestion, ForemanContext, foremanActionProblem, isTerminal } from "@hardness/contracts";
+import { ForemanAnswer, type ForemanSuggestion, ForemanContext, TicketContext, foremanActionProblem, isTerminal } from "@hardness/contracts";
 import { buildForemanBoard } from "../../domain/foreman.ts";
 import { basename, isAbsolute, resolve as resolvePath } from "node:path";
 import { type Context, Hono } from "hono";
@@ -75,7 +75,8 @@ import type { Questionnaires } from "../../application/questionnaires.ts";
 import type { Vulns } from "../../application/vulns.ts";
 import type { ReleaseNotes } from "../../application/release-notes.ts";
 import { type ComplianceDrafts, type CompliancePublisher, DraftNeedsRepoError, DraftNotFoundError, DraftRefusedError, DraftStatusError, StaleDraftError } from "../../application/compliance-drafts.ts";
-import { type TicketMachine, TicketNotFound, TicketRefusal } from "../../application/ticket-machine.ts";
+import { type TicketScreen, ticketOfText } from "../../application/ticket-screen.ts";
+import { HeldSafetyError, type TicketMachine, TicketNotFound, TicketRefusal } from "../../application/ticket-machine.ts";
 import { streamSSE } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { DataSource } from "typeorm";
@@ -170,6 +171,8 @@ export interface AppDeps {
   access?: ApiAccess;
   /** Packs on demand (`POST /runs`); without it (MACHINE_AGENTS=off) the route answers 503 `agents_off`. */
   runs?: PackRunsPort;
+  /** The ticket safety screen: a `POST /runs` that carries a `ticket` (and is not the `ticket_safety` pack) is screened first. Absent, nothing is screened. */
+  screen?: TicketScreen;
   /** Proofs of a repository's own luna.yaml for the setup skill; without it (no sandbox) `POST /repos/config/prove` answers 503. */
   configProofs?: ConfigProofs;
   /** The repo's own run signals for `POST /repos/proposals`; defaults to none, so no proposal is made until an adapter backs it. */
@@ -245,7 +248,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, compliance, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], clock = () => new Date(), problems: problemsOf, sandboxPolicy }: AppDeps): Hono {
+export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, compliance, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, screen, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], clock = () => new Date(), problems: problemsOf, sandboxPolicy }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -266,6 +269,8 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     if (error instanceof DraftRefusedError) return fail(c, 422, "secret", error.message);
     if (error instanceof DraftNeedsRepoError) return fail(c, 422, "needs_repository", error.message);
     if (error instanceof TicketNotFound) return fail(c, 404, "not_found", error.message);
+    // A refusal that is a safety hold keeps its own code: it is a subclass of `TicketRefusal`, so it is asked first.
+    if (error instanceof HeldSafetyError) return fail(c, 409, "held_safety", error.message);
     if (error instanceof TicketRefusal) return fail(c, 409, "ticket_refused", error.message);
     if (error instanceof BacklogItemNotFoundError) return fail(c, 404, "not_found", error.message);
     if (error instanceof NotSchedulableError) return fail(c, 409, "not_schedulable", error.message, { blockedBy: error.blockedBy });
@@ -359,6 +364,13 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     const client = c.req.header("x-luna-client") ?? null;
     if (client !== null && !CLIENT_NAME.test(client)) throw new BadRequest("X-Luna-Client must be 1 to 64 letters, digits, dots, dashes or underscores");
     if (!runs) return fail(c, 503, "agents_off", "this machine runs no packs: agents are off (MACHINE_AGENTS=off)");
+    // A ticket in the context is a stranger's text headed for a pack: it is screened first, and a hold answers 409 `held_safety` without running the pack. The screen's own pack is not screened. A ticket that does not parse is not screened: the run itself refuses a context its pack cannot read.
+    const ticket = input.pack === "ticket_safety" || !screen ? null : TicketContext.safeParse(input.context.ticket);
+    if (ticket?.success) {
+      const read = ticket.data;
+      const screened = await screen!.screen(ticketOfText({ key: read.key, title: read.title, description: read.description, comments: read.comments }), null);
+      if (screened.verdict !== "safe") throw new HeldSafetyError(read.key);
+    }
     // The request's own signal: a client that leaves is dropped from the queue, or its container stopped.
     return c.json(await runs.run(input, client, c.req.raw.signal));
   });

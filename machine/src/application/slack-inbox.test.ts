@@ -11,6 +11,7 @@ import { ChannelClaims } from "./channel-claims.ts";
 import { ConversationActions } from "./conversation-actions.ts";
 import { ConversationDrafts, draftHash, MemoryDraftStore } from "./conversation-drafts.ts";
 import type { Assessed } from "./conversation-machine.ts";
+import { HeldSafetyError } from "./ticket-machine.ts";
 import { AlreadyTaskError, BadRelationError, BuiltinWatchError, NoItemError, SlackInbox, SlackRefusedError } from "./slack-inbox.ts";
 import { NoSlackTokenError, type RawMessage, type SearchHit, noTokenSlack } from "./slack.ts";
 import type { TriageAnswer, TriageItem, Triager } from "./slack-triage.ts";
@@ -30,6 +31,7 @@ const USERS: Record<string, { name: string; isBot: boolean }> = { U1: { name: "h
 const CHANNELS: Record<string, { name: string; kind: "channel" | "group" | "dm" | "mpim" }> = { C1: { name: "eng", kind: "channel" }, C9: { name: "payments-oncall", kind: "channel" }, CR: { name: "random", kind: "channel" }, D1: { name: "U2", kind: "dm" }, G1: { name: "secret", kind: "group" } };
 
 interface World {
+  screen?: import("./ticket-screen.ts").TicketScreen;
   hits?: SearchHit[];
   history?: Record<string, RawMessage[]>;
   replies?: Record<string, RawMessage[]>;
@@ -131,6 +133,7 @@ function setup(world: World = {}) {
     markRead: world.markRead ?? false,
     scope: world.scope ?? "all",
     ...(world.claimed || world.conv ? { claims: stubClaims(world.claimed ?? {}, world.conv) } : {}),
+    ...(world.screen ? { screen: world.screen } : {}),
     ...(world.assessor ? { assessor: world.assessor } : {}),
     ...(world.onTriaged ? { onTriaged: world.onTriaged } : {}),
     ...(world.actions ? { actions: world.actions } : {}),
@@ -960,6 +963,25 @@ describe("SlackInbox actions", () => {
     const titled = await seeded();
     await titled.inbox.toTask(titled.item.id, { title: "Approve the thing" }, TAP);
     expect(titled.created[0]).toMatchObject({ title: "Approve the thing", repoPath: null });
+  });
+
+  it("toTask screens the message first: a hold creates no task and the tap is answered with the fixed words, never model text", async () => {
+    const seen: string[] = [];
+    const screen = { screen: async (t: { description: string }) => (seen.push(t.description), { verdict: "suspicious" as const, reasons: ["addresses_agent" as const], hash: "h" }) };
+    const { inbox, item, created } = await seeded({ screen });
+    const error = await inbox.toTask(item.id, {}, TAP).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(HeldSafetyError);
+    expect((error as Error).message).toBe("held: the message may carry instructions for the agent");
+    expect(created).toEqual([]);
+    expect(seen[0]).toContain("can you approve?");
+    expect(inbox.snapshot.items[0]!.linked.taskId).toBeNull();
+  });
+
+  it("toTask with a screen that passes the message makes the task as before", async () => {
+    const screen = { screen: async () => ({ verdict: "safe" as const, reasons: [], hash: "h" }) };
+    const { inbox, item, created } = await seeded({ screen });
+    await inbox.toTask(item.id, {}, TAP);
+    expect(created).toHaveLength(1);
   });
 
   it("toTask on a row stored before this wave: a DM's text never enters the card, a public channel's personal data is masked", async () => {

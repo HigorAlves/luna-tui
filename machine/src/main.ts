@@ -640,6 +640,8 @@ const slackInbox = new SlackInbox({
   store: slackStore,
   intervalMs: config.slackInbox.intervalMs,
   publish: (snapshot) => bus.publish({ type: "slack.items", snapshot }),
+  // A person's tap that makes a card of a message is screened first (the screen is built below, and read at call time).
+  screen: { screen: (ticket, repoPath) => ticketScreen.screen(ticket, repoPath) },
   findTask: (id) => pipeline.get(id).catch(() => null),
   linkPr: (refs) => {
     for (const ref of refs) {
@@ -800,6 +802,9 @@ const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira
 /** The shared backlog; the duplicate check reads and bumps it through the pipeline's `dedup` port. */
 const backlog = new Backlog({ store: new PgBacklogStore(db), pipeline, staleDays: FACTORY_DEFAULTS.backlog.stale_days, onDecline: (row) => ticketMachine.declineFromBacklog(row.sources), stackOf: (sources) => ticketMachine.stackOfSources(sources) });
 /** The Ticket Machine: Jira and GitHub tickets in scope are read, checked, assessed and drafted, then held for a person's tap. Every model call is a pack through `packRuns`; the port's writes are reached only from the tap routes. */
+// Where the screen runs (RFC 0012): the GitHub and Jira intakes (before their classifiers), the Slack tap that makes a card, and `POST /runs` with a `ticket`; `sourceHeld` on the pipeline is the second line for
+// a card made from a ticket the screen holds (the backlog's promote reaches it through `createTask`). Cards with NO screen coverage, by design: PR tasks (`pr-tasks.ts`), vulnerability cards (`vulns.ts`),
+// breach cards (`breach-card.ts`), the pipeline's own internal `createTask` calls, `POST /tasks`, and Luna Notch's sources. `slack_triage` and the conversation packs also read Slack text before any tap.
 const ticketScreen = createTicketScreen({
   decide: async (context, _repoPath) => {
     if (!packRuns) throw new Error("agents are off: the ticket machine has no model to ask");
@@ -1040,6 +1045,7 @@ const app = createApp({
   bus,
   backlog,
   tickets: ticketMachine,
+  screen: ticketScreen,
   compliance,
   watcher,
   stubs,

@@ -9,6 +9,7 @@ import { cardOf } from "../domain/card-fields.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import { Backlog } from "./backlog.ts";
 import { Pipeline } from "./pipeline.ts";
+import { HeldSafetyError } from "./ticket-machine.ts";
 import { StubStages } from "./stages/stubs.ts";
 
 let db: DataSource;
@@ -85,6 +86,17 @@ describe("the backlog routes", () => {
     const b = await add("Plain");
     await new Backlog({ store: new PgBacklogStore(db), pipeline: wrapped as never, staleDays: 14, stackOf: async () => ({}) }).promote(b.body.id);
     expect(made[1].stack).toBeUndefined();
+  });
+
+  it("promote of an item whose ticket the safety screen holds is refused with held_safety, makes no card and puts the item back", async () => {
+    const held = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, sourceHeld: async (s) => s?.kind === "github" });
+    const heldBacklog = new Backlog({ store: new PgBacklogStore(db), pipeline: held, staleDays: 14 });
+    const a = await add("Held one", { sources: [{ kind: "github", repo: "o/a", number: 3, url: "https://github.com/o/a/issues/3" }] });
+    await expect(heldBacklog.promote(a.body.id)).rejects.toBeInstanceOf(HeldSafetyError);
+    expect(await pipeline.list()).toEqual([]);
+    const items = (await call("GET", "/backlog")).body;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ title: "Held one", sources: [{ kind: "github", number: 3 }] });
   });
 
   it("two promotes of one item at once make one card", async () => {
