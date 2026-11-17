@@ -13,6 +13,8 @@ export interface BrainPrecedentsDeps {
   brain: Brain;
   /** `brain.precedents` of the repository's luna.yaml: the packs that get them. May throw when the file cannot be read. */
   packsOf: (repoPath: string) => Promise<string[]>;
+  /** The machine's `repoSlug()`: a precedent is a card of the same repository, `repo:<slug>`, never another's. */
+  repoSlug: (repoPath: string) => string;
   log?: (line: string) => void;
 }
 
@@ -24,7 +26,9 @@ export function brainPrecedents(deps: BrainPrecedentsDeps): PrecedentLookup {
     if (!deps.brain.enabled || !repoPath) return [];
     try {
       if (!(await deps.packsOf(repoPath)).includes(pack)) return [];
-      const { rows } = await deps.brain.query("precedents", { pack, q: title });
+      const slug = deps.repoSlug(repoPath);
+      if (!slug) return [];
+      const { rows } = await deps.brain.query("precedents", { pack, q: title, repo: `repo:${slug}` });
       const found: Precedent[] = [];
       for (const row of rows) {
         // The card being decided is already in the graph once it has verdicts: they are not precedents for itself.

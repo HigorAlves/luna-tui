@@ -95,7 +95,7 @@ import { brainProjector, projectAfterClose } from "./application/brain-projector
 import { brainSources } from "./application/brain-sources.ts";
 import { type BrainQueryAnswerer, brainQueryAnswerer } from "./application/brain-query.ts";
 import { admission as brainAdmission } from "./application/brain-admission.ts";
-import { retroClaims as handClaims } from "./application/brain-retro.ts";
+import { retroClaims as handClaims, speakerTrustOf } from "./application/brain-retro.ts";
 import { PgClaimStore } from "./adapters/persistence/brain-claim-store.ts";
 import { brainJournal } from "./adapters/fs/brain-state.ts";
 import { brainAtBoot } from "./adapters/omnigraph/boot.ts";
@@ -696,7 +696,7 @@ const slackInbox = new SlackInbox({
     docs: (repo, text) => repoDocs(repo, text),
     // What the brain holds about the thread: only for a repository with `brain.tell: on` (RFC 0010).
     // `brain` is bound below, so it is read when a draft is made, never before.
-    brain: (repo, text) => conversationBrain({ brain, tells: async (r) => (await policies.for(r)).factory.brain.tell === "on" })(text, repo),
+    brain: (repo, text) => conversationBrain({ brain, repoSlug: graphRepoSlug, tells: async (r) => (await policies.for(r)).factory.brain.tell === "on" })(text, repo),
     tone: (channel, isPrivate) => conversationDrafts.recentEdits(channel, isPrivate),
     run: async (context) => {
       if (!packRuns) throw new Error("agents are off: no model to draft the reply");
@@ -779,7 +779,7 @@ const packRuns = buildPackRuns(config, {
   // Opt-in per repository and pack (`brain.precedents`): a decision pack's earlier answers on cards like this one. An on-demand call knows its card, not its repository, so the card's is read here.
   precedents: async (pack, title, repoPath, taskId) => {
     const repo = repoPath ?? (taskId ? ((await pipeline.get(taskId).catch(() => null))?.repoPath ?? null) : null);
-    return brainPrecedents({ brain, packsOf: async (r) => (await policies.for(r)).factory.brain.precedents, log: (line) => console.warn(line) })(pack, title, repo, taskId);
+    return brainPrecedents({ brain, repoSlug: graphRepoSlug, packsOf: async (r) => (await policies.for(r)).factory.brain.precedents, log: (line) => console.warn(line) })(pack, title, repo, taskId);
   },
   // A usage limit moves a call to a fallback engine, never to one whose window the pipeline holds.
   latched: () => pipeline.slots.latched.map((latch) => latch.owner),
@@ -1061,8 +1061,8 @@ const admission = brainAdmission({
   log: (line) => console.warn(line),
 });
 // A repository's luna.yaml says whether its runs may read the brain (`brain.tell`, off by default); a file that cannot be read says no.
-brainQuery.answer = brainQueryAnswerer({ brain, tell: async (repoPath) => (await policies.for(repoPath)).factory.brain.tell === "on" });
-retroClaims.hand = handClaims(admission, (line) => console.warn(line));
+brainQuery.answer = brainQueryAnswerer({ brain, tell: async (repoPath) => (await policies.for(repoPath)).factory.brain.tell === "on", repoSlug: graphRepoSlug });
+retroClaims.hand = handClaims(admission, (line) => console.warn(line), async (task) => speakerTrustOf(task));
 const projector = trackProjector(
   brainProjector({
     brain,

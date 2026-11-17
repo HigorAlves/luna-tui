@@ -232,3 +232,34 @@ describe("brainEvidence compliance", () => {
     expect((await brainEvidence(brain, "q")).map((r) => r.kind)).toEqual(["control"]);
   });
 });
+
+describe("brainEvidence for one repository", () => {
+  const repo = "repo:mine";
+
+  it("asks the repository's own searches, never the global ones, nor incidents, controls or answers", async () => {
+    const { brain, asked } = fake({});
+    await brainEvidence(brain, "what went wrong with PLAT-1?", { repo });
+    expect(asked).toEqual([
+      { name: "search_cards_in_repo", params: { repo, q: "what went wrong with PLAT-1?" } },
+      { name: "search_components", params: { q: "what went wrong with PLAT-1?" } },
+      { name: "search_learnings_in_repo", params: { repo, q: "what went wrong with PLAT-1?" } },
+      { name: "search_principles", params: { q: "what went wrong with PLAT-1?" } },
+    ]);
+  });
+
+  it("keeps the principles and components of that repository and drops the others", async () => {
+    const { brain } = fake({
+      search_principles: [
+        { principle: "principle:a", statement: "Mine", section: "s", repo },
+        { principle: "principle:b", statement: "Theirs", section: "s", repo: "repo:other" },
+      ],
+      search_components: [
+        { component: "component:mine/board", name: "board" },
+        { component: "component:other/board", name: "board" },
+      ],
+    });
+    const rows = await brainEvidence(brain, "board", { repo });
+    expect(rows.map((r) => r.slug)).toEqual(["principle:a", "component:mine/board"]);
+  });
+});
+

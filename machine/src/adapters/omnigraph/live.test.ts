@@ -24,7 +24,7 @@ describe.skipIf(!process.env.BRAIN_LIVE_URL)("omnigraph, live", () => {
 
   const rows: BrainRow[] = [
     // listed out of order on purpose: the batches put a node after what its edges point at
-    ...prRows({ repo: `acme/${id}`, number: 7, title: "Wire the egress proxy", state: "merged", url: "https://example.test/pr/7", mergedAt: at, author: "Octo-Cat" }, id),
+    ...prRows({ repo: `acme/${id}`, number: 7, title: "Wire the egress proxy", state: "merged", url: "https://example.test/pr/7", mergedAt: at, author: "Octo-Cat", opened: true }, id),
     brainNode("Card", { slug: card, title: `Sandbox egress proxy ${id}`, state: "closed", route: "feature", size: "M", risk: "low", est_loc: 300, actual_loc: 412, retries: 2, escalations: 0, opened_at: at, closed_at: at }),
     brainEdge("CardInRepo", card, `repo:${id}`),
     brainEdge("CardForTicket", card, `ticket:jira/${id}-1`),
@@ -74,6 +74,7 @@ describe.skipIf(!process.env.BRAIN_LIVE_URL)("omnigraph, live", () => {
     const params: Record<string, Record<string, string>> = {
       card_lookup: { card },
       search_cards: { q: `egress ${id}` },
+      search_cards_in_repo: { repo: `repo:${id}`, q: `egress ${id}` },
       cards_in_repo: { repo: `repo:${id}` },
       cards_touching: { component: `component:${id}/Stage-Runner` },
       prs_for_card: { card },
@@ -82,6 +83,7 @@ describe.skipIf(!process.env.BRAIN_LIVE_URL)("omnigraph, live", () => {
       cards_for_ticket: { ticket: `ticket:jira/${id}-1` },
       search_components: { q: "stage runner" },
       search_learnings: { q: `board lint ${id}` },
+      search_learnings_in_repo: { repo: `repo:${id}`, q: `board lint ${id}` },
       learnings_of_repo: { repo: `repo:${id}` },
       claims_of_learning: { learning: `learning:${id}` },
       principles_of_repo: { repo: `repo:${id}` },
@@ -118,8 +120,12 @@ describe.skipIf(!process.env.BRAIN_LIVE_URL)("omnigraph, live", () => {
     // a retired rule is in the graph and no agent reads it
     expect((await agentQuery(brain, "principles_of_repo", { repo: `repo:${id}` })).rows.map((row) => row.principle)).toEqual([`principle:${id}/a1`]);
     // a pack's own past answers on cards like this one, with what really happened
-    const precedents = (await brain.query("precedents", { pack: `risk_score_${id}`, q: `egress proxy ${id}` })).rows;
+    const precedents = (await brain.query("precedents", { pack: `risk_score_${id}`, q: `egress proxy ${id}`, repo: `repo:${id}` })).rows;
     expect(precedents[0]).toMatchObject({ card, question: "risk", answer: "1", truth: "2", truth_source: "outcome" });
+    // ...and only on cards of that repository
+    expect((await brain.query("precedents", { pack: `risk_score_${id}`, q: `egress proxy ${id}`, repo: `repo:other-${id}` })).rows).toEqual([]);
+    // the machine's own check of which repository a card is in
+    expect((await brain.query("card_repo", { card })).rows).toEqual([{ repo: `repo:${id}` }]);
     // an agent may not run the machine's own queries
     expect((await agentQuery(brain, "similar_claims", { q: "lint" })).note).toMatch(/not a query an agent may run/);
   });

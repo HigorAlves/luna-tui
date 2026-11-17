@@ -106,20 +106,28 @@ function pageText(title: BrainValue | undefined, label: string, row: Row): strin
 /**
  * The rows that answer a question, in the order the pack should weigh them: lessons, then principles, then incidents, control pages and answers, then cards, then their pull requests, then their verdicts,
  * then the components that matched. Never throws: a query that fails, or a brain that is off, adds nothing.
+ * With `options.repo` (a `repo:<slug>`) it reads that one repository: for a question that does not come from the owner, whose words may steer the search.
+ * Cards and lessons come from the repository's own searches, principles and components are kept only when they are its own, and incidents,
+ * control pages, answers and ticket lookups, which cannot be held to a repository, are not asked.
  */
-export async function brainEvidence(brain: Brain, question: string): Promise<BrainAskRow[]> {
+export async function brainEvidence(brain: Brain, question: string, options: { repo?: string } = {}): Promise<BrainAskRow[]> {
   if (!brain.enabled) return [];
-  const keys = [...new Set(question.match(TICKET_KEY) ?? [])].slice(0, MAX_TICKETS);
-  const [ticketHits, searchHits, components, lessonHits, principleHits, incidentHits, controlHits, answerHits] = await Promise.all([
+  const { repo } = options;
+  const keys = repo ? [] : [...new Set(question.match(TICKET_KEY) ?? [])].slice(0, MAX_TICKETS);
+  const none: Promise<Row[]> = Promise.resolve([]);
+  const [ticketHits, searchHits, rawComponents, lessonHits, rawPrinciples, incidentHits, controlHits, answerHits] = await Promise.all([
     Promise.all(keys.map((key) => rowsOf(brain, "cards_for_ticket", { ticket: `ticket:jira/${key}` }))),
-    rowsOf(brain, "search_cards", { q: question }),
+    repo ? rowsOf(brain, "search_cards_in_repo", { repo, q: question }) : rowsOf(brain, "search_cards", { q: question }),
     rowsOf(brain, "search_components", { q: question }),
-    rowsOf(brain, "search_learnings", { q: question }),
+    repo ? rowsOf(brain, "search_learnings_in_repo", { repo, q: question }) : rowsOf(brain, "search_learnings", { q: question }),
     rowsOf(brain, "search_principles", { q: question }),
-    rowsOf(brain, "search_incidents", { q: question }),
-    rowsOf(brain, "search_controls", { q: question }),
-    rowsOf(brain, "search_answers", { q: question }),
+    repo ? none : rowsOf(brain, "search_incidents", { q: question }),
+    repo ? none : rowsOf(brain, "search_controls", { q: question }),
+    repo ? none : rowsOf(brain, "search_answers", { q: question }),
   ]);
+  const componentPrefix = repo ? `component:${repo.replace(/^repo:/, "")}/` : null;
+  const components = componentPrefix ? rawComponents.filter((row) => typeof row.component === "string" && row.component.startsWith(componentPrefix)) : rawComponents;
+  const principleHits = repo ? rawPrinciples.filter((row) => row.repo === repo) : rawPrinciples;
   const lessons = lessonHits.flatMap((row) => {
     const slug = slugOf(row, "learning");
     return slug ? [{ slug, row }] : [];

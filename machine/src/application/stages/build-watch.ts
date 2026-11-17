@@ -613,7 +613,7 @@ export function cardSearchAnswers(deps: { outDir: string; search: (query: string
   };
 }
 
-/** The machine's side of `brain_query`: answers in the mailbox for the task's own repository, never the one a request names. */
+/** The machine's side of `brain_query`: answers in the mailbox from the task's repository, which the answerer confines every query to; a repository a request names is not read. */
 export function brainQueryMailbox(deps: { outDir: string; repoPath: string | null; answer: (repoPath: string | null, request: BrainQueryRequest) => Promise<BrainQueryAnswer> }) {
   return {
     async onBrainQuery(request: BrainQueryRequest): Promise<void> {

@@ -80,6 +80,12 @@ describe("brain/queries", () => {
     for (const query of storedQueries()) expect(query.body, query.name).not.toMatch(/^\s*(insert|update|delete)\b/m);
   });
 
+  it("matches a repository tool query on the repository its parameter names", () => {
+    for (const listed of BRAIN_QUERIES.filter((q) => q.tool === "repo")) {
+      expect(storedQueries().find((q) => q.name === listed.name)!.body, listed.name).toMatch(/\$r: Repo \{ slug: \$repo \}/);
+    }
+  });
+
   it("caps every list an agent may read", () => {
     const agent = new Set(BRAIN_QUERIES.filter((q) => q.agent).map((q) => q.name));
     for (const query of storedQueries().filter((q) => agent.has(q.name) && q.name !== "card_lookup")) expect(query.body, query.name).toMatch(/^\s*limit \d+$/m);

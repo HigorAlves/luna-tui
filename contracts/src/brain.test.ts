@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { BRAIN_APPEND_ONLY, BRAIN_EDGES, BRAIN_NODE_TYPES, BRAIN_QUERIES, brainEdge, brainNode, brainSlug, brainTime } from "./index.ts";
+import { BRAIN_APPEND_ONLY, BRAIN_EDGES, BRAIN_NODE_TYPES, BRAIN_QUERIES, brainEdge, brainNode, brainSlug, brainTime, toolQuery } from "./index.ts";
 
 describe("a brain slug", () => {
   it("is <system>:<native id>, the same for the same input", () => {
@@ -96,5 +96,40 @@ describe("the brain's named queries", () => {
     const hygiene = BRAIN_QUERIES.filter((q) => q.hygiene);
     expect(hygiene.length).toBeGreaterThan(0);
     expect(hygiene.every((q) => !q.agent)).toBe(true);
+  });
+});
+
+describe("the queries a model may run through brain_query", () => {
+  it("is exactly these, each agent-readable and taking the parameter its confinement names", () => {
+    const tools = BRAIN_QUERIES.filter((q) => q.tool);
+    expect(tools.map((q) => `${q.name}:${q.tool}`).sort()).toEqual(
+      [
+        "card_lookup:card",
+        "cards_in_repo:repo",
+        "cards_touching:component",
+        "controls_of_repo:repo",
+        "learnings_of_repo:repo",
+        "principles_of_repo:repo",
+        "prs_for_card:card",
+        "regimes_of_repo:repo",
+        "search_cards_in_repo:repo",
+        "search_learnings_in_repo:repo",
+        "verdicts_for_card:card",
+      ].sort(),
+    );
+    for (const q of tools) {
+      expect(q.agent, q.name).toBe(true);
+      expect(Object.keys(q.params), q.name).toContain(q.tool);
+    }
+  });
+
+  it("finds a tool query by name and nothing else", () => {
+    expect(toolQuery("cards_in_repo")?.tool).toBe("repo");
+    for (const name of ["search_cards", "open_incidents", "cards_for_ticket", "card_repo", "precedents", "nope"]) expect(toolQuery(name), name).toBeUndefined();
+  });
+
+  it("keeps card_repo the machine's own and gives precedents a repository", () => {
+    expect(BRAIN_QUERIES.find((q) => q.name === "card_repo")).toMatchObject({ agent: false, params: { card: "String" } });
+    expect(Object.keys(BRAIN_QUERIES.find((q) => q.name === "precedents")!.params)).toEqual(["pack", "q", "repo"]);
   });
 });

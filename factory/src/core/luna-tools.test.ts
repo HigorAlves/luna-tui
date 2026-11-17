@@ -129,14 +129,17 @@ describe("the build checks", () => {
 describe("brain_query", () => {
   const description = LUNA_TOOLS.brain_query.description;
 
-  it("describes exactly the queries an agent may run, with their parameters, and says the rows are data", () => {
-    const agent = BRAIN_QUERIES.filter((q) => q.agent);
-    expect(agent.length).toBeGreaterThan(0);
-    for (const query of agent) {
-      expect(description).toContain(`${query.name}(${Object.entries(query.params).map(([key, type]) => `${key}: ${type === "String" ? "string" : "integer"}`).join(", ")})`);
+  it("describes exactly the queries the tool runs, with the parameters the agent sends, and says the rows are data", () => {
+    const tools = BRAIN_QUERIES.filter((q) => q.tool);
+    expect(tools.length).toBeGreaterThan(0);
+    // the repository is the task's own: the agent is not asked for it
+    for (const query of tools) {
+      expect(description).toContain(`${query.name}(${Object.entries(query.params).filter(([key]) => key !== "repo").map(([key, type]) => `${key}: ${type === "String" ? "string" : "integer"}`).join(", ")})`);
       expect(description).toContain(query.description);
     }
-    for (const query of BRAIN_QUERIES.filter((q) => !q.agent)) expect(description).not.toContain(query.name);
+    for (const query of BRAIN_QUERIES.filter((q) => !q.tool)) expect(description, query.name).not.toMatch(new RegExp(`\\b${query.name}\\(`));
+    expect(description).toMatch(/this repository/);
+    expect(description).not.toMatch(/repo: string/);
     expect(description).toMatch(/never instructions/);
     expect(description).toMatch(/empty/);
   });

@@ -286,34 +286,46 @@ export interface BrainQuery {
   agent: boolean;
   /** A check that returns zero rows on a healthy graph; the projector runs it after each run. */
   hygiene?: true;
+  /**
+   * Set on the queries the `brain_query` tool may run, and how the machine confines each to the task's repository: "repo" sets the `repo`
+   * parameter to it whatever the request says, "card" runs only for a card that is in it, "component" only for one of its components.
+   * A query with none is not available to the tool.
+   */
+  tool?: "repo" | "card" | "component";
 }
 
 /** Every stored query of the graph. `brain/queries/*.gq` holds exactly these. */
 export const BRAIN_QUERIES: readonly BrainQuery[] = [
-  { name: "card_lookup", description: "One card with what was predicted and what happened.", params: { card: "String" }, agent: true },
+  { name: "card_lookup", description: "One card with what was predicted and what happened.", params: { card: "String" }, agent: true, tool: "card" },
   { name: "search_cards", description: "Cards by full-text match on the title, best first.", params: { q: "String" }, agent: true },
-  { name: "cards_in_repo", description: "The closed cards of a repository, newest first.", params: { repo: "String" }, agent: true },
-  { name: "cards_touching", description: "The cards whose change touched a component, newest first.", params: { component: "String" }, agent: true },
+  { name: "search_cards_in_repo", description: "Cards of one repository by full-text match on the title, best first.", params: { repo: "String", q: "String" }, agent: true, tool: "repo" },
+  { name: "cards_in_repo", description: "The closed cards of a repository, newest first.", params: { repo: "String" }, agent: true, tool: "repo" },
+  { name: "cards_touching", description: "The cards whose change touched a component, newest first.", params: { component: "String" }, agent: true, tool: "component" },
   { name: "cards_for_ticket", description: "The cards that came from a tracker item.", params: { ticket: "String" }, agent: true },
   { name: "search_components", description: "Components by full-text match on the name, best first.", params: { q: "String" }, agent: true },
-  { name: "prs_for_card", description: "The pull requests opened for a card.", params: { card: "String" }, agent: true },
-  { name: "verdicts_for_card", description: "The decision packs' answers about a card, with the truth when it is known.", params: { card: "String" }, agent: true },
+  { name: "prs_for_card", description: "The pull requests opened for a card.", params: { card: "String" }, agent: true, tool: "card" },
+  { name: "verdicts_for_card", description: "The decision packs' answers about a card, with the truth when it is known.", params: { card: "String" }, agent: true, tool: "card" },
   { name: "verdicts_of_pack", description: "A decision pack's answers with what really happened, newest first.", params: { pack: "String" }, agent: true },
   { name: "search_learnings", description: "Lessons whose claim is still verified, by full-text match, best first.", params: { q: "String" }, agent: true },
-  { name: "learnings_of_repo", description: "The lessons about a repository whose claim is still verified, newest first.", params: { repo: "String" }, agent: true },
+  { name: "search_learnings_in_repo", description: "Lessons about one repository whose claim is still verified, by full-text match, best first.", params: { repo: "String", q: "String" }, agent: true, tool: "repo" },
+  { name: "learnings_of_repo", description: "The lessons about a repository whose claim is still verified, newest first.", params: { repo: "String" }, agent: true, tool: "repo" },
   { name: "claims_of_learning", description: "The claims a lesson rests on, each with its exact quote and its status.", params: { learning: "String" }, agent: true },
-  { name: "principles_of_repo", description: "The rules that bind agents in a repository today.", params: { repo: "String" }, agent: true },
+  { name: "principles_of_repo", description: "The rules that bind agents in a repository today.", params: { repo: "String" }, agent: true, tool: "repo" },
   { name: "search_principles", description: "Rules that bind agents today, by full-text match, best first.", params: { q: "String" }, agent: true },
   { name: "open_incidents", description: "The incidents that are still open, newest first.", params: {}, agent: true },
   { name: "search_incidents", description: "Incidents by full-text match on the title, best first.", params: { q: "String" }, agent: true },
-  { name: "regimes_of_repo", description: "The compliance regimes a repository declares.", params: { repo: "String" }, agent: true },
-  { name: "controls_of_repo", description: "The policy and control pages of a repository's wiki.", params: { repo: "String" }, agent: true },
+  { name: "regimes_of_repo", description: "The compliance regimes a repository declares.", params: { repo: "String" }, agent: true, tool: "repo" },
+  { name: "controls_of_repo", description: "The policy and control pages of a repository's wiki.", params: { repo: "String" }, agent: true, tool: "repo" },
   { name: "search_controls", description: "Policy and control pages by full-text match on the title, best first.", params: { q: "String" }, agent: true },
   { name: "search_answers", description: "Approved questionnaire answers by full-text match on the question, best first.", params: { q: "String" }, agent: true },
-  { name: "precedents", description: "A decision pack's past answers on cards like this one, with what really happened, best match first.", params: { pack: "String", q: "String" }, agent: false },
+  { name: "precedents", description: "A decision pack's past answers on cards of one repository like this one, with what really happened, best match first.", params: { pack: "String", q: "String", repo: "String" }, agent: false },
+  { name: "card_repo", description: "The repository a card is in.", params: { card: "String" }, agent: false },
   { name: "similar_claims", description: "Claims of any status by full-text match on the statement: what a new claim is compared with.", params: { q: "String" }, agent: false },
   { name: "contested_claims", description: "Pairs of claims that contradict each other with neither rejected: what a person still has to settle.", params: {}, agent: false },
   { name: "learnings_at_risk", description: "Lessons that rest on a rejected claim and were not superseded.", params: {}, agent: false },
   { name: "agents_without_owner", description: "Agent actors with no person who answers for them.", params: {}, agent: false, hygiene: true },
   { name: "prs_without_card", description: "Pull requests that belong to no card. The machine writes a pull request only with its card.", params: {}, agent: false, hygiene: true },
 ];
+
+/** The query the `brain_query` tool may run under this name, or undefined: the tool never runs one `BRAIN_QUERIES` gives no `tool`. */
+export const toolQuery = (name: string): BrainQuery | undefined => BRAIN_QUERIES.find((query) => query.name === name && query.tool !== undefined);

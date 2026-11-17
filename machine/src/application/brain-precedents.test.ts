@@ -23,7 +23,7 @@ function fakeBrain(rows: Row[], options: { enabled?: boolean; fails?: boolean } 
   };
 }
 
-const on = (brain: Brain, listed: string[] | Error = ["triage_signals"]) => brainPrecedents({ brain, packsOf: async (repoPath) => { if (listed instanceof Error) throw listed; return repoPath === "/r/a" ? listed : []; } });
+const on = (brain: Brain, listed: string[] | Error = ["triage_signals"]) => brainPrecedents({ brain, repoSlug: (repoPath) => repoPath.split("/").pop()!, packsOf: async (repoPath) => { if (listed instanceof Error) throw listed; return repoPath === "/r/a" ? listed : []; } });
 
 describe("brainPrecedents", () => {
   it("never asks the brain by default: a repository with no list, or without the pack in it, or no repository", async () => {
@@ -35,19 +35,28 @@ describe("brainPrecedents", () => {
     expect(brain.asked).toEqual([]);
   });
 
+  it("asks nothing when the repository has no slug: a card with no repository gets no precedents", async () => {
+    const brain = fakeBrain([row()]);
+    const none = brainPrecedents({ brain, repoSlug: () => "", packsOf: async () => ["triage_signals"] });
+    expect(await none("triage_signals", "Export", "/r/a", "t1")).toEqual([]);
+    const throws = brainPrecedents({ brain, repoSlug: () => { throw new Error("no path"); }, packsOf: async () => ["triage_signals"] });
+    expect(await throws("triage_signals", "Export", "/r/a", "t1")).toEqual([]);
+    expect(brain.asked).toEqual([]);
+  });
+
   it("asks nothing of a brain that is off", async () => {
     const brain = fakeBrain([row()], { enabled: false });
     expect(await on(brain)("triage_signals", "Export", "/r/a", "t1")).toEqual([]);
     expect(brain.asked).toEqual([]);
   });
 
-  it("asks the precedents query with the pack and the title, and maps the rows: the card's title, truth_source as truthSource", async () => {
+  it("asks the precedents query with the pack, the title and the card's repository, and maps the rows: the card's title, truth_source as truthSource", async () => {
     const brain = fakeBrain([row(), row({ question: "size", answer: "S", truth: "M", truth_source: "outcome", title: "Fix login", card: "card:old2" })]);
     expect(await on(brain)("triage_signals", "Export a report", "/r/a", "t1")).toEqual([
       { question: "kind", answer: "bug", truth: "feature", truthSource: "person", card: "Export CSV", decidedAt: "2026-10-03T08:15:00.000Z" },
       { question: "size", answer: "S", truth: "M", truthSource: "outcome", card: "Fix login", decidedAt: "2026-10-03T08:15:00.000Z" },
     ]);
-    expect(brain.asked).toEqual([{ name: "precedents", params: { pack: "triage_signals", q: "Export a report" } }]);
+    expect(brain.asked).toEqual([{ name: "precedents", params: { pack: "triage_signals", q: "Export a report", repo: "repo:a" } }]);
   });
 
   it("leaves out the current card's own verdicts, a row with a missing column, and a truth source it does not know", async () => {

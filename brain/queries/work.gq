@@ -17,6 +17,27 @@ query search_cards($q: String) @description("Cards by full-text match on the tit
     limit 8
 }
 
+query search_cards_in_repo($repo: String, $q: String) @description("Cards of one repository by full-text match on the title, best first.") {
+    match {
+        $r: Repo { slug: $repo }
+        $c: Card
+        $c cardInRepo $r
+    }
+    return { $c.slug as card, $c.title as title, $c.state as state, $c.size as size, $c.risk as risk, $c.est_loc as est_loc, $c.actual_loc as actual_loc, $c.retries as retries, $c.escalations as escalations, $c.opened_at as opened_at, $c.closed_at as closed_at }
+    order { bm25($c.title, $q) }
+    limit 8
+}
+
+query card_repo($card: String) @description("The repository a card is in.") {
+    match {
+        $c: Card { slug: $card }
+        $r: Repo
+        $c cardInRepo $r
+    }
+    return { $r.slug as repo }
+    limit 1
+}
+
 query cards_in_repo($repo: String) @description("The closed cards of a repository, newest first.") {
     match {
         $r: Repo { slug: $repo }

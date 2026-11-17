@@ -15,6 +15,19 @@ query search_learnings($q: String) @description("Lessons whose claim is still ve
     limit 8
 }
 
+query search_learnings_in_repo($repo: String, $q: String) @description("Lessons about one repository whose claim is still verified, by full-text match, best first.") {
+    match {
+        $r: Repo { slug: $repo }
+        $l: Learning
+        $l learningAboutRepo $r
+        $c: Claim { status: "verified" }
+        $l basedOn $c
+    }
+    return { $l.slug as learning, $l.title as title, $l.kind as kind, $l.scope as scope, $l.recorded_at as recorded_at }
+    order { bm25($l.title, $q) }
+    limit 8
+}
+
 query learnings_of_repo($repo: String) @description("The lessons about a repository whose claim is still verified, newest first.") {
     match {
         $r: Repo { slug: $repo }
@@ -63,9 +76,11 @@ query search_principles($q: String) @description("Rules that bind agents today, 
     limit 8
 }
 
-query precedents($pack: String, $q: String) @description("A decision pack's past answers on cards like this one, with what really happened, best match first.") {
+query precedents($pack: String, $q: String, $repo: String) @description("A decision pack's past answers on cards of one repository like this one, with what really happened, best match first.") {
     match {
+        $r: Repo { slug: $repo }
         $c: Card
+        $c cardInRepo $r
         $v: Verdict { pack: $pack }
         $v verdictOn $c
     }
