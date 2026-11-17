@@ -600,7 +600,7 @@ impl Machine {
         Self::typed(self.agent.get(self.url("/tickets")).call())
     }
 
-    /// A tap on a ticket: `approve`, `edit`, `ignore`, `card` or `backlog`; `body` carries the draft id and hash (and the text for an edit).
+    /// A tap on a ticket: `approve`, `edit`, `ignore`, `card`, `backlog`, or on a held one `safety/release` or `safety/archive`; `body` carries the draft id and hash (and the text for an edit).
     pub fn ticket_act(&self, key: &str, action: &str, body: Value) -> Result<(), String> {
         Self::json(
             self.agent

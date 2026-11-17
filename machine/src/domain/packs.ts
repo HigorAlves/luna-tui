@@ -54,6 +54,7 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   worth_learning: [],
   intake_dedup: [],
   ticket_validity: [],
+  ticket_safety: [],
   ticket_assess: [],
   conversation_assess: [],
   conversation_relation: [],
@@ -63,6 +64,7 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   ticket_reply: [],
   // The loop guard's judge and its redirect writer, run on demand by the build watch.
   loop_judge: [],
+  guard_judge: [],
   loop_redirect: [],
   // The fact proposer, run on demand when a card closes.
   fact_propose: [],

@@ -16,10 +16,10 @@ import { ConfidencePolicySchema } from "./questions.ts";
 export const StageOutcome = z.enum(["pass", "fail", "needs_input", "test_change", "escalated"]);
 export type StageOutcome = z.infer<typeof StageOutcome>;
 
-/** Where a task came from: a tracker issue, or an open PR acted on from the PR inbox. */
+/** Where a task came from: a tracker issue, or an open PR acted on from the PR inbox. `safetyReleased` (github, jira, slack): the safety screen held the ticket and a person released it, so its card runs untrusted whatever the source (`trustOf`). */
 export const TaskSource = z.discriminatedUnion("kind", [
   /** `labels` are the issue's own at intake: the card keeps them so a `security` label still knocks the priority out to P0 when triage reads the signals again. */
-  z.object({ kind: z.literal("github"), repo: z.string(), number: z.number().int(), url: z.string(), labels: z.array(z.string()).optional(), authorAssociation: z.string().optional() }),
+  z.object({ kind: z.literal("github"), repo: z.string(), number: z.number().int(), url: z.string(), labels: z.array(z.string()).optional(), authorAssociation: z.string().optional(), safetyReleased: z.boolean().optional() }),
   /** A Dependabot or code-scanning alert a vulnerability card stands for. `alert` is the alert's own number, a count apart from issues and PRs: nothing reads it as `#N`. `labels` carry `security` for a critical one, as an issue's do. */
   z.object({ kind: z.literal("github_alert"), repo: z.string(), alert: z.number().int(), tool: z.enum(["dependabot", "code_scanning"]), url: z.string(), labels: z.array(z.string()).optional() }),
   /** The breach-notification card of an incident (`id` is the incident's own id). `labels` carry `security`, as an issue's do, so triage reads the card as P0. */
@@ -35,9 +35,9 @@ export const TaskSource = z.discriminatedUnion("kind", [
     authorAssociation: z.string().optional(),
   }),
   /** A ticket made from a Slack message (`t` in the board's Slack inbox). */
-  z.object({ kind: z.literal("slack"), channel: z.string(), ts: z.string(), permalink: z.string() }),
+  z.object({ kind: z.literal("slack"), channel: z.string(), ts: z.string(), permalink: z.string(), safetyReleased: z.boolean().optional() }),
   /** A ticket imported from a Jira issue by intake. `issueType` is Jira's type name, e.g. `Bug`. */
-  z.object({ kind: z.literal("jira"), key: z.string(), url: z.string(), issueType: z.string().nullable(), labels: z.array(z.string()).optional() }),
+  z.object({ kind: z.literal("jira"), key: z.string(), url: z.string(), issueType: z.string().nullable(), labels: z.array(z.string()).optional(), safetyReleased: z.boolean().optional() }),
   /** A Luna Notch ticket run on the machine: `ref` is its board key (`LUNA-14`), `id` its uuid.
    *  The notch talks to Jira, Slack and Teams about it; `jiraKey` only names the branch. */
   z.object({ kind: z.literal("notch"), ref: z.string().min(1), id: z.string().min(1), jiraKey: z.string().nullable().optional() }),
@@ -185,6 +185,10 @@ export const PackId = z.enum([
   "intake_dedup",
   // A decision at the Ticket Machine (a ticket context, run on demand): can this ticket be worked on at all.
   "ticket_validity",
+  // A decision at the Ticket Machine: does the ticket's text try to instruct whoever reads it (run before anything else reads the ticket).
+  "ticket_safety",
+  // A decision at the stage guard's judge endpoint (a check context, run on demand): would one suspicious tool call of a stage harm.
+  "guard_judge",
   // A decision at the Ticket Machine: the four typed answers of an assessment (urgency, complexity, blast radius, risk of doing against not doing).
   "ticket_assess",
   // A decision at the Conversation Machine (a conversation context, run on demand): the kind of a Slack thread, whether it needs a reply, three knock-outs and five scores.
@@ -911,8 +915,8 @@ export type ArchiveReason = z.infer<typeof ArchiveReason>;
 /** Why a stage stopped on purpose: `plan_wrong` the plan cannot be built as written (the planner runs again with the evidence),
  *  `env_broken` the sandbox or toolchain is, `flaky_tests` the tests do not hold still, `too_complex`
  *  the work is bigger than one stage, `undeclared_scope` it needs files or packages the plan did not name, `head_moved` the PR head moved after
- *  the evidence pack was made (Evidence runs again). */
-export const EscalationReason = z.enum(["plan_wrong", "env_broken", "flaky_tests", "too_complex", "undeclared_scope", "head_moved", "other"]);
+ *  the evidence pack was made (Evidence runs again), `guard_blocked` the stage guard blocked a tool call on a card from outside the team (the gate runs after the stage ends). */
+export const EscalationReason = z.enum(["plan_wrong", "env_broken", "flaky_tests", "too_complex", "undeclared_scope", "head_moved", "guard_blocked", "other"]);
 export type EscalationReason = z.infer<typeof EscalationReason>;
 
 /** How risky a change or a ticket reads: on one scale for the triage record and the evidence pack. */
@@ -1055,9 +1059,11 @@ export type PlanContext = z.infer<typeof PlanContext>;
 
 /** What the checks (red_check, scope_check, finding_classify, e2e_failure_cause) judge: a red slice's failing output, the facts of a change's scope, a review finding, or a failed browser run. */
 export const CheckContext = z.object({
-  kind: z.enum(["red", "scope", "finding", "e2e", "escalation", "ci", "frames", "loop"]),
+  kind: z.enum(["red", "scope", "finding", "e2e", "escalation", "ci", "frames", "loop", "guard"]),
   /** loop: the guard's digest of a run's recent actions (counters, tool names, base names, error hashes: never file contents), the pack and how many calls it made; `cause` is what the judge found, for the redirect writer. All data. */
   loop: z.object({ digest: z.string().max(6000), pack: z.string().max(60), calls: z.number().int().nonnegative(), cause: z.string().max(40).optional() }).optional(),
+  /** guard: one tool call the stage guard held, with the task's text and the scanner's findings, capped by the machine: all data for guard_judge, never instructions. */
+  guard: z.object({ task: z.string().max(4000), tool: z.string().max(100), args: z.string().max(4000), findings: z.array(z.object({ id: z.string().max(100), severity: z.string().max(20), title: z.string().max(300) })).max(10) }).optional(),
   /** frames: the distinct on-screen texts of a film or its screenshots, flattened and capped by the machine (40 texts of 1000 characters): data for frame_privacy. */
   frames: z.object({ texts: z.array(z.string().max(1000)).max(40) }).optional(),
   /** ci: the failing job and the tail of its log, flattened and capped by the machine: data for ci_failure_class. */
@@ -1360,6 +1366,10 @@ export const TicketContext = z.object({
   files: z.array(z.string().max(300)).max(10),
   candidates: z.array(z.object({ slot: z.number().int().min(1).max(5), kind: z.enum(["open", "closed", "backlog"]), title: z.string().max(500), summary: z.string().max(1000) })).max(5),
   /** The assessment, for the packs that read it (ticket_recommend, ticket_reply). */
+  /** What the machine's own scan counted in the raw text: the evidence for the hidden-content question. */
+  /** Set when the ticket is read in parts (a long ticket): which part this call holds, 1-based. Every part carries the title. */
+  chunk: z.object({ index: z.number().int().min(1).max(200), of: z.number().int().min(1).max(200) }).optional(),
+  signals: z.object({ invisible: z.number().int().min(0), bidi: z.number().int().min(0), htmlComments: z.number().int().min(0), encodedRuns: z.number().int().min(0), linkMismatch: z.number().int().min(0) }).optional(),
   assessment: z.object({ priority: z.string().max(10), size: z.string().max(10), blastRadius: z.string().max(10), costOfDelay: z.number(), costOfDoing: z.number(), score: z.number() }).nullable().optional(),
 });
 export type TicketContext = z.infer<typeof TicketContext>;

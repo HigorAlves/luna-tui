@@ -1,0 +1,4 @@
+# The guard image's build context is machine/runner (`-f guard/Dockerfile`): only luna-env and guard/ go in.
+*
+!luna-env
+!guard

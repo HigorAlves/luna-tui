@@ -8,6 +8,8 @@ import { classificationLine } from "@hardness/contracts";
 import { type IssueClassifier, confidentQuestion } from "./classify.ts";
 import type { GitHub } from "./github.ts";
 import { canonicalTicketOf } from "../domain/ticket.ts";
+import { cardText, contentHash } from "../domain/ticket-screen.ts";
+import { rawOf } from "./ticket-screen.ts";
 import type { Pipeline } from "./pipeline.ts";
 import type { TicketIntake } from "./ticket-machine.ts";
 
@@ -43,7 +45,7 @@ export class GitHubIntake {
   private warnedAuth = false;
   /** Issues declined as questions, `owner/name#n`: not classified nor told again. */
   private readonly declined = new Set<string>();
-  /** Issues already held as tickets, by `updated`-less ref: a re-poll does not read them again. */
+  /** Issues already read, by ref and the hash of the text read (title and body): a re-poll does not read them again, and an edited issue is read (and screened) again. */
   private readonly held = new Set<string>();
 
   constructor(private readonly options: GitHubIntakeOptions) {}
@@ -91,15 +93,26 @@ export class GitHubIntake {
     for (const issue of issues) {
       const ref = `${repo}#${issue.number}`;
       if (this.declined.has(ref) || (await this.options.pipeline.findBySource(repo, issue.number))) continue;
-      const body = issue.body ?? "";
-      if (this.options.tickets && !(await this.options.ticketsAuto?.(repoPath).catch(() => false))) {
-        if (this.held.has(ref)) continue;
-        const asked = (await this.options.classifier?.classify({ title: issue.title, description: body, labels: issue.labels ?? [], source: issue.url }).catch(() => null)) ?? null;
-        await this.options.tickets.ingest(canonicalTicketOf({ tool: "github", slug: repo, issue }), { repoPath, question: confidentQuestion(asked) });
-        this.held.add(ref);
+      const ticket = canonicalTicketOf({ tool: "github", slug: repo, issue });
+      // The text everything after the screen reads (the classifier, the card) is the canonical ticket's: no more than the screen read.
+      const body = cardText(ticket.description);
+      const seen = `${ref}@${contentHash(rawOf(ticket))}`;
+      if (this.held.has(seen)) continue;
+      // The safety screen reads the issue before anything else does, the classifier included: one that is not safe has a held ticket row and goes no further.
+      // The comments are not in the canonical GitHub ticket, so the title and body are what is screened (and what the hash covers). A screen that failed is not remembered: the next poll tries again.
+      const screened = (await this.options.tickets?.screenAndHold?.(ticket, { repoPath })) ?? null;
+      if (screened?.held) {
+        if (!screened.failed) this.held.add(seen);
+        console.log(`github intake: ${ref} held by the safety screen`);
         continue;
       }
-      const classification = (await this.options.classifier?.classify({ title: issue.title, description: body, labels: issue.labels ?? [], source: issue.url })) ?? null;
+      if (this.options.tickets && !(await this.options.ticketsAuto?.(repoPath).catch(() => false))) {
+        const asked = (await this.options.classifier?.classify({ title: ticket.title, description: body, labels: issue.labels ?? [], source: issue.url }).catch(() => null)) ?? null;
+        await this.options.tickets.ingest(ticket, { repoPath, question: confidentQuestion(asked), ...(this.options.tickets.screenAndHold ? { screened: true } : {}) });
+        this.held.add(seen);
+        continue;
+      }
+      const classification = (await this.options.classifier?.classify({ title: ticket.title, description: body, labels: issue.labels ?? [], source: issue.url })) ?? null;
       if (confidentQuestion(classification)) {
         this.declined.add(ref);
         const line = classificationLine(classification);
@@ -110,7 +123,7 @@ export class GitHubIntake {
         continue;
       }
       const task = await this.options.pipeline.createTask({
-        title: issue.title,
+        title: ticket.title,
         description: body,
         criteria: parseChecklist(body),
         repoPath,

@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_DATABASE_URL,
   DEFAULT_MAX_CONCURRENT_TASKS,
+  DEFAULT_GUARD_JUDGE_PORT,
   DEFAULT_PORT,
   DEFAULT_RETENTION_DAYS,
   loadConfig,
@@ -28,6 +29,8 @@ describe("loadConfig", () => {
       runnerImage: "hardness-runner:dev",
       runnerQaImage: "hardness-runner-qa:dev",
       runnerVideoImage: "hardness-runner-video:dev",
+      runnerGuardImage: "hardness-runner-guard:dev",
+      guardJudgePort: DEFAULT_GUARD_JUDGE_PORT,
       worktreesDir: "/home/me/Developer/worktrees",
       stateDir: "/home/me/.local/state/hardness",
       githubPoll: { repos: [], intervalMs: 300_000, label: "ready-for-agent" },
@@ -66,6 +69,10 @@ describe("loadConfig", () => {
       sla: { gateSecs: 172_800, cycleSecs: null },
       sandboxPolicy: DEFAULT_MACHINE_POLICY,
     });
+  });
+
+  it("reads the guard image from RUNNER_GUARD_IMAGE", () => {
+    expect(loadConfig({ HOME: "/home/me", RUNNER_GUARD_IMAGE: "g:1" }).runnerGuardImage).toBe("g:1");
   });
 
   it("reads the Slack inbox's tokens and knobs", () => {
@@ -262,6 +269,13 @@ describe("loadConfig", () => {
     for (const host of ["127.0.0.1", "localhost", "::1", "127.0.0.2"]) {
       expect(loadConfig({ HOME: "/h", MACHINE_HOST: host }).host).toBe(host);
     }
+  });
+
+  it("reads the guard judge's port: 4319 by default, a custom one, and refuses one that is not a port", () => {
+    expect(DEFAULT_GUARD_JUDGE_PORT).toBe(4319);
+    expect(loadConfig({ HOME: "/h", MACHINE_GUARD_JUDGE_PORT: "4400" }).guardJudgePort).toBe(4400);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_GUARD_JUDGE_PORT: "abc" })).toThrow(/MACHINE_GUARD_JUDGE_PORT/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_GUARD_JUDGE_PORT: "70000" })).toThrow(/MACHINE_GUARD_JUDGE_PORT/);
   });
 
   it("rejects a port that is not a number", () => {
@@ -507,5 +521,15 @@ describe("sandbox policy keys that have no effect", () => {
 
   it("names nothing when bash_sandbox is off", () => {
     expect(sandboxPolicyNotes(DEFAULT_MACHINE_POLICY)).toEqual({ notInForce: [], warnings: [] });
+    expect(sandboxPolicyNotes(DEFAULT_MACHINE_POLICY, { relay: true })).toEqual({ notInForce: [], warnings: [] });
+  });
+
+  it("names the guard when the policy asks for one but the engine relay (or the egress proxy, which it needs) is off", () => {
+    const note = "guard: needs the engine relay and the egress proxy; both must be on";
+    expect(sandboxPolicyNotes(DEFAULT_MACHINE_POLICY, { relay: false })).toEqual({ notInForce: [note], warnings: [`sandbox policy: ${note}`] });
+    const untrustedOnly = { ...DEFAULT_MACHINE_POLICY, guard: { ...DEFAULT_MACHINE_POLICY.guard, trusted: "off" as const, untrusted: "block" as const } };
+    expect(sandboxPolicyNotes(untrustedOnly, { relay: false }).notInForce).toEqual([note]);
+    const off = { ...DEFAULT_MACHINE_POLICY, guard: { ...DEFAULT_MACHINE_POLICY.guard, trusted: "off" as const, untrusted: "off" as const } };
+    expect(sandboxPolicyNotes(off, { relay: false })).toEqual({ notInForce: [], warnings: [] });
   });
 });

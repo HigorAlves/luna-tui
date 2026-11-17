@@ -58,6 +58,7 @@ import { randomUUID } from "node:crypto";
 import { execInSandbox, imageExists, imageId, imageLabel, removeLeftoverContainers, runSandbox, sandboxExecutor, setSecretsRoot } from "../adapters/docker/docker.ts";
 import { removeLeftoverApps } from "../adapters/docker/app.ts";
 import { openCardNetwork, openPlainNetwork, removeLeftoverNetworks } from "../adapters/docker/egress.ts";
+import { guardImageProblem as guardImageProblemOf } from "../adapters/docker/guard.ts";
 import { startServices } from "../adapters/docker/services.ts";
 import { type AppDeps, openApp, openPreview } from "../application/app-session.ts";
 import { type EgressPolicy, blockedPayloads } from "../application/egress-policy.ts";
@@ -115,6 +116,9 @@ export async function egressImageProblem(image: string, label: (image: string, n
   return (await label(image, "dev.hardness.egress")) === null ? `image ${image} has no egress proxy (label dev.hardness.egress): rebuild it with pnpm runner:build` : null;
 }
 
+/** Why an image is not the stage guard (it has no dev.hardness.guard label: wrong name, or never built), or null. */
+export const guardImageProblem = (image: string, label: (image: string, name: string) => Promise<string | null> = imageLabel): Promise<string | null> => guardImageProblemOf(image, label);
+
 /** What the retro reads about a task: the last implementing ledger and every earlier run. */
 export type TaskHistory = (taskId: string) => Promise<{ ledger: Ledger | null; runs: RunSummary[] }>;
 
@@ -169,6 +173,8 @@ export async function buildRealStages(
   jira?: Jira | null,
   /** What the review route links a PR to (the board's cards, the Jev fallback, where the links are kept); absent, only the keys a PR names are read. */
   reviewLinks?: PrReviewDeps["links"],
+  /** The stage guards' judge (RFC 0012, B6): bound late by main, once the listener is up; absent, no guard has a judge. */
+  guardJudge?: AgentDeps["guardJudge"],
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -188,6 +194,10 @@ export async function buildRealStages(
     console.warn(`${noProxy}: every stage is a stub`);
     return stubbed(noProxy);
   }
+  // A guard the policy asks for needs its image: said at start, and again as env_broken on the first guarded stage, which never runs unguarded.
+  const guardAsked = config.egress.relay && (config.sandboxPolicy.guard.trusted !== "off" || config.sandboxPolicy.guard.untrusted !== "off");
+  const noGuard = guardAsked ? await guardImageProblem(config.runnerGuardImage) : null;
+  if (noGuard) console.warn(`${noGuard}: every Claude stage with tools will escalate as env_broken until it is built, or set guard.trusted and guard.untrusted to off`);
   const removed = await removeLeftoverContainers();
   if (removed > 0) console.log(`removed ${removed} leftover stage container(s)`);
   const removedApps = await removeLeftoverApps();
@@ -326,6 +336,9 @@ export async function buildRealStages(
   const graphReady = graphs ? (input: Parameters<typeof ensureGraphReady>[1]) => ensureGraphReady({ graph: graphs.graph, policies }, input) : undefined;
   const deps = {
     image: config.runnerImage,
+    // The stage guard runs only with the relay on (it forwards to the relay); a run asks for it from the policy, `runSandbox` checks the image.
+    ...(config.egress.relay ? { guardImage: config.runnerGuardImage } : {}),
+    ...(config.egress.relay && guardJudge ? { guardJudge } : {}),
     ...(egress ? { egress } : {}),
     install,
     secrets,

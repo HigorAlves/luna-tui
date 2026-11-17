@@ -12,6 +12,7 @@ describe("MachinePolicySchema", () => {
       egress: { deny: [], max_repo_hosts: 50, repo_hosts: "allow" },
       images: { repo_base: "allow", devcontainer: "allow" },
       cache: { split_by_trust: true },
+      guard: { trusted: "log", untrusted: "log", block_severity: "high" },
       bash_sandbox: "off",
     });
   });
@@ -44,5 +45,13 @@ describe("machinePolicyProblem", () => {
     expect(machinePolicyProblem({ seccomp: "relative/profile.json" })).toMatch(/^seccomp/);
     expect(machinePolicyProblem({ egress: { deny: ["https://x.com/path"] } })).toMatch(/^egress\.deny\.0/);
     expect(machinePolicyProblem({ egress: { repo_hosts: "maybe" } })).toMatch(/^egress\.repo_hosts/);
+    expect(machinePolicyProblem({ guard: { trusted: "warn" } })).toMatch(/^guard\.trusted/);
+    expect(machinePolicyProblem({ guard: { untrusted: 1 } })).toMatch(/^guard\.untrusted/);
+    expect(machinePolicyProblem({ guard: { block_severity: "severe" } })).toMatch(/^guard\.block_severity/);
+  });
+
+  it("takes a guard section and refuses an unknown key under it", () => {
+    expect(MachinePolicySchema.parse({ guard: { untrusted: "block", block_severity: "medium" } }).guard).toEqual({ trusted: "log", untrusted: "block", block_severity: "medium" });
+    expect(machinePolicyProblem({ guard: { mode: "block" } })).toMatch(/guard\.mode: unknown key/);
   });
 });

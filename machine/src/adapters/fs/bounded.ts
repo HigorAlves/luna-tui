@@ -43,6 +43,24 @@ export async function readRegularFile(path: string, maxBytes: number): Promise<s
   }
 }
 
+/** The first `maxBytes` of a regular file, and whether there was more; throws for a link, a FIFO or anything else. A file over the cap is not an error. */
+export async function readRegularHead(path: string, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
+  const { handle, size } = await openRegular(path);
+  try {
+    const want = Math.min(size, maxBytes);
+    const buffer = Buffer.alloc(want);
+    let read = 0;
+    while (read < want) {
+      const { bytesRead } = await handle.read(buffer, read, want - read, read);
+      if (bytesRead === 0) break;
+      read += bytesRead;
+    }
+    return { text: buffer.subarray(0, read).toString("utf8"), truncated: size > maxBytes };
+  } finally {
+    await handle.close();
+  }
+}
+
 /** Copies a regular file to `to` through the open file, never following a link and never blocking on a FIFO. */
 export async function copyRegularFile(from: string, to: string): Promise<void> {
   const { handle } = await openRegular(from);

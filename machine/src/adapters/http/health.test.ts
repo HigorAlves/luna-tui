@@ -17,9 +17,9 @@ afterAll(async () => {
   await db.destroy();
 });
 
-const health = async (problems?: () => Promise<string[]> | string[], sandboxPolicy?: MachinePolicy) => {
+const health = async (problems?: () => Promise<string[]> | string[], sandboxPolicy?: MachinePolicy, engineRelay?: boolean) => {
   const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, maxConcurrentTasks: 2 });
-  const response = await createApp({ db, pipeline, bus: new Bus(), ...(problems ? { problems } : {}), ...(sandboxPolicy ? { sandboxPolicy } : {}) }).request("/health");
+  const response = await createApp({ db, pipeline, bus: new Bus(), ...(problems ? { problems } : {}), ...(sandboxPolicy ? { sandboxPolicy } : {}), ...(engineRelay === undefined ? {} : { engineRelay }) }).request("/health");
   return { status: response.status, body: (await response.json()) as Record<string, unknown> };
 };
 
@@ -45,5 +45,13 @@ describe("GET /health", () => {
     const on = { ...DEFAULT_MACHINE_POLICY, bash_sandbox: "on" as const };
     expect(await health(undefined, on)).toMatchObject({ status: 200, body: { sandboxPolicy: { bash_sandbox: "on" }, notInForce: ["bash_sandbox"] } });
     expect((await health(undefined, DEFAULT_MACHINE_POLICY)).body).not.toHaveProperty("notInForce");
+  });
+
+  it("lists the guard under notInForce when the policy asks for one and the engine relay is off", async () => {
+    const note = "guard: needs the engine relay and the egress proxy; both must be on";
+    expect(await health(undefined, DEFAULT_MACHINE_POLICY, false)).toMatchObject({ status: 200, body: { notInForce: [note] } });
+    expect((await health(undefined, DEFAULT_MACHINE_POLICY, true)).body).not.toHaveProperty("notInForce");
+    const off = { ...DEFAULT_MACHINE_POLICY, guard: { ...DEFAULT_MACHINE_POLICY.guard, trusted: "off" as const, untrusted: "off" as const } };
+    expect((await health(undefined, off, false)).body).not.toHaveProperty("notInForce");
   });
 });

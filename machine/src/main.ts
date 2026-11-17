@@ -16,6 +16,9 @@ import { machineSecrets } from "./bootstrap/machine-secrets.ts";
 import { useTruthSecrets } from "./application/ground-truth.ts";
 import { buildTelemetry, probeCollector } from "./bootstrap/telemetry.ts";
 import { buildPackRuns, buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
+import { GuardJudge } from "./application/guard-judge.ts";
+import { type GuardJudgeServer, startGuardJudgeServer } from "./adapters/http/guard-judge.ts";
+import type { Trust } from "./domain/trust.ts";
 import { loadConfig, sandboxPolicyNotes } from "./config.ts";
 import { createDataSource, poolSizeFor } from "./adapters/persistence/data-source.ts";
 import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
@@ -111,7 +114,8 @@ import { Backlog } from "./application/backlog.ts";
 import { PgTicketStore } from "./adapters/persistence/ticket-store.ts";
 import { GitHubTickets } from "./adapters/tickets/github-tickets.ts";
 import { JiraTickets } from "./adapters/tickets/jira-tickets.ts";
-import { TicketMachine, cardOnce, ticketSource } from "./application/ticket-machine.ts";
+import { createTicketScreen } from "./application/ticket-screen.ts";
+import { TicketMachine, cardOnce, sourceLookups, ticketSource } from "./application/ticket-machine.ts";
 import { TicketEvents } from "./application/ticket-events.ts";
 import { INTAKE_CLIENT } from "./application/classify.ts";
 import type { DedupAnswer } from "./application/intake-dedup.ts";
@@ -154,7 +158,7 @@ if (applied.length > 0) {
 }
 
 /** Every repo's luna.yaml (or older PIPELINE.md), read on demand; shared so a bad edit warns once. */
-for (const line of sandboxPolicyNotes(config.sandboxPolicy).warnings) console.warn(line);
+for (const line of sandboxPolicyNotes(config.sandboxPolicy, { relay: config.egress.relay }).warnings) console.warn(line);
 const policies = new PolicyStore({ machinePolicy: config.sandboxPolicy });
 /** Run traces: a local Laminar (`MACHINE_TRACES`, `LMNR_*`); the no-op without a key. Built before
  *  the pipeline so the first stage run after boot is traced. */
@@ -326,6 +330,15 @@ const stackDeps = {
 const jiraApi = config.jira ? createJira(config.jira) : noTokenJira();
 /** Ship's review-loop decisions run through PackRuns as the `ship` client: bound once it exists. */
 const shipDecisions: { decide: ShipDecide | null } = { decide: null };
+/** The stage guards' judge (RFC 0012, B6): a run asks it for a key, and only when its listener is up and a Jev credential can run the pack. Bound after PackRuns is built. */
+const guardJudge: { current: GuardJudge | null } = { current: null };
+let guardJudgeServer: GuardJudgeServer | null = null;
+const guardJudgeFacade = {
+  port: config.guardJudgePort,
+  available: async () => guardJudge.current !== null && (await credentials.check("jev")).available,
+  register: (taskId: string, trust: Trust) => guardJudge.current!.register(taskId, trust),
+  revoke: (token: string) => guardJudge.current?.revoke(token),
+};
 const { stubReason, real, resolveConflicts, verifyPack, checksExec, proofRig, agentDeps, shipGateProbe, compliance: complianceReview, docsDrift: docsDriftReview } = await buildRealStages(
   config,
   watcher,
@@ -381,6 +394,8 @@ const { stubReason, real, resolveConflicts, verifyPack, checksExec, proofRig, ag
     },
     record: (taskId, links, pr) => pipeline.recordReview(taskId, links, pr),
   },
+  // The stage guards' judge: the listener below binds it once PackRuns exists; until then, and with no Jev credential, a guard has none.
+  guardJudgeFacade,
 );
 /** The retro's facts for a task, from the machine's own records. */
 async function retroFactsFor(taskId: string) {
@@ -505,6 +520,8 @@ const channelClaims = new ChannelClaims(
 
 pipeline = new Pipeline(db, runnerFor, {
   economy,
+  // The second line of the ticket safety screen: a card is never made from a source whose ticket the screen holds.
+  ...sourceLookups(new PgTicketStore(db)),
   proposer: factProposer,
   // A card that came from a ticket is split into child tickets, created only after a person approves the split gate (never by a clock or a retry).
   splitTickets: {
@@ -634,6 +651,8 @@ const slackInbox = new SlackInbox({
   store: slackStore,
   intervalMs: config.slackInbox.intervalMs,
   publish: (snapshot) => bus.publish({ type: "slack.items", snapshot }),
+  // A person's tap that makes a card of a message is screened first (the screen is built below, and read at call time).
+  screen: { screen: (ticket, repoPath) => ticketScreen.screen(ticket, repoPath) },
   findTask: (id) => pipeline.get(id).catch(() => null),
   linkPr: (refs) => {
     for (const ref of refs) {
@@ -754,6 +773,35 @@ const packRuns = buildPackRuns(config, {
   // A usage limit moves a call to a fallback engine, never to one whose window the pipeline holds.
   latched: () => pipeline.slots.latched.map((latch) => latch.owner),
 });
+// The judge listener: only where a guard can run (the relay on, the policy not off for both trusts) and agents are on. It has its own PackRuns, two at once and four waiting,
+// so judge calls never wait behind the notch's two. A listener that cannot bind leaves the guards without a judge, said once.
+if (packRuns && config.egress.relay && (config.sandboxPolicy.guard.trusted !== "off" || config.sandboxPolicy.guard.untrusted !== "off")) {
+  const judgeRuns = buildPackRuns(config, {
+    policies,
+    ...(config.egress.enabled && agentDeps?.egress ? { egress: agentDeps.egress } : {}),
+    credentials,
+    store: new PgPackRunStore(db),
+    budget: { dailyUsd: pipeline.budget.dailyUsd, spentTodayUsd: () => pipeline.spentTodayUsd() },
+    engineBudgets,
+    telemetry,
+    decisions: decisionLog,
+    secrets: () => machineSecrets(config, process.env),
+    learning: learningOf,
+    latched: () => pipeline.slots.latched.map((latch) => latch.owner),
+    max: 2,
+    queue: 4,
+  });
+  if (judgeRuns) {
+    const judge = new GuardJudge({ runs: judgeRuns });
+    try {
+      guardJudgeServer = await startGuardJudgeServer({ judge, host: "0.0.0.0", port: config.guardJudgePort });
+      guardJudge.current = judge;
+      console.log(`guard judge: listening on 0.0.0.0:${config.guardJudgePort} (a guard reaches it as host.docker.internal through the egress proxy)`);
+    } catch (error) {
+      console.warn(`guard judge: could not listen on port ${config.guardJudgePort}, so stage guards run without a judge: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+}
 // The last red the card's CI stage called a real failure: its decision record and the failing job, read from the stage's own finish.
 verifyDecisions.lastRed = async (taskId) => {
   const detail = (await pipeline.latestStageFinish(taskId, "ci_watch"))?.detail;
@@ -794,6 +842,16 @@ const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira
 /** The shared backlog; the duplicate check reads and bumps it through the pipeline's `dedup` port. */
 const backlog = new Backlog({ store: new PgBacklogStore(db), pipeline, staleDays: FACTORY_DEFAULTS.backlog.stale_days, onDecline: (row) => ticketMachine.declineFromBacklog(row.sources), stackOf: (sources) => ticketMachine.stackOfSources(sources) });
 /** The Ticket Machine: Jira and GitHub tickets in scope are read, checked, assessed and drafted, then held for a person's tap. Every model call is a pack through `packRuns`; the port's writes are reached only from the tap routes. */
+// Where the screen runs (RFC 0012): the GitHub and Jira intakes (before their classifiers), the Slack tap that makes a card, and `POST /runs` with a `ticket`; `sourceHeld` on the pipeline is the second line for
+// a card made from a ticket the screen holds (the backlog's promote reaches it through `createTask`). Cards with NO screen coverage, by design: PR tasks (`pr-tasks.ts`), vulnerability cards (`vulns.ts`),
+// breach cards (`breach-card.ts`), the pipeline's own internal `createTask` calls, `POST /tasks`, and Luna Notch's sources. `slack_triage` and the conversation packs also read Slack text before any tap.
+const ticketScreen = createTicketScreen({
+  decide: async (context, _repoPath) => {
+    if (!packRuns) throw new Error("agents are off: the ticket machine has no model to ask");
+    const { answer, recordId } = await ownCalls(packRuns).run({ pack: "ticket_safety", context: { ticket: context } }, INTAKE_CLIENT);
+    return { answer: tagged({ answer: answer as Record<string, unknown>, ...(recordId ? { recordId } : {}) }), ...(recordId ? { recordId } : {}) };
+  },
+});
 const ticketPack = async (pack: "ticket_validity" | "ticket_assess" | "ticket_recommend" | "ticket_reply", context: TicketContext): Promise<unknown> => {
   if (!packRuns) throw new Error("agents are off: the ticket machine has no model to ask");
   const { answer, recordId } = await ownCalls(packRuns).run({ pack, context: { ticket: context } }, INTAKE_CLIENT);
@@ -809,6 +867,7 @@ const ticketMachine = new TicketMachine({
   config: async (repoPath) => (await policies.for(repoPath)).factory,
   locate: async (repoPath, text) => (repoPath ? ((await graph.locate(repoPath, text))?.files ?? []).map((f: { path?: string } | string) => (typeof f === "string" ? f : (f.path ?? ""))).filter(Boolean) : []),
   createCard: (input, key) => cardOnce(pipeline, input, key),
+  screen: ticketScreen,
   validity: { decide: async (c) => (await ticketPack("ticket_validity", c)) as never },
   assess: { decide: async (c) => (await ticketPack("ticket_assess", c)) as never },
   recommend: { decide: async (c) => (await ticketPack("ticket_recommend", c)) as never },
@@ -1006,6 +1065,7 @@ const app = createApp({
   knownRepos,
   // The identity is read on each call, so a machine fixed in place turns healthy without a restart; the token and the stub reason are fixed at boot.
   sandboxPolicy: config.sandboxPolicy,
+  engineRelay: config.egress.relay,
   problems: async () => readinessProblems({ githubToken: config.githubToken, identity: await gitIdentity(process.cwd()), stubReason }),
   approveBase,
   ...(config.economy ? { economy: { port: economy, knownRepos, configOf: async (repo: string) => (await policies.for(repo)).factory.economy } } : {}),
@@ -1026,6 +1086,7 @@ const app = createApp({
   bus,
   backlog,
   tickets: ticketMachine,
+  screen: ticketScreen,
   compliance,
   watcher,
   stubs,
@@ -1243,6 +1304,7 @@ async function shutdown(): Promise<void> {
   if (digestTimer) clearTimeout(digestTimer);
   pipeline.stopSupervisor();
   server.close();
+  await guardJudgeServer?.close();
   await pipeline.shutdown();
   await telemetry.flush();
   await db.destroy();

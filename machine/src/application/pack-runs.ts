@@ -181,6 +181,8 @@ function resetsIso(resetsAt: number | string | null): string | null {
 }
 
 const isPrivate = (context: PackContext): boolean => (context as { conversation?: { private?: unknown } }).conversation?.private === true;
+/** A guard judge call: its context holds the arguments of a tool call and a ticket's text, so no transcript of it leaves the machine. */
+const isGuard = (context: PackContext): boolean => (context as { check?: { kind?: unknown } }).check?.kind === "guard";
 
 const usd = (value: number) => `$${value.toFixed(2)}`;
 
@@ -374,7 +376,7 @@ export class PackRuns implements PackRunsPort {
         info,
         // A transcript holds the model's own text (the draft reply to a DM) and a client's context: only the machine's own call, and
         // never a private conversation's, may send it, and what leaves passes the stored copy's redaction and the personal-data masking.
-        ...(keepsMore && origin.own === true && !isPrivate(context) ? { transcriptPath: join(runDir, "transcript.log"), scrub: this.scrubber() } : {}),
+        ...(keepsMore && origin.own === true && !isPrivate(context) && !isGuard(context) ? { transcriptPath: join(runDir, "transcript.log"), scrub: this.scrubber() } : {}),
         ...(carried ?? {}),
       });
       await rm(runDir, { recursive: true, force: true }).catch(() => {});

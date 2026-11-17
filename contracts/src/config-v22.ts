@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import type { EconomyConfig } from "./economy.ts";
 import { hostPatternProblem, secretNameProblem, urlPatternProblem } from "./egress.ts";
+import { GuardMode, Severity } from "./machine-policy.ts";
 
 const unit = z.number().min(0).max(1);
 const count = (max: number) => z.number().int().min(0).max(max);
@@ -92,6 +93,7 @@ export const FactoryConfigInput = {
     egress: section({ allow: z.array(HostPattern).max(50).optional(), registries: z.enum(["install", "always"]).optional() }).optional(),
     install: section({ run: z.enum(["on", "off"]).optional(), scripts: z.enum(["off", "on"]).optional() }).optional(),
     image: section({ base: z.string().max(1000).optional() }).optional(),
+    guard: section({ trusted: GuardMode.optional(), untrusted: GuardMode.optional(), block_severity: Severity.optional() }).optional(),
   }).optional(),
   verify: section({
     coverage_drop_max: z.number().min(0).max(100).optional(),
@@ -152,7 +154,7 @@ export interface FactoryConfig {
   plan: { coverage_score_min: number; coverage_rounds: number; plan_check_retries: number; approvers: { low: number; medium: number; high: number; outside_owning_team: boolean }; sla: { reminder_days: number; escalate_days: number }; council: { enabled: boolean; rounds: 1 | 2; on_risk: "high"; on_size: Array<"XS" | "S" | "M" | "L" | "XL">; counts_as_pass: boolean } };
   size: { target_loc: [number, number]; hard_limit_loc: number; max_children: number; max_rounds: number; depth: number };
   build: { max_iterations: number; max_tokens: number; max_minutes: number; backoff_minutes: [number, number]; regression_full_suite_minutes: number };
-  sandbox: { cpu: number; memory_gb: number; keep_hours: number; egress: { allow: string[]; registries: "install" | "always" }; install: { run: "on" | "off"; scripts: "off" | "on" }; image: { base: string | null } };
+  sandbox: { cpu: number; memory_gb: number; keep_hours: number; egress: { allow: string[]; registries: "install" | "always" }; install: { run: "on" | "off"; scripts: "off" | "on" }; image: { base: string | null }; guard?: { trusted?: GuardMode; untrusted?: GuardMode; block_severity?: Severity } };
   verify: { coverage_drop_max: number; mutation: { command: string | null; min_score: number }; build_rounds: number; e2e_rounds: number; ci_rounds: number; env_flake_retries: number; ci_flaky_reruns: number; auto_rebase: number; e2e: { deploy: { command: string | null; url_pattern: string | null; health_check: string; timeout_minutes: number; secrets: string[] }; start: { command: string | null; port: number; ready: string; ready_timeout_s: number; secrets: string[] }; seed: { command: string | null; secrets: string[] } } };
   evidence: { video_budget_s: number; regenerate: number; tts: { voice: string | null; language: string | null }; storage: "release_asset" | "local"; retention_days: number };
   economy: EconomyConfig;
@@ -196,7 +198,7 @@ export const CONSUMED_FROM: Readonly<Record<string, number>> = {
   "plan.council.enabled": 19, "plan.council.rounds": 19, "plan.council.on_risk": 19, "plan.council.on_size": 19, "plan.council.counts_as_pass": 19,
   "size.target_loc": 15, "size.hard_limit_loc": 15, "size.max_children": 15, "size.max_rounds": 15, "size.depth": 15,
   "build.max_iterations": 10, "build.max_tokens": 10, "build.max_minutes": 10, "build.backoff_minutes": 10, "build.regression_full_suite_minutes": 10,
-  "sandbox.cpu": 11, "sandbox.memory_gb": 11, "sandbox.keep_hours": 11, "sandbox.egress.allow": 11, "sandbox.egress.registries": 11, "sandbox.install.run": 11, "sandbox.install.scripts": 11, "sandbox.image.base": 11,
+  "sandbox.cpu": 11, "sandbox.memory_gb": 11, "sandbox.keep_hours": 11, "sandbox.egress.allow": 11, "sandbox.egress.registries": 11, "sandbox.install.run": 11, "sandbox.install.scripts": 11, "sandbox.image.base": 11, "sandbox.guard.trusted": 22, "sandbox.guard.untrusted": 22, "sandbox.guard.block_severity": 22,
   "verify.coverage_drop_max": 12, "verify.mutation.command": 12, "verify.mutation.min_score": 12, "verify.build_rounds": 12, "verify.e2e_rounds": 12, "verify.ci_rounds": 12,
   "verify.env_flake_retries": 8, "verify.ci_flaky_reruns": 8, "verify.auto_rebase": 8,
   "verify.e2e.deploy.command": 11, "verify.e2e.deploy.url_pattern": 11, "verify.e2e.deploy.health_check": 11, "verify.e2e.deploy.timeout_minutes": 11, "verify.e2e.deploy.secrets": 11,

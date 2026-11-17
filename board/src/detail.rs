@@ -1044,6 +1044,7 @@ pub(crate) fn escalation_words(reason: &str) -> String {
         "too_complex" => "too complex for this engine".to_string(),
         "undeclared_scope" => "it changed files outside its scope".to_string(),
         "head_moved" => "the branch moved under it".to_string(),
+        "guard_blocked" => "the stage guard blocked a tool call".to_string(),
         "other" => "it needs a person".to_string(),
         unknown => plain(unknown).replace('_', " "),
     }
@@ -3436,6 +3437,15 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
+
+    #[test]
+    fn a_guard_block_is_spelled_in_fixed_words_and_an_unknown_reason_is_not_a_code_word() {
+        assert_eq!(
+            escalation_words("guard_blocked"),
+            "the stage guard blocked a tool call"
+        );
+        assert_eq!(escalation_words("some_new_reason"), "some new reason");
+    }
     use crate::model::PullRequest;
 
     const TASK: &str = r#"{"id":"abcdef123456","title":"Add CSV export","description":"Users want CSV.","criteria":["handles a/b & c","declares charset in header"],

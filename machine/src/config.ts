@@ -38,6 +38,10 @@ export interface Config {
   /** Docker image for the e2e stage, with a browser. Used by the QA slices. */
   runnerQaImage: string;
   runnerVideoImage: string;
+  /** Docker image of the stage guard (SafeAgents), built by `runner:build --guard`; its label dev.hardness.guard says what it is. */
+  runnerGuardImage: string;
+  /** The port of the listener the stage guards call for the judge (`MACHINE_GUARD_JUDGE_PORT`, 4319). It binds beyond loopback (the guards reach it through the egress proxy as host.docker.internal) and takes only a per-run key. */
+  guardJudgePort: number;
   /** Task worktrees go in `<worktreesDir>/<repo>/<branch>`, like `herdr worktree`. */
   worktreesDir: string;
   /** Run inputs, outputs and transcripts. */
@@ -248,6 +252,8 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 export const DEFAULT_DATABASE_URL = "postgres://hardness:hardness@127.0.0.1:5433/hardness";
 export const DEFAULT_PORT = 4317;
+/** Where the stage guards' judge listens (`MACHINE_GUARD_JUDGE_PORT`): free in the repo's port table (4317 the API, 4318 compose's, 5433 Postgres, 5667 and 8000-8001 Laminar). */
+export const DEFAULT_GUARD_JUDGE_PORT = 4319;
 export const DEFAULT_MAX_CONCURRENT_TASKS = 4;
 export const DEFAULT_RETENTION_DAYS = 90;
 export const DEFAULT_WORKTREE_RETENTION_DAYS = 7;
@@ -357,10 +363,20 @@ export function sandboxPolicyFrom(env: NodeJS.ProcessEnv, home: string): Machine
   return parsed.data;
 }
 
-/** The policy keys that are set but do nothing, and a startup warning for each. Today only `bash_sandbox: on`: the nested Bash sandbox was not built (RFC 0009). */
-export function sandboxPolicyNotes(policy: MachinePolicy): { notInForce: string[]; warnings: string[] } {
-  if (policy.bash_sandbox !== "on") return { notInForce: [], warnings: [] };
-  return { notInForce: ["bash_sandbox"], warnings: ["sandbox policy: bash_sandbox is on, but the nested Bash sandbox was not built (RFC 0009), so it has no effect"] };
+/** The policy keys that are set but do nothing, and a startup warning for each: `bash_sandbox: on` (the nested Bash sandbox was not built, RFC 0009) and a stage guard the policy asks for while the engine relay is off (the guard sits in front of the relay, so it needs the relay and the egress proxy; `relay` is false with either off). */
+export function sandboxPolicyNotes(policy: MachinePolicy, runtime: { relay: boolean } = { relay: true }): { notInForce: string[]; warnings: string[] } {
+  const notInForce: string[] = [];
+  const warnings: string[] = [];
+  if (policy.bash_sandbox === "on") {
+    notInForce.push("bash_sandbox");
+    warnings.push("sandbox policy: bash_sandbox is on, but the nested Bash sandbox was not built (RFC 0009), so it has no effect");
+  }
+  if (!runtime.relay && (policy.guard.trusted !== "off" || policy.guard.untrusted !== "off")) {
+    const note = "guard: needs the engine relay and the egress proxy; both must be on";
+    notInForce.push(note);
+    warnings.push(`sandbox policy: ${note}`);
+  }
+  return { notInForce, warnings };
 }
 
 /** The policy's seccomp profile must exist, be a readable regular file and parse as JSON: else the machine would start and then fail every stage. Throws, naming the key and the path. */
@@ -549,6 +565,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     runnerImage: env.RUNNER_IMAGE ?? "hardness-runner:dev",
     runnerQaImage: env.RUNNER_QA_IMAGE ?? "hardness-runner-qa:dev",
     runnerVideoImage: env.RUNNER_VIDEO_IMAGE ?? "hardness-runner-video:dev",
+    runnerGuardImage: env.RUNNER_GUARD_IMAGE ?? "hardness-runner-guard:dev",
+    guardJudgePort: portFrom(env, "MACHINE_GUARD_JUDGE_PORT", DEFAULT_GUARD_JUDGE_PORT),
     worktreesDir: env.WORKTREES_DIR ?? join(home, "Developer", "worktrees"),
     stateDir,
     githubPoll: { repos, intervalMs: pollSeconds * 1000, label: env.MACHINE_GITHUB_LABEL ?? "ready-for-agent" },

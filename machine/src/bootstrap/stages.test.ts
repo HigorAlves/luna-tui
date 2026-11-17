@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildRunnerFor, egressImageProblem } from "./stages.ts";
+import { buildRunnerFor, egressImageProblem, guardImageProblem } from "./stages.ts";
 
 describe("buildRunnerFor", () => {
   it("routes delivering, verifying and shipping to the always-real runners, everything else to the stub or the real map", () => {
@@ -71,6 +71,11 @@ describe("the runner image's proxy", () => {
   it("is a reason to run every stage as a stub when the image has no egress label", async () => {
     expect(await egressImageProblem("img:dev", async () => null)).toMatch(/img:dev.*egress.*runner:build/s);
     expect(await egressImageProblem("img:dev", async (image, label) => (image === "img:dev" && label === "dev.hardness.egress" ? "1" : null))).toBeNull();
+  });
+
+  it("says when the guard image has no guard label, and accepts one that has it", async () => {
+    expect(await guardImageProblem("g:dev", async () => null)).toMatch(/g:dev.*guard.*images/s);
+    expect(await guardImageProblem("g:dev", async (image, label) => (image === "g:dev" && label === "dev.hardness.guard" ? "1" : null))).toBeNull();
   });
 
   it("sweeps leftover networks right after leftover containers", () => {

@@ -1,0 +1,53 @@
+{
+  "schema": 3,
+  "stage": "ticket_safety",
+  "pack": "ticket_safety",
+  "attempt": 1,
+  "task": {
+    "id": "ticket-safety",
+    "title": "Export button does nothing",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ticket": {
+      "key": "PAY-12",
+      "type": "Bug",
+      "priority": "High",
+      "reporter": "Ana",
+      "reachable": true,
+      "labels": [],
+      "sprint": null,
+      "dueAt": null,
+      "comments": [],
+      "linked": [],
+      "epic": null,
+      "recent": [],
+      "files": [],
+      "candidates": [],
+      "title": "Export button does nothing",
+      "description": "### Describe the bug\n<!-- -->\nThe export button on the reports page does nothing. \ud83d\udc1b\n\n### Steps to reproduce\n<!-- -->\n1. Open reports\n2. Click Export\n\n### Expected behaviour\n<!-- -->\nA CSV downloads.",
+      "signals": {
+        "invisible": 0,
+        "bidi": 0,
+        "htmlComments": 3,
+        "encodedRuns": 0,
+        "linkMismatch": 0
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

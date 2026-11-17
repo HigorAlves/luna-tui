@@ -2,11 +2,14 @@
 // mode: no route out and no gateway address on the host. The proxy is a second container of the machine's own image,
 // on that network and on one ordinary bridge the machine owns, started with the run's list on its command line, so
 // nothing in a stage container can change it. See docs/architecture.md "A sandbox's network".
+import { dirname, join } from "node:path";
+
 import { z } from "zod";
 
 import type { EngineRelay } from "../credentials/credential.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { type ExecResult, exec as hostExec } from "../process/exec.ts";
+import { GuardStartError, type GuardSpec, guardName, guardSecretsDir, startGuard } from "./guard.ts";
 
 /** Label on the card network and the proxy, the same as a stage container's, so leftovers are swept together. */
 const STAGE_LABEL = "dev.hardness.stage=1";
@@ -119,6 +122,8 @@ export function blockedRowsOf(text: string): BlockedRow[] {
 
 export interface CardNetwork {
   name: string;
+  /** The run's stage guard, when it has one: where it listens and where its journal will be. */
+  guard?: { address: string; port: number; journalPath: string };
   /** The address of the proxy on this network (its refusing resolver too), or 127.0.0.1 when there is none. */
   dns: string;
   /** The `docker run` arguments that put a container on this network: `--network`, `--dns`, and the proxy variables when there is a proxy. */
@@ -129,10 +134,16 @@ export interface CardNetwork {
   teardown(): Promise<void>;
 }
 
+type RunningGuardInfo = NonNullable<CardNetwork["guard"]>;
+
 export interface OpenOptions {
   exec?: DockerExec;
   /** The machine's own runner image, where the proxy file is. */
   proxyImage: string;
+  /** The machine's own guard image (`RUNNER_GUARD_IMAGE`); needed when the spec asks for a guard. */
+  guardImage?: string;
+  /** `uid:gid` the guard runs as (the machine's user, so it can read the 0600 journal). */
+  guardUser?: string | undefined;
   bridge?: string;
   pollMs?: number;
   readyTimeoutMs?: number;
@@ -141,16 +152,19 @@ export interface OpenOptions {
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Makes a run's card network and, when its list has an entry, the proxy on it. Throws `EgressUnsupportedError` when the daemon cannot make the isolated network. */
-export async function openCardNetwork(runName: string, spec: { allow: readonly string[]; allowPrivate: readonly string[]; relay?: EngineRelay }, options: OpenOptions): Promise<CardNetwork> {
+export async function openCardNetwork(runName: string, spec: { allow: readonly string[]; allowPrivate: readonly string[]; relay?: EngineRelay; /** A guard between the stage and the relay; only with a relay. */ guard?: GuardSpec }, options: OpenOptions): Promise<CardNetwork> {
   const exec = options.exec ?? hostExec;
   const bridge = options.bridge ?? EGRESS_BRIDGE;
   const network = cardNetworkName(runName);
   const proxy = proxyName(runName);
   const hasProxy = spec.allow.length + spec.allowPrivate.length > 0 || spec.relay !== undefined;
+  const wantsGuard = spec.relay !== undefined && spec.guard !== undefined;
   let torn = false;
   const teardown = async (): Promise<void> => {
     if (torn) return;
     torn = true;
+    // The guard first: `docker network rm` fails while a container is attached.
+    if (wantsGuard) await exec("docker", ["rm", "-f", guardName(runName)]);
     if (hasProxy) await exec("docker", ["rm", "-f", proxy]);
     await exec("docker", ["network", "rm", network]);
   };
@@ -193,21 +207,30 @@ export async function openCardNetwork(runName: string, spec: { allow: readonly s
       await waitReady(exec, proxy, options);
     }
 
+    // The guard starts once the proxy (and so the relay) is ready. A guard that cannot start is an error, never a run without one.
+    let guard: RunningGuardInfo | undefined;
+    if (spec.relay && spec.guard) {
+      if (!options.guardImage) throw new GuardStartError("no guard image is configured (RUNNER_GUARD_IMAGE)");
+      const started = await startGuard({ run: runName, image: options.guardImage, network, dns: address, journalDir: spec.guard.journalDir, secretsDir: guardSecretsDir(spec.guard.journalDir), upstream: `http://${address}:${RELAY_PORT}`, mode: spec.guard.mode, blockSeverity: spec.guard.blockSeverity, ...(spec.guard.judge ? { judge: spec.guard.judge, proxy: `http://${address}:${PROXY_PORT}` } : {}), user: options.guardUser, exec, ...(options.pollMs !== undefined ? { pollMs: options.pollMs } : {}), ...(options.readyTimeoutMs !== undefined ? { readyTimeoutMs: options.readyTimeoutMs } : {}) });
+      guard = { address: started.address, port: started.port, journalPath: started.journalPath };
+    }
+
     const proxyUrl = `http://${address}:${PROXY_PORT}`;
     return {
       name: network,
+      ...(guard ? { guard } : {}),
       dns: address,
       containerArgs(aliases = []) {
         const args = ["--network", network, "--dns", address];
         if (!hasProxy) return args;
         // The SDK sends a plain-HTTP base URL through HTTP_PROXY when it is set, so the relay's address must be exempt.
-        const noProxy = ["localhost", "127.0.0.1", "::1", ...aliases, ...(spec.relay ? [address] : [])].join(",");
+        const noProxy = ["localhost", "127.0.0.1", "::1", ...aliases, ...(spec.relay ? [address] : []), ...(guard ? [guard.address] : [])].join(",");
         const env: Array<[string, string]> = [
           ...["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "YARN_HTTP_PROXY", "YARN_HTTPS_PROXY"].map((name): [string, string] => [name, proxyUrl]),
           ["NO_PROXY", noProxy],
           ["no_proxy", noProxy],
           ["NODE_USE_ENV_PROXY", "1"],
-          ...(spec.relay ? [["ANTHROPIC_BASE_URL", `http://${address}:${RELAY_PORT}`] as [string, string]] : []),
+          ...(guard ? [["ANTHROPIC_BASE_URL", `http://${guard.address}:${guard.port}`] as [string, string]] : spec.relay ? [["ANTHROPIC_BASE_URL", `http://${address}:${RELAY_PORT}`] as [string, string]] : []),
         ];
         return [...args, ...env.flatMap(([name, value]) => ["-e", `${name}=${value}`])];
       },
@@ -250,8 +273,9 @@ export async function findCardNetwork(runName: string, exec: DockerExec = hostEx
   const proxy = proxyName(runName);
   const hasNetwork = (await exec("docker", ["network", "inspect", network])).code === 0;
   const hasProxy = (await exec("docker", ["inspect", "-f", "{{.State.Running}}", proxy])).code === 0;
-  // A proxy whose network is gone is still found, so that it (and the real-token file it mounts) is removed when the run ends.
-  if (!hasNetwork && !hasProxy) return null;
+  const hasGuard = (await exec("docker", ["inspect", "-f", "{{.State.Running}}", guardName(runName)])).code === 0;
+  // A proxy whose network is gone is still found, so that it (and the real-token file it mounts) is removed when the run ends. A guard is found the same way.
+  if (!hasNetwork && !hasProxy && !hasGuard) return null;
   let torn = false;
   return {
     name: network,
@@ -267,6 +291,7 @@ export async function findCardNetwork(runName: string, exec: DockerExec = hostEx
     async teardown() {
       if (torn) return;
       torn = true;
+      if (hasGuard) await exec("docker", ["rm", "-f", guardName(runName)]);
       if (hasProxy) await exec("docker", ["rm", "-f", proxy]);
       await exec("docker", ["network", "rm", network]);
     },
@@ -288,12 +313,20 @@ async function waitReady(exec: DockerExec, proxy: string, options: OpenOptions):
 
 /** Removes one run's proxy and card network by the run's container name; nothing happens for what is already gone. */
 export async function removeRunNetwork(runName: string, exec: DockerExec = hostExec): Promise<void> {
+  await exec("docker", ["rm", "-f", guardName(runName)]);
   await exec("docker", ["rm", "-f", proxyName(runName)]);
   await exec("docker", ["network", "rm", cardNetworkName(runName)]);
 }
 
-/** Removes proxies whose run's container is gone, then every network labelled as a stage's that no container uses. Returns how many networks went. */
+/** Removes guards and proxies whose run's container is gone, then every network labelled as a stage's that no container uses. Returns how many networks went. */
 export async function removeLeftoverNetworks(exec: DockerExec = hostExec): Promise<number> {
+  // Guards first: a network with a guard attached cannot be removed.
+  const guards = await exec("docker", ["ps", "--format", "{{.Names}}", "--filter", "name=^hardness-guard-"]);
+  for (const name of guards.stdout.split("\n").map((n) => n.trim()).filter((n) => n.startsWith("hardness-guard-"))) {
+    const run = name.slice("hardness-guard-".length);
+    const alive = await exec("docker", ["inspect", "-f", "{{.State.Running}}", run]);
+    if (alive.code !== 0 || alive.stdout.trim() !== "true") await exec("docker", ["rm", "-f", name]);
+  }
   const proxies = await exec("docker", ["ps", "--format", "{{.Names}}", "--filter", "name=^hardness-egress-"]);
   for (const name of proxies.stdout.split("\n").map((n) => n.trim()).filter((n) => n.startsWith("hardness-egress-"))) {
     const run = name.slice("hardness-egress-".length);

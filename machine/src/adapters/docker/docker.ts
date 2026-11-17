@@ -8,12 +8,13 @@ import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
-import type { ServiceSpec } from "@hardness/contracts";
+import type { GuardMode, ServiceSpec } from "@hardness/contracts";
 
 import type { CredentialMount, RunCredential } from "../credentials/index.ts";
 import { hostRedactor, secretRedactor } from "../../domain/redact-secrets.ts";
 import type { SecretStore } from "../../application/secrets.ts";
 import { type BlockedRow, type CardNetwork, findCardNetwork, openCardNetwork } from "./egress.ts";
+import { GuardStartError, type GuardSpec, guardImageProblem, guardSecretsDir } from "./guard.ts";
 import { runtimeChecker } from "./runtimes.ts";
 import { type ServiceHardening, type ServiceHost, hostArgs, serviceName, startServices } from "./services.ts";
 import { type ExecResult, exec, execOrThrow, OUTPUT_CAP } from "../process/exec.ts";
@@ -200,6 +201,8 @@ export interface SandboxRun {
   serviceHosts?: ServiceHost[];
   /** The list this run may reach (`egressFor`), and the machine's own image the proxy runs from (never a repository's). `runSandbox` opens a card network with a proxy for it, and removes both when the run ends. */
   egress?: { allow: readonly string[]; allowPrivate: readonly string[]; proxyImage: string };
+  /** The stage guard between this run and the engine relay (RFC 0012): its mode, severity and the folder for its journal, and the machine's own guard image. Used only when the credential has a relay and the mode is not off; the run's card network then starts one guard, removed with it. */
+  guard?: Omit<GuardSpec, "mode" | "judge"> & { mode: GuardMode; image: string; /** The judge this run's guard asks (B6): its URL, whether an error blocks, the run's key (written as a secret file, never an argument) and how to take the key back. */ judge?: NonNullable<GuardSpec["judge"]> & { token: string; revoke(): void } };
   /** Secret values by name, for this run only: files in `<runDir>/secrets`, mounted read-only at /run/luna-secrets. */
   secrets?: Record<string, string>;
   /** Values the container never holds but its output may carry (the app's, the seed's and the deploy's secrets seen by the browser run): replaced in the transcript and the refused hosts only. */
@@ -238,6 +241,8 @@ export interface SandboxResult {
   transcriptPath: string;
   /** What the run's proxy refused (untrusted text, flattened); absent for a run with no card network. */
   blocked?: BlockedRow[];
+  /** Where the run's stage guard wrote its journal (host path), when it had one. */
+  guard?: { journalPath: string };
 }
 
 /** What `runSandbox` and `execInSandbox` call out to; the host's by default, a fake in a test. */
@@ -251,8 +256,20 @@ export interface RunDeps {
   checkSeccomp: () => Promise<void>;
   /** Throws `RuntimeUnavailableError` when the daemon lacks the runtime the size names (`--runtime`); asked only for a runtime other than runc. */
   checkRuntime?: (runtime: string) => Promise<void>;
+  /** Why an image is not the stage guard, or null; asked before the first guarded run (a missing image is `GuardStartError`). */
+  guardImageProblem: (image: string) => Promise<string | null>;
 }
-const HOST_DEPS: RunDeps = { exec, execOrThrow, startServices, openCardNetwork, findCardNetwork, checkSeccomp: seccompChecker(exec), checkRuntime: runtimeChecker(exec) };
+/** The guard images already checked: a good image is asked about once. */
+const guardImagesChecked = new Set<string>();
+const HOST_DEPS: RunDeps = {
+  exec, execOrThrow, startServices, openCardNetwork, findCardNetwork, checkSeccomp: seccompChecker(exec), checkRuntime: runtimeChecker(exec),
+  guardImageProblem: async (image) => {
+    if (guardImagesChecked.has(image)) return null;
+    const problem = await guardImageProblem(image, imageLabel);
+    if (problem === null) guardImagesChecked.add(image);
+    return problem;
+  },
+};
 
 /** Every container drops all capabilities and has its own IPC namespace: a stage needs none of root's powers, and shares no shared memory with the host. */
 export const HARDEN_ARGS = ["--cap-drop", "ALL", "--ipc", "private"];
@@ -326,15 +343,41 @@ function networkArgs(network: string | null | undefined, serviceEnv: Record<stri
 
 export async function runSandbox(run: SandboxRun, given: Partial<RunDeps> = {}): Promise<SandboxResult> {
   const deps: RunDeps = { ...HOST_DEPS, ...given };
+  // A guard only sits in front of a relayed credential: with no relay there is nothing for it to forward to.
+  const asked = run.guard;
+  const guard = run.credential.relay && asked && asked.mode !== "off" ? { ...asked, mode: asked.mode } : null;
   if (!run.attach) {
     await deps.checkSeccomp();
     if (run.limits?.runtime) await deps.checkRuntime?.(run.limits.runtime);
+    if (guard) {
+      const problem = await deps.guardImageProblem(guard.image);
+      if (problem) throw new GuardStartError(problem);
+    }
   }
   // The run's own card network, when it has a list: opened here and removed in `finally`, whatever the outcome. A card network
   // it is handed (the browser run's, the app's) is joined and left alone; a re-attached run's is found by name and removed at its end.
   let own: CardNetwork | null = null;
+  // The judge's key goes with the run: revoked, and its file removed, however the run ends.
+  const dropJudge = async (): Promise<void> => {
+    if (!guard?.judge) return;
+    guard.judge.revoke();
+    await rm(guardSecretsDir(guard.journalDir), { recursive: true, force: true });
+  };
   if (run.attach) own = run.cardNetwork ? null : run.egress ? await deps.findCardNetwork(run.name) : null;
-  else if (!run.cardNetwork && run.egress) own = await deps.openCardNetwork(run.name, run.credential.relay ? { ...run.egress, relay: run.credential.relay } : run.egress, { proxyImage: run.egress.proxyImage });
+  else if (!run.cardNetwork && run.egress) {
+    const spec = run.credential.relay ? { ...run.egress, relay: run.credential.relay, ...(guard ? { guard: { mode: guard.mode, blockSeverity: guard.blockSeverity, journalDir: guard.journalDir, ...(guard.judge ? { judge: { url: guard.judge.url, failClosed: guard.judge.failClosed } } : {}) } } : {}) } : run.egress;
+    try {
+      // The judge's key is a read-only file of the guard's secrets folder (RFC 0009 S2), written before the guard starts; never an argument.
+      if (guard?.judge) {
+        await writeSecretFiles(guardSecretsDir(guard.journalDir), { SAFEAGENTS_JUDGE_API_KEY: guard.judge.token });
+        await chmod(join(guardSecretsDir(guard.journalDir), "SAFEAGENTS_JUDGE_API_KEY"), 0o444);
+      }
+      own = await deps.openCardNetwork(run.name, spec, { proxyImage: run.egress.proxyImage, ...(guard ? { guardImage: guard.image, guardUser: hostUser() } : {}) });
+    } catch (error) {
+      await dropJudge();
+      throw error;
+    }
+  }
   const card = run.cardNetwork ?? own;
   const secretsPath = join(run.runDir, "secrets");
   try {
@@ -357,7 +400,9 @@ export async function runSandbox(run: SandboxRun, given: Partial<RunDeps> = {}):
       const redact = secretRedactor(known);
       const redactHost = hostRedactor(known);
       const result = await waitSandbox(run, deps.exec, redact);
-      return own ? { ...result, blocked: ((await own.blocked()) as BlockedRow[]).map((row) => ({ ...row, host: redactHost(row.host) })) } : result;
+      // A re-attached run's guard is the one it started with: its journal is where the spec said.
+      const journal = own?.guard?.journalPath ?? (run.attach && guard && own ? join(guard.journalDir, "calls.jsonl") : null);
+      return own ? { ...result, blocked: ((await own.blocked()) as BlockedRow[]).map((row) => ({ ...row, host: redactHost(row.host) })), ...(journal ? { guard: { journalPath: journal } } : {}) } : result;
     } finally {
       await services.teardown();
       // The files are in the container's mount only while it lives: nothing of a run's secrets stays on the host.
@@ -365,6 +410,7 @@ export async function runSandbox(run: SandboxRun, given: Partial<RunDeps> = {}):
     }
   } finally {
     await own?.teardown();
+    await dropJudge();
   }
 }
 

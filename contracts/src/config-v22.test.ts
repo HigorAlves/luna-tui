@@ -40,11 +40,12 @@ describe("the diagram's config defaults", () => {
   });
 
   it("name, for every key, the wave that reads it", () => {
-    const keys = configKeys();
+    // `sandbox.guard` has no default on purpose: the machine's policy decides, so the keys are named here, not found in the defaults.
+    const keys = [...configKeys(), "sandbox.guard.trusted", "sandbox.guard.untrusted", "sandbox.guard.block_severity"];
     expect(keys.length).toBeGreaterThan(60);
     expect(keys.filter((k) => CONSUMED_FROM[k] === undefined)).toEqual([]);
     expect(Object.keys(CONSUMED_FROM).filter((k) => !keys.includes(k))).toEqual([]);
-    expect(new Set(Object.values(CONSUMED_FROM))).toEqual(new Set([8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]));
+    expect(new Set(Object.values(CONSUMED_FROM))).toEqual(new Set([8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 22]));
   });
 
   it("mark exactly the keys whose default already equals today's constant as wave 8", () => {
@@ -317,5 +318,19 @@ describe("the e2e app, its seed and its preview", () => {
     expect(ok({ verify: { e2e: { seed: { secrets: ["lower"] } } } }).success).toBe(false);
     expect(ok({ checks: [{ name: "t", run: "x", secrets: ["GIT_DIR"] }] }).success).toBe(false);
     expect(ok({ checks: [{ name: "t", run: "x", secrets: Array.from({ length: 11 }, (_, i) => `SECRET_${i}`) }] }).success).toBe(false);
+  });
+});
+
+describe("the guard a repository asks for", () => {
+  it("is unset by default, read from wave 22, and a repository's value wins", () => {
+    expect(FACTORY_DEFAULTS.sandbox.guard).toBeUndefined();
+    for (const key of ["sandbox.guard.trusted", "sandbox.guard.untrusted", "sandbox.guard.block_severity"]) expect(CONSUMED_FROM[key], key).toBe(22);
+    expect(factoryConfigOf({ sandbox: { guard: { untrusted: "block" } } }).sandbox.guard).toEqual({ untrusted: "block" });
+  });
+
+  it("is accepted in a luna.yaml, and a bad value or an unknown key under it is refused", () => {
+    expect(LunaConfig.safeParse({ sandbox: { guard: { trusted: "log", untrusted: "block", block_severity: "medium" } } }).success).toBe(true);
+    expect(LunaConfig.safeParse({ sandbox: { guard: { trusted: "warn" } } }).success).toBe(false);
+    expect(LunaConfig.safeParse({ sandbox: { guard: { mode: "block" } } }).success).toBe(false);
   });
 });

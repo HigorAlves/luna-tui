@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { AnswerScenario, AnswerStep, type CiContext, type ComplianceReviewContext, type CoverageSummary, type DocsDriftContext, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
+import { AnswerScenario, AnswerStep, DEFAULT_MACHINE_POLICY, type CiContext, type ComplianceReviewContext, type CoverageSummary, type DocsDriftContext, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -42,8 +42,10 @@ import { redactFiles } from "../../adapters/fs/redact-files.ts";
 import { saveKept } from "../kept-sandboxes.ts";
 import { LOCKFILES, envOf } from "../../domain/env-hash.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
-import { sandboxSizeOf } from "../../domain/sandbox-bounds.ts";
-import { trustOf, untrustedNote } from "../../domain/trust.ts";
+import { type SandboxBounds, guardOf, sandboxSizeOf } from "../../domain/sandbox-bounds.ts";
+import type { GuardSpec } from "../../adapters/docker/guard.ts";
+import { type GuardEntry, readGuardJournal } from "../../adapters/docker/guard-journal.ts";
+import { type Trust, safetyReleasedOf, trustOf, untrustedNote } from "../../domain/trust.ts";
 import { envBrokenDetail } from "../env-broken.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
@@ -68,13 +70,17 @@ import type { Graph } from "../graph.ts";
 import { PolicyStore } from "../policy.ts";
 import { RepoImageError } from "../repo-images.ts";
 import { type GraphReadiness, graphEscalation, graphSkipped } from "../graph-ready.ts";
-import type { StageContext, StageResult, StageRunner, Watcher } from "../ports.ts";
+import type { EmittableKind, StageContext, StageResult, StageRunner, Watcher } from "../ports.ts";
 
 export interface AgentDeps {
   /** The id of a local image, for the environment hash; absent, no environment is recorded. */
   imageId?: (image: string) => Promise<string>;
   /** The base stage image. */
   image: string;
+  /** The machine's judge for stage guards (RFC 0012, B6), when its listener is up: its port, whether a Jev credential is there to run its pack, and the per-run keys. Absent: no guard has a judge. */
+  guardJudge?: { port: number; available(): Promise<boolean>; register(taskId: string, trust: Trust): string; revoke(token: string): void };
+  /** The machine's own stage guard image (`RUNNER_GUARD_IMAGE`); absent, no run is guarded (tests). */
+  guardImage?: string;
   /** Resolves the image a repository's stages run in (its own, built from its base, or `image`); absent, every repository runs in `image`. */
   repoImages?: { ensure(repoPath: string, signal?: AbortSignal, taskId?: string): Promise<{ image: string }> };
   /** The image with browsers, used by the e2e pack. */
@@ -299,6 +305,34 @@ async function foldRun(deps: AgentDeps, context: StageContext, pack: PackId, res
   }
 }
 
+/** Most guard events a stage logs; the rest are one `more` row. */
+const GUARD_EVENTS_MAX = 20;
+
+/** Reads the stage guard's journal and logs one card event per entry (never the call's arguments or the task), at most 20 and then one `more`, and one note when lines were skipped or the file was cut. Returns the entries. */
+async function recordGuardJournal(journalPath: string, context: StageContext): Promise<GuardEntry[]> {
+  const journal = await readGuardJournal(journalPath);
+  const emit = (kind: EmittableKind, payload: Record<string, unknown>) => Promise.resolve(context.emit?.(kind, payload)).catch(() => {});
+  for (const entry of journal.entries.slice(0, GUARD_EVENTS_MAX)) {
+    await emit(`guard.${entry.verdict}`, { id: entry.id, tool: entry.tool, signals: entry.signals, ...(entry.reason !== null ? { reason: entry.reason } : {}) });
+  }
+  if (journal.entries.length > GUARD_EVENTS_MAX) await emit("guard.more", { more: journal.entries.length - GUARD_EVENTS_MAX });
+  if (journal.skipped > 0 || journal.truncated) await emit("guard.skipped", { skipped: journal.skipped, truncated: journal.truncated });
+  return journal.entries;
+}
+
+/** The guard a run asks for, or null. Pure. The default (no machine policy loaded) is the policy's own: `log` for both trusts. */
+export function stageGuardOf(input: { pack: (typeof PACKS)[PackId]; engineRuntime: string; relayed: boolean; image: string | undefined; bounds: SandboxBounds | undefined; trust: Trust; journalDir: string }): (Omit<GuardSpec, "judge"> & { image: string }) | null {
+  const { pack, bounds } = input;
+  if (!input.image || !input.relayed || input.engineRuntime !== "claude" || pack.kind !== "agent") return null;
+  const a = pack.access;
+  if (!(a.read || a.write || a.web || a.agent || a.skills || a.commands.length > 0 || a.luna.length > 0)) return null;
+  const { mode, blockSeverity } = guardOf(bounds ?? { guard: { trusted: DEFAULT_MACHINE_POLICY.guard.trusted, untrusted: DEFAULT_MACHINE_POLICY.guard.untrusted, blockSeverity: DEFAULT_MACHINE_POLICY.guard.block_severity } }, input.trust);
+  return mode === "off" ? null : { mode, blockSeverity, journalDir: input.journalDir, image: input.image };
+}
+
+/** The guard's bounds when no machine policy was loaded: the policy's own defaults. */
+const DEFAULT_GUARD_BOUNDS = { guard: { trusted: DEFAULT_MACHINE_POLICY.guard.trusted, untrusted: DEFAULT_MACHINE_POLICY.guard.untrusted, blockSeverity: DEFAULT_MACHINE_POLICY.guard.block_severity } };
+
 /** The cards whose untrusted run has been said on the task, so it is said once. */
 const untrustedNoted = new Set<string>();
 
@@ -317,7 +351,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const size = sandboxSizeOf(policy, trust);
   if (trust === "untrusted" && !untrustedNoted.has(task.id)) {
     untrustedNoted.add(task.id);
-    await context.note?.(untrustedNote(size)).catch(() => {});
+    await context.note?.(untrustedNote({ ...size, released: safetyReleasedOf(task.source) })).catch(() => {});
   }
   // The repository's own image, built from the base its luna.yaml names; a build that fails is an environment problem with the reason.
   let stageImage = extra.image ?? deps.image;
@@ -667,14 +701,39 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   // The run's own list: its engine's owner and each helper's, and for a browser run the hosts of the QA target(s) it may drive.
   const found = PACKS[pack];
   const owners = [credentialOwner(choice.engine), ...(found.kind === "decision" ? [] : helpersOn(found, resolveEngine(choice.engine).runtime).map((h) => credentialOwner(h.engine)))];
-  const egress = deps.egress
-    ? await guard(() => deps.egress!.for({ repoPath: task.repoPath, kind: egressKindOf(found), owners: [...new Set(owners)], ...(credential.relay ? { relayed: ["claude" as const] } : {}), targets: found.kind !== "decision" && found.network === "full" && (pack === "e2e" || pack === "recording") ? targetHosts(input.context.qaTargets ?? []) : [] }))
+  // The stage guard (RFC 0012): only an agent pack that has tools, on a Claude engine whose credential is relayed (the guard forwards to the relay).
+  // The mode is the policy's for the card's trust; `off` or a missing image means none. A resumed run re-attaches to the guard it started with.
+  const askedGuardBase = stageGuardOf({ pack: found, engineRuntime: resolveEngine(choice.engine).runtime, relayed: credential.relay !== undefined, image: deps.guardImage, bounds: policy.bounds, trust, journalDir: join(runDir, "guard") });
+  // The guard's judge: a key for this run when the guard is new, the machine serves a judge and a Jev credential can run its pack. Without one the guard runs
+  // with no judge, and an untrusted card's block severity drops one step, high to medium: the findings the judge would have weighed are then blocked by the scan alone.
+  let askedGuard: NonNullable<SandboxRun["guard"]> | null = askedGuardBase;
+  let judge: NonNullable<NonNullable<SandboxRun["guard"]>["judge"]> | null = null;
+  if (askedGuardBase && !resume) {
+    if (deps.guardJudge && (await deps.guardJudge.available().catch(() => false))) {
+      const port = deps.guardJudge.port;
+      const registry = deps.guardJudge;
+      const token = registry.register(task.id, trust);
+      let taken = false;
+      judge = { url: `http://host.docker.internal:${port}/v1`, failClosed: guardOf(policy.bounds ?? DEFAULT_GUARD_BOUNDS, trust).failClosed, token, revoke: () => { if (!taken) { taken = true; registry.revoke(token); } } };
+      askedGuard = { ...askedGuardBase, judge };
+    } else if (trust === "untrusted" && askedGuardBase.blockSeverity === "high") askedGuard = { ...askedGuardBase, blockSeverity: "medium" };
+  }
+  let egress: Awaited<ReturnType<NonNullable<AgentDeps["egress"]>["for"]>> | undefined;
+  let identity: Awaited<ReturnType<typeof gitIdentity>> | null;
+  try {
+  egress = deps.egress
+    ? await guard(() => deps.egress!.for({ repoPath: task.repoPath, kind: egressKindOf(found), owners: [...new Set(owners)], ...(judge && deps.guardJudge ? { judgePort: deps.guardJudge.port } : {}), ...(credential.relay ? { relayed: ["claude" as const] } : {}), targets: found.kind !== "decision" && found.network === "full" && (pack === "e2e" || pack === "recording") ? targetHosts(input.context.qaTargets ?? []) : [] }))
     : undefined;
-  const identity = limits.writable ? await guard(() => gitIdentity(task.repoPath!)) : null;
+  identity = limits.writable ? await guard(() => gitIdentity(task.repoPath!)) : null;
+  } catch (error) {
+    judge?.revoke();
+    throw error;
+  }
   let sandbox: SandboxResult;
   try {
   sandbox = await (deps.sandbox ?? runSandbox)({
     ...(egress ? { egress } : {}),
+    ...(askedGuard ? { guard: askedGuard } : {}),
     ...(secretValues ? { secrets: secretValues } : {}),
     ...(extra.redactValues ? { redactValues: extra.redactValues } : {}),
     ...(extra.alsoJoin?.length ? { alsoJoin: extra.alsoJoin } : {}),
@@ -721,6 +780,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   });
     ran.container = true;
   } catch (error) {
+    // The run's network was torn down with the sandbox (or never made): the judge's key goes too.
+    judge?.revoke();
     const broken = envBrokenDetail(error);
     if (!broken) throw error;
     return { outcome: "escalated", detail: broken };
@@ -732,6 +793,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const hasSecrets = Object.keys(known).length > 0;
   if (hasSecrets) await redactFiles(join(runDir, "out", "files"), redact);
   for (const payload of blockedPayloads(sandbox.blocked, "stage")) await Promise.resolve(context.emit?.("sandbox.egress_blocked", payload)).catch(() => {});
+  // The guard's journal, read now: the run's folder is still there. Each entry is a card event; the outcome is not touched here (the gate is the next slice's).
+  const guardEntries: GuardEntry[] = sandbox.guard ? await recordGuardJournal(sandbox.guard.journalPath, context) : [];
 
   const base: StageResult = {
     outcome: "fail",
@@ -760,6 +823,22 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     const detail = { error, ...extraDetail, ...(ledger ? { ledger } : {}), ...(pushes.attempted ? { pushes } : {}) };
     return dirty({ ...base, detail: hasSecrets ? (redactDeep(detail, redact) as Record<string, unknown>) : detail });
   };
+
+  // The gate: a card from outside the team whose guard blocked a call is held for a person. Nothing is imported or ingested. The journal is read
+  // after the container ended, so this is not live. A trusted card only had the events above.
+  const blockedCalls = guardEntries.filter((entry) => entry.verdict === "blocked").length;
+  if (trust === "untrusted" && blockedCalls > 0) {
+    return {
+      ...base,
+      outcome: "escalated",
+      detail: {
+        escalation: "guard_blocked",
+        reason: `The stage guard blocked ${blockedCalls} tool call(s).`,
+        guard: { blocked: blockedCalls },
+        options: ["read the guard events on the card, then retry the stage", "abandon the card"],
+      },
+    };
+  }
 
   // A nested repository (a `.git` below the folder's top level) is data no host git may read: with a gitlink for it git would start a
   // child in it and read its own configuration. The walk follows no link; what it finds is removed by plain file removal, and the run fails.

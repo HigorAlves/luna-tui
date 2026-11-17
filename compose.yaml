@@ -42,6 +42,9 @@ services:
     ports:
       # 4318 on the host, so the board can tell this machine from a `pnpm dev` one on 4317.
       - "127.0.0.1:${MACHINE_DOCKER_PORT:-4318}:4317"
+      # The stage guards' judge listener (RFC 0012). Stage containers are siblings: they reach it as host.docker.internal:<port>, the way
+      # they reach Laminar, so it is published on the host under the same number the machine listens on.
+      - "127.0.0.1:${MACHINE_GUARD_JUDGE_PORT:-4319}:${MACHINE_GUARD_JUDGE_PORT:-4319}"
     environment:
       DATABASE_URL: postgres://hardness:hardness@postgres:5432/hardness
       MACHINE_HOST: 0.0.0.0
@@ -100,6 +103,8 @@ services:
       RUNNER_IMAGE: ${RUNNER_IMAGE:-hardness-runner:dev}
       RUNNER_QA_IMAGE: ${RUNNER_QA_IMAGE:-hardness-runner-qa:dev}
       RUNNER_VIDEO_IMAGE: ${RUNNER_VIDEO_IMAGE:-hardness-runner-video:dev}
+      RUNNER_GUARD_IMAGE: ${RUNNER_GUARD_IMAGE:-hardness-runner-guard:dev}
+      MACHINE_GUARD_JUDGE_PORT: ${MACHINE_GUARD_JUDGE_PORT:-4319}
       # gh and git push to GitHub over https with this token (`pnpm start` passes `gh auth token`).
       GH_TOKEN: ${GH_TOKEN:-}
       # The Codex (ChatGPT) login for `codex:*` engines: your Codex home, mounted below. The machine

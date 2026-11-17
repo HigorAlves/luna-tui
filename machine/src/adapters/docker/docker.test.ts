@@ -9,6 +9,7 @@ import { RuntimeUnavailableError } from "./runtimes.ts";
 import { CACHE_ENV, SecretsMissingError, type RunDeps, cacheVolumeFor, hostUser, execInSandbox, runSandbox, sandboxArgs, sandboxExecArgs, sandboxExecutor, secretNameProblem, writeSecretFiles, type SandboxRun } from "./docker.ts";
 import { appArgs } from "./app.ts";
 import { EgressUnsupportedError } from "./egress.ts";
+import { GuardStartError } from "./guard.ts";
 
 /** A unit test never asks the real daemon: the seccomp and runtime start checks pass here, and the tests that test them pass their own. */
 const NO_DAEMON = { checkSeccomp: async () => {}, checkRuntime: async () => {} } as Partial<RunDeps>;
@@ -508,7 +509,7 @@ describe("runSandbox and execInSandbox on a run's own network", () => {
   const ok = (stdout = ""): ExecResult => ({ code: 0, stdout, stderr: "" });
 
   /** Fake deps: every step lands in `events`, in order. */
-  function fakes(over: { failRun?: boolean; open?: (name: string, spec: unknown) => Promise<never> } = {}) {
+  function fakes(over: { failRun?: boolean; open?: (name: string, spec: unknown, options: unknown) => Promise<never> } = {}) {
     const events: string[] = [];
     const calls: string[][] = [];
     const network = (label: string) => ({
@@ -538,6 +539,7 @@ describe("runSandbox and execInSandbox on a run's own network", () => {
       openCardNetwork: over.open ?? (async (name: string) => (events.push(`open ${name}`), network("own") as never)),
       findCardNetwork: async (name: string) => (events.push(`find ${name}`), network("found") as never),
       checkSeccomp: async () => {},
+      guardImageProblem: async () => null,
     };
     return { deps, events, calls, network };
   }
@@ -559,6 +561,89 @@ describe("runSandbox and execInSandbox on a run's own network", () => {
     await runSandbox({ ...base, credential: { env: { CLAUDE_CODE_OAUTH_TOKEN: relay.placeholder }, mounts: [], relay } }, deps);
     expect(seen).toEqual([{ allow: [], allowPrivate: [], proxyImage: "machine:dev", relay }]);
     expect(calls.find((c) => c[0] === "run")!.join(" ")).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
+  });
+
+  describe("the stage guard", () => {
+    const relay = { kind: "oauth" as const, placeholder: "sk-ant-oat01-luna-relay-ph", file: "/state/r/relay/anthropic", metaFile: "/state/r/relay/meta.json" };
+    const guard = { mode: "block" as const, blockSeverity: "high" as const, image: "guard:dev" };
+    const guarded = (over: { relay?: boolean; guard?: SandboxRun["guard"] | undefined } = {}) => {
+      const seen: Array<{ spec: Record<string, unknown>; options: Record<string, unknown> }> = [];
+      const checks: string[] = [];
+      const f = fakes({ open: async (name: string, spec: unknown, options: unknown) => (seen.push({ spec: spec as never, options: options as never }), { name: `net-${name}`, dns: "172.30.0.2", ...((spec as { guard?: unknown }).guard ? { guard: { address: "172.30.0.3", port: 8787, journalPath: "/j/calls.jsonl" } } : {}), containerArgs: () => ["--network", "n"], blocked: async () => [], teardown: async () => {} } as never) });
+      const deps = { ...f.deps, guardImageProblem: async (image: string) => (checks.push(image), null) } as RunDeps;
+      const dir = tmp();
+      const asked = "guard" in over ? over.guard : { ...guard, journalDir: join(dir, "guard") };
+      const base = run({ runDir: dir, egress: { allow: [], allowPrivate: [], proxyImage: "machine:dev" }, ...(asked ? { guard: asked } : {}) });
+      const credential = over.relay === false ? base.credential : { env: { CLAUDE_CODE_OAUTH_TOKEN: relay.placeholder }, mounts: [], relay };
+      return { seen, checks, deps, run: { ...base, credential } as SandboxRun, dir, events: f.events, calls: f.calls };
+    };
+
+    it("opens the card network with the guard's spec and image, checks the image first, and reports the journal", async () => {
+      const g = guarded();
+      const result = await runSandbox(g.run, g.deps);
+      expect(g.checks).toEqual(["guard:dev"]);
+      expect(g.seen[0]!.spec).toEqual({ allow: [], allowPrivate: [], proxyImage: "machine:dev", relay, guard: { mode: "block", blockSeverity: "high", journalDir: join(g.dir, "guard") } });
+      expect(g.seen[0]!.options).toMatchObject({ proxyImage: "machine:dev", guardImage: "guard:dev" });
+      expect(result.guard).toEqual({ journalPath: "/j/calls.jsonl" });
+    });
+
+    it("starts no guard without a relay, without a spec, or when the mode is off", async () => {
+      for (const g of [guarded({ relay: false }), guarded({ guard: undefined }), guarded({ guard: { ...guard, mode: "off" as never, journalDir: "/x" } })]) {
+        const result = await runSandbox(g.run, g.deps);
+        expect(g.checks).toEqual([]);
+        expect(g.seen[0]!.spec).not.toHaveProperty("guard");
+        expect(result.guard).toBeUndefined();
+      }
+    });
+
+    describe("with a judge", () => {
+      const token = "ab".repeat(32);
+      const judgeOf = (revoked: string[]) => ({ url: "http://host.docker.internal:4319/v1", failClosed: true, token, revoke: () => void revoked.push(token) });
+
+      it("writes the run's key as a read-only file of the guard's secrets folder before the network opens, passes the guard its URL only, and never puts the key in an argument", async () => {
+        const revoked: string[] = [];
+        const read: Array<{ mode: number; dirMode: number; parentMode: number; text: string }> = [];
+        const g = guarded({ guard: undefined });
+        const journalDir = join(g.dir, "guard");
+        const secrets = join(g.dir, "guard-secrets");
+        const open = g.deps.openCardNetwork;
+        const deps = {
+          ...g.deps,
+          openCardNetwork: async (name: string, spec: unknown, options: unknown) => {
+            const file = join(secrets, "SAFEAGENTS_JUDGE_API_KEY");
+            read.push({ mode: statSync(file).mode & 0o777, dirMode: statSync(secrets).mode & 0o777, parentMode: statSync(g.dir).mode & 0o777, text: readFileSync(file, "utf8") });
+            return open(name, spec as never, options as never);
+          },
+        } as RunDeps;
+        await runSandbox({ ...g.run, guard: { ...guard, journalDir, judge: judgeOf(revoked) } }, deps);
+        expect(read).toEqual([{ mode: 0o444, dirMode: 0o755, parentMode: 0o700, text: token }]);
+        expect((g.seen[0]!.spec as { guard: unknown }).guard).toEqual({ mode: "block", blockSeverity: "high", journalDir, judge: { url: "http://host.docker.internal:4319/v1", failClosed: true } });
+        expect(JSON.stringify([g.seen, g.calls])).not.toContain(token);
+        // The key is revoked with the network, and the file goes with the run.
+        expect(revoked).toEqual([token]);
+        expect(existsSync(secrets)).toBe(false);
+      });
+
+      it("revokes the key and removes the file when the run fails, and when the network cannot be opened", async () => {
+        for (const failure of ["run", "open"] as const) {
+          const revoked: string[] = [];
+          const g = guarded({ guard: undefined });
+          const secrets = join(g.dir, "guard-secrets");
+          const deps = (failure === "open" ? { ...g.deps, openCardNetwork: async () => Promise.reject(new GuardStartError("it exited")) } : { ...g.deps, execOrThrow: async () => Promise.reject(new Error("docker run failed")) }) as RunDeps;
+          await expect(runSandbox({ ...g.run, guard: { ...guard, journalDir: join(g.dir, "guard"), judge: judgeOf(revoked) } }, deps)).rejects.toThrow();
+          expect(revoked, failure).toEqual([token]);
+          expect(existsSync(secrets), failure).toBe(false);
+        }
+      });
+    });
+
+    it("throws GuardStartError and opens nothing when the image is missing: the stage never runs unguarded", async () => {
+      const g = guarded();
+      const deps = { ...g.deps, guardImageProblem: async () => "image guard:dev is not the stage guard" } as RunDeps;
+      await expect(runSandbox(g.run, deps)).rejects.toBeInstanceOf(GuardStartError);
+      expect(g.seen).toEqual([]);
+      expect(g.events).toEqual([]);
+    });
   });
 
   it("execInSandbox with the services already up starts none and removes none: the seed runs against the app's own database", async () => {

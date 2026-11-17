@@ -34,6 +34,8 @@ export interface EgressRequest {
   targets?: readonly string[];
   /** The preview host (`host:443`) a deploy brings up, for a check that reaches it. */
   deploy?: readonly string[];
+  /** The port of the machine's guard judge: the run's guard reaches it as `host.docker.internal:<port>` through the proxy (RFC 0012, B6). Only an agent run's list gets it. */
+  judgePort?: number;
 }
 
 export interface EgressPolicy {
@@ -117,7 +119,7 @@ export function egressPolicy(deps: EgressPolicyDeps): EgressPolicy {
         engineHosts: agentLike ? (deps.engineHosts ?? []) : [],
         targets,
         deploy,
-        machineEntries: agentLike ? (deps.traceEntries ?? []) : [],
+        machineEntries: agentLike ? [...(deps.traceEntries ?? []), ...(request.judgePort !== undefined ? [`host.docker.internal:${request.judgePort}`] : [])] : [],
       });
       return { run: { allow, allowPrivate, proxyImage: deps.proxyImage, bounds: reasons }, reasons };
     }

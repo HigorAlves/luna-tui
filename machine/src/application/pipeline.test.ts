@@ -21,6 +21,8 @@ import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import { ApprovalEntity } from "../adapters/persistence/schemas.ts";
 import { ApproverRequiredError, type BudgetAlert, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, Pipeline, PlanApprovedError, testPathsIn, RejectNotAllowedError, QuestionsCarrySecretError, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "./pipeline.ts";
+import { HeldSafetyError } from "./ticket-machine.ts";
+import { trustOf } from "../domain/trust.ts";
 import { DEFAULT_POLICY } from "../domain/policy.ts";
 import { approvedPlan, buildStageInput } from "../domain/stage-input.ts";
 import { ensureClone } from "../adapters/git/clone.ts";
@@ -4507,3 +4509,49 @@ describe("the address of a card's PR", () => {
   });
 });
 
+describe("a released source (the auto intakes make cards from released tickets)", () => {
+  const gh = { kind: "github" as const, repo: "o/r", number: 7, url: "https://github.com/o/r/issues/7", authorAssociation: "OWNER" };
+  const jira = { kind: "jira" as const, key: "PAY-1", url: "https://x/PAY-1", issueType: null };
+
+  it("createTask and createTaskOnce store safetyReleased on the source and the card runs untrusted, even an owner's or a Jira one", async () => {
+    const asked: unknown[] = [];
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, sourceReleased: async (s) => (asked.push(s), true) });
+    const a = await p.createTask({ title: "gh", source: gh });
+    const b = await p.createTask({ title: "jira", source: jira });
+    const c = (await p.createTaskOnce({ title: "gh once", source: { ...gh, number: 8 } }, "k-gh")).task;
+    const d = (await p.createTaskOnce({ title: "jira once", source: { ...jira, key: "PAY-2" } }, "k-jira")).task;
+    for (const task of [a, b, c, d]) {
+      expect((task.source as { safetyReleased?: boolean }).safetyReleased).toBe(true);
+      expect(trustOf(task)).toBe("untrusted");
+    }
+    // The stored order is the one asked for: a retry of the same body answers the same task.
+    const again = await p.createTaskOnce({ title: "gh once", source: { ...gh, number: 8 } }, "k-gh");
+    expect(again).toMatchObject({ created: false, task: { id: c.id } });
+    await p.shutdown();
+  });
+
+  it("a source that was not released stays as it was", async () => {
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, sourceReleased: async () => false });
+    const a = await p.createTask({ title: "gh", source: gh });
+    expect((a.source as { safetyReleased?: boolean }).safetyReleased).toBeUndefined();
+    expect(trustOf(a)).toBe("trusted");
+    expect(trustOf(await p.createTask({ title: "jira", source: jira }))).toBe("trusted");
+    await p.shutdown();
+  });
+});
+
+describe("a held source (the second line of the ticket safety screen)", () => {
+  it("createTask and createTaskOnce refuse a source the held check names, and create nothing", async () => {
+    const source = { kind: "github" as const, repo: "o/r", number: 7, url: "https://github.com/o/r/issues/7" };
+    const asked: Array<unknown> = [];
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, sourceHeld: async (s) => (asked.push(s), s?.kind === "github") });
+    await expect(p.createTask({ title: "Refund", source })).rejects.toBeInstanceOf(HeldSafetyError);
+    await expect(p.createTaskOnce({ title: "Refund", source }, "k-1")).rejects.toBeInstanceOf(HeldSafetyError);
+    expect(await db.query("select count(*)::int as n from tasks")).toEqual([{ n: 0 }]);
+    expect(asked).toEqual([source, source]);
+    // A card with no source, or one the check lets through, is made as before.
+    expect((await p.createTask({ title: "Plain" })).title).toBe("Plain");
+    expect((await p.createTask({ title: "Jira", source: { kind: "jira", key: "PAY-1", url: "https://x", issueType: null } })).title).toBe("Jira");
+    await p.shutdown();
+  });
+});

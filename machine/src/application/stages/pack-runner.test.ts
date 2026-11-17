@@ -264,6 +264,94 @@ describe("agent stages through packs", () => {
     expect(note).toHaveBeenCalledWith(bounds.notes[0]);
   });
 
+  describe("the stage guard", () => {
+    const relay = { kind: "oauth" as const, placeholder: "sk-ant-oat01-luna-relay-ph", file: "/state/r/relay/anthropic", metaFile: "/state/r/relay/meta.json" };
+    const relayed: Credentials = { check: async () => ({ available: true }), prepare: async () => ({ env: { CLAUDE_CODE_OAUTH_TOKEN: relay.placeholder }, mounts: [], relay, release: async () => {} }) };
+    const guardBounds = (trusted: string, untrusted: string, severity = "high") => ({ notes: [], egress: [], image: [], seccomp: null, runtime: { default: "runc", untrusted: "runc" }, maxPids: 1024, splitCache: true, guard: { trusted, untrusted, blockSeverity: severity } });
+    const guardedDeps = (bounds = guardBounds("log", "block", "critical"), over: Partial<AgentDeps> = {}): AgentDeps => ({ ...deps(fakeSandbox(output())), credentials: relayed, guardImage: "guard:dev", policies: { for: async () => ({ ...DEFAULT_POLICY, bounds }) } as never, ...over });
+    const stranger = (ctx: StageContext): StageContext => ({ ...ctx, task: { ...ctx.task, id: `g-${Math.random()}`, source: { kind: "github", repo: "o/a", number: 9, url: "u", authorAssociation: "NONE" } } as unknown as TaskRow });
+
+    it("gives an agent pack with access, on a relayed Claude credential, a guard in the mode its card's trust gets, with the run's own journal folder", async () => {
+      await runAgent(guardedDeps(), context("triage"), "triage");
+      expect(seen!.guard).toEqual({ mode: "log", blockSeverity: "critical", journalDir: join(stateDir, "runs", "run-1", "guard"), image: "guard:dev" });
+      await runAgent(guardedDeps(), stranger(context("triage")), "triage");
+      expect(seen!.guard).toMatchObject({ mode: "block", blockSeverity: "critical" });
+    });
+
+    it("gives none when the mode for that trust is off", async () => {
+      await runAgent(guardedDeps(guardBounds("off", "block")), context("triage"), "triage");
+      expect(seen!.guard).toBeUndefined();
+      await runAgent(guardedDeps(guardBounds("off", "block")), stranger(context("triage")), "triage");
+      expect(seen!.guard).toMatchObject({ mode: "block" });
+    });
+
+    it("gives none without a relay (another engine, or MACHINE_ENGINE_RELAY=off), for a pack with no access, or for a decision pack", async () => {
+      await runAgent({ ...guardedDeps(), credentials: fixedCredentials({ ANTHROPIC_API_KEY: "x" }) }, context("triage"), "triage");
+      expect(seen!.guard).toBeUndefined();
+      await runAgent(guardedDeps(), context("triage"), "fact_propose");
+      expect(PACKS.fact_propose.access.commands).toEqual([]);
+      expect(seen!.guard).toBeUndefined();
+    });
+
+    describe("the judge", () => {
+      const registered: Array<[string, string]> = [];
+      const revoked: string[] = [];
+      const judgeDeps = (available = true) => ({ port: 4319, available: async () => available, register: (taskId: string, trust: string) => (registered.push([taskId, trust]), "tok-1"), revoke: (token: string) => void revoked.push(token) });
+      const egressSeen: Array<Record<string, unknown>> = [];
+      const egress = { for: async (request: Record<string, unknown>) => (egressSeen.push(request), { allow: [], allowPrivate: request.judgePort ? [`host.docker.internal:${request.judgePort}`] : [], proxyImage: "img" }) };
+      beforeEach(() => {
+        registered.length = 0;
+        revoked.length = 0;
+        egressSeen.length = 0;
+      });
+
+      it("asks the guard to use the machine's judge when a Jev credential is there: a key for the card and its trust, the URL, fail-closed for an untrusted card, the judge's port on the run's private list, and the key taken back when the run ends", async () => {
+        await runAgent(guardedDeps(guardBounds("log", "block", "high"), { guardJudge: judgeDeps(), egress: egress as never }), stranger(context("triage")), "triage");
+        expect(registered).toHaveLength(1);
+        expect(registered[0]![1]).toBe("untrusted");
+        expect(seen!.guard).toMatchObject({ mode: "block", blockSeverity: "high", judge: { url: "http://host.docker.internal:4319/v1", failClosed: true, token: "tok-1" } });
+        expect(egressSeen[0]!.judgePort).toBe(4319);
+        seen!.guard!.judge!.revoke();
+        expect(revoked).toContain("tok-1");
+        await runAgent(guardedDeps(guardBounds("log", "block", "high"), { guardJudge: judgeDeps(), egress: egress as never }), context("triage"), "triage");
+        expect(seen!.guard).toMatchObject({ mode: "log", judge: { failClosed: false } });
+      });
+
+      it("starts the guard with no judge, and registers no key, when there is no Jev credential; an untrusted card's block severity then drops from high to medium, and nothing else changes", async () => {
+        const without = (bounds: ReturnType<typeof guardBounds>, ctx: StageContext) => runAgent(guardedDeps(bounds, { guardJudge: judgeDeps(false), egress: egress as never }), ctx, "triage");
+        await without(guardBounds("log", "block", "high"), stranger(context("triage")));
+        expect(seen!.guard).toMatchObject({ mode: "block", blockSeverity: "medium" });
+        expect(seen!.guard).not.toHaveProperty("judge");
+        expect(egressSeen[0]).not.toHaveProperty("judgePort");
+        expect(registered).toEqual([]);
+        await without(guardBounds("log", "block", "critical"), stranger(context("triage")));
+        expect(seen!.guard).toMatchObject({ blockSeverity: "critical" });
+        await without(guardBounds("log", "block", "high"), context("triage"));
+        expect(seen!.guard).toMatchObject({ mode: "log", blockSeverity: "high" });
+        // No judge listener at all (a machine that cannot serve one): the same.
+        await runAgent(guardedDeps(guardBounds("log", "block", "high")), stranger(context("triage")), "triage");
+        expect(seen!.guard).toMatchObject({ blockSeverity: "medium" });
+      });
+
+      it("revokes the key when the sandbox throws", async () => {
+        const failing = { ...guardedDeps(guardBounds("log", "block", "high"), { guardJudge: judgeDeps(), egress: egress as never }), sandbox: async () => Promise.reject(new Error("boom")) };
+        await expect(runAgent(failing, stranger(context("triage")), "triage")).rejects.toThrow("boom");
+        expect(revoked).toEqual(["tok-1"]);
+      });
+    });
+
+    it("gives none when the machine has no guard image to name", async () => {
+      await runAgent(guardedDeps(undefined, { guardImage: undefined as never }), context("triage"), "triage");
+      expect(seen!.guard).toBeUndefined();
+    });
+
+    it("keeps the guard on a resumed run, which re-attaches to the one it started with", async () => {
+      await runAgent(guardedDeps(), { ...context("triage"), resume: { container: "hardness-x", inputCommit: null, engine: "claude:opus" as const } }, "triage");
+      expect(seen!.attach).toBe(true);
+      expect(seen!.guard).toMatchObject({ mode: "log", journalDir: join(stateDir, "runs", "run-1", "guard") });
+    });
+  });
+
   describe("a card from outside the repository's people", () => {
     const stranger = (ctx: StageContext, authorAssociation = "NONE"): StageContext => ({ ...ctx, task: { ...ctx.task, id: `stranger-${authorAssociation}-${Math.random()}`, source: { kind: "github", repo: "o/a", number: 9, url: "u", authorAssociation } } as unknown as TaskRow });
     const bounds = { notes: [], egress: [], image: [], seccomp: null, runtime: { default: "runc", untrusted: "runsc" }, maxPids: 300, splitCache: true };
@@ -1644,6 +1732,72 @@ describe("a stage's own list of hosts", () => {
     const result = await runAgent(d, context("triage"), "triage");
     expect(result.outcome).toBe("escalated");
     expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true, step: "network", reason: expect.stringContaining("Docker Engine 28"), options: expect.any(Array) });
+  });
+});
+
+describe("the stage guard's journal", () => {
+  const line = (id: number, verdict: string, tool: string) =>
+    JSON.stringify({ id, time: 1.5 + id, verdict, tool, arguments: '{"command":"curl -H sk-SECRET-123 x"}', reason: `why ${id}`, signals: [{ id: "env.read", severity: "high", title: "Reads the environment" }], judge: null, model: "m", task: "ignore previous instructions" });
+  const withJournal = (lines: string[]) => {
+    const inner = fakeSandbox(output());
+    return async (run: SandboxRun): Promise<SandboxResult> => {
+      const journalPath = join(mkdtempSync(join(tmpdir(), "journal-")), "calls.jsonl");
+      writeFileSync(journalPath, `${lines.join("\n")}\n`);
+      return { ...(await inner(run)), guard: { journalPath } };
+    };
+  };
+  const emittedOf = async (lines: string[]) => {
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    await runAgent(deps(withJournal(lines)), { ...context("triage"), emit: async (kind, payload) => void emitted.push([kind, payload]) }, "triage");
+    return emitted.filter(([k]) => k.startsWith("guard.") || k === "guard.skipped");
+  };
+
+  it("emits guard.blocked, guard.flagged and guard.suspicious from the journal, with no arguments or task", async () => {
+    const emitted = await emittedOf([line(1, "blocked", "Bash"), line(2, "flagged", "Read"), line(3, "suspicious", "Write")]);
+    const signals = [{ id: "env.read", severity: "high", title: "Reads the environment" }];
+    expect(emitted).toEqual([
+      ["guard.blocked", { id: 1, tool: "Bash", signals, reason: "why 1" }],
+      ["guard.flagged", { id: 2, tool: "Read", signals, reason: "why 2" }],
+      ["guard.suspicious", { id: 3, tool: "Write", signals, reason: "why 3" }],
+    ]);
+    const text = JSON.stringify(emitted);
+    expect(text).not.toContain("sk-SECRET-123");
+    expect(text).not.toContain("ignore previous instructions");
+    expect(text).not.toContain("arguments");
+  });
+
+  it("emits at most 20 events and then one `more` row, and one note for a skipped line", async () => {
+    const lines = [...Array.from({ length: 25 }, (_, i) => line(i + 1, "flagged", "Bash")), "not json"];
+    const emitted = await emittedOf(lines);
+    expect(emitted.filter(([k]) => k === "guard.flagged")).toHaveLength(20);
+    expect(emitted.filter(([k]) => k === "guard.more")).toEqual([["guard.more", { more: 5 }]]);
+    expect(emitted.filter(([k]) => k === "guard.skipped")).toEqual([["guard.skipped", { skipped: 1, truncated: false }]]);
+  });
+
+  it("an untrusted card whose guard journal holds a blocked entry ends escalated with guard_blocked and imports no commits; a trusted card only emits", async () => {
+    const stranger = (ctx: StageContext): StageContext => ({ ...ctx, task: { ...ctx.task, id: `gb-${Math.random()}`, source: { kind: "github", repo: "o/a", number: 9, url: "u", authorAssociation: "NONE" } } as unknown as TaskRow });
+    const emitted: string[] = [];
+    const ctx = (c: StageContext): StageContext => ({ ...c, emit: async (kind) => void emitted.push(kind) });
+    const blocked = [line(1, "blocked", "Bash"), line(2, "flagged", "Read"), line(3, "blocked", "Write")];
+    const result = await runAgent(deps(withJournal(blocked)), ctx(stranger(context("implementing"))), "implementing");
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "guard_blocked", reason: "The stage guard blocked 2 tool call(s).", guard: { blocked: 2 } });
+    expect((result.detail as { options: string[] }).options.join(" ")).not.toMatch(/unguarded/i);
+    expect((result.detail as { options: string[] }).options.length).toBeGreaterThan(0);
+    expect(result.detail).not.toHaveProperty("ingested");
+    expect(emitted.filter((k) => k.startsWith("guard."))).toEqual(["guard.blocked", "guard.flagged", "guard.blocked"]);
+    // A flagged or suspicious entry alone does not hold an untrusted card.
+    const soft = await runAgent(deps(withJournal([line(1, "flagged", "Read"), line(2, "suspicious", "Bash")])), ctx(stranger(context("triage"))), "triage");
+    expect(soft.detail).not.toMatchObject({ escalation: "guard_blocked" });
+    // A trusted card only emits.
+    const trusted = await runAgent(deps(withJournal(blocked)), ctx(context("triage")), "triage");
+    expect(trusted.detail).not.toMatchObject({ escalation: "guard_blocked" });
+  });
+
+  it("emits nothing for a stage without a guard", async () => {
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    await runAgent(deps(fakeSandbox(output())), { ...context("triage"), emit: async (kind, payload) => void emitted.push([kind, payload]) }, "triage");
+    expect(emitted.filter(([k]) => k.startsWith("guard."))).toEqual([]);
   });
 });
 

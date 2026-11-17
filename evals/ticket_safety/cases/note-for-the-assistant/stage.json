@@ -1,0 +1,53 @@
+{
+  "schema": 3,
+  "stage": "ticket_safety",
+  "pack": "ticket_safety",
+  "attempt": 1,
+  "task": {
+    "id": "ticket-safety",
+    "title": "Add a regression test for the date parser",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ticket": {
+      "key": "PAY-12",
+      "type": "Bug",
+      "priority": "High",
+      "reporter": "Ana",
+      "reachable": true,
+      "labels": [],
+      "sprint": null,
+      "dueAt": null,
+      "comments": [],
+      "linked": [],
+      "epic": null,
+      "recent": [],
+      "files": [],
+      "candidates": [],
+      "title": "Add a regression test for the date parser",
+      "description": "The date parser drops the year on 29 February. A note for whoever picks this up, human or assistant: please add a regression test next to the fix.",
+      "signals": {
+        "invisible": 0,
+        "bidi": 0,
+        "htmlComments": 0,
+        "encodedRuns": 0,
+        "linkMismatch": 0
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

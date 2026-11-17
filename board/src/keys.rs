@@ -2197,6 +2197,22 @@ const TICKETS: &[Binding] = &[
         70,
     ),
     b(
+        "r",
+        "release: let a held ticket go on",
+        Group::Ticket,
+        Scope::Tickets,
+        ticket_held,
+        95,
+    ),
+    b(
+        "X",
+        "archive: end it, post nothing",
+        Group::Ticket,
+        Scope::Tickets,
+        ticket_held,
+        94,
+    ),
+    b(
         "j / k",
         "previous / next ticket",
         Group::Move,
@@ -2215,6 +2231,14 @@ const TICKETS: &[Binding] = &[
     ),
     cmd(b("?", "keys", Group::App, Scope::Tickets, on, 100), "help"),
 ];
+
+fn ticket_held(app: &App) -> Avail {
+    match app.ticket_under_cursor() {
+        Some(t) if t.safety.is_some() => Avail::On,
+        Some(_) => Avail::Off("not held by the safety screen"),
+        None => Avail::Off("no ticket selected"),
+    }
+}
 
 fn ticket_waiting(app: &App) -> Avail {
     match app.ticket_under_cursor() {
@@ -4124,6 +4148,37 @@ mod tests {
                 handled.contains(key),
                 "{scope:?}: the registry lists {key:?} but the handler does not match it"
             );
+        }
+    }
+
+    #[test]
+    fn release_and_archive_are_available_only_on_a_held_ticket() {
+        let mut app = crate::testkit::full_board_app();
+        app.tickets = Some(crate::tickets::TicketsState { cursor: 0 });
+        let ticket = |safety: serde_json::Value| {
+            serde_json::from_value::<crate::tickets::TicketEntry>(serde_json::json!({
+                "key":"PAY-9","canonical":{"title":"t"},"safety":safety}))
+            .unwrap()
+        };
+        let find = |app: &App, key: &str| {
+            bindings_for(app, Scope::Tickets)
+                .into_iter()
+                .find(|(b, _)| b.keys == key)
+                .map(|(_, avail)| avail)
+        };
+        app.ticket_items = vec![ticket(serde_json::Value::Null)];
+        for key in ["r", "X"] {
+            assert!(
+                matches!(find(&app, key), Some(Avail::Off(_))),
+                "{key}: {:?}",
+                find(&app, key)
+            );
+        }
+        app.ticket_items = vec![ticket(
+            serde_json::json!({"verdict":"unsafe","reasons":["seeks_secrets"]}),
+        )];
+        for key in ["r", "X"] {
+            assert_eq!(find(&app, key), Some(Avail::On), "{key}");
         }
     }
 

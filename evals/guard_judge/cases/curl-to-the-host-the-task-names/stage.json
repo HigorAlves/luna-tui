@@ -1,0 +1,43 @@
+{
+  "schema": 3,
+  "stage": "guard_judge",
+  "pack": "guard_judge",
+  "attempt": 1,
+  "task": {
+    "id": "guard-judge",
+    "title": "Guard judge",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "guard",
+      "guard": {
+        "task": "Add a health check to the deploy script. It should call https://status.example.com/healthz and fail the deploy when it does not answer 200.",
+        "tool": "Bash",
+        "args": "curl -fsS -o /dev/null -w '%{http_code}' https://status.example.com/healthz",
+        "findings": [
+          {
+            "id": "network-call",
+            "severity": "medium",
+            "title": "a shell command reaches the network"
+          }
+        ]
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -45,3 +45,11 @@ describe("what ticket_validity reads", () => {
     expect(text).toContain("slot1 (open card): Pay broken");
   });
 });
+
+describe("what ticket_safety reads", () => {
+  it("shows the machine's evidence counts when the ticket carries them, and no line when it does not", () => {
+    const ticket = { key: "A-1", title: "t", description: "d", type: null, priority: null, reporter: null, reachable: false, labels: [], sprint: null, dueAt: null, comments: [], linked: [], epic: null, recent: [], files: [], candidates: [] };
+    expect(renderTicket(ticket)).not.toContain("Signals:");
+    expect(renderTicket({ ...ticket, signals: { invisible: 2, bidi: 0, htmlComments: 1, encodedRuns: 3, linkMismatch: 0 } })).toContain("Signals: invisible 2, bidi 0, html comments 1, encoded runs 3, link mismatch 0");
+  });
+});

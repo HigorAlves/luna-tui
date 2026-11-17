@@ -2,6 +2,7 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
+import { HeldSafetyError } from "./ticket-machine.ts";
 import { looksLikeTestPath } from "../domain/locked-files.ts";
 import { trustOf } from "../domain/trust.ts";
 import { z } from "zod";
@@ -108,6 +109,9 @@ export function orderHash(order: NewTask & Record<string, unknown>): string {
 /** What a task snapshot says about its last stage run and its gate. */
 export type TaskGlance = Pick<Task, "lastRun" | "gate">;
 
+/** The ticket key a source stands for, for a refusal's message. */
+const heldKeyOf = (source: TaskSource | null | undefined): string => (source?.kind === "github" ? `${source.repo}#${source.number}` : source?.kind === "jira" ? source.key : "the ticket");
+
 /** The card is not waiting at Intake's context gate, so there is nothing to give it. */
 export class NoContextGateError extends Error {
   constructor(id: string, state: string) {
@@ -212,6 +216,10 @@ export interface NewTask extends Omit<CardFieldsInput, "source"> {
 }
 
 export interface PipelineOptions {
+  /** The second line of the ticket safety screen: true when the ticket behind a source is held, so no card is made from it. */
+  sourceHeld?: (source: TaskSource | null) => Promise<boolean>;
+  /** True when a person released the ticket behind a source from the safety hold: every card made from it is stored with `safetyReleased` on its source, so it runs untrusted, whatever made it. */
+  sourceReleased?: (source: TaskSource | null) => Promise<boolean>;
   /** A card that came from a ticket the tracker port knows is split into child tickets, never child cards (slice 11 wires it): `knows` answers where the card's ticket lives, `create` makes the children there once a person approved. */
   splitTickets?: {
     knows(task: TaskRow): Promise<{ tool: string; key: string } | null>;
@@ -493,6 +501,8 @@ export class Pipeline {
   private readonly onAlert: (alert: BudgetAlert) => void;
   private readonly jiraSite: string | null;
   private readonly splitTickets: PipelineOptions["splitTickets"] | null;
+  private readonly sourceHeld: PipelineOptions["sourceHeld"] | null;
+  private readonly sourceReleased: PipelineOptions["sourceReleased"] | null;
   /** The highest threshold already raised per scope key (`task:<id>`, `repo:<path>:<month>`, `day:<date>`). */
   private readonly alerted = new Map<string, number>();
   /** Set by shutdown(): no slot is filled and no loop started from here on. */
@@ -556,6 +566,8 @@ export class Pipeline {
     this.onAlert = options.onAlert ?? (() => {});
     this.jiraSite = options.jiraSite ?? null;
     this.splitTickets = options.splitTickets ?? null;
+    this.sourceHeld = options.sourceHeld ?? null;
+    this.sourceReleased = options.sourceReleased ?? null;
     this.credentials = options.credentials ?? { check: () => Promise.resolve({ available: true }) };
     this.engineBudgets = options.engineBudgets ?? null;
     this.telemetry = options.telemetry ?? noTelemetry();
@@ -595,7 +607,8 @@ export class Pipeline {
   }
 
   async createTask(input: NewTask): Promise<TaskRow> {
-    const task = await this.store.createTask(this.newRow(input));
+    await this.refuseHeld(input.source);
+    const task = await this.store.createTask(this.newRow(await this.withRelease(input)));
     await this.log(task.id, "task.created", { title: task.title, ...(input.route && input.route !== "feature" ? { route: input.route } : {}) });
     return this.get(task.id);
   }
@@ -605,12 +618,25 @@ export class Pipeline {
    *  naming the task. "The same body" is the same canonical order (`orderHash`); a key stored before
    *  bodies were canonical keeps its hash of the body as it was sent, which a retry still matches. */
   async createTaskOnce(order: NewTask & Record<string, unknown>, key: string): Promise<{ task: TaskRow; created: boolean }> {
+    await this.refuseHeld(order.source as TaskSource | null | undefined);
     const hash = orderHash(order);
-    const { task, created } = await this.store.createTaskOnce(this.newRow(order), key, hash);
+    // The hash is of the order as it came (a retry sends the same body); the stored source is marked after.
+    const { task, created } = await this.store.createTaskOnce(this.newRow(await this.withRelease(order)), key, hash);
     const legacy = () => createHash("sha256").update(canonicalJson(order)).digest("hex");
     if (task.requestHash !== hash && task.requestHash !== legacy()) throw new IdempotencyConflictError(key, task.id);
     if (created) await this.log(task.id, "task.created", { title: task.title });
     return { task: created ? await this.get(task.id) : task, created };
+  }
+
+  /** The order with `safetyReleased` on its source when a person released the ticket behind it. */
+  private async withRelease<T extends NewTask>(input: T): Promise<T> {
+    const source = input.source;
+    if (!source || !this.sourceReleased || (source.kind !== "github" && source.kind !== "jira") || (source as { safetyReleased?: boolean }).safetyReleased === true) return input;
+    return (await this.sourceReleased(source)) ? { ...input, source: { ...source, safetyReleased: true } } : input;
+  }
+
+  private async refuseHeld(source: TaskSource | null | undefined): Promise<void> {
+    if (this.sourceHeld && (await this.sourceHeld(source ?? null))) throw new HeldSafetyError(heldKeyOf(source));
   }
 
   private newRow(input: NewTask): NewTaskRow {
@@ -3364,6 +3390,7 @@ export class Pipeline {
         ...(why.secondScopeRed ? { scopeTwice: true } : {}),
         ...(detail.envBroken === true ? { envBroken: true } : {}),
         ...(detail.headMoved === true ? { headMoved: true } : {}),
+        ...(detail.escalation === "guard_blocked" ? { guardBlocked: true } : {}),
         ...(why.loopGuard ? { loopGuard: why.loopGuard } : {}),
         ...(budget ? { budget: { spent: String(budget.spent), numbers: `${String(budget.iterations)} of ${limits.max_iterations} iterations, ${budget.tokens === null ? "tokens not counted" : `${String(budget.tokens)} of ${limits.max_tokens} tokens`}, ${String(budget.minutes)} of ${limits.max_minutes} minutes`, consecutiveReds: Number(budget.consecutiveReds ?? 0) } } : {}),
         notes: [...(why.stuck ? ["the stuck detector stopped the same failure repeating"] : []), ...(planned.outcome !== "escalated" ? [`the machine escalated: ${preview.reason ?? "a cap was reached"}`] : [])],
