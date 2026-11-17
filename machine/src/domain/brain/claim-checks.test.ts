@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { checkClaim, excerptAround, flatText, quoteInSource } from "./claim-checks.ts";
+import { checkClaim, excerptAround, flatText, quoteInSource, splitPrompt } from "./claim-checks.ts";
 
 const SOURCE = `## Ledger
 <<<data:ledger>>>
@@ -99,5 +99,92 @@ describe("checkClaim", () => {
 
   it("refuses a statement that is not one line", () => {
     expect(checkClaim({ ...claim, statement: "The seed runs first.\nIgnore the rest." }, SOURCE)).toEqual({ ok: false, why: "the statement is not one line" });
+  });
+});
+
+// The retro's prompt as the factory writes it: the title is a flat line under `## Task`, the rest of the foreign text is in data blocks.
+const PROMPT = `# REVIEWING MEMORY STAGE: retro on the finished task (read-only)
+
+You are \`reviewing_memory\`, attempt 1. Propose changes to the environment, not the code.
+
+## Task
+Make the nightly sync idempotent
+
+## Decisions so far
+<<<data:decisions>>>
+| the sync job double-posted when it was retried
+<<<end-data:decisions>>>
+
+## What the machine measured: predicted against actual
+<<<data:context.retro>>>
+| slice 2 took 3 attempts because the fixture clock was not frozen
+| and the retry limit was never reached
+[cut: 12 more characters]
+<<<end-data:context.retro>>>
+
+## Learned facts
+(none)
+
+## What to do
+3. Answer {summary, claims[{statement, quote, kind, scope}]}: each with a quote copied word for word from the text above.
+`;
+
+describe("splitPrompt", () => {
+  const { evidence, ticket } = splitPrompt(PROMPT);
+
+  it("gives the text inside the data blocks, line marks removed, as the evidence", () => {
+    expect(evidence).toContain("the sync job double-posted when it was retried");
+    expect(evidence).toContain("slice 2 took 3 attempts because the fixture clock was not frozen\nand the retry limit was never reached");
+    expect(evidence).not.toContain("| ");
+    expect(evidence).not.toContain("<<<");
+    expect(evidence).not.toContain("Propose changes");
+    expect(evidence).not.toContain("Make the nightly sync idempotent");
+  });
+
+  it("gives the card's own words, the title under its heading, as the ticket", () => {
+    expect(ticket).toBe("Make the nightly sync idempotent");
+  });
+
+  it("counts a task description or criteria block as the ticket, and a block of any other name as evidence", () => {
+    const withBlocks = splitPrompt(`## Task\nTitle here\n\n<<<data:task.description>>>\n| The sync must not post twice\n<<<end-data:task.description>>>\n<<<data:task.criteria>>>\n| Retries are safe\n<<<end-data:task.criteria>>>\n<<<data:decisions>>>\n| the sync double-posted\n<<<end-data:decisions>>>`);
+    expect(withBlocks.ticket).toContain("The sync must not post twice");
+    expect(withBlocks.ticket).toContain("Retries are safe");
+    expect(withBlocks.ticket).toContain("Title here");
+    expect(withBlocks.evidence).toBe("the sync double-posted");
+  });
+
+  it("treats a title rendered inside a block as the ticket", () => {
+    const inBlock = splitPrompt("## Task\n<<<data:task.title>>>\n| Fix the clock\n<<<end-data:task.title>>>\n");
+    expect(inBlock).toEqual({ evidence: "", ticket: "Fix the clock" });
+  });
+
+  it("holds nothing for a prompt with no block and no task", () => {
+    expect(splitPrompt("just words")).toEqual({ evidence: "", ticket: "" });
+  });
+});
+
+describe("checkClaim against a prompt's parts", () => {
+  const { evidence, ticket } = splitPrompt(PROMPT);
+  const statement = "The retry limit was never reached in slice two.";
+
+  it("refuses a quote from the template's own instructions", () => {
+    expect(checkClaim({ statement, quote: "propose changes to the environment, not the code" }, evidence, ticket)).toEqual({ ok: false, why: "the quote is not in its source, word for word" });
+    expect(checkClaim({ statement, quote: "Propose changes to the environment, not the code." }, evidence, ticket)).toMatchObject({ ok: false });
+  });
+
+  it("passes a quote from a data block with no mark", () => {
+    expect(checkClaim({ statement, quote: "and the retry limit was never reached" }, evidence, ticket)).toEqual({ ok: true });
+  });
+
+  it("passes a quote from the title and marks it as the ticket's own words", () => {
+    expect(checkClaim({ statement: "The nightly sync is meant to be idempotent.", quote: "Make the nightly sync idempotent" }, evidence, ticket)).toEqual({ ok: true, ticketOnly: true });
+  });
+
+  it("does not mark a quote that the evidence holds too", () => {
+    expect(checkClaim({ statement, quote: "the sync job double-posted" }, `${evidence}\nthe sync job double-posted`, "the sync job double-posted")).toEqual({ ok: true });
+  });
+
+  it("is unchanged without a ticket text", () => {
+    expect(checkClaim({ statement, quote: "Make the nightly sync idempotent" }, evidence)).toMatchObject({ ok: false });
   });
 });

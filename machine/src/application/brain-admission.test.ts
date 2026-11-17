@@ -1,9 +1,9 @@
 import { PACKS, type AdmitContext, type BrainClaim, type ClaimDraft } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { admission, type AdmissionDeps, type ClaimOrigin } from "./brain-admission.ts";
+import { admission, admitModeFor, type AdmissionDeps, type ClaimOrigin } from "./brain-admission.ts";
 import type { ClaimPatch, ClaimStore, NewClaim } from "./brain-claims.ts";
-import type { Brain } from "./brain.ts";
+import { type Brain, type BrainAnswer } from "./brain.ts";
 import { tagged } from "./decision-truth.ts";
 
 const SOURCE = "The retro reads the card diff. Then it writes the lessons it learned from the run.";
@@ -31,14 +31,17 @@ function fakeStore(): ClaimStore & { all: BrainClaim[] } {
       const claim = all.find((c) => c.id === id);
       if (!claim) return null;
       if (options?.ifStatus && claim.status !== options.ifStatus) return null;
-      Object.assign(claim, patch);
+      const { durable, ...rest } = patch;
+      Object.assign(claim, options?.keepDurable && claim.durable !== null ? rest : { ...rest, ...(durable === undefined ? {} : { durable }) });
       return { ...claim };
     },
     stats: async () => ({ waiting: 0, decided: 0, agreed: 0, missed: 0, ready: false }),
+    delete: async () => false,
+    forgetSpeaker: async () => 0,
   };
 }
 
-const brainOf = (rows: Array<Record<string, string>>, fails = false): Brain & { asked: string[] } => {
+const brainOf = (rows: Array<Record<string, string>>, fails = false, note: string | null = null): Brain & { asked: string[] } => {
   const asked: string[] = [];
   return {
     asked,
@@ -46,11 +49,12 @@ const brainOf = (rows: Array<Record<string, string>>, fails = false): Brain & { 
     health: async () => ({ ok: true, version: null, note: null }),
     load: async () => ({ entities: 0, commit: null }),
     query: async (name, params) => {
-      asked.push(`${name}:${params?.q}`);
+      asked.push(`${name}:${params?.repo}:${params?.q}`);
       if (fails) throw new Error("graph down");
-      return { rows, note: null };
+      return { rows, note } satisfies BrainAnswer;
     },
     unlink: async () => 0,
+    remove: async () => 0,
     reset: async () => {},
   };
 };
@@ -112,7 +116,7 @@ describe("admission.propose", () => {
     ]);
     const t = setup({ brain });
     await t.a.propose([draft()], origin());
-    expect(brain.asked).toEqual(["similar_claims:The retro stage reads the card's diff."]);
+    expect(brain.asked).toEqual(["similar_claims:repo:slug-a:The retro stage reads the card's diff."]);
     expect(t.seen[0]).toEqual({
       claim: { statement: "The retro stage reads the card's diff.", quote: "The retro reads the card diff.", kind: "fact", scope: "repo", extractor: "retro" },
       source: { kind: "card", title: "A card", excerpt: SOURCE },
@@ -157,6 +161,19 @@ describe("admission.propose", () => {
     expect(claim).toMatchObject({ status: "unverified", proposed: "ask", reasons: ["its source was written by someone outside the org"] });
   });
 
+  it("holds a claim whose quote is only the ticket's own words for the person, even when Jev says verify", async () => {
+    const reason = "its quote is the ticket's own words";
+    const t = setup();
+    const [claim] = await t.a.propose([draft({ quote: "Make the nightly sync idempotent", statement: "The nightly sync is meant to be idempotent." })], origin({ sourceText: SOURCE, ticketText: "Make the nightly sync idempotent" }));
+    expect(claim).toMatchObject({ status: "unverified", proposed: "ask", reasons: [reason], decidedBy: null });
+    expect(t.seen[0]!.source.excerpt).toBe("Make the nightly sync idempotent");
+    // a quote the evidence holds carries no such reason, and one found in neither is refused
+    const [fine] = await t.a.propose([draft()], origin({ sourceText: SOURCE, ticketText: "Make the nightly sync idempotent" }));
+    expect(fine).toMatchObject({ status: "verified", reasons: [] });
+    const [none] = await t.a.propose([draft({ statement: "The template asks for a rules block.", quote: "return the rules text in the JSON" })], origin({ sourceText: SOURCE, ticketText: "Make the nightly sync idempotent" }));
+    expect(none).toMatchObject({ status: "refused", refusal: "the quote is not in its source, word for word" });
+  });
+
   it("keeps a claim waiting when the pack throws, and logs no claim text", async () => {
     const t = setup({ decide: async () => { throw new Error(`could not read "The retro stage reads the card's diff."`); } });
     const [claim] = await t.a.propose([draft()], origin());
@@ -166,12 +183,57 @@ describe("admission.propose", () => {
     expect(t.logs.join("\n")).not.toContain("card diff");
   });
 
-  it("leaves the claim with the person when no pack runs, and survives a failing brain", async () => {
+  it("leaves the claim with the person when no pack runs", async () => {
     const none = setup({ decide: null });
     expect((await none.a.propose([draft()], origin()))[0]).toMatchObject({ status: "unverified", proposed: null });
+  });
+
+  it("asks the person when the similar claims could not be read, and still runs the pack with none", async () => {
+    const reason = "the similar claims could not be read";
+    const unread: Array<[string, Brain]> = [
+      ["a query that throws", brainOf([], true)],
+      ["an answer with a failure note", brainOf([], false, "similar_claims failed: HTTP 503")],
+      ["a brain that is off", { ...brainOf([]), enabled: false }],
+    ];
+    for (const [why, brain] of unread) {
+      const t = setup({ brain });
+      const [claim] = await t.a.propose([draft()], origin());
+      expect(claim, why).toMatchObject({ status: "unverified", proposed: "ask", reasons: [reason] });
+      expect(t.store.all[0]!.reasons, why).toEqual([reason]);
+      expect(t.seen[0]!.similar, why).toEqual([]);
+    }
+    // an empty answer is an answer: nothing is similar, and the claim goes on as before
+    const empty = setup({ brain: brainOf([], false, "similar_claims found nothing") });
+    expect((await empty.a.propose([draft()], origin()))[0]).toMatchObject({ status: "verified", reasons: [] });
+  });
+
+  it("keeps the reasons the code found beside the one for similar claims it could not read", async () => {
     const t = setup({ brain: brainOf([], true) });
-    expect((await t.a.propose([draft()], origin()))[0]).toMatchObject({ status: "verified" });
-    expect(t.seen[0]!.similar).toEqual([]);
+    const [claim] = await t.a.propose([draft()], origin({ speakerTrust: "outside" }));
+    expect(claim!.reasons).toEqual(["its source was written by someone outside the org", "the similar claims could not be read"]);
+  });
+
+  it("compares a claim with its own repository's claims only, and a claim of no repository with nothing", async () => {
+    const brain = brainOf([{ claim: "claim:other", status: "verified", statement: "Other." }]);
+    const t = setup({ brain });
+    await t.a.propose([draft()], origin({ repoPath: "/r/b" }));
+    expect(brain.asked).toEqual(["similar_claims:repo:slug-b:The retro stage reads the card's diff."]);
+    const org = setup({ brain });
+    brain.asked.length = 0;
+    const [claim] = await org.a.propose([draft({ scope: "org" })], origin({ repoPath: null }));
+    expect(brain.asked).toEqual([]);
+    expect(org.seen[0]!.similar).toEqual([]);
+    // nothing to compare is not a read that failed: only the org scope holds it for the person
+    expect(claim).toMatchObject({ proposed: "ask", reasons: ["applies to the whole org"] });
+  });
+
+  it("asks, never rejects, on a duplicate of a claim that is not verified", async () => {
+    const dup = answer({ relation_1: { choice: "duplicate", confidence: 0.95 } });
+    for (const [status, outcome] of [["verified", "reject"], ["unverified", "ask"], ["rejected", "ask"]] as const) {
+      const t = setup({ brain: brainOf([{ claim: "claim:old", status, statement: "Old." }]), decide: async () => tagged({ answer: dup }) });
+      const [claim] = await t.a.propose([draft()], origin());
+      expect(claim, status).toMatchObject({ proposed: outcome, status: outcome === "reject" ? "rejected" : "unverified" });
+    }
   });
 
   it("keeps the id of the similar claim the outcome says it contradicts", async () => {
@@ -197,7 +259,9 @@ describe("admission.propose", () => {
     const t = setup({ overrides: async (repoPath) => (seenOverrides.push(repoPath), { risk: { proceed: 0.99 } }) });
     const [claim] = await t.a.propose([draft()], origin());
     expect(seenOverrides).toEqual(["/r/a"]);
-    expect(claim!.proposed).not.toBe("verify");
+    // risk 0 at confidence 0.95 is under a 0.99 bar for proceeding: the risk question is flagged, so the outcome is flag, and nothing failed on the way
+    expect(claim).toMatchObject({ proposed: "flag", tier: "low", status: "verified", decidedBy: "jev" });
+    expect(t.logs).toEqual([]);
     expect(PACKS.memory_admit.kind).toBe("decision");
   });
 });
@@ -214,6 +278,31 @@ describe("admission.propose, a person deciding while the pack runs", () => {
     const [claim] = await t.a.propose([draft()], origin());
     expect(claim).toMatchObject({ status: "rejected", decidedBy: "person", decidedAt: "2026-05-04T00:00:00.000Z", proposed: "verify", recordId: "rec-1" });
     expect(t.store.all[0]).toMatchObject({ status: "rejected", decidedBy: "person", proposed: "verify", tier: expect.any(String) });
+  });
+});
+
+describe("admission.propose, a person deciding while the pack runs: durable", () => {
+  it("leaves the person's durable alone when Jev's status update loses", async () => {
+    const t = setup({
+      decide: async () => {
+        Object.assign(t.store.all[0]!, { status: "rejected", decidedBy: "person", durable: false });
+        return tagged({ answer: answer({ durable: yes(true) }) });
+      },
+    });
+    const [claim] = await t.a.propose([draft()], origin());
+    expect(claim).toMatchObject({ status: "rejected", decidedBy: "person", durable: false, proposed: "verify" });
+  });
+});
+
+describe("admitModeFor", () => {
+  it("is off when the brain is off, whatever the file says, and without reading it", async () => {
+    let read = 0;
+    const configured = (mode: "off" | "shadow" | "auto") => async () => (read++, mode);
+    expect(await admitModeFor(false, configured("auto"))).toBe("off");
+    expect(read).toBe(0);
+    expect(await admitModeFor(true, configured("auto"))).toBe("auto");
+    expect(await admitModeFor(true, configured("shadow"))).toBe("shadow");
+    expect(await admitModeFor(true, configured("off"))).toBe("off");
   });
 });
 
@@ -268,6 +357,19 @@ describe("admission.settle", () => {
     const [a, b] = await t.a.propose([draft(), draft({ statement: "A second statement about the retro stage.", quote: "Then it writes the lessons" })], origin());
     expect(await t.a.settle(a!.id, "verify")).toEqual({ claim: expect.objectContaining({ status: "verified", durable: true }) });
     expect(await t.a.settle(b!.id, "reject")).toEqual({ claim: expect.objectContaining({ status: "rejected", decidedBy: "person" }) });
+  });
+
+  it("keeps the durable Jev's reading set between the read and the verify", async () => {
+    const t = setup({ mode: async () => "shadow", decide: null });
+    const [claim] = await t.a.propose([draft()], origin());
+    const read = t.store.get;
+    t.store.get = async (id) => {
+      const seen = { ...(await read(id))! };
+      // Jev's reading lands after the tap read the claim.
+      Object.assign(t.store.all[0]!, { durable: false });
+      return seen;
+    };
+    expect(await t.a.settle(claim!.id, "verify")).toEqual({ claim: expect.objectContaining({ status: "verified", durable: false }) });
   });
 
   it("answers not_waiting to the tap that lost a race with another decision", async () => {

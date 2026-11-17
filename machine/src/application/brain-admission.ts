@@ -1,6 +1,7 @@
 // Admission (RFC 0010, "Remember"): what a pack hands over, or a person writes, enters the journal as a claim. The code checks it
 // first; the memory_admit decision pack judges what passes; the person decides what waits. In `shadow` Jev's outcome is only
-// recorded, in `auto` it is applied, and a claim with a reason the code holds back is always the person's.
+// recorded, in `auto` it is applied, and a claim with a reason the code holds back is always the person's: no answer of Jev's, a confident
+// no included, decides it.
 import { createHash } from "node:crypto";
 
 import {
@@ -11,7 +12,7 @@ import {
 import { checkClaim, excerptAround } from "../domain/brain/claim-checks.ts";
 import { maskPii, screen } from "../domain/secrets-check.ts";
 import type { ClaimStore } from "./brain-claims.ts";
-import type { Brain } from "./brain.ts";
+import { answered, type Brain } from "./brain.ts";
 import { recordIdOf } from "./decision-truth.ts";
 
 export type AdmitMode = "off" | "shadow" | "auto";
@@ -21,8 +22,10 @@ export interface ClaimOrigin {
   repoPath: string | null;
   extractor: string;
   source: BrainClaim["source"];
-  /** The text the quote must be found in; null when the machine does not hold it. */
+  /** The text the quote must be found in; null when the machine does not hold it. For a card it is the evidence: what the prompt's data blocks held. */
   sourceText: string | null;
+  /** The card's own words (its title, description and criteria). A quote found only here passes, but the claim is the person's. */
+  ticketText?: string | null;
   speaker: string | null;
   speakerTrust: ClaimSpeakerTrust;
 }
@@ -43,6 +46,11 @@ export interface AdmissionDeps {
   log?: (line: string) => void;
 }
 
+/** `brain.admit` of a repository, but off whenever the brain is off: a machine without the graph does not run memory_admit on every claim. `configured` is not read then. */
+export async function admitModeFor(brainEnabled: boolean, configured: () => Promise<AdmitMode>): Promise<AdmitMode> {
+  return brainEnabled ? configured() : "off";
+}
+
 export interface Admission {
   /** What a pack handed over. Never throws; a draft that fails is logged and skipped. */
   propose(drafts: ClaimDraft[], origin: ClaimOrigin): Promise<BrainClaim[]>;
@@ -56,9 +64,18 @@ const SIMILAR_MAX = 5;
 const NOTE_MIN = 12;
 const NOTE_MAX = 300;
 const SIMILAR_STATUS = new Set(["unverified", "verified", "rejected"]);
+const TICKET_REASON = "its quote is the ticket's own words";
+const UNREAD_REASON = "the similar claims could not be read";
 
 /** A refused claim's text as the journal keeps it: every secret cut out and every address and phone number masked. The journal must not hold what the claim was refused for. */
 const storable = (text: string): string => maskPii(screen(text).text);
+
+/** A refused note as the journal keeps it: `storable`, and at most NOTE_MAX characters. The table's unique index holds the statement, and a long one in a multi-byte script is more than an index row may be. */
+const refusedText = (text: string): string => {
+  const kept = storable(text);
+  const chars = [...kept];
+  return chars.length > NOTE_MAX ? `${chars.slice(0, NOTE_MAX - 1).join("")}\u2026` : kept;
+};
 
 export function admission(deps: AdmissionDeps): Admission {
   const now = () => (deps.now ?? (() => new Date()))().toISOString();
@@ -72,10 +89,14 @@ export function admission(deps: AdmissionDeps): Admission {
   };
   const slugOf = (repoPath: string | null) => (repoPath ? deps.repoSlug(repoPath) : null);
 
-  /** The claims most like this one, in the order the questions number them. A brain that is off or fails gives none. */
-  async function similarTo(claim: BrainClaim): Promise<AdmitContext["similar"]> {
+  /** The claims of the claim's own repository most like it, in the order the questions number them. Null when they could not be read: the brain is off, failed or did not answer. */
+  async function similarTo(claim: BrainClaim): Promise<AdmitContext["similar"] | null> {
+    // A claim about the whole org has no repository: it is compared with nothing, never with another repository's claims.
+    if (!claim.repoPath) return [];
+    if (!deps.brain.enabled) return null;
     try {
-      const answer = await deps.brain.query("similar_claims", { q: claim.statement });
+      const answer = await deps.brain.query("similar_claims", { repo: `repo:${deps.repoSlug(claim.repoPath)}`, q: claim.statement });
+      if (!answered("similar_claims", answer)) return null;
       const similar: AdmitContext["similar"] = [];
       for (const row of answer.rows) {
         const id = typeof row.claim === "string" && row.claim.startsWith("claim:") ? row.claim.slice("claim:".length) : "";
@@ -85,7 +106,7 @@ export function admission(deps: AdmissionDeps): Admission {
       }
       return similar;
     } catch {
-      return [];
+      return null;
     }
   }
 
@@ -93,30 +114,38 @@ export function admission(deps: AdmissionDeps): Admission {
   async function judge(claim: BrainClaim, origin: ClaimOrigin, mode: AdmitMode): Promise<BrainClaim> {
     if (!deps.decide) return claim;
     try {
-      const similar = await similarTo(claim);
+      const read = await similarTo(claim);
+      const similar = read ?? [];
+      // Without the similar claims a contradiction or a duplicate cannot be seen: the person decides, and the reason is kept with the claim.
+      const reasons = read === null ? [...claim.reasons, UNREAD_REASON] : claim.reasons;
       const admit: AdmitContext = {
         claim: { statement: claim.statement, quote: claim.quote, kind: claim.kind, scope: claim.scope, extractor: claim.extractor },
-        source: { kind: claim.source.kind, title: claim.source.title.slice(0, 200), excerpt: excerptAround(claim.quote, origin.sourceText ?? "") },
+        source: { kind: claim.source.kind, title: claim.source.title.slice(0, 200), excerpt: excerptAround(claim.quote, origin.sourceText ?? "") || excerptAround(claim.quote, origin.ticketText ?? "") },
         similar,
       };
       const answer = await deps.decide(admit, origin.repoPath);
       const recordId = recordIdOf(answer) ?? null;
       const { verdicts } = applyPolicy(PACKS.memory_admit, answer, await deps.overrides?.(origin.repoPath));
-      const result = admissionOutcome({ answer, verdicts, reasons: claim.reasons, similar: similar.length });
-      const patch: Parameters<ClaimStore["update"]>[1] = {
+      const result = admissionOutcome({ answer, verdicts, reasons, similar: similar.length });
+      // A duplicate of a claim nobody verified (or one that was rejected) says nothing is already known: a person looks at it.
+      const duplicateOf = result.duplicateOf === null ? undefined : similar[result.duplicateOf - 1];
+      const outcome = result.outcome === "reject" && duplicateOf && duplicateOf.status !== "verified" ? ("ask" as const) : result.outcome;
+      // What Jev read; `durable` is apart, because a person's decision in the meantime may have set it.
+      const reading: Parameters<ClaimStore["update"]>[1] = {
         tier: result.tier,
-        proposed: result.outcome,
-        durable: result.durable,
+        proposed: outcome,
         contradicts: result.contradicts.flatMap((n) => similar[n - 1]?.id ?? []),
         recordId,
+        ...(read === null ? { reasons } : {}),
       };
-      if (mode === "auto" && result.outcome !== "ask") {
+      const patch = { ...reading, durable: result.durable };
+      if (mode === "auto" && outcome !== "ask") {
         // The claim was listed as waiting while the pack ran: a person may have decided it since, and their word stands.
-        const decided = { ...patch, status: result.outcome === "reject" ? ("rejected" as const) : ("verified" as const), decidedBy: "jev" as const, decidedAt: now() };
+        const decided = { ...patch, status: outcome === "reject" ? ("rejected" as const) : ("verified" as const), decidedBy: "jev" as const, decidedAt: now() };
         const applied = await deps.store.update(claim.id, decided, { ifStatus: "unverified" });
         if (applied) return applied;
-        // Jev's reading is still recorded beside the person's decision.
-        return (await deps.store.update(claim.id, patch)) ?? claim;
+        // Jev's reading is still recorded beside the person's decision, but not its durable: that may be theirs.
+        return (await deps.store.update(claim.id, reading)) ?? claim;
       }
       return (await deps.store.update(claim.id, patch)) ?? claim;
     } catch (err) {
@@ -140,9 +169,9 @@ export function admission(deps: AdmissionDeps): Admission {
       if (mode === "off") return [];
       for (const draft of drafts) {
         try {
-          const checked = checkClaim(draft, origin.sourceText);
+          const checked = checkClaim(draft, origin.sourceText, origin.ticketText ?? undefined);
           const kept = checked.ok ? draft : { ...draft, statement: storable(draft.statement), quote: storable(draft.quote) };
-          const reasons = claimHighRiskReasons({ ...draft, speakerTrust: origin.speakerTrust });
+          const reasons = [...claimHighRiskReasons({ ...draft, speakerTrust: origin.speakerTrust }), ...(checked.ok && checked.ticketOnly ? [TICKET_REASON] : [])];
           const added = await deps.store.add({
             repoPath: origin.repoPath, repo: slugOf(origin.repoPath), taskId: origin.taskId, statement: kept.statement, quote: kept.quote, kind: draft.kind, scope: draft.scope,
             source: origin.source, speaker: origin.speaker, speakerTrust: origin.speakerTrust, extractor: origin.extractor,
@@ -163,14 +192,14 @@ export function admission(deps: AdmissionDeps): Admission {
       // The same note in the same repository is one source: its reference is a hash of both.
       const ref = createHash("sha256").update(`${origin.repoPath ?? ""}\n${statement}`).digest("hex").slice(0, 32);
       const source = { kind: "note" as const, ref, title: "A note" };
-      // A refused note is stored with its secrets and addresses cut out, so it is looked up in that form too.
-      const earlier = (await deps.store.findBySource(source, statement)) ?? (await deps.store.findBySource(source, storable(statement)));
+      const length = [...statement].length;
+      // A refused note is stored with its secrets and addresses cut out, and a long one cut short, so it is looked up in that form too. A note over the cap is never stored whole: comparing it with the table's rows is a slow query for nothing.
+      const earlier = (length > NOTE_MAX ? null : await deps.store.findBySource(source, statement)) ?? (await deps.store.findBySource(source, refusedText(statement)));
       if (earlier) return earlier;
 
-      const length = [...statement].length;
       const checked = length < NOTE_MIN ? { ok: false as const, why: `a note is at least ${NOTE_MIN} characters` } : length > NOTE_MAX ? { ok: false as const, why: `a note is at most ${NOTE_MAX} characters` } : checkClaim({ statement, quote: statement }, statement);
       // A refused note is kept so the person sees why, with what made it refusable cut out.
-      const kept = checked.ok ? statement : storable(statement);
+      const kept = checked.ok ? statement : refusedText(statement);
       const added = await deps.store.add({
         repoPath: origin.repoPath, repo: slugOf(origin.repoPath), taskId: null, statement: kept, quote: kept, kind: "fact", scope: origin.repoPath ? "repo" : "org", source,
         speaker: origin.speaker, speakerTrust: "owner", extractor: "person", status: checked.ok ? "unverified" : "refused", refusal: checked.ok ? null : checked.why, reasons: [],
@@ -188,8 +217,8 @@ export function admission(deps: AdmissionDeps): Admission {
       const open: ClaimStatus[] = decision === "verify" ? ["unverified", "rejected"] : ["unverified", "verified"];
       if (!open.includes(claim.status)) return { problem: "not_waiting" };
       const decided = { decidedBy: "person" as const, decidedAt: now() };
-      // Only while the claim is in the status it was read in: a tap that lost to another decision in between is told so.
-      const updated = await deps.store.update(id, decision === "verify" ? { status: "verified", durable: claim.durable ?? true, ...decided } : { status: "rejected", ...decided }, { ifStatus: claim.status });
+      // Only while the claim is in the status it was read in: a tap that lost to another decision in between is told so. A durable Jev's reading set since the claim was read stays.
+      const updated = await deps.store.update(id, decision === "verify" ? { status: "verified", durable: claim.durable ?? true, ...decided } : { status: "rejected", ...decided }, { ifStatus: claim.status, keepDurable: true });
       if (!updated) return { problem: "not_waiting" };
       changed();
       return { claim: updated };

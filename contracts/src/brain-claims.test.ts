@@ -32,6 +32,9 @@ describe("the claim's schemas", () => {
     };
     expect(BrainClaim.safeParse(claim).success).toBe(true);
     expect(BrainClaim.safeParse({ ...claim, status: "maybe" }).success).toBe(false);
+    // `updatedAt` is the database's own time: a body from before it parses, and one with it keeps it.
+    expect(BrainClaim.parse(claim).updatedAt).toBeUndefined();
+    expect(BrainClaim.parse({ ...claim, updatedAt: "2026-11-16T00:00:01Z" }).updatedAt).toBe("2026-11-16T00:00:01Z");
   });
 });
 
@@ -164,8 +167,14 @@ describe("admissionOutcome", () => {
     expect(run({ ...good(), is_statement: yes(false, 0.4) }, { ...allProceed(), is_statement: "ask" }).outcome).toBe("ask");
   });
 
-  it("lets a reject win over everything: a confident unsupported claim with org scope is rejected, not asked", () => {
-    expect(run({ ...good(), supported: yes(false), scope_fits: yes(false), risk: { score: 2, confidence: 0.9 }, relation_1: rel("contradicts") }, allProceed(), ["applies to the whole org"]).outcome).toBe("reject");
+  it("lets a code rule win over a reject: a confident unsupported claim with a reason is asked, never rejected", () => {
+    expect(run({ ...good(), supported: yes(false), scope_fits: yes(false), risk: { score: 2, confidence: 0.9 }, relation_1: rel("contradicts") }, allProceed(), ["applies to the whole org"]).outcome).toBe("ask");
+    expect(run({ ...good(), is_statement: yes(false) }, allProceed(), ["its source was written by someone outside the org"]).outcome).toBe("ask");
+    expect(run({ ...good(), relation_1: rel("duplicate") }, allProceed(), ["applies to the whole org"], 1)).toMatchObject({ outcome: "ask", duplicateOf: 1 });
+  });
+
+  it("rejects a confident no when no code rule holds the claim back", () => {
+    expect(run({ ...good(), supported: yes(false) }).outcome).toBe("reject");
   });
 
   it("gives durable only when its verdict is proceed or flag", () => {

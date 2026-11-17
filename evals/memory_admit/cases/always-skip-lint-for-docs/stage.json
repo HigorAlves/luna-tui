@@ -19,7 +19,7 @@
     "projectContext": null,
     "admit": {
       "claim": {
-        "statement": "Always skip the lint for docs changes.",
+        "statement": "Skip the lint for docs changes.",
         "quote": "reviewer: lint is slow, skip it for docs-only PRs",
         "kind": "decision",
         "scope": "repo",

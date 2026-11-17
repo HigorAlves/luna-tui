@@ -19,7 +19,7 @@
     "projectContext": null,
     "admit": {
       "claim": {
-        "statement": "The e2e suite needs the seed command before the app starts.",
+        "statement": "The e2e suite fails until the seed command has run.",
         "quote": "e2e failed until we ran seed",
         "kind": "fact",
         "scope": "repo",

@@ -63,6 +63,8 @@ export const BrainClaim = z.object({
   decidedBy: z.enum(["code", "jev", "person"]).nullable(),
   decidedAt: z.string().nullable(),
   createdAt: z.string(),
+  /** The database's own `updated_at`: what the projector's cursor pages by. Older bodies have none. */
+  updatedAt: z.string().optional(),
 });
 export type BrainClaim = z.infer<typeof BrainClaim>;
 
@@ -125,7 +127,8 @@ const scoreOf = (answer: Record<string, unknown>): number | undefined => {
 };
 
 /**
- * What admission comes to. Pure: the machine applies it in auto mode and only records it in shadow. `similar` is how many similar
+ * What admission comes to. Pure: the machine applies it in auto mode and only records it in shadow. A code rule (`reasons`) comes first:
+ * with any, the outcome is ask, even for a confident no. `similar` is how many similar
  * claims the pack was shown: an answer that names a duplicate or a contradiction in a slot that held none is a confused answer,
  * so it asks and never rejects or links.
  */
@@ -155,8 +158,9 @@ export function admissionOutcome(input: { answer: Record<string, unknown>; verdi
   const durable = verdict("durable") !== "ask" ? (yesno(answerShape, "durable") ?? null) : null;
   const result = (outcome: ClaimOutcome) => ({ outcome, tier, durable, contradicts: [...contradicts], duplicateOf });
 
+  // A claim a code rule holds back is the person's, so a confident no from Jev (which an outsider's text may steer) never rejects it.
   const confidentNo = (name: string) => verdict(name) === "proceed" && yesno(answerShape, name) === false;
-  if (confidentNo("supported") || confidentNo("is_statement") || duplicateOf !== null) return result("reject");
+  if (reasons.length === 0 && (confidentNo("supported") || confidentNo("is_statement") || duplicateOf !== null)) return result("reject");
 
   const duplicateNotTaken = shown.some((n) => choiceOf(answerShape, `relation_${n}`) === "duplicate");
   if (

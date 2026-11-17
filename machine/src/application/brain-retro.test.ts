@@ -13,12 +13,13 @@ const machine = async (): Promise<ClaimSpeakerTrust> => "machine";
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("retroClaims", () => {
-  it("proposes the drafts with the card as their source and the retro's prompt as the text the quotes are checked against", async () => {
+  it("proposes the drafts with the card as their source, the prompt's data blocks as the text the quotes are checked against and its title as the ticket's words", async () => {
     const calls: Array<[ClaimDraft[], ClaimOrigin]> = [];
     const admission = { propose: async (d: ClaimDraft[], origin: ClaimOrigin) => (calls.push([d, origin]), []) } as unknown as Admission;
-    retroClaims(admission, () => {}, machine)(context, drafts, "the retro prompt");
+    const prompt = "Propose changes.\n\n## Task\nExport CSV\n\n## Facts\n<<<data:context.retro>>>\n| the export job retries three times\n<<<end-data:context.retro>>>\n";
+    retroClaims(admission, () => {}, machine)(context, drafts, prompt);
     await tick();
-    expect(calls).toEqual([[drafts, { taskId: "t1", repoPath: "/work/luna", extractor: "reviewing_memory", source: { kind: "card", ref: "t1", title: "Export CSV" }, sourceText: "the retro prompt", speaker: null, speakerTrust: "machine" }]]);
+    expect(calls).toEqual([[drafts, { taskId: "t1", repoPath: "/work/luna", extractor: "reviewing_memory", source: { kind: "card", ref: "t1", title: "Export CSV" }, sourceText: "the export job retries three times", ticketText: "Export CSV", speaker: null, speakerTrust: "machine" }]]);
   });
 
   it("hands over a null source text as it is", async () => {

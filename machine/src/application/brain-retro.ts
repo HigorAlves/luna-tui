@@ -1,7 +1,9 @@
 // What the retro's claims become (RFC 0010, "Remember"): the retro stage hands its drafts over and moves on; this puts them to admission with the
-// card as their source. The retro's prompt is the text the quotes must be found in, since the retro quotes what it was shown.
+// card as their source. The quotes must be found in what the retro's prompt quotes as data (not in the template's own words); a quote
+// found only in the card's title is allowed but the claim is the person's (`splitPrompt`).
 import type { ClaimSpeakerTrust } from "@hardness/contracts";
 
+import { splitPrompt } from "../domain/brain/claim-checks.ts";
 import type { TaskRow } from "../domain/task.ts";
 import { trustOf } from "../domain/trust.ts";
 import type { Admission } from "./brain-admission.ts";
@@ -21,8 +23,9 @@ export function retroClaims(admission: Pick<Admission, "propose">, log: (line: s
     const { task } = context;
     // A lookup that fails is an outsider: the claim then waits for a person.
     const speakerTrust = trustOfTask(task).catch((): ClaimSpeakerTrust => "outside");
+    const parts = prompt === null ? null : splitPrompt(prompt);
     speakerTrust
-      .then((trust) => admission.propose(drafts, { taskId: task.id, repoPath: task.repoPath ?? null, extractor: "reviewing_memory", source: { kind: "card", ref: task.id, title: task.title }, sourceText: prompt, speaker: null, speakerTrust: trust }))
+      .then((trust) => admission.propose(drafts, { taskId: task.id, repoPath: task.repoPath ?? null, extractor: "reviewing_memory", source: { kind: "card", ref: task.id, title: task.title }, sourceText: parts?.evidence ?? null, ...(parts ? { ticketText: parts.ticket } : {}), speaker: null, speakerTrust: trust }))
       .catch((error: unknown) => log(`brain: the retro's claims were not admitted: ${error instanceof Error ? error.message : String(error)}`));
   };
 }
