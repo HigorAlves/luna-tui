@@ -14,7 +14,7 @@ import { safe } from "../domain/evidence-markdown.ts";
 import type { Trust } from "../domain/trust.ts";
 import { type PackRunsPort, ownCalls } from "./pack-runs.ts";
 
-/** Calls one run's guard may make to the judge; past it the endpoint answers 429 and SafeAgents applies its fail-open or fail-closed rule. */
+/** Calls one run's guard may make to the judge; past it the endpoint declines the call (200, `block`, for any trust). */
 export const JUDGE_MAX_CALLS = 5;
 /** How long a call waits for the pack: under SafeAgents' own 30 s, so the guard hears 503 from here rather than time out first. */
 export const JUDGE_TIMEOUT_MS = 25_000;
@@ -29,7 +29,14 @@ export interface GuardJudgePort {
   revoke(token: string): void;
 }
 
-export type JudgeAnswer = { status: 200; verdict: "allow" | "block"; reason: string } | { status: 400 | 401 | 429 | 503 };
+/**
+ * 401 is a key it does not know and 503 a pack that failed or was too slow: both are the machine's faults, and `--judge-fail-closed` covers an untrusted card. Everything the stage can force (a run past its
+ * calls, a message that is not SafeAgents') is a 200 `block` in fixed words instead of an HTTP error, so the outcome never rests on SafeAgents' fail-open or fail-closed rule.
+ */
+export type JudgeAnswer = { status: 200; verdict: "allow" | "block"; reason: string } | { status: 401 | 503 };
+
+/** What the judge says to a call it will not weigh. Fixed words, for any trust. */
+export const JUDGE_DECLINED = "the judge declined this call";
 
 export interface GuardJudgeDeps {
   /** The runs the judge's packs go through: their own `PackRuns` (a small cap), so judge calls never wait behind the notch's. */
@@ -131,15 +138,24 @@ export class GuardJudge implements GuardJudgePort {
     return found;
   }
 
-  /** One request: 401 for a key it does not know, 429 past the run's calls, 400 for a message that is not SafeAgents', 503 when the pack fails or is too slow. */
+  /** Whether a bearer names a run's grant: the listener asks before it reads a body. */
+  knows(bearer: string | null): boolean {
+    return this.find(bearer) !== null;
+  }
+
+  /** One request: 401 for a key it does not know, a 200 `block` past the run's calls or for a message that is not SafeAgents', 503 when the pack fails or is too slow. */
   async review(bearer: string | null, userText: string): Promise<JudgeAnswer> {
     const grant = this.find(bearer);
     if (!grant) return { status: 401 };
     // Every call of a run counts, a malformed one too: the cap bounds what one guard can spend.
     grant.calls += 1;
-    if (grant.calls > JUDGE_MAX_CALLS) return { status: 429 };
+    const declined = (why: string): JudgeAnswer => {
+      this.log(`guard judge: declined a call for ${grant.trust} card ${grant.taskId}: ${why}`);
+      return { status: 200, verdict: "block", reason: JUDGE_DECLINED };
+    };
+    if (grant.calls > JUDGE_MAX_CALLS) return declined("past the run's calls");
     const parsed = parseJudgeMessage(userText);
-    if (!parsed) return { status: 400 };
+    if (!parsed) return declined("not SafeAgents' message");
     const task = safe(parsed.task);
     const findings = parsed.findings.slice(0, FINDINGS_MAX).map((f) => ({ id: safe(f.id).slice(0, 100), severity: safe(f.severity).slice(0, 20), title: safe(f.title).slice(0, 300) }));
     const guard = { task: task.length > TASK_MAX ? task.slice(-TASK_MAX) : task, tool: safe(parsed.tool).slice(0, 100), args: safe(parsed.args).slice(0, ARGS_MAX), findings };

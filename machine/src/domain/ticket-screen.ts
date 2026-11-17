@@ -46,23 +46,41 @@ const SURE = 0.85;
 /** A comment holds prose past this many non-space characters; every issue template's comments are shorter. */
 const COMMENT_PROSE = 40;
 
-const ZERO_WIDTH = /[​‌‍⁠﻿]/;
-const BIDI = /[‎‏‪-‮⁦-⁩]/g;
+/**
+ * Characters that print nothing and that Unicode says a renderer may drop (Default_Ignorable_Code_Point): zero-width and joiner characters, the soft hyphen, the invisible math operators,
+ * the Hangul fillers, the Mongolian separators, variation selectors, and the deprecated format controls. Bidi controls and tag characters are counted apart, so they are left out here.
+ */
+const IGNORABLE = /\p{Default_Ignorable_Code_Point}/u;
+const BIDI = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+const BIDI_ONE = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/;
 const TAGS = /[\u{E0000}-\u{E007F}]/gu;
-const EMOJI = /\p{Extended_Pictographic}|\p{Emoji_Modifier}|️/u;
+const TAG_ONE = /[\u{E0000}-\u{E007F}]/u;
+const SELECTOR = /[\uFE00-\uFE0F\u{E0100}-\u{E01EF}]/u;
+const EMOJI = /\p{Extended_Pictographic}|\p{Emoji_Modifier}|\uFE0F/u;
+const PICTOGRAPH = /\p{Extended_Pictographic}/u;
+const KEYCAP_BASE = /[0-9#*]/;
 const ENCODED = /[A-Za-z0-9+/=]{80,}|[0-9a-fA-F]{64,}/g;
 const LINK = /\[([^\]\n]+)\]\(\s*<?([^)\s>]+)/g;
 
 const count = (text: string, re: RegExp): number => text.match(re)?.length ?? 0;
 
-/** Zero-width characters, except a ZWJ that joins emoji: it follows an emoji and precedes one. */
+/**
+ * Hidden characters, except the two an emoji needs: a ZWJ that joins emoji (it follows an emoji and precedes one), and one U+FE0F that follows an emoji (or a keycap base, before U+20E3) and is not part
+ * of a run of selectors. Any other variation selector, and every one in a run of two or more, counts: a run of selectors is a way to carry bits no reader sees. The soft hyphen counts too, and that is the
+ * one judgement call here: a soft hyphen inside a word is rare in an issue, and the cost of a hit is a `suspicious` hold a person releases, against a channel that carries an instruction unseen.
+ */
 function invisibleIn(text: string): number {
   const chars = [...text];
   let n = 0;
   chars.forEach((c, i) => {
-    if (!ZERO_WIDTH.test(c)) return;
-    const joins = c === "‍" && i > 0 && EMOJI.test(chars[i - 1]!) && i + 1 < chars.length && EMOJI.test(chars[i + 1]!);
-    if (!joins) n += 1;
+    if (BIDI_ONE.test(c) || TAG_ONE.test(c) || !IGNORABLE.test(c)) return;
+    const prev = chars[i - 1];
+    const next = chars[i + 1];
+    if (c === "\u200D" && prev !== undefined && EMOJI.test(prev) && next !== undefined && EMOJI.test(next)) return;
+    if (c === "\uFE0F" && prev !== undefined && !SELECTOR.test(prev) && !(next !== undefined && SELECTOR.test(next))) {
+      if (PICTOGRAPH.test(prev) || (KEYCAP_BASE.test(prev) && next === "\u20E3") || /\p{Emoji_Modifier}/u.test(prev)) return;
+    }
+    n += 1;
   });
   return n;
 }

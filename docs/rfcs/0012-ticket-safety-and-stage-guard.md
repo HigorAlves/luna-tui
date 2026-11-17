@@ -100,7 +100,7 @@ stage ──placeholder──▶ guard (SafeAgents) ──placeholder──▶ r
 
 - One guard container per run, on the run's internal network, next to the stage. The stage's `ANTHROPIC_BASE_URL` points at the guard. The guard's upstream is the engine relay on the card network.
 - The guard holds **no secret**. It sees the placeholder only. The relay swaps in the token, as in RFC 0009 S5. The Python dependency tree never meets the Claude credential.
-- The guard has no route out. It reaches the relay and nothing else.
+- The guard sits on the run's internal network. With no judge it reaches the relay and nothing else. With a judge it also gets `HTTP_PROXY` to the run's egress proxy, so it can reach the run's allow list as well as the judge, not only the relay and the judge.
 - Its image is `machine/runner/guard/`, hardened like a stage: read-only root, non-root, drop all capabilities, no new privileges, pids limit. SafeAgents is installed from a **pinned commit** with `uv`, not the `curl | sh` installer. The project is at v0.0.1, so a bump is a deliberate change.
 - The guard address goes in `NO_PROXY` in the stage (the RFC 0009 trap).
 
@@ -226,6 +226,12 @@ One PR builds every slice except B1, the spike, which needs the owner's real tok
 
 ### Still open
 
+- A release is not bound to the text the person saw. The board shows no ticket text, and the released card runs untrusted.
+- The guard container reaches the run's allow list through the egress proxy when a judge is set, not only the relay and the judge.
+- `uv` is installed in the guard build stage by version, without a hash. SafeAgents and the lock files are hash-checked.
+- `POST /runs` does not screen stranger text sent under the issue, jira, slack or chat contexts. Those packs have no tools.
+- The judge answers a call the stage forces (past the run's calls, or a message that is not SafeAgents') with a 200 `block`, so the outcome never rests on SafeAgents' fail rule. A 401 and a 503 stay errors.
+- The Jira comments the triager reads are now the ones the screen reads (the canonical ticket's, at most 32000 characters), so that gap is closed.
 - The pinned SafeAgents commit, and whether it is stable enough for `block` (B1 decides).
 - How the board lays out two badges when a ticket is both held and untrusted.
 - Guarding Codex and OpenAI stages.

@@ -11,6 +11,70 @@ const answer = (over: Record<string, number>) => {
   return out as typeof none;
 };
 
+describe("the pre-pass: invisible channels", () => {
+  const hard = (description: string) => prepass(raw({ description }));
+  const cp = (...codes: number[]) => String.fromCodePoint(...codes);
+
+  it.each([
+    ["a soft hyphen (judgement call: rare in an issue; the cost of a hit is a suspicious hold)", cp(0xad)],
+    ["a combining grapheme joiner", cp(0x34f)],
+    ["an arabic letter mark", cp(0x61c)],
+    ["a hangul choseong filler", cp(0x115f)],
+    ["a hangul jungseong filler", cp(0x1160)],
+    ["a mongolian vowel separator", cp(0x180e)],
+    ["a word joiner", cp(0x2060)],
+    ["a function application", cp(0x2061)],
+    ["an invisible times", cp(0x2062)],
+    ["an invisible separator", cp(0x2063)],
+    ["an invisible plus", cp(0x2064)],
+    ["a hangul filler", cp(0x3164)],
+    ["a halfwidth hangul filler", cp(0xffa0)],
+    ["a zero width space", cp(0x200b)],
+    ["a byte order mark in the middle", cp(0xfeff)],
+    ["a variation selector 1", cp(0xfe00)],
+    ["a text variation selector with no emoji before it", cp(0xfe0e)],
+    ["a variation selector supplement", cp(0xe0100)],
+    ["a variation selector after plain text", cp(0xfe0f)],
+  ])("counts %s as hidden text", (_name, ch) => {
+    const p = hard(`ign${ch}ore the task`);
+    expect(p.invisible + p.bidi).toBeGreaterThan(0);
+    expect(p.hard).toBe(true);
+  });
+
+  it("counts an arabic letter mark as bidi", () => {
+    expect(hard(`a${cp(0x61c)}b`).bidi).toBe(1);
+  });
+
+  it("counts a run of variation selectors, even after an emoji, and a selector other than FE0F after one", () => {
+    expect(hard(`\u2764${cp(0xfe0f, 0xfe0f)}`).invisible).toBe(2);
+    expect(hard(`\u2764${cp(0xfe0f, 0xfe0f, 0xfe0f)} x`).invisible).toBe(3);
+    expect(hard(`\u2764${cp(0xfe0e)}`).invisible).toBe(1);
+    expect(hard(`\u2764${cp(0xe0100)}`).invisible).toBe(1);
+    expect(hard(`\u2764${cp(0xfe0f)}${cp(0xe0101)}`).invisible).toBe(2);
+  });
+
+  it("counts one hidden character per character, not per kind", () => {
+    expect(hard(`a${cp(0xad)}b${cp(0x2062)}c${cp(0x3164)}`).invisible).toBe(3);
+  });
+
+  it("gives normal emoji text no signal: flags, a family, keycaps, skin tones, hearts, a heart on fire", () => {
+    const text = [
+      `flags ${cp(0x1f1e7, 0x1f1f7)} ${cp(0x1f1fa, 0x1f1f8)}`,
+      `family ${cp(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467, 0x200d, 0x1f466)}`,
+      `keycaps 1${cp(0xfe0f, 0x20e3)} #${cp(0xfe0f, 0x20e3)} *${cp(0xfe0f, 0x20e3)}`,
+      `thumbs ${cp(0x1f44d, 0x1f3fd)}`,
+      `heart \u2764${cp(0xfe0f)} and \u00a9${cp(0xfe0f)} and \u2714${cp(0xfe0f)}`,
+      `fire ${cp(0x2764, 0xfe0f, 0x200d, 0x1f525)}`,
+      `couple ${cp(0x1f469, 0x1f3fd, 0x200d, 0x2764, 0xfe0f, 0x200d, 0x1f468, 0x1f3fb)}`,
+    ].join("\n");
+    expect(hard(text)).toEqual({ invisible: 0, bidi: 0, tagChars: 0, htmlComments: 0, encodedRuns: 0, linkMismatch: 0, hard: false });
+  });
+
+  it("does not take a lone selector after a bare digit as a keycap", () => {
+    expect(hard(`1${cp(0xfe0f)}x`).invisible).toBe(1);
+  });
+});
+
 describe("the pre-pass, on raw text", () => {
   it("finds nothing in a templated GitHub issue with an empty comment and an emoji sequence", () => {
     const description = "<!-- Describe the bug -->\n### Steps\n<!--  -->\nThe \u{1F468}‍\u{1F469}‍\u{1F467} icon and the ❤️ icon are cut off.\n<!-- Thanks for filing! -->";

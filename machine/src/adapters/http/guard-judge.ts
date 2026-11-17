@@ -65,12 +65,12 @@ export async function startGuardJudgeServer(options: { judge: GuardJudge; host: 
       const path = (req.url ?? "").split("?")[0];
       if (path !== PATH) return reply(res, 404);
       if (req.method !== "POST") return reply(res, 405);
-      // A caller with no key costs nothing: the body is not read.
+      // A caller with no key, or one that names no run, costs nothing: the grant is checked before the body is read or parsed.
       const key = bearerOf(req);
-      if (key === null) return reply(res, 401);
+      if (key === null || !options.judge.knows(key)) return reply(res, 401);
+      // A body over the cap, or one that is not a chat request, is a call the judge declines (a 200 `block`, counted against the run), not an HTTP error the stage could use to steer SafeAgents' fail rule.
       const body = await readBody(req);
-      if (body === null) return reply(res, 413);
-      const user = userTextOf(body);
+      const user = body === null ? null : userTextOf(body);
       const answer = await options.judge.review(key, user ?? "");
       if (answer.status !== 200) return reply(res, answer.status);
       return reply(res, 200, {

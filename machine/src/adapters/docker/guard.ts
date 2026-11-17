@@ -119,9 +119,11 @@ export async function startGuard(options: StartGuardOptions): Promise<RunningGua
     await exec("docker", ["rm", "-f", name]);
   };
   try {
-    // The journal folder is the machine's, inside the run's private folder; the guard's user writes it whatever its uid.
+    // The journal folder is the machine's, inside the run's private folder. The guard runs as the machine's own user, so the folder is the machine's alone (0700). Only a guard run as another
+    // uid (no `user` given: the fallback is nobody; or a different one) needs it open to write the journal, and that is the one case that keeps 0777.
     await mkdir(options.journalDir, { recursive: true });
-    await chmod(options.journalDir, 0o777);
+    const own = typeof process.getuid === "function" && options.user !== undefined && options.user.split(":")[0] === String(process.getuid());
+    await chmod(options.journalDir, own ? 0o700 : 0o777);
     await mkdir(options.secretsDir, { recursive: true, mode: 0o755 });
     await chmod(options.secretsDir, 0o755);
   } catch (error) {

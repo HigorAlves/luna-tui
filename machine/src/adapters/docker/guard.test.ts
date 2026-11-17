@@ -102,7 +102,15 @@ describe("startGuard", () => {
     // The log line was there from the first poll; it did not end the wait.
     expect(calls.filter((c) => c[0] === "logs")).toHaveLength(0);
     expect(guard).toMatchObject({ address: "172.30.0.3", port: 8787, journalPath: join(folder, "guard", "calls.jsonl") });
+    // The guard runs as another uid ("1000:1000" is not the test's user): it needs the folder open to write the journal.
     expect(statSync(join(folder, "guard")).mode & 0o777).toBe(0o777);
+  });
+
+  it("makes the journal folder the machine's alone (0700) when the guard runs as the machine's own user", async () => {
+    if (typeof process.getuid !== "function") return;
+    const { exec } = fake(() => ok());
+    await startGuard(options({ exec, user: `${process.getuid()}:${process.getgid?.() ?? 0}` }));
+    expect(statSync(join(folder, "guard")).mode & 0o777).toBe(0o700);
   });
 
   it("removes the container when asked, once", async () => {
