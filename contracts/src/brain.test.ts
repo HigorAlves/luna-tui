@@ -50,7 +50,7 @@ describe("a brain row", () => {
 
 describe("the brain's types", () => {
   it("names the work, code, people, verdict, evidence and fact layers", () => {
-    expect([...BRAIN_NODE_TYPES].sort()).toEqual(["Actor", "Card", "Claim", "Component", "Learning", "PR", "Person", "Principle", "Repo", "Source", "Ticket", "Verdict"]);
+    expect([...BRAIN_NODE_TYPES].sort()).toEqual(["Actor", "Answer", "Card", "Claim", "Component", "Control", "Incident", "Learning", "PR", "Person", "Principle", "Regime", "Repo", "Source", "Ticket", "Verdict"]);
   });
 
   it("has every edge join two known node types", () => {

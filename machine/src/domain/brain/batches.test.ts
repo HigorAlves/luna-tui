@@ -72,7 +72,7 @@ describe("brainBatches", () => {
   });
   it("orders the node types so each comes after what its edges point at", () => {
     const at = (type: string): number => BRAIN_LOAD_ORDER.indexOf(type);
-    expect([...BRAIN_LOAD_ORDER].sort()).toEqual(["Actor", "Card", "Claim", "Component", "Learning", "PR", "Person", "Principle", "Repo", "Source", "Ticket", "Verdict"]);
+    expect([...BRAIN_LOAD_ORDER].sort()).toEqual(["Actor", "Answer", "Card", "Claim", "Component", "Control", "Incident", "Learning", "PR", "Person", "Principle", "Regime", "Repo", "Source", "Ticket", "Verdict"]);
     for (const [from, to] of [["Card", "Repo"], ["Card", "Ticket"], ["Card", "Component"], ["Component", "Repo"], ["PR", "Card"], ["PR", "Person"], ["Actor", "Person"], ["Verdict", "Card"], ["Source", "Card"], ["Claim", "Source"], ["Claim", "Person"], ["Claim", "Repo"], ["Learning", "Claim"], ["Learning", "Repo"]]) {
       expect(at(to!), `${from} -> ${to}`).toBeLessThan(at(from!));
     }

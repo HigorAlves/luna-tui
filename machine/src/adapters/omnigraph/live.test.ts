@@ -44,6 +44,15 @@ describe.skipIf(!process.env.BRAIN_LIVE_URL)("omnigraph, live", () => {
     brainNode("Claim", { slug: `claim:${id}-b`, statement: `The board lint may be skipped for a docs change ${id}`, quote: "a docs change gets no board check", kind: "pattern", scope: "repo", status: "unverified", recorded_at: at }),
     brainEdge("ClaimFrom", `claim:${id}-b`, `source:card/${id}`),
     brainEdge("Contradicts", `claim:${id}-b`, `claim:${id}-a`),
+    // an incident under a regime the repository declares, a control page and an approved answer
+    brainNode("Incident", { slug: `incident:${id}`, title: `Export bucket readable by anyone ${id}`, severity: "high", status: "open", service: "exports", breach: true, started_at: at }),
+    brainEdge("IncidentUnderRegime", `incident:${id}`, "regime:gdpr"),
+    brainEdge("RepoUnderRegime", `repo:${id}`, "regime:gdpr"),
+    brainNode("Regime", { slug: "regime:gdpr", name: "GDPR" }),
+    brainNode("Control", { slug: `control:${id}/Compliance/Controls/Access.md`, title: `Access control ${id}`, kind: "control", path: "Compliance/Controls/Access.md" }),
+    brainEdge("ControlOfRepo", `control:${id}/Compliance/Controls/Access.md`, `repo:${id}`),
+    brainNode("Answer", { slug: `answer:${id}/Compliance/Answers/encryption-at-rest.md`, question: `Is data encrypted at rest? ${id}`, path: "Compliance/Answers/encryption-at-rest.md" }),
+    brainEdge("AnswerOfRepo", `answer:${id}/Compliance/Answers/encryption-at-rest.md`, `repo:${id}`),
     // a rule of the repository, and one that left its file
     brainNode("Principle", { slug: `principle:${id}/a1`, statement: `Run the board lint before every commit ${id}`, section: "Critical rules", status: "active", recorded_at: at }),
     brainEdge("PrincipleOfRepo", `principle:${id}/a1`, `repo:${id}`),
@@ -76,6 +85,11 @@ describe.skipIf(!process.env.BRAIN_LIVE_URL)("omnigraph, live", () => {
       learnings_of_repo: { repo: `repo:${id}` },
       claims_of_learning: { learning: `learning:${id}` },
       principles_of_repo: { repo: `repo:${id}` },
+      search_incidents: { q: `export bucket ${id}` },
+      regimes_of_repo: { repo: `repo:${id}` },
+      controls_of_repo: { repo: `repo:${id}` },
+      search_controls: { q: `access control ${id}` },
+      search_answers: { q: `encrypted at rest ${id}` },
       search_principles: { q: `board lint ${id}` },
     };
     for (const query of BRAIN_QUERIES.filter((q) => q.agent)) {

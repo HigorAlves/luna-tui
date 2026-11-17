@@ -136,7 +136,7 @@ describe("omnigraphBrain.unlink and reset", () => {
     const { client, mutated } = fake();
     await omnigraphBrain({ client, tokens }).reset();
     const types = mutated.map((call) => /delete (\w+) where slug != ""/.exec(call.query)?.[1]);
-    expect([...types].sort()).toEqual(["Actor", "Card", "Claim", "Component", "Learning", "PR", "Person", "Principle", "Repo", "Source", "Ticket", "Verdict"]);
+    expect([...types].sort()).toEqual(["Actor", "Answer", "Card", "Claim", "Component", "Control", "Incident", "Learning", "PR", "Person", "Principle", "Regime", "Repo", "Source", "Ticket", "Verdict"]);
     expect(types.indexOf("Principle")).toBeLessThan(types.indexOf("Repo"));
     expect(types.indexOf("Learning")).toBeLessThan(types.indexOf("Claim"));
     expect(types.indexOf("Claim")).toBeLessThan(types.indexOf("Source"));
