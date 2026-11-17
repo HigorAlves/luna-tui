@@ -3,7 +3,7 @@
 // a card; only `approve`, `edit` and `card`, each started by a person's request, do. A clock or an event handler has no path to them.
 import { createHash } from "node:crypto";
 
-import { type BacklogAddInput, SplitChild, type CanonicalTicket, type FactoryConfig, PACKS, type SizeContext, type SplitContext, type TaskSource, type TicketContext, applyPolicy, sizeLimits, sizeVerdict } from "@hardness/contracts";
+import { type BacklogAddInput, SplitChild, type CanonicalTicket, type FactoryConfig, PACKS, type SizeContext, type SplitContext, type TaskSource, type TicketContext, TicketSafety, applyPolicy, sizeLimits, sizeVerdict } from "@hardness/contracts";
 
 import { z } from "zod";
 
@@ -17,6 +17,8 @@ import { type AssessDeps, type AssessmentRecord, assessTicket } from "./ticket-a
 import { type Draft, type RecommendDeps, type ReplyDeps, assessmentDraft, declineDraft, parkDraft, reminderDraft, editDraft, ignoreDraft, splitDraft, draftHash, needsInfoDraft, notOursDraft, recommendWithDecision } from "./ticket-drafts.ts";
 import { ticketClocks } from "../domain/ticket-sla.ts";
 import { enrichTicket } from "./ticket-enrich.ts";
+import { type TicketScreen, rawOf } from "./ticket-screen.ts";
+import { contentHash } from "../domain/ticket-screen.ts";
 import { type SizeDecision, type SizedCard, similarCards, sizeContextOf, sizeDecisionOf } from "./size-estimate.ts";
 import { type ValidityDeps, checkValidity } from "./ticket-validity.ts";
 import type { NewTask } from "./pipeline.ts";
@@ -24,7 +26,7 @@ import type { TicketRow, TicketStore, Tickets } from "./tickets.ts";
 
 /** What the intakes hand a ticket to. */
 export interface TicketIntake {
-  ingest(ticket: CanonicalTicket, ctx: { repoPath: string | null; question: boolean; force?: boolean }): Promise<unknown>;
+  ingest(ticket: CanonicalTicket, ctx: { repoPath: string | null; question: boolean; force?: boolean; released?: boolean }): Promise<unknown>;
 }
 
 export class TicketNotFound extends Error {
@@ -39,6 +41,14 @@ export class TicketRefusal extends Error {
   constructor(message: string) {
     super(message);
     this.name = "TicketRefusal";
+  }
+}
+
+/** The machine will not do this for a ticket the safety screen holds: a person releases or archives it first. */
+export class HeldSafetyError extends TicketRefusal {
+  constructor(key: string) {
+    super(`${key.slice(0, 80)} is held by the safety screen: release or archive it first`);
+    this.name = "HeldSafetyError";
   }
 }
 
@@ -64,6 +74,8 @@ export interface TicketView {
   clocks: Record<string, unknown>;
   /** Where approving a split draft creates the child tickets: the Jira project or the GitHub repository of this ticket's own key; null when the key is neither. */
   splitTarget: string | null;
+  /** Why the safety screen holds this ticket; null unless its status is `held_safety`. */
+  safety: TicketSafety | null;
 }
 
 export interface TicketMachineDeps {
@@ -77,6 +89,8 @@ export interface TicketMachineDeps {
   /** Makes a card through `create_card`, once per `key`: a second call with the key answers the card the first made (`cardOnce`). */
   createCard(input: NewTask, key: string): Promise<{ id: string }>;
   validity: ValidityDeps;
+  /** The safety screen, before anything else reads the ticket. Absent, no ticket is screened. */
+  screen?: TicketScreen;
   assess: Pick<AssessDeps, "decide">;
   /**
    * The size estimate (wave 15): the typed decision `size_estimate` on the ticket's text, and the counted diff of closed cards by id. Only the closed cards among
@@ -90,7 +104,7 @@ export interface TicketMachineDeps {
   /** The shared backlog, for `schedule` and for keeping an item's rank in step with a re-assessment. */
   /** Ground truth: what a tap says about the decision `ticket_recommend` made (the decision log's `learned`), and what was done to a draft (a file beside a gate's). Absent: nothing is kept. */
   truth?: {
-    learned(fact: { pack: "ticket_recommend" | "ticket_validity"; recordId: string; label: Record<string, Record<string, unknown>>; source: string; kind: "person" | "fact" | "outcome"; repoPath?: string | null }): Promise<boolean>;
+    learned(fact: { pack: "ticket_recommend" | "ticket_validity" | "ticket_safety"; recordId: string; label: Record<string, Record<string, unknown>>; source: string; kind: "person" | "fact" | "outcome"; repoPath?: string | null }): Promise<boolean>;
     draft(entry: { key: string; draft: string; kind: string; did: "sent" | "edited" | "ignored"; original: string; final: string | null; at: string; repoPath?: string | null }): Promise<void>;
   };
   /** The label the GitHub intake watches for: a child ticket made on GitHub carries it, so the intake sees it. */
@@ -153,17 +167,33 @@ export class TicketMachine implements TicketIntake {
   }
 
   /** Reads a ticket and holds its drafts. Writes nothing to the tracker and makes no card. */
-  async ingest(ticket: CanonicalTicket, ctx: { repoPath: string | null; question: boolean; force?: boolean }): Promise<void> {
+  async ingest(ticket: CanonicalTicket, ctx: { repoPath: string | null; question: boolean; force?: boolean; released?: boolean }): Promise<void> {
     const { store } = this.deps;
     const prev = await store.get(ticket.key);
-    if (!ctx.force && prev?.machineStatus && prev.machineStatus !== "validity_failed" && prev.canonical.updatedAt === ticket.updatedAt) return;
+    // Unchanged is the same `updatedAt` AND (with a screen) the same text: GitHub tickets carry no `updatedAt`, so the hash is what sees an edit. A held `screen_failed` is tried again.
+    const unchanged = (row: TicketRow) => row.canonical.updatedAt === ticket.updatedAt && (!this.deps.screen || (screenHashOf(row) === contentHash(rawOf(ticket)) && !screenFailedOn(row)));
+    if (!ctx.force && prev?.machineStatus && prev.machineStatus !== "validity_failed" && unchanged(prev)) return;
     await store.read(ticket);
     const at = this.now();
     // The acknowledge clock starts when the machine first saw the ticket, on the machine's own clock (the row's `createdAt` is the database's).
     if (!prev) await this.mergeClocks(ticket.key, { firstSeenAt: at.toISOString() });
+    // The safety screen reads the ticket before anything else does: a ticket that is not safe is held, with nothing drafted, posted or carded.
+    // A released ticket was read by a person: the hash of its text is kept all the same, so the next unchanged ingest does not hold it again.
+    let screenHash: string | null = this.deps.screen && ctx.released ? contentHash(rawOf(ticket)) : null;
+    if (this.deps.screen && !ctx.released) {
+      const screened = await this.deps.screen.screen(ticket, ctx.repoPath);
+      screenHash = screened.hash;
+      if (screened.verdict !== "safe") {
+        await store.appendAssessment(ticket.key, { at: at.toISOString(), outcome: "held_safety", verdict: screened.verdict, reasons: screened.reasons, hash: screened.hash, ...(screened.recordId ? { recordId: screened.recordId } : {}) });
+        await store.updateDrafts(ticket.key, (current) => (current as unknown as Draft[]).filter((d) => d.status === "posting" || d.status === "posted") as unknown as Record<string, unknown>[]);
+        const kept = ((await store.get(ticket.key))?.machineLinks ?? []).filter((l) => l.kind !== "repo");
+        await store.setMachine(ticket.key, { status: "held_safety", ...(ctx.repoPath ? { links: [...kept, { kind: "repo", target: ctx.repoPath }] } : {}) });
+        return;
+      }
+    }
     let refused: string | null = null;
     const done = async (status: string, assessment: Record<string, unknown>, drafts: Draft[]) => {
-      await store.appendAssessment(ticket.key, { at: at.toISOString(), ...assessment, ...(refused ? { draftRefused: refused } : {}) });
+      await store.appendAssessment(ticket.key, { at: at.toISOString(), ...assessment, ...(screenHash ? { screenHash } : {}), ...(refused ? { draftRefused: refused } : {}) });
       // Under the row lock: a draft being posted or already posted is never rewritten, and a new draft with the same id is dropped.
       await store.updateDrafts(ticket.key, (current) => {
         const keep = (current as unknown as Draft[]).filter((d) => d.status === "posting" || d.status === "posted");
@@ -269,6 +299,7 @@ export class TicketMachine implements TicketIntake {
   /** Places the ticket in the shared backlog by its score, or updates its item. A tap. Nothing is written to the ticket. */
   async schedule(key: string): Promise<{ id: string; created: boolean }> {
     const row = await this.row(key);
+    heldGuard(row);
     const last = [...row.assessments].reverse().find((a) => a.outcome === "workable");
     if (!last || !this.deps.backlog) throw new TicketRefusal("only a ticket assessed as workable goes to the backlog");
     const repo = row.machineLinks.find((l) => l.kind === "repo")?.target ?? null;
@@ -352,6 +383,7 @@ export class TicketMachine implements TicketIntake {
   /** Makes one card from the ticket, with its link as the source and the assessment as lower-confidence hints. A tap. Nothing is written to the ticket. */
   async card(key: string): Promise<{ id: string }> {
     const row = await this.row(key);
+    heldGuard(row);
     if (row.cardId) throw new TicketRefusal("this ticket already has a card");
     const read = await this.withAssociation(row.canonical);
     const t = read.ticket;
@@ -397,6 +429,7 @@ export class TicketMachine implements TicketIntake {
    * goes on), then the origin is marked `epic`. A failure puts the draft back to `waiting` with what was made.
    */
   private async approveSplit(row: TicketRow, draft: Draft, hash: string): Promise<void> {
+    heldGuard(row);
     if (draft.rev !== 2) throw new TicketRefusal("this split draft is from an older version: it has to be drafted again before it can be approved");
     let claimed = false;
     let held: unknown = null;
@@ -554,6 +587,7 @@ export class TicketMachine implements TicketIntake {
 
   /** Posts `to` in place of `before`. The draft is marked `posting` by a conditional change under the row lock BEFORE the port is called (only a waiting or edited draft with the hash the person saw can move), `posted` after; a failed post puts it back. Two taps in flight post once. */
   private async post(row: TicketRow, before: Draft, to: Draft, hash: string, transition: string | undefined): Promise<void> {
+    heldGuard(row);
     if (transition !== undefined && row.canonical.tool === "github") throw new TicketRefusal("a GitHub issue has no transition the machine makes: approve without one");
     if (carriesSecret(to.text)) throw new TicketRefusal("the text carries a token-shaped string and is not posted");
     const port = this.deps.port(row.canonical.tool);
@@ -671,7 +705,34 @@ export function splitTargetOf(key: string): string | null {
   return gh ? `${gh[1]}/${gh[2]}` : null;
 }
 
+/** Refuses a tap on a ticket the safety screen holds. */
+function heldGuard(row: TicketRow): void {
+  if (row.machineStatus === "held_safety") throw new HeldSafetyError(row.key);
+}
+
+const lastHeld = (row: TicketRow) => [...row.assessments].reverse().find((a) => a.outcome === "held_safety");
+
+/** The hash of the text the screen last read: a held entry's own, else the one the last assessment kept. Undefined for a ticket never screened. */
+function screenHashOf(row: TicketRow): string | undefined {
+  for (const a of [...row.assessments].reverse()) {
+    const h = a.outcome === "held_safety" ? a.hash : a.screenHash;
+    if (typeof h === "string") return h;
+  }
+  return undefined;
+}
+
+/** A ticket held only because the screen could not answer: it is tried again whatever its text. */
+const screenFailedOn = (row: TicketRow): boolean => row.machineStatus === "held_safety" && ((lastHeld(row)?.reasons as unknown[] | undefined) ?? []).includes("screen_failed");
+
+/** Why the screen holds the ticket, from its last held entry, while its status is `held_safety`. */
+function safetyOf(row: TicketRow): TicketSafety | null {
+  if (row.machineStatus !== "held_safety") return null;
+  const held = lastHeld(row);
+  const parsed = TicketSafety.safeParse({ verdict: held?.verdict, reasons: held?.reasons });
+  return parsed.success ? parsed.data : null;
+}
+
 function viewOf(row: TicketRow): TicketView {
-  return { key: row.key, canonical: row.canonical, status: row.machineStatus, assessments: row.assessments, drafts: (row.drafts as unknown as Draft[]).map((d) => ({ ...d, hash: draftHash(d) })), cardId: row.cardId, clocks: row.clocks, splitTarget: splitTargetOf(row.key) };
+  return { key: row.key, canonical: row.canonical, status: row.machineStatus, assessments: row.assessments, drafts: (row.drafts as unknown as Draft[]).map((d) => ({ ...d, hash: draftHash(d) })), cardId: row.cardId, clocks: row.clocks, splitTarget: splitTargetOf(row.key), safety: safetyOf(row) };
 }
 void (null as unknown as AssessAnswer);

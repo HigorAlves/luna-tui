@@ -111,6 +111,7 @@ import { Backlog } from "./application/backlog.ts";
 import { PgTicketStore } from "./adapters/persistence/ticket-store.ts";
 import { GitHubTickets } from "./adapters/tickets/github-tickets.ts";
 import { JiraTickets } from "./adapters/tickets/jira-tickets.ts";
+import { createTicketScreen } from "./application/ticket-screen.ts";
 import { TicketMachine, cardOnce, ticketSource } from "./application/ticket-machine.ts";
 import { TicketEvents } from "./application/ticket-events.ts";
 import { INTAKE_CLIENT } from "./application/classify.ts";
@@ -505,6 +506,11 @@ const channelClaims = new ChannelClaims(
 
 pipeline = new Pipeline(db, runnerFor, {
   economy,
+  // The second line of the ticket safety screen: a card is never made from a source whose ticket the screen holds.
+  sourceHeld: async (source) => {
+    const key = source?.kind === "github" ? `${source.repo}#${source.number}` : source?.kind === "jira" ? source.key : null;
+    return key !== null && (await new PgTicketStore(db).get(key))?.machineStatus === "held_safety";
+  },
   proposer: factProposer,
   // A card that came from a ticket is split into child tickets, created only after a person approves the split gate (never by a clock or a retry).
   splitTickets: {
@@ -794,6 +800,13 @@ const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira
 /** The shared backlog; the duplicate check reads and bumps it through the pipeline's `dedup` port. */
 const backlog = new Backlog({ store: new PgBacklogStore(db), pipeline, staleDays: FACTORY_DEFAULTS.backlog.stale_days, onDecline: (row) => ticketMachine.declineFromBacklog(row.sources), stackOf: (sources) => ticketMachine.stackOfSources(sources) });
 /** The Ticket Machine: Jira and GitHub tickets in scope are read, checked, assessed and drafted, then held for a person's tap. Every model call is a pack through `packRuns`; the port's writes are reached only from the tap routes. */
+const ticketScreen = createTicketScreen({
+  decide: async (context, _repoPath) => {
+    if (!packRuns) throw new Error("agents are off: the ticket machine has no model to ask");
+    const { answer, recordId } = await ownCalls(packRuns).run({ pack: "ticket_safety", context: { ticket: context } }, INTAKE_CLIENT);
+    return { answer: tagged({ answer: answer as Record<string, unknown>, ...(recordId ? { recordId } : {}) }), ...(recordId ? { recordId } : {}) };
+  },
+});
 const ticketPack = async (pack: "ticket_validity" | "ticket_assess" | "ticket_recommend" | "ticket_reply", context: TicketContext): Promise<unknown> => {
   if (!packRuns) throw new Error("agents are off: the ticket machine has no model to ask");
   const { answer, recordId } = await ownCalls(packRuns).run({ pack, context: { ticket: context } }, INTAKE_CLIENT);
@@ -809,6 +822,7 @@ const ticketMachine = new TicketMachine({
   config: async (repoPath) => (await policies.for(repoPath)).factory,
   locate: async (repoPath, text) => (repoPath ? ((await graph.locate(repoPath, text))?.files ?? []).map((f: { path?: string } | string) => (typeof f === "string" ? f : (f.path ?? ""))).filter(Boolean) : []),
   createCard: (input, key) => cardOnce(pipeline, input, key),
+  screen: ticketScreen,
   validity: { decide: async (c) => (await ticketPack("ticket_validity", c)) as never },
   assess: { decide: async (c) => (await ticketPack("ticket_assess", c)) as never },
   recommend: { decide: async (c) => (await ticketPack("ticket_recommend", c)) as never },

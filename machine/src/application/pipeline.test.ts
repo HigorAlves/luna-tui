@@ -21,6 +21,7 @@ import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import { ApprovalEntity } from "../adapters/persistence/schemas.ts";
 import { ApproverRequiredError, type BudgetAlert, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, Pipeline, PlanApprovedError, testPathsIn, RejectNotAllowedError, QuestionsCarrySecretError, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "./pipeline.ts";
+import { HeldSafetyError } from "./ticket-machine.ts";
 import { DEFAULT_POLICY } from "../domain/policy.ts";
 import { approvedPlan, buildStageInput } from "../domain/stage-input.ts";
 import { ensureClone } from "../adapters/git/clone.ts";
@@ -4507,3 +4508,18 @@ describe("the address of a card's PR", () => {
   });
 });
 
+describe("a held source (the second line of the ticket safety screen)", () => {
+  it("createTask and createTaskOnce refuse a source the held check names, and create nothing", async () => {
+    const source = { kind: "github" as const, repo: "o/r", number: 7, url: "https://github.com/o/r/issues/7" };
+    const asked: Array<unknown> = [];
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, sourceHeld: async (s) => (asked.push(s), s?.kind === "github") });
+    await expect(p.createTask({ title: "Refund", source })).rejects.toBeInstanceOf(HeldSafetyError);
+    await expect(p.createTaskOnce({ title: "Refund", source }, "k-1")).rejects.toBeInstanceOf(HeldSafetyError);
+    expect(await db.query("select count(*)::int as n from tasks")).toEqual([{ n: 0 }]);
+    expect(asked).toEqual([source, source]);
+    // A card with no source, or one the check lets through, is made as before.
+    expect((await p.createTask({ title: "Plain" })).title).toBe("Plain");
+    expect((await p.createTask({ title: "Jira", source: { kind: "jira", key: "PAY-1", url: "https://x", issueType: null } })).title).toBe("Jira");
+    await p.shutdown();
+  });
+});
