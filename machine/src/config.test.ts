@@ -65,6 +65,7 @@ describe("loadConfig", () => {
       datadog: { apiKey: "", appKey: "", site: "datadoghq.com", scope: "" },
       sla: { gateSecs: 172_800, cycleSecs: null },
       sandboxPolicy: DEFAULT_MACHINE_POLICY,
+      brain: { url: null, tokensPath: "/home/me/.config/hardness/brain-tokens.json" },
     });
   });
 
@@ -124,6 +125,14 @@ describe("loadConfig", () => {
     expect(stateDirFrom({}, "/h")).toBe("/h/.local/state/hardness");
     expect(stateDirFrom({ MACHINE_STATE_DIR: "/s" }, "/h")).toBe("/s");
     expect(loadConfig({ HOME: "/h", MACHINE_STATE_DIR: "/s" }).stateDir).toBe("/s");
+  });
+
+  it("reads the brain's address and tokens file; unset or empty is off", () => {
+    expect(loadConfig({ HOME: "/h" }).brain).toEqual({ url: null, tokensPath: "/h/.config/hardness/brain-tokens.json" });
+    expect(loadConfig({ HOME: "/h", MACHINE_BRAIN_URL: "" }).brain.url).toBeNull();
+    expect(loadConfig({ HOME: "/h", MACHINE_BRAIN_URL: "http://127.0.0.1:8080/", MACHINE_BRAIN_TOKENS: "/t.json" }).brain).toEqual({ url: "http://127.0.0.1:8080", tokensPath: "/t.json" });
+    expect(() => loadConfig({ HOME: "/h", MACHINE_BRAIN_URL: "not a url" })).toThrow(/MACHINE_BRAIN_URL/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_BRAIN_URL: "ftp://x" })).toThrow(/MACHINE_BRAIN_URL/);
   });
 
   it("reads the thread-reply switch and the Slack pair, which go together", () => {

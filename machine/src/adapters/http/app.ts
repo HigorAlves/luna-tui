@@ -64,6 +64,10 @@ import { buildForemanBoard } from "../../domain/foreman.ts";
 import { basename, isAbsolute, resolve as resolvePath } from "node:path";
 import { type Context, Hono } from "hono";
 import type { Economy } from "../../application/economy.ts";
+import { brainRoutes, offBrain, type TrackedProjector } from "./brain.ts";
+import type { Brain } from "../../application/brain.ts";
+import type { Admission } from "../../application/brain-admission.ts";
+import type { ClaimStore } from "../../application/brain-claims.ts";
 import { economyMetrics } from "../../domain/economy/metrics.ts";
 import { type Backlog, BacklogItemNotFoundError, NotSchedulableError } from "../../application/backlog.ts";
 import type { ChangeEvidence } from "../../application/change-evidence.ts";
@@ -133,6 +137,8 @@ export interface AppDeps {
   approveBase?: (repo: string, base: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
   /** The token economy (RFC 0007) with the repositories the machine knows and each one's `economy` policy; absent (`MACHINE_ECONOMY=off`), the `/economy` routes and the metrics' `economy` are absent. */
   economy?: { port: Economy; knownRepos: () => Promise<string[]>; configOf: (repo: string) => Promise<EconomyConfig> };
+  /** The company brain (RFC 0010) and its projector; absent, `/brain/health` says it is off and the commands answer the off result. */
+  brain?: { brain: Brain; projector: TrackedProjector; claims?: ClaimStore; admission?: Admission; /** The GitHub login a note typed on the board is attributed to; null or a throw leaves it with no speaker. */ speaker?: () => Promise<string | null> };
   db: DataSource;
   pipeline: Pipeline;
   bus: Bus;
@@ -245,7 +251,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, compliance, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], clock = () => new Date(), problems: problemsOf, sandboxPolicy }: AppDeps): Hono {
+export function createApp({ repoHealth, approveBase, economy, brain, db, pipeline, bus, backlog, tickets, compliance, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], clock = () => new Date(), problems: problemsOf, sandboxPolicy }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -426,6 +432,8 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
       return c.json({ repo: body.repo, base: body.base, approved: true });
     });
   }
+
+  brainRoutes(app, { ...(brain ?? offBrain()), runs });
 
   if (economy) {
     /** A checkout the machine knows, named by its absolute path: anything else is a 400. */

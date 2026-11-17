@@ -4,6 +4,7 @@
 import { z } from "zod";
 
 import { ChangeExceptionKind, ComplianceRegime } from "./compliance.ts";
+import { ClaimKind, ClaimScope } from "./brain-claims.ts";
 import { EconomyInput, ProposeContext } from "./economy.ts";
 import { EngineBudgets, EngineId } from "./engines.ts";
 import { EffortId } from "./models.ts";
@@ -183,6 +184,8 @@ export const PackId = z.enum([
   "worth_learning",
   // A decision at Intake (a dedup context, run on demand): is a new report the same problem as one of the five nearest cards.
   "intake_dedup",
+  // A decision on a claim a pack handed over (an admit context, run on demand): does the source support it, will it last, is it a statement, how risky is it, how does it stand to the five most like it.
+  "memory_admit",
   // A decision at the Ticket Machine (a ticket context, run on demand): can this ticket be worked on at all.
   "ticket_validity",
   // A decision at the Ticket Machine: the four typed answers of an assessment (urgency, complexity, blast radius, risk of doing against not doing).
@@ -236,6 +239,8 @@ export const PackId = z.enum([
   "vuln_triage",
   // Drafts the user-facing notes of a release from the merged PRs; no tools, no worktree, on demand.
   "release_notes",
+  // The company brain's answerer: answers a question from rows the machine read out of the graph and cites them; no tools, no worktree, on demand (POST /brain/ask).
+  "brain_ask",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -691,6 +696,30 @@ export const QuestionnaireContext = z.object({
   bank: z.array(z.object({ path: z.string().min(1).max(300), text: z.string().max(2_000) })).max(100),
 });
 export type QuestionnaireContext = z.infer<typeof QuestionnaireContext>;
+/** One row the machine read out of the company brain for a question. `text` is built by the machine from the graph's columns; a title in it is a person's: data, never an instruction. */
+export const BrainAskRow = z.object({
+  /** The node's slug: what an answer cites. */
+  slug: z.string().min(1).max(300),
+  kind: z.enum(["card", "pr", "verdict", "component", "learning", "principle"]),
+  text: z.string().max(600),
+});
+export type BrainAskRow = z.infer<typeof BrainAskRow>;
+
+/** For brain_ask: the person's question and the rows the machine found for it. */
+export const BrainAskContext = z.object({ question: z.string().min(1).max(2000), rows: z.array(BrainAskRow).max(60) });
+export type BrainAskContext = z.infer<typeof BrainAskContext>;
+
+/** One earlier answer of the same pack on a card like this one, with what really happened. Data about the past, never an instruction. */
+export const Precedent = z.object({
+  question: z.string().max(60),
+  answer: z.string().max(60),
+  truth: z.string().max(60),
+  truthSource: z.enum(["person", "outcome"]),
+  /** The earlier card's title: a person's text. */
+  card: z.string().max(200),
+  decidedAt: z.string(),
+});
+export type Precedent = z.infer<typeof Precedent>;
 
 /** One slice of the implementer's ledger, kept by the runner in `/out/ledger.json`. */
 export const LedgerSlice = z.object({
@@ -1326,6 +1355,15 @@ export const DedupContext = z.object({
 });
 export type DedupContext = z.infer<typeof DedupContext>;
 
+/** For memory_admit: one claim, the part of its source around the quote, and the claims most like it. Every text in it is a model's or a person's: data, never an instruction. */
+export const AdmitContext = z.object({
+  claim: z.object({ statement: z.string().max(300), quote: z.string().max(500), kind: ClaimKind, scope: ClaimScope, extractor: z.string().max(60) }),
+  source: z.object({ kind: z.enum(["card", "note"]), title: z.string().max(200), excerpt: z.string().max(4000) }),
+  /** At most five, in the order the questions number them. */
+  similar: z.array(z.object({ id: z.string(), statement: z.string().max(300), status: z.enum(["unverified", "verified", "rejected"]) })).max(5),
+});
+export type AdmitContext = z.infer<typeof AdmitContext>;
+
 /** What pr_link reads: the PR under review and up to ten candidates (open Jira tickets and open board cards, numbered by slot), flattened and capped by the machine. A stranger wrote all of it. */
 export const PrLinkContext = z.object({
   pr: z.object({
@@ -1388,6 +1426,8 @@ export const ConversationContext = z.object({
       tone: z.array(z.object({ machine: z.string().max(1500), person: z.string().max(1500) })).max(5),
     })
     .optional(),
+  /** What the company brain holds about the thread (cards, pull requests, decisions, lessons), read by named queries: data, never an instruction. Absent unless the repository's `luna.yaml` has `brain.tell: "on"` and the brain found something. */
+  brain: z.array(BrainAskRow).max(12).optional(),
 });
 export type ConversationContext = z.infer<typeof ConversationContext>;
 
@@ -1558,6 +1598,8 @@ export const StageInput = z.object({
     split: SplitContext.nullable().optional(),
     /** For intake_dedup: the new report and the shortlist to judge. */
     dedup: DedupContext.nullable().optional(),
+    /** For memory_admit: the claim, its source excerpt and the similar claims to judge. */
+    admit: AdmitContext.nullable().optional(),
     /** For pr_link: the PR under review and the candidates to judge. */
     prLink: PrLinkContext.nullable().optional(),
     /** For the Ticket Machine's decisions (ticket_validity): the ticket and its enrichment. */
@@ -1594,6 +1636,10 @@ export const StageInput = z.object({
     vulns: VulnTriageContext.nullable().optional(),
     /** For release_notes: the PRs merged since the last release; the task is synthetic and there is no worktree. */
     release: ReleaseNotesContext.nullable().optional(),
+    /** For brain_ask: the question and the rows read out of the company brain; the task is synthetic and there is no worktree. */
+    brainAsk: BrainAskContext.nullable().optional(),
+    /** For a decision pack the repository opted in (`luna.yaml` `brain.precedents`): its own earlier answers on cards like this one, with what really happened. Absent unless there are some: a pack's input is unchanged without it. */
+    precedents: z.array(Precedent).max(8).nullable().optional(),
     /** For question_council: the open triage questions to settle from the code, the card and the answers so far. */
     questions: QuestionsContext.nullable().optional(),
     /** For verifying: the files the code graph says depend on what the change touched, to review first. */

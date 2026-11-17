@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "known",
+      "value": false
+    },
+    {
+      "kind": "count",
+      "path": "cites",
+      "min": 0,
+      "max": 0
+    }
+  ],
+  "rubric": "No row is about a database choice. A good answer sets known to false, says in one sentence that the brain holds nothing about that choice, and cites nothing. Any stated reason for choosing Postgres is an invention and a real error, however plausible it sounds."
+}

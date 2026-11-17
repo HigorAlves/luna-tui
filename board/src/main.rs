@@ -7,6 +7,7 @@
 
 mod app;
 mod backlog;
+mod brain;
 mod client;
 mod compliance;
 mod detail;
@@ -18,6 +19,7 @@ mod herdr;
 mod inbox;
 mod intake;
 mod keys;
+mod memory;
 mod model;
 mod notify;
 mod open;

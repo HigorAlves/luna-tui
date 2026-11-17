@@ -1,7 +1,7 @@
 // The reply draft of a thread, written after the relation: the card's state, its Evidence Pack summary and the repository's docs as data, one run of the
 // `conversation_reply` pack (no tools, one answer). Nothing here posts: the text is stored as the draft and a person's tap sends it.
 // A card's part is built only when the relation's target is a card in the thread's own stored shortlist (what its channel could see), never from a message.
-import type { ConversationContext } from "@hardness/contracts";
+import type { BrainAskRow, ConversationContext } from "@hardness/contracts";
 
 import { domainTokens } from "../domain/address-rule.ts";
 import { carriesSecret, postableDraft } from "../domain/postable.ts";
@@ -25,6 +25,8 @@ export interface DraftDeps {
   docs(repo: string, text: string): Promise<string[]>;
   /** The channel's notes for tone (the rules file's Notes), and later its past edits. */
   tone(channel: string, isPrivate: boolean): Promise<Array<{ machine: string; person: string }>>;
+  /** What the company brain holds about the thread (`conversationBrain`): empty unless the repository tells. Never throws, and a failure here is no rows. */
+  brain?(repo: string | null, text: string): Promise<BrainAskRow[]>;
   /** The one run of the `conversation_reply` pack. */
   run(context: ConversationContext): Promise<{ reply: string; confidence: number }>;
 }
@@ -61,14 +63,18 @@ export class ConversationDrafter {
     }
     const docs = c.repo ? await this.deps.docs(c.repo, history.map((m) => m.text).join(" ")).catch(() => []) : [];
     const tone = await this.deps.tone(row.channel.id, c.private).catch(() => []);
+    const latest = flat(history.at(-1)?.text ?? row.text, 500);
+    const brain = this.deps.brain ? await this.deps.brain(c.repo, latest).catch((): BrainAskRow[] => []) : [];
     const context: ConversationContext = {
       channel: flat(row.channel.name, 120),
       private: c.private,
       thread: history.map((m) => `${flat(m.author.name, 100)}: ${flat(m.text, 500)}`),
-      latest: flat(history.at(-1)?.text ?? row.text, 500),
+      latest,
       author: { profile: row.author.isBot ? "bot" : "member", title: null },
       candidates: [],
       reply: { relation: relation.type, card, evidence, docs: docs.map((d) => flat(d, 1500)).slice(0, 3), tone: tone.slice(0, 5).map((t) => ({ machine: flat(t.machine, 1500), person: flat(t.person, 1500) })) },
+      // Only with rows: a repository that does not tell sends the pack the very input it sent before.
+      ...(brain.length > 0 ? { brain: brain.slice(0, 12) } : {}),
     };
     const answer = await this.deps.run(context);
     if (carriesSecret(answer.reply)) return null;

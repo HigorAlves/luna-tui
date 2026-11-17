@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "known",
+      "value": true
+    },
+    {
+      "kind": "mentions",
+      "path": "reply",
+      "words": [
+        "low",
+        "high"
+      ]
+    },
+    {
+      "kind": "count",
+      "path": "cites",
+      "min": 1,
+      "max": 3
+    },
+    {
+      "kind": "oneOf",
+      "path": "cites[]",
+      "values": [
+        "card:c1a9",
+        "card:c2b7",
+        "card:c3d4",
+        "pr:acme/shop#41",
+        "pr:acme/shop#33",
+        "verdict:risk_score/r-81/risk",
+        "verdict:worth_learning/r-97/worth",
+        "component:shop-1a2b3c4d/Stage-Runner"
+      ]
+    }
+  ],
+  "rubric": "The answer says the risk score answered low for the evidence video pipeline and that what really happened was high, so it got the card wrong. It cites verdict:risk_score/r-81/risk, and may cite card:c3d4, whose five retries and two escalations agree. It does not confuse it with the worth_learning verdict on the same card, which is about something else."
+}

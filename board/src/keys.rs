@@ -41,6 +41,7 @@ pub enum Scope {
     Economy,
     Tickets,
     Compliance,
+    Memory,
     Slack,
     Watches,
     Inbox,
@@ -51,7 +52,7 @@ pub enum Scope {
 }
 
 impl Scope {
-    pub const ALL: [Scope; 14] = [
+    pub const ALL: [Scope; 15] = [
         Scope::Board,
         Scope::Detail,
         Scope::Pulls,
@@ -59,6 +60,7 @@ impl Scope {
         Scope::Economy,
         Scope::Tickets,
         Scope::Compliance,
+        Scope::Memory,
         Scope::Slack,
         Scope::Watches,
         Scope::Inbox,
@@ -78,6 +80,7 @@ impl Scope {
             Scope::Economy => "Economy",
             Scope::Tickets => "Tickets",
             Scope::Compliance => "Compliance",
+            Scope::Memory => "Memory",
             Scope::Slack => "Slack",
             Scope::Watches => "Watches",
             Scope::Inbox => "Inbox",
@@ -98,6 +101,7 @@ impl Scope {
             Scope::Economy => "economy",
             Scope::Tickets => "tickets",
             Scope::Compliance => "compliance",
+            Scope::Memory => "memory",
             Scope::Slack => "slack",
             Scope::Watches => "watches",
             Scope::Inbox => "inbox",
@@ -152,6 +156,7 @@ impl Group {
                 Scope::Backlog => "Item",
                 Scope::Economy => "Row",
                 Scope::Compliance => "Draft",
+                Scope::Memory => "Claim",
                 Scope::Slack => "Message",
                 Scope::Watches => "Watch",
                 _ => "Ticket",
@@ -1313,6 +1318,17 @@ const BOARD: &[Binding] = &[
     ),
     cmd(
         b(
+            "L",
+            "Memory: what the brain asks of you",
+            Group::Views,
+            Scope::Board,
+            on,
+            20,
+        ),
+        "memory",
+    ),
+    cmd(
+        b(
             "S",
             "Slack: mentions, DMs and watches",
             Group::Views,
@@ -1366,6 +1382,14 @@ const BOARD: &[Binding] = &[
         Scope::Board,
         on,
         45,
+    ),
+    b(
+        "b",
+        "ask the company brain",
+        Group::App,
+        Scope::Board,
+        on,
+        44,
     ),
     b(":", "command palette", Group::App, Scope::Board, on, 30),
     b(
@@ -1636,6 +1660,17 @@ const BOARD: &[Binding] = &[
             0,
         ),
         "compliance",
+    ),
+    cmd(
+        b(
+            ":memory",
+            "open the Memory view",
+            Group::Commands,
+            Scope::Board,
+            on,
+            0,
+        ),
+        "memory",
     ),
     cmd(
         b(
@@ -1991,6 +2026,14 @@ const INBOX: &[Binding] = &[
         Scope::Inbox,
         on,
         45,
+    ),
+    b(
+        "b",
+        "ask the company brain",
+        Group::App,
+        Scope::Inbox,
+        on,
+        44,
     ),
     b("esc / I / q", "close", Group::Move, Scope::Inbox, on, 20),
     cmd(b("?", "keys", Group::App, Scope::Inbox, on, 100), "help"),
@@ -2431,6 +2474,71 @@ const BACKLOG: &[Binding] = &[
     cmd(b("?", "keys", Group::App, Scope::Backlog, on, 100), "help"),
 ];
 
+/// The Memory view: the brain's claims, the week's digest, and the two decisions: at once on a claim that waits, after a
+/// y / n on one that was decided.
+const MEMORY: &[Binding] = &[
+    b(
+        "a",
+        "verify: keeps it (asks if rejected)",
+        Group::Ticket,
+        Scope::Memory,
+        |app| memory_decision(app, true),
+        90,
+    ),
+    b(
+        "x",
+        "reject: drops it (asks if verified)",
+        Group::Ticket,
+        Scope::Memory,
+        |app| memory_decision(app, false),
+        85,
+    ),
+    b(
+        "j / k",
+        "previous / next row",
+        Group::Move,
+        Scope::Memory,
+        on,
+        30,
+    ),
+    b(
+        "h / l",
+        "previous / next page",
+        Group::Move,
+        Scope::Memory,
+        on,
+        29,
+    ),
+    b("esc / L / q", "close", Group::Move, Scope::Memory, on, 20),
+    b(
+        "r",
+        "fetch the page again",
+        Group::App,
+        Scope::Memory,
+        on,
+        60,
+    ),
+    cmd(b("?", "keys", Group::App, Scope::Memory, on, 100), "help"),
+];
+
+fn memory_decision(app: &App, verify: bool) -> Avail {
+    use crate::memory::Status;
+    match app.memory.as_ref() {
+        Some(state) if state.decision(verify).is_some() => Avail::On,
+        Some(state) if state.pending.is_some() => Avail::Off("a decision is on its way"),
+        Some(state) if state.selected().is_none() => Avail::Off("no claim selected"),
+        Some(state) if state.status == Status::Refused => Avail::Off("a refused claim is final"),
+        Some(state) if state.status == Status::Unverified => Avail::Off("only a claim that waits"),
+        Some(state) if verify && state.selected().is_some_and(|c| c.status == "verified") => {
+            Avail::Off("already verified")
+        }
+        Some(state) if state.selected().is_some_and(|c| c.status == "rejected") => {
+            Avail::Off("already rejected")
+        }
+        _ => Avail::Off("only a verified or a rejected claim"),
+    }
+}
+
 const SLACK: &[Binding] = &[
     b(
         "r",
@@ -2753,6 +2861,7 @@ const TOTAL: usize = BOARD.len()
     + ECONOMY.len()
     + TICKETS.len()
     + COMPLIANCE.len()
+    + MEMORY.len()
     + SLACK.len()
     + WATCHES.len()
     + DIGEST.len()
@@ -2827,6 +2936,7 @@ const fn build() -> [Binding; TOTAL] {
     copy_into(ECONOMY, Scope::Economy, "", &mut out, &mut at);
     copy_into(TICKETS, Scope::Tickets, "", &mut out, &mut at);
     copy_into(COMPLIANCE, Scope::Compliance, "", &mut out, &mut at);
+    copy_into(MEMORY, Scope::Memory, "", &mut out, &mut at);
     copy_into(SLACK, Scope::Slack, "", &mut out, &mut at);
     copy_into(WATCHES, Scope::Watches, "", &mut out, &mut at);
     copy_into(DIGEST, Scope::Digest, "", &mut out, &mut at);
@@ -2867,6 +2977,7 @@ pub fn active_scope(app: &App) -> Scope {
         Some(View::Economy) => Scope::Economy,
         Some(View::Tickets) => Scope::Tickets,
         Some(View::Compliance) => Scope::Compliance,
+        Some(View::Memory) => Scope::Memory,
         Some(View::Slack) => Scope::Slack,
         None => Scope::Board,
     }
@@ -3077,6 +3188,7 @@ fn view_label(app: &App, scope: Scope, b: &Binding) -> String {
         "tab" => return "next repo".into(),
         "esc" => return "close".into(),
         "j" => return "move".into(),
+        "h" if scope == Scope::Memory => return "page".into(),
         "h" => return "split".into(),
         "1-5" | "1-6" => return "jump".into(),
         "!" => return "priority up".into(),
@@ -4137,6 +4249,7 @@ mod tests {
         parity(Scope::Economy, handled::ECONOMY);
         parity(Scope::Tickets, handled::TICKETS);
         parity(Scope::Compliance, handled::COMPLIANCE);
+        parity(Scope::Memory, handled::MEMORY);
         parity(Scope::Slack, handled::SLACK);
         parity(Scope::Watches, handled::WATCHES);
         parity(Scope::Digest, handled::DIGEST);

@@ -12,7 +12,7 @@ const FACTORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", ".."
 describe("evePacks", () => {
   it("builds an eve agent only for a pack whose engines allow eve, and for each helper on an eve engine that a stage on another runtime reaches", () => {
     // triage's reply-drafter is a native subagent of its own app on eve; verifying's second opinion is Codex's under Claude's stage.
-    expect(evePacks().map(appName).sort()).toEqual(["chat_triage", "council_second", "decide", "decompose", "foreman", "plan", "question_council", "slack_triage", "triage", "verifying", "verifying--second-opinion", "video_qa"]);
+    expect(evePacks().map(appName).sort()).toEqual(["brain_ask", "chat_triage", "council_second", "decide", "decompose", "foreman", "plan", "question_council", "slack_triage", "triage", "verifying", "verifying--second-opinion", "video_qa"]);
     expect(evePacks(["triage", "implementing"]).map((p) => p.id)).toEqual(["triage"]);
     expect(evePacks(["verifying--second-opinion"])).toEqual([expect.objectContaining({ id: "verifying", agent: "second-opinion", writable: false })]);
   });

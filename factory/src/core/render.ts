@@ -317,6 +317,15 @@ const statusText = (status: StageInput["context"]["status"]) => {
   };
 };
 
+/** The brain's rows, as brain_ask reads them: the question as text, one line per row (a title in it is a person's, so quoted as data). */
+const brainAskText = (brainAsk: StageInput["context"]["brainAsk"]) => {
+  if (!brainAsk) return { question: NONE, rows: NONE };
+  return {
+    question: brainAsk.question,
+    rows: brainAsk.rows.length > 0 ? brainAsk.rows.map((row) => `${row.slug} · ${row.kind} · ${row.text}`).join("\n") : NONE,
+  };
+};
+
 /** The issue, as jira_intake reads it: one header line, the description, the comments, the repo. */
 const jiraText = (jira: StageInput["context"]["jira"]) => {
   if (!jira) return { issue: NONE, description: NONE, comments: NONE, repoPath: NONE, classification: NONE };
@@ -652,6 +661,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
   const postmortem = postmortemText(input.context.postmortem);
   const docsDrift = docsDriftText(input.context.docsDrift);
   const questionnaire = questionnaireText(input.context.questionnaire);
+  const brainAsk = brainAskText(input.context.brainAsk);
   const questions = questionsText(input.context.questions);
   const video = videoText(input.context.video);
   const subs: Record<string, string> = {
@@ -666,7 +676,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.check}}": input.context.check ? renderCheck(input.context.check) : NONE,
     "{{context.propose}}": proposeText(input.context.propose),
     "{{context.factCandidates}}": candidatesText(input.context.factCandidates),
-    ...(input.context.conversation ? conversationText(input.context.conversation) : Object.fromEntries(Object.keys(CONVERSATION_VARIABLES).map((name) => [`{{context.conversation.${name}}}`, NONE]))),
+    ...(input.context.conversation ? conversationText(input.context.conversation) : Object.fromEntries(Object.keys(CONVERSATION_VARIABLES).map((name) => [`{{context.conversation.${name}}}`, name.startsWith("brain") ? "" : NONE]))),
     "{{context.plan.council}}": councilText(input.context.plan?.council),
     "{{context.questions.list}}": questions.list,
     "{{context.questions.card}}": questions.card,
@@ -806,6 +816,8 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.questionnaire.markdown}}": questionnaire.markdown,
     "{{context.questionnaire.policies}}": questionnaire.policies,
     "{{context.questionnaire.bank}}": questionnaire.bank,
+    "{{context.brainAsk.question}}": brainAsk.question,
+    "{{context.brainAsk.rows}}": brainAsk.rows,
     "{{context.jira.issue}}": jira.issue,
     "{{context.jira.description}}": jira.description,
     "{{context.jira.comments}}": jira.comments,

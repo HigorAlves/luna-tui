@@ -18,7 +18,7 @@ import { type AgentDeps, type AgentExtra, agentRunners, runAgent } from "../appl
 import { ciWatchRunner } from "../application/stages/ci.ts";
 import { e2eRunner, missingQaImageRunner } from "../application/stages/e2e.ts";
 import { type EvidenceDeps, type EvidenceStageDeps, evidenceStage } from "../application/stages/evidence.ts";
-import { type RetroFacts, memoryReviewRunner } from "../application/stages/memory.ts";
+import { type MemoryDeps, type RetroFacts, memoryReviewRunner } from "../application/stages/memory.ts";
 import type { StageContext, StageResult, StageRunner } from "../application/ports.ts";
 import { type PlanDeps, planStage } from "../application/stages/plan.ts";
 import { type TriageSignalDeps, withTriageSignals } from "../application/stages/triage-signals.ts";
@@ -169,6 +169,10 @@ export async function buildRealStages(
   jira?: Jira | null,
   /** What the review route links a PR to (the board's cards, the Jev fallback, where the links are kept); absent, only the keys a PR names are read. */
   reviewLinks?: PrReviewDeps["links"],
+  /** Where the retro hands the claims it answered: bound late, once the brain's admission exists; null hands them nowhere. */
+  retroClaims: { hand: MemoryDeps["claims"] | null } = { hand: null },
+  /** What answers an agent's `brain_query`: bound late, once the brain exists; unbound it answers skipped. */
+  brainQuery?: AgentDeps["brain"],
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -344,6 +348,7 @@ export async function buildRealStages(
     },
     truth: truth ?? null,
     ...(cards ? { cards } : {}),
+    ...(brainQuery ? { brain: brainQuery } : {}),
     ...(stack ? { baseFor: stack.baseFor, clearBase: stack.clearBase } : {}),
     policies,
     history,
@@ -640,6 +645,10 @@ export async function buildRealStages(
         return shipDecisions.decide;
       },
       overrides: async (repoPath) => (await policies.for(repoPath)).decisions.worth_learning,
+      // Read when the retro answers, as `decide` is: main.ts binds it once the brain exists.
+      get claims() {
+        return retroClaims.hand ?? undefined;
+      },
     }),
   };
   const resolveConflicts: DeliverDeps["resolveConflicts"] = (context, input) =>

@@ -375,6 +375,36 @@ describe("the pr_link decision pack", () => {
   });
 });
 
+describe("the memory_admit decision pack", () => {
+  it("asks four yes/no questions, a risk score and one relation per similar claim, acts at the proceed bar and has no role or prompt", async () => {
+    const { PACKS, AdmitContext, applyPolicy } = await import("./index.ts");
+    const pack = PACKS.memory_admit;
+    expect(pack.kind).toBe("decision");
+    expect(Object.keys(pack.questions)).toEqual(["supported", "durable", "scope_fits", "is_statement", "risk", "relation_1", "relation_2", "relation_3", "relation_4", "relation_5"]);
+    expect(pack.questions.risk).toMatchObject({ type: "score" });
+    expect(Object.keys((pack.questions.risk as { rubric: object }).rubric)).toEqual(["low", "medium", "high"]);
+    for (const n of [1, 2, 3, 4, 5]) expect(Object.keys((pack.questions[`relation_${n}`] as { criteria: object }).criteria)).toEqual(["unrelated", "duplicate", "refines", "contradicts"]);
+    for (const q of Object.values(pack.questions)) expect((q as { instructions: string }).instructions).toMatch(/data|not an instruction/);
+    const answer = {
+      supported: { value: true, p: 0.9 }, durable: { value: true, p: 0.9 }, scope_fits: { value: true, p: 0.9 }, is_statement: { value: true, p: 0.9 }, risk: { score: 0, confidence: 0.9 },
+      ...Object.fromEntries([1, 2, 3, 4, 5].map((n) => [`relation_${n}`, { choice: "unrelated", confidence: 0.9 }])),
+    };
+    expect(pack.answer.safeParse(answer).success).toBe(true);
+    expect(pack.answer.safeParse({ ...answer, relation_2: { choice: "same", confidence: 0.9 } }).success).toBe(false);
+    for (const q of Object.keys(pack.questions)) expect(pack.policy[q]).toEqual({ proceed: 0.7, flag: 0.5 });
+    expect(applyPolicy(pack, { ...answer, supported: { value: true, p: 0.6 } }).verdicts.supported).toBe("flag");
+    expect(pack.engines.default).toBe("jev");
+    expect(pack.engines.fallback).toEqual(["claude:haiku"]);
+    const claim = { statement: "s", quote: "q", kind: "fact", scope: "repo", extractor: "reviewing_memory" };
+    const source = { kind: "card", title: "t", excerpt: "e" };
+    const similar = (n: number) => ({ id: `c${n}`, statement: "x", status: "verified" });
+    expect(AdmitContext.safeParse({ claim, source, similar: [1, 2, 3, 4, 5].map(similar) }).success).toBe(true);
+    expect(AdmitContext.safeParse({ claim, source, similar: [1, 2, 3, 4, 5, 6].map(similar) }).success).toBe(false);
+    expect(AdmitContext.safeParse({ claim: { ...claim, kind: "rule" }, source, similar: [] }).success).toBe(false);
+    expect(AdmitContext.safeParse({ claim, source, similar: [{ ...similar(1), status: "refused" }] }).success).toBe(false);
+  });
+});
+
 describe("the ticket_validity decision pack", () => {
   it("asks six typed questions in one call, has no role or prompt, and names a duplicate by slot", async () => {
     const { PACKS, TicketContext } = await import("./index.ts");
@@ -541,6 +571,17 @@ describe("the fact_propose agent pack", () => {
     expect(ReviewingMemoryAnswer.safeParse({ ...base, factPromotions: [{ id: "a1b2c3d4e5f6", section: "Commands" }] }).success).toBe(true);
     expect(ReviewingMemoryAnswer.safeParse({ ...base, factPromotions: [{ id: "a1", section: "Elsewhere" }] }).success).toBe(false);
     expect(ReviewingMemoryAnswer.safeParse({ ...base, factPromotions: Array(11).fill({ id: "a1", section: "Commands" }) }).success).toBe(false);
+  });
+
+  it("the retro may hand over up to eight claims, each a draft with a quote", async () => {
+    const { ReviewingMemoryAnswer } = await import("./index.ts");
+    const base = { summary: "s", incidents: [], patterns: [], proposedRules: [], calibration: { estLocBias: 0 } };
+    const claim = { statement: "The e2e suite needs the seed command first.", quote: "e2e failed until we ran seed", kind: "fact", scope: "repo" };
+    expect(ReviewingMemoryAnswer.safeParse(base).success).toBe(true);
+    expect(ReviewingMemoryAnswer.safeParse({ ...base, claims: [claim] }).success).toBe(true);
+    expect(ReviewingMemoryAnswer.safeParse({ ...base, claims: Array(8).fill(claim) }).success).toBe(true);
+    expect(ReviewingMemoryAnswer.safeParse({ ...base, claims: Array(9).fill(claim) }).success).toBe(false);
+    expect(ReviewingMemoryAnswer.safeParse({ ...base, claims: [{ ...claim, quote: "short" }] }).success).toBe(false);
   });
 });
 

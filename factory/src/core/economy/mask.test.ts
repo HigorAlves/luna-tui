@@ -10,7 +10,7 @@ describe("maskedPack", () => {
   });
 
   it("removes the masked units from the access and the skills, and a masked agent takes the Claude subagents with it", () => {
-    const pack = maskedPack(PACKS.triage, { web: true, agent: true, skills: ["code-discovery"], luna: ["card_search", "decision_get"] });
+    const pack = maskedPack(PACKS.triage, { web: true, agent: true, skills: ["code-discovery"], luna: ["card_search", "brain_query", "decision_get"] });
     if (pack.kind !== "agent") throw new Error("agent pack");
     expect(pack.access).toMatchObject({ web: false, agent: false, skills: false });
     expect(pack.access.luna).toEqual(["step", "decision_get"]);

@@ -1,0 +1,59 @@
+{
+  "schema": 3,
+  "stage": "memory_admit",
+  "pack": "memory_admit",
+  "attempt": 1,
+  "task": {
+    "id": "duplicate-of-similar-two",
+    "title": "duplicate-of-similar-two",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "admit": {
+      "claim": {
+        "statement": "Seed the database before running the e2e suite.",
+        "quote": "e2e failed until we ran seed",
+        "kind": "fact",
+        "scope": "repo",
+        "extractor": "reviewing_memory"
+      },
+      "source": {
+        "kind": "card",
+        "title": "Stabilise the checkout e2e",
+        "excerpt": "Verifier note: e2e failed until we ran seed; the checkout flow needs the seeded products."
+      },
+      "similar": [
+        {
+          "id": "c-lint",
+          "statement": "Unit tests run in under a minute on CI.",
+          "status": "verified"
+        },
+        {
+          "id": "c-seed",
+          "statement": "The e2e suite needs the seed command before the app starts.",
+          "status": "verified"
+        },
+        {
+          "id": "c-cache",
+          "statement": "The build cache is keyed on the lockfile hash.",
+          "status": "verified"
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

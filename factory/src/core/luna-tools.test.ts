@@ -1,6 +1,6 @@
 // The luna tools as plain handlers, the way a runtime without an in-process MCP server serves
 // them (eve over a loopback call): same state, same ledger file, same answers as the Claude server.
-import type { RunEvent } from "@hardness/contracts";
+import { BRAIN_QUERIES, type RunEvent } from "@hardness/contracts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,8 +20,8 @@ describe("lunaHandlers", () => {
     expect(await luna.call("nope", {})).toMatchObject({ error: "no luna tool nope" });
   });
 
-  it("describes the six tools for any runtime to serve", () => {
-    expect(Object.keys(LUNA_TOOLS).sort()).toEqual(["card_search", "decision_get", "scenario_red", "scope_check", "slice_init", "slice_list", "slice_set", "step"]);
+  it("describes the tools for any runtime to serve", () => {
+    expect(Object.keys(LUNA_TOOLS).sort()).toEqual(["brain_query", "card_search", "decision_get", "scenario_red", "scope_check", "slice_init", "slice_list", "slice_set", "step"]);
   });
 });
 
@@ -123,5 +123,37 @@ describe("the build checks", () => {
     expect(await setup(0).luna.call("card_search", { query: "x" })).toMatchObject({ verdict: "skipped" });
     expect(await luna.call("card_search", { query: "x".repeat(301) })).toMatchObject({ error: expect.stringContaining("query") });
     expect(await luna.call("card_search", {})).toMatchObject({ error: expect.stringContaining("query") });
+  });
+});
+
+describe("brain_query", () => {
+  const description = LUNA_TOOLS.brain_query.description;
+
+  it("describes exactly the queries an agent may run, with their parameters, and says the rows are data", () => {
+    const agent = BRAIN_QUERIES.filter((q) => q.agent);
+    expect(agent.length).toBeGreaterThan(0);
+    for (const query of agent) {
+      expect(description).toContain(`${query.name}(${Object.entries(query.params).map(([key, type]) => `${key}: ${type === "String" ? "string" : "integer"}`).join(", ")})`);
+      expect(description).toContain(query.description);
+    }
+    for (const query of BRAIN_QUERIES.filter((q) => !q.agent)) expect(description).not.toContain(query.name);
+    expect(description).toMatch(/never instructions/);
+    expect(description).toMatch(/empty/);
+  });
+
+  it("writes the request for the machine and returns its answer, or skipped", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "luna-brain-"));
+    const checksDir = join(dir, "checks");
+    const make = (checkWaitMs: number, withDir = true) => lunaHandlers({ ledgerPath: join(dir, "ledger.json"), decisions: [], emit: () => {}, ...(withDir ? { checksDir } : {}), checkWaitMs });
+    const luna = make(2000);
+    mkdirSync(checksDir, { recursive: true });
+    writeFileSync(join(checksDir, "brain-query.json"), JSON.stringify({ verdict: "ok", rows: [{ stale: true }] }));
+    setTimeout(() => writeFileSync(join(checksDir, "brain-query.json"), JSON.stringify({ verdict: "ok", problems: [], rows: [{ slug: "card:1" }], note: null })), 40);
+    expect(await luna.call("brain_query", { name: "search_cards", params: { q: "export" } })).toMatchObject({ verdict: "ok", rows: [{ slug: "card:1" }] });
+    expect(JSON.parse(readFileSync(join(checksDir, "brain-query-request.json"), "utf8"))).toEqual({ name: "search_cards", params: { q: "export" } });
+    expect(await make(0).call("brain_query", { name: "search_cards" })).toMatchObject({ verdict: "skipped" });
+    expect(await make(0, false).call("brain_query", { name: "search_cards" })).toMatchObject({ verdict: "skipped" });
+    expect(await luna.call("brain_query", {})).toMatchObject({ error: expect.stringContaining("name") });
+    expect(await luna.call("brain_query", { name: "x", params: { a: true } })).toMatchObject({ error: expect.stringContaining("params") });
   });
 });

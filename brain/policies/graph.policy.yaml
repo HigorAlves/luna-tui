@@ -1,0 +1,34 @@
+# A token selects an actor; this policy says what the actor may do.
+#
+# The machine writes facts as luna-facts and claims as luna-memories, so the commit history says
+# which job wrote what. It reads as luna-reader, which cannot write: a stored write run with that
+# token is refused. `owner` is the person who runs Luna.
+#
+# What this policy cannot do: say which stored query an actor may run. `invoke_query` covers the
+# whole catalog, so the list of queries an agent may run is in contracts/src/brain.ts and the
+# machine's port enforces it. No agent holds a token.
+version: 1
+groups:
+  readers: [owner, luna-facts, luna-memories, luna-reader]
+  writers: [owner, luna-facts, luna-memories]
+  admins: [owner]
+protected_branches: [main]
+rules:
+  - id: read-data
+    allow:
+      actors: { group: readers }
+      actions: [read, export]
+      branch_scope: any
+  - id: invoke-stored-queries
+    allow:
+      actors: { group: readers }
+      actions: [invoke_query]
+  - id: write-data
+    allow:
+      actors: { group: writers }
+      actions: [change]
+      branch_scope: any
+  - id: change-schema
+    allow:
+      actors: { group: admins }
+      actions: [schema_apply]

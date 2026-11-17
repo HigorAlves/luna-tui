@@ -6,7 +6,7 @@
 // catalog's price.
 import { type QuestionSet, type ResolvedEngine, lowestBar } from "@hardness/contracts";
 
-import { decisionSummary, stateOf } from "../../core/decide.ts";
+import { decisionSummary, stateOf, stateWithPrecedents } from "../../core/decide.ts";
 import { EMPTY_RUN, type RunOutcome } from "../../core/output.ts";
 import { NO_TELEMETRY } from "../../core/telemetry.ts";
 import { NO_INSTRUCTIONS, type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
@@ -67,7 +67,8 @@ export function jevRuntime(transport: () => JevTransport = jevTransport): Runtim
       let via: JevTransport | null = null;
       try {
         via = transport();
-        const call: JevCall = { state: stateOf(input), questions: pack.questions, engine };
+        // Jev takes the state and the questions on its own wire, so precedents ride at the end of the description.
+        const call: JevCall = { state: stateWithPrecedents(stateOf(input), input.context.precedents), questions: pack.questions, engine };
         if (dry) {
           emit({ kind: "session", payload: { model: engine.modelId, text: JSON.stringify(await via.request(call), null, 2) } });
           let structured: Record<string, unknown> | null = null;

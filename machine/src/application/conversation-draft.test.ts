@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ConversationRelation } from "@hardness/contracts";
+import type { BrainAskRow, ConversationRelation } from "@hardness/contracts";
 
 import { conversationRow } from "../test/conversation-row.ts";
 import { ConversationDrafter, type DraftDeps } from "./conversation-draft.ts";
@@ -10,7 +10,7 @@ const row = (rel: ConversationRelation | null, over: { kind?: string; verdict?: 
   const base = conversationRow();
   return { ...base, triage: { priority: "P1", category: "request", expectsReply: over.needsReply ?? true, summary: "s", why: "w", draft: null, refs: [], deadline: null, by: "model", triagedAt: "t", overridden: false } as never, conversation: { ...base.conversation!, classification: { kind: over.kind ?? "bug", confidence: 0.9, by: "model" as const, at: "t", records: {}, verdict: over.verdict ?? "ok" }, relation: rel, shortlist: over.shortlist ?? [{ slot: 1, id: "card-1", kind: "open" as const, otherSource: null }, { slot: 2, id: "b-1", kind: "backlog" as const, otherSource: null, title: "t" }] } };
 };
-const world = (reply: string | Error = "It is queued.") => {
+const world = (reply: string | Error = "It is queued.", brain?: (repo: string | null, text: string) => Promise<BrainAskRow[]>) => {
   const toneCalls: string[] = [];
   const contexts: Array<{ reply?: { relation: string; card: string | null; evidence: string | null; docs: string[]; tone: unknown[] } }> = [];
   const deps: DraftDeps = {
@@ -18,6 +18,7 @@ const world = (reply: string | Error = "It is queued.") => {
     rank: async () => "ranks 4th of 12",
     docs: async () => ["docs/checkout.md: retries"],
     tone: async (channel) => (toneCalls.push(channel), []),
+    ...(brain ? { brain } : {}),
     run: async (context) => {
       contexts.push(context as never);
       if (reply instanceof Error) throw reply;
@@ -26,6 +27,26 @@ const world = (reply: string | Error = "It is queued.") => {
   };
   return { contexts, toneCalls, drafter: new ConversationDrafter(deps) };
 };
+
+describe("ConversationDrafter: what the brain holds", () => {
+  const rows: BrainAskRow[] = [{ slug: "card:c1", kind: "card", text: "Export fails on large files · state closed" }];
+  it("puts the brain's rows into the context, asked with the thread's latest message and its repository", async () => {
+    const asked: Array<[string | null, string]> = [];
+    const { drafter, contexts } = world("It is queued.", async (repo, text) => (asked.push([repo, text]), rows));
+    await drafter.draft(row(relation()));
+    expect((contexts[0] as { brain?: unknown }).brain).toEqual(rows);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]![0]).toBe(conversationRow().conversation!.repo);
+    expect(asked[0]![1]).toBe((contexts[0] as { latest: string }).latest);
+  });
+  it("leaves the context without a brain key when there are no rows, no hook, or the hook fails", async () => {
+    for (const brain of [undefined, async () => [], async () => { throw new Error("down"); }] as const) {
+      const { drafter, contexts } = world("It is queued.", brain);
+      expect(await drafter.draft(row(relation()))).toBe("It is queued.");
+      expect("brain" in contexts[0]!).toBe(false);
+    }
+  });
+});
 
 describe("ConversationDrafter", () => {
   it("drafts for a sure need of a reply on a relation that is not ask, with the card's part from the stored shortlist only", async () => {

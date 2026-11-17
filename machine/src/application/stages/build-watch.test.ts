@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import type { CheckContext } from "@hardness/contracts";
 
 import { type Learned, tagged } from "../decision-truth.ts";
-import { type Decide, MAX_CARD_SEARCHES, MAX_LOOP_REQUESTS, MAX_MAILBOX_BYTES, MAX_REDS_PER_SLICE, MAX_SCOPE_REQUESTS, NOTE_TAIL, buildChecks, buildWatch, cardSearchAnswers, judgeRedCheck, loopAnswers, readMailbox, writeMailbox } from "./build-watch.ts";
+import { type Decide, MAX_BRAIN_QUERIES, MAX_CARD_SEARCHES, MAX_LOOP_REQUESTS, MAX_MAILBOX_BYTES, MAX_REDS_PER_SLICE, MAX_SCOPE_REQUESTS, NOTE_TAIL, brainQueryMailbox, buildChecks, buildWatch, cardSearchAnswers, judgeRedCheck, loopAnswers, readMailbox, writeMailbox } from "./build-watch.ts";
 
 const ledger = (slices: Array<{ id: number; status: string; commit?: string | null }>) =>
   JSON.stringify({ schema: 1, slices: slices.map((s) => ({ id: s.id, title: `slice ${s.id}`, status: s.status, commit: s.commit ?? null })) });
@@ -290,6 +290,37 @@ describe("the board search mailbox", () => {
     await watch.stop();
     expect(queries).toHaveLength(MAX_CARD_SEARCHES);
     expect(queries[0]).toBe("q1");
+  });
+});
+
+describe("the brain query mailbox", () => {
+  it("answers each request the agent writes in brain-query.json, for the task's repository, whatever the request says of it", async () => {
+    const out = mkdtempSync(join(tmpdir(), "brain-query-"));
+    const asked: Array<{ repoPath: string | null; name: string; params: unknown }> = [];
+    const answers = brainQueryMailbox({ outDir: out, repoPath: "/the/task/repo", answer: async (repoPath, request) => (asked.push({ repoPath, ...request }), { verdict: "ok", problems: [], rows: [{ card: "card:1" }], note: null }) });
+    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onBrainQuery: answers.onBrainQuery });
+    mkdirSync(join(out, "checks"), { recursive: true });
+    writeFileSync(join(out, "checks", "brain-query-request.json"), JSON.stringify({ name: "search_cards", params: { q: "csv" }, repoPath: "/some/other/repo" }));
+    const answer = await waitFor(join(out, "checks", "brain-query.json"));
+    await watch.stop();
+    expect(asked).toEqual([{ repoPath: "/the/task/repo", name: "search_cards", params: { q: "csv" } }]);
+    expect(answer).toEqual({ verdict: "ok", problems: [], rows: [{ card: "card:1" }], note: null });
+  });
+
+  it("answers at most MAX_BRAIN_QUERIES requests per run and leaves a malformed request unanswered", async () => {
+    const out = mkdtempSync(join(tmpdir(), "brain-query-caps-"));
+    mkdirSync(join(out, "checks"), { recursive: true });
+    const names: string[] = [];
+    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onBrainQuery: async (r) => void names.push(r.name) });
+    writeFileSync(join(out, "checks", "brain-query-request.json"), JSON.stringify({ name: 5 }));
+    await settle(30);
+    for (let n = 1; n <= MAX_BRAIN_QUERIES + 2; n++) {
+      writeFileSync(join(out, "checks", "brain-query-request.json"), JSON.stringify({ name: `q${n}` }));
+      await settle(30);
+    }
+    await watch.stop();
+    expect(names).toHaveLength(MAX_BRAIN_QUERIES);
+    expect(names[0]).toBe("q1");
   });
 });
 

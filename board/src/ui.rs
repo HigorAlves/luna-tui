@@ -243,6 +243,35 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
+    if let Some(state) = app.memory.as_ref().filter(|_| {
+        app.active_view() == Some(View::Memory)
+            && matches!(
+                app.mode,
+                Mode::Normal | Mode::ConfirmClaim { .. } | Mode::Help { .. }
+            )
+    }) {
+        render_memory(frame, body, state);
+        frame.render_widget(footer_line(app, footer.width), footer);
+        match &app.mode {
+            Mode::ConfirmClaim {
+                verify, statement, ..
+            } => {
+                let (title, note, accent) = if *verify {
+                    (" Verify this claim? ", "The brain keeps it again.", GREEN)
+                } else {
+                    (
+                        " Reject this claim? ",
+                        "Agents stop reading the lessons that rest on it.",
+                        RED,
+                    )
+                };
+                render_confirm_box(frame, statement, title, note, accent);
+            }
+            Mode::Help { .. } => render_help(frame, app),
+            _ => {}
+        }
+        return;
+    }
     if let Some(state) = app.backlog.as_ref().filter(|_| {
         app.active_view() == Some(View::Backlog)
             && matches!(app.mode, Mode::Normal | Mode::Help { .. })
@@ -489,6 +518,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             }
         }
         Mode::Foreman(state) => render_foreman(frame, app, state),
+        Mode::Brain(state) => render_brain(frame, state),
         Mode::ConfirmApprove(held) => {
             if let Some(task) = app.task(&held.id) {
                 render_approve(frame, &held.question, task);
@@ -833,6 +863,7 @@ fn header_line(app: &App) -> Line<'static> {
         Some(View::Economy) => Some("  [economy]"),
         Some(View::Tickets) => Some("  [tickets]"),
         Some(View::Compliance) => Some("  [compliance]"),
+        Some(View::Memory) => Some("  [memory]"),
         Some(View::Pulls) => Some("  [pulls]"),
         Some(View::Slack) => Some("  [slack]"),
         Some(View::Inbox | View::Digest) | None => None,
@@ -968,6 +999,11 @@ fn footer_line(app: &App, width: u16) -> Line<'static> {
                 ("esc", "close"),
             ]),
         },
+        Mode::Brain(state) => match state.phase {
+            crate::brain::Phase::Typing => hint(&[("enter", "ask"), ("esc", "back")]),
+            crate::brain::Phase::Waiting => hint(&[("esc", "close")]),
+            crate::brain::Phase::Answer => hint(&[("i", "ask more"), ("esc", "close")]),
+        },
         Mode::ConfirmApprove(_) => hint(&[("y/enter", "approve"), ("n/esc", "cancel")]),
         Mode::CoveragePicker(_) => hint(&[
             ("space", "tick"),
@@ -1018,6 +1054,10 @@ fn footer_line(app: &App, width: u16) -> Line<'static> {
             ("esc", "cancel"),
         ]),
         Mode::ConfirmJiraUnlink(_) => hint(&[("y", "unlink"), ("n", "cancel")]),
+        Mode::ConfirmClaim { verify, .. } => hint(&[
+            ("y", if *verify { "verify it" } else { "reject it" }),
+            ("n/esc", "cancel"),
+        ]),
         Mode::EnginePicker { .. } => hint(&[("j/k", "move"), ("enter", "set"), ("esc", "back")]),
         Mode::ClonePrompt { .. } => hint(&[
             ("type", "filter folders"),
@@ -2376,6 +2416,74 @@ pub(crate) fn render_foreman(frame: &mut Frame, app: &App, state: &crate::forema
     );
 }
 
+/// The company brain's popup: the question, the reply under it, and one row per node the reply cites.
+pub(crate) fn render_brain(frame: &mut Frame, state: &crate::brain::State) {
+    use crate::brain::Phase;
+    let area = centered(
+        frame.area(),
+        frame.area().width * 9 / 10,
+        frame.area().height * 8 / 10,
+    );
+    frame.render_widget(Clear, area);
+    let width = (area.width as usize).saturating_sub(6);
+    let mut lines: Vec<Line> = Vec::new();
+    if state.phase != Phase::Waiting
+        && let Some(reply) = &state.reply
+    {
+        lines.push(Line::from(vec![
+            Span::from(" you: ").fg(c(ACCENT)).bold(),
+            Span::from(text::sanitize(&state.question, false)),
+        ]));
+        lines.push(Line::default());
+        let body = Span::from(text::sanitize(&reply.reply, true));
+        lines.push(Line::from(if reply.known {
+            body
+        } else {
+            body.fg(c(SUBTEXT0))
+        }));
+        if !reply.cites.is_empty() {
+            lines.push(Line::default());
+        }
+        for cite in &reply.cites {
+            let (slug, text) = crate::brain::cite_row(cite, width.saturating_sub(2));
+            lines.push(Line::from(vec![
+                Span::from(format!("  {slug}")).fg(c(ACCENT)),
+                Span::from(format!("  {text}")).fg(c(SUBTEXT0)),
+            ]));
+        }
+        lines.push(Line::default());
+    }
+    match state.phase {
+        Phase::Typing => {
+            lines.push(Line::from(vec![
+                Span::from(" ask: ").fg(c(ACCENT)).bold(),
+                Span::from(format!("{}▏", state.input)),
+            ]));
+            if let Some(error) = &state.error {
+                lines.push(Line::default());
+                lines.push(Line::from(
+                    Span::from(text::sanitize(error, false)).fg(c(RED)),
+                ));
+            }
+        }
+        Phase::Waiting => lines.push(Line::from(
+            Span::from("The brain is reading…").fg(c(SUBTEXT0)),
+        )),
+        Phase::Answer => {}
+    }
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(" Brain ").fg(c(ACCENT)).bold());
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
 fn render_confirm_box(frame: &mut Frame, heading: &str, title: &str, note: &str, accent: Color) {
     let area = centered(frame.area(), 68, 7);
     frame.render_widget(Clear, area);
@@ -2696,6 +2804,169 @@ fn render_backlog(frame: &mut Frame, area: Rect, app: &App, state: &crate::backl
         Paragraph::new(lines).block(side).wrap(Wrap { trim: false }),
         detail_area,
     );
+}
+
+/// The Memory view: a header with how often Jev and you agreed, the claims of one status (or the week's digest) as rows, and
+/// the selected row's detail beside them.
+fn render_memory(frame: &mut Frame, area: Rect, state: &crate::memory::MemoryState) {
+    use crate::memory::{Entry, Row, Status, Tone};
+    let [header_area, body] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
+    let mut head = Vec::new();
+    if state.loaded || state.stats != crate::memory::Stats::default() {
+        head.push(
+            Span::from(format!(" {}", state.stats.header()))
+                .fg(c(ACCENT))
+                .bold(),
+        );
+        if let Some(ready) = state.stats.ready_text() {
+            head.push(Span::from(format!(" {ready}")).style(theme::done()).bold());
+        }
+        if let Some(missed) = state.stats.missed_text() {
+            head.push(
+                Span::from(format!(" {missed}"))
+                    .style(theme::needs_you())
+                    .bold(),
+            );
+        }
+    } else {
+        head.push(Span::from(" Memory").fg(c(ACCENT)).bold());
+    }
+    frame.render_widget(Paragraph::new(Line::from(head)), header_area);
+    let [list_area, detail_area] =
+        Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(body);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .title(Line::from(format!(" {} {} ", state.status.label(), state.len())).bold());
+    let inner = block.inner(list_area);
+    let selected = state.cursor.min(state.len().saturating_sub(1));
+    let mut lines = Vec::new();
+    if let (Some(error), true) = (&state.error, state.len() == 0) {
+        let error = text::sanitize(error, false);
+        lines.push(Line::from(
+            Span::from(format!("  {error}")).style(theme::lost()),
+        ));
+    } else if !state.loaded {
+        lines.push(Line::from(Span::from("  loading…").style(theme::dim())));
+    } else if state.status == Status::Week {
+        // One display line per entry: the section titles and the "none" lines are no rows, so the selected row's own
+        // line decides what scrolls into view.
+        let rows = state.digest.rows();
+        let layout = state.digest.layout();
+        let at = layout
+            .iter()
+            .position(|e| *e == Entry::Row(selected))
+            .unwrap_or(0);
+        let visible = (inner.height as usize).max(1);
+        let start = at
+            .saturating_sub(visible / 2)
+            .min(layout.len().saturating_sub(visible));
+        for entry in layout.iter().skip(start).take(visible) {
+            lines.push(match entry {
+                Entry::Title(title) => Line::from(
+                    Span::from(format!(" {}", text::sanitize(title, false)))
+                        .style(theme::heading()),
+                ),
+                Entry::None => Line::from(Span::from("   none").style(theme::dim())),
+                Entry::Row(i) => match rows[*i] {
+                    Row::Verified(claim) | Row::Rejected(claim) => {
+                        claim_row(claim, *i == selected, inner.width as usize)
+                    }
+                    other => {
+                        let room = (inner.width as usize).saturating_sub(4);
+                        let mut spans = vec![
+                            Span::from(if *i == selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+                            Span::from(format!("  {}", other.row_text(room))),
+                        ];
+                        if *i == selected {
+                            spans = spans.into_iter().map(|s| s.bg(c(SELECTED_BG))).collect();
+                        }
+                        Line::from(spans)
+                    }
+                },
+            });
+        }
+    } else if state.claims.is_empty() {
+        let style = if state.status == Status::Unverified {
+            theme::done()
+        } else {
+            theme::dim()
+        };
+        lines.push(Line::from(
+            Span::from(format!("  {}", state.status.empty_text())).style(style),
+        ));
+    }
+    if state.status != Status::Week {
+        let visible = (inner.height as usize).max(1);
+        let start = selected
+            .saturating_sub(visible / 2)
+            .min(state.claims.len().saturating_sub(visible));
+        for (row, claim) in state.claims.iter().enumerate().skip(start).take(visible) {
+            lines.push(claim_row(claim, row == selected, inner.width as usize));
+        }
+    }
+    frame.render_widget(Paragraph::new(lines).block(block), list_area);
+    let side = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(MUTED)))
+        .padding(Padding::horizontal(1))
+        .title(Line::from(format!(" {} ", state.detail_title())).bold());
+    let width = side.inner(detail_area).width as usize;
+    let lines: Vec<Line> = match state.detail_lines(width) {
+        Some(detail) => detail
+            .into_iter()
+            .map(|(tone, text)| {
+                Line::from(match tone {
+                    Tone::Plain => Span::from(text),
+                    Tone::Quote => Span::from(text).fg(c(SUBTEXT0)).italic(),
+                    Tone::Dim => Span::from(text).fg(c(SUBTEXT0)),
+                    Tone::Reason => Span::from(text).style(theme::needs_you()),
+                    Tone::Refusal => Span::from(text).style(theme::lost()).bold(),
+                })
+            })
+            .collect(),
+        None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
+    };
+    frame.render_widget(Paragraph::new(lines).block(side), detail_area);
+}
+
+/// One claim as a row of the Memory view: the bar, its tier and Jev's verdict, then for a decided claim who decided it and
+/// a `flagged` mark (in the warning colour) on one Jev verified alone without being sure, then the statement.
+fn claim_row(claim: &crate::memory::Claim, on: bool, width: usize) -> Line<'static> {
+    let tier = match claim.tier_label() {
+        "high" => RED,
+        "medium" => YELLOW,
+        _ => SUBTEXT0,
+    };
+    let verdict = match claim.verdict() {
+        "verify" => GREEN,
+        "flag" => YELLOW,
+        "ask" => PEACH,
+        "reject" => RED,
+        _ => SUBTEXT0,
+    };
+    let mut spans = vec![
+        Span::from(if on { "▌ " } else { "  " }).fg(c(ACCENT)),
+        Span::from(format!("{:<6} ", claim.tier_label())).fg(c(tier)),
+        Span::from(format!("{:<6} ", claim.verdict())).fg(c(verdict)),
+    ];
+    // The bar, the tier and the verdict take 2 + 7 + 7 cells; a decided claim gives 4 + 8 more to who and the mark.
+    let mut room = width.saturating_sub(16);
+    if claim.is_decided() {
+        room = room.saturating_sub(12);
+        spans.push(Span::from(format!("{:<3} ", claim.who())).fg(c(SUBTEXT0)));
+        spans.push(if claim.is_flagged() {
+            Span::from("flagged ").style(theme::needs_you())
+        } else {
+            Span::from("        ")
+        });
+    }
+    spans.push(Span::from(claim.row_text(room)));
+    if on {
+        spans = spans.into_iter().map(|s| s.bg(c(SELECTED_BG))).collect();
+    }
+    Line::from(spans)
 }
 
 /// The Economy view: facts, tools and the loop guard as one list under headings; the row's detail, the cost and the envelopes beside it.
@@ -7982,6 +8253,11 @@ mod help_sheet_tests {
             ("compliance", {
                 let mut a = board();
                 a.compliance = Some(crate::compliance::ComplianceState::default());
+                a
+            }),
+            ("memory", {
+                let mut a = board();
+                a.memory = Some(crate::memory::MemoryState::default());
                 a
             }),
             ("slack", {

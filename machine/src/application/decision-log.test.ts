@@ -52,6 +52,8 @@ describe("DecisionLog", () => {
     expect((await log.list("worth_learning")).map((r) => r.id)).toEqual(["a", "b"]);
     expect((await log.list("worth_learning", { since: new Date("2026-11-03T00:00:00Z") })).map((r) => r.id)).toEqual(["b"]);
     expect((await log.list("worth_learning", { withTruth: true })).map((r) => r.id)).toEqual(["a"]);
+    expect((await log.list("worth_learning", { fromDay: "2026-11-03" })).map((r) => r.id)).toEqual(["b"]);
+    expect((await log.list("worth_learning", { fromDay: "2026-11-02" })).map((r) => r.id)).toEqual(["a", "b"]);
     expect(await log.list("risk_score")).toEqual([]);
   });
 

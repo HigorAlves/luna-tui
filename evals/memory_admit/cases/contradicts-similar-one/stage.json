@@ -1,0 +1,54 @@
+{
+  "schema": 3,
+  "stage": "memory_admit",
+  "pack": "memory_admit",
+  "attempt": 1,
+  "task": {
+    "id": "contradicts-similar-one",
+    "title": "contradicts-similar-one",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "admit": {
+      "claim": {
+        "statement": "The deploy job runs on every push to main.",
+        "quote": "the deploy workflow triggers on push to main",
+        "kind": "fact",
+        "scope": "repo",
+        "extractor": "reviewing_memory"
+      },
+      "source": {
+        "kind": "card",
+        "title": "Speed up deploys",
+        "excerpt": "Reading the workflow file: the deploy workflow triggers on push to main, with no tag filter. We kept it that way."
+      },
+      "similar": [
+        {
+          "id": "c-deploy",
+          "statement": "The deploy job runs only on release tags.",
+          "status": "verified"
+        },
+        {
+          "id": "c-lint",
+          "statement": "Unit tests run in under a minute on CI.",
+          "status": "verified"
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -107,7 +107,7 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
   const effort = ctx.effort ?? (pack.kind === "agent" ? pack.effort : "low");
   // A mask changes the Claude run's tools; eve's apps are built with the image, so it is said once and ignored.
   if (pack.kind === "agent" && input.context.economy?.mask && maskKey(input.context.economy.mask) !== null) emit({ kind: "note", payload: { phase: "economy_mask_skipped", pack: pack.id, reason: "an eve app is built with the image; a mask does not narrow it" } });
-  const message = decision ? renderDecision(decision.questions, stateOf(input)) : prompt;
+  const message = decision ? renderDecision(decision.questions, stateOf(input), input.context.precedents) : prompt;
   const maxTurns = decision ? 1 : input.limits.maxTurns;
   const app = join(options.agentsDir ?? join(paths.factoryRoot, ".eve-agents"), appName(pack));
   const entry = join(app, ".output", "server", "index.mjs");

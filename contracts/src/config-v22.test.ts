@@ -44,7 +44,7 @@ describe("the diagram's config defaults", () => {
     expect(keys.length).toBeGreaterThan(60);
     expect(keys.filter((k) => CONSUMED_FROM[k] === undefined)).toEqual([]);
     expect(Object.keys(CONSUMED_FROM).filter((k) => !keys.includes(k))).toEqual([]);
-    expect(new Set(Object.values(CONSUMED_FROM))).toEqual(new Set([8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]));
+    expect(new Set(Object.values(CONSUMED_FROM))).toEqual(new Set([8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]));
   });
 
   it("mark exactly the keys whose default already equals today's constant as wave 8", () => {
@@ -81,6 +81,27 @@ describe("the plan council section", () => {
     expect(LunaConfig.safeParse({ plan: { council: { rounds: 3 } } }).success).toBe(false);
     expect(LunaConfig.safeParse({ plan: { council: { on_size: ["huge"] } } }).success).toBe(false);
     expect(LunaConfig.safeParse({ plan: { council: { members: 3 } } }).success).toBe(false);
+  });
+});
+
+describe("the brain section", () => {
+  it("defaults to shadow, read from wave 20", () => {
+    expect(FACTORY_DEFAULTS.brain).toEqual({ admit: "shadow", tell: "off", precedents: [] });
+    expect(CONSUMED_FROM["brain.tell"]).toBe(20);
+    expect(CONSUMED_FROM["brain.precedents"]).toBe(20);
+    expect(CONSUMED_FROM["brain.admit"]).toBe(20);
+  });
+
+  it("takes off, shadow or auto, and refuses an unknown key or value", () => {
+    for (const admit of ["off", "shadow", "auto"]) expect(factoryConfigOf({ brain: { admit } }).brain.admit).toBe(admit);
+    expect(factoryConfigOf({}).brain.admit).toBe("shadow");
+    expect(LunaConfig.safeParse({ brain: { admit: "auto" } }).success).toBe(true);
+    expect(LunaConfig.safeParse({ brain: { admit: "on" } }).success).toBe(false);
+    expect(LunaConfig.safeParse({ brain: { admits: "auto" } }).success).toBe(false);
+    // Nothing the brain holds reaches a pack until a repository says so: both default to off.
+    expect(factoryConfigOf({}).brain).toMatchObject({ tell: "off", precedents: [] });
+    expect(factoryConfigOf({ brain: { tell: "on", precedents: ["risk_score"] } }).brain).toEqual({ admit: "shadow", tell: "on", precedents: ["risk_score"] });
+    expect(LunaConfig.safeParse({ brain: { tell: "yes" } }).success).toBe(false);
   });
 });
 

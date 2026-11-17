@@ -1,6 +1,6 @@
 import { RepoImageError } from "../repo-images.ts";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, mkdtempSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, mkdtempSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -468,6 +468,34 @@ describe("agent stages through packs", () => {
     await runAgent(d, context("triage"), "question_council");
     expect(asked).toEqual([expect.objectContaining({ query: "csv export", repoPath: context("triage").task.repoPath })]);
     expect(answer).toMatchObject({ verdict: "ok", cards: [{ id: "c1" }] });
+  });
+
+  it("answers triage's brain_query for the task's own repository, and answers skipped while the brain is not bound", async () => {
+    const asked: Array<{ repoPath: string | null; name: string }> = [];
+    const run = async (brain: unknown, pack: "triage" | "question_council") => {
+      let answer: unknown = null;
+      const inner = fakeSandbox(output({ answer: pack === "triage" ? {} : { answers: [] } }));
+      const sandbox = async (r: SandboxRun) => {
+        r.onStarted?.("c1");
+        const checks = join(r.runDir, "out", "checks");
+        rmSync(checks, { recursive: true, force: true });
+        mkdirSync(checks, { recursive: true });
+        writeFileSync(join(checks, "brain-query-request.json"), JSON.stringify({ name: "search_cards", params: { q: "csv" }, repoPath: "/some/other/repo" }));
+        for (let i = 0; i < 200 && !existsSync(join(checks, "brain-query.json")); i++) await new Promise((res) => setTimeout(res, 10));
+        answer = existsSync(join(checks, "brain-query.json")) ? JSON.parse(readFileSync(join(checks, "brain-query.json"), "utf8")) : null;
+        return inner(r);
+      };
+      await runAgent({ ...deps(sandbox), brain: brain as never, watchEvery: 5 }, context("triage"), pack);
+      return answer;
+    };
+    const bound = { answer: async (repoPath: string | null, request: { name: string }) => (asked.push({ repoPath, name: request.name }), { verdict: "ok", problems: [], rows: [{ card: "card:1" }], note: null }) };
+    expect(await run({ answer: bound.answer }, "triage")).toMatchObject({ verdict: "ok", rows: [{ card: "card:1" }] });
+    expect(await run({ answer: bound.answer }, "question_council")).toMatchObject({ verdict: "ok" });
+    expect(asked).toEqual([
+      { repoPath: context("triage").task.repoPath, name: "search_cards" },
+      { repoPath: context("triage").task.repoPath, name: "search_cards" },
+    ]);
+    expect(await run({ answer: null }, "triage")).toMatchObject({ verdict: "skipped", rows: [] });
   });
 
   it("reads the v2.2 plan answer: steps become the slices Build reads (files are the touchpoints) and ride along with out of scope, migration and flags", async () => {

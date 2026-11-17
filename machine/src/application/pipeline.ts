@@ -241,6 +241,8 @@ export interface PipelineOptions {
   economy?: Economy;
   /** Runs the fact_propose pack when a card closes; bound late (once PackRuns exists). Absent or null, no card asks for facts. */
   proposer?: { run: Propose | null };
+  /** Called when a card has closed, after its close step: starts the brain's projection and returns at once. Never awaited into the close. */
+  onClosed?: () => void;
   /** Whether the repo already has a luna.yaml; a task on one without runs setup first. Tests pass a fake. */
   hasConfig?: (repoPath: string) => boolean;
   /** Resolves a card's repository, project, owners and history by script when it starts; absent, a card starts as it is. */
@@ -456,6 +458,7 @@ export class Pipeline {
   private readonly escalationDecide: { decide: Decide | null };
   private readonly economy: Economy;
   private readonly proposer: { run: Propose | null } | undefined;
+  private readonly onClosed: (() => void) | undefined;
   private readonly escalationTruth: NonNullable<PipelineOptions["escalationTruth"]> | undefined;
   private readonly commitsSince: NonNullable<PipelineOptions["commitsSince"]> | undefined;
   private readonly headOf: PipelineOptions["headOf"];
@@ -520,6 +523,7 @@ export class Pipeline {
     this.escalationDecide = options.escalationDecide ?? { decide: null };
     this.economy = options.economy ?? noEconomy();
     this.proposer = options.proposer;
+    this.onClosed = options.onClosed;
     this.escalationTruth = options.escalationTruth;
     this.commitsSince = options.commitsSince;
     this.headOf = options.headOf;
@@ -2743,6 +2747,11 @@ export class Pipeline {
     // The proposer is a pack run of minutes: nothing waits on it, and it never throws.
     const tick = this.factTick(id).finally(() => void this.factTicks.delete(tick));
     this.factTicks.add(tick);
+    try {
+      this.onClosed?.();
+    } catch (error) {
+      console.error(`could not start the brain projection after closing ${id}`, error);
+    }
   }
 
   /** The fact-proposer ticks still running after closes. Tests wait on it; nothing else does. */

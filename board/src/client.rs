@@ -76,6 +76,20 @@ pub enum Incoming {
     SlackPolled(Result<SlackSnapshot, String>),
     /// The foreman's answer to a question, fetched off the UI thread.
     Foreman(Result<crate::foreman::Reply, String>),
+    /// The company brain's answer to a question, fetched off the UI thread.
+    Brain(Result<crate::brain::Reply, String>),
+    /// The brain's claims of `status`, fetched off the UI thread for the Memory view; dropped when the view has moved to another status.
+    MemoryClaims {
+        status: crate::memory::Status,
+        result: Result<crate::memory::ClaimList, String>,
+    },
+    /// The week's digest, fetched off the UI thread for the Memory view's last page; dropped when the view has moved to another page.
+    MemoryDigest(Result<crate::memory::Digest, String>),
+    /// The answer to `a` or `x` in Memory on claim `id`.
+    MemoryDecided {
+        id: String,
+        result: Result<crate::memory::Claim, crate::memory::DecideError>,
+    },
 }
 
 #[derive(Clone)]
@@ -511,6 +525,77 @@ impl Machine {
                 .post(self.url("/foreman"))
                 .send_json(json!({ "question": question, "history": history })),
         )
+    }
+
+    /// Asks the company brain a question (1 to 2000 characters). It waits for a model run, so it uses the long timeout.
+    pub fn brain_ask(&self, question: &str) -> Result<crate::brain::Reply, String> {
+        Self::typed(
+            self.slow
+                .post(self.url("/brain/ask"))
+                .send_json(json!({ "question": question })),
+        )
+    }
+
+    /// The brain's claims of one status (`unverified`, `verified`, `rejected` or `refused`), with how often Jev and the person agreed.
+    pub fn brain_claims(&self, status: &str) -> Result<crate::memory::ClaimList, String> {
+        Self::typed(
+            self.agent
+                .get(self.url("/brain/claims"))
+                .query("status", status)
+                .call(),
+        )
+    }
+
+    /// What Jev decided alone in the last `days` days, the lessons at risk and the claims that contradict each other.
+    pub fn brain_digest(&self, days: u32) -> Result<crate::memory::Digest, String> {
+        Self::typed(
+            self.agent
+                .get(self.url("/brain/digest"))
+                .query("days", days.to_string())
+                .call(),
+        )
+    }
+
+    /// Verifies a claim that waits, or a rejected one the person changes their mind on; answers the claim as it is now. A
+    /// `409 not_waiting` means it is in that status already (or refused).
+    pub fn brain_claim_verify(
+        &self,
+        id: &str,
+    ) -> Result<crate::memory::Claim, crate::memory::DecideError> {
+        self.decide_claim(id, "verify", json!({}))
+    }
+
+    /// Rejects a claim that waits, or a verified one the person changes their mind on, with a reason when there is one.
+    pub fn brain_claim_reject(
+        &self,
+        id: &str,
+        reason: Option<&str>,
+    ) -> Result<crate::memory::Claim, crate::memory::DecideError> {
+        self.decide_claim(id, "reject", dismiss_body(reason))
+    }
+
+    fn decide_claim(
+        &self,
+        id: &str,
+        verb: &str,
+        body: Value,
+    ) -> Result<crate::memory::Claim, crate::memory::DecideError> {
+        #[derive(serde::Deserialize)]
+        struct Decided {
+            claim: crate::memory::Claim,
+        }
+        let reply = self
+            .agent
+            .post(self.url(&format!("/brain/claims/{}/{verb}", path_segment(id))))
+            .send_json(body);
+        let body = Self::coded(reply)
+            .map_err(|(code, message)| crate::memory::DecideError { code, message })?;
+        serde_json::from_value::<Decided>(body)
+            .map(|d| d.claim)
+            .map_err(|e| crate::memory::DecideError {
+                code: String::new(),
+                message: format!("unexpected reply: {e}"),
+            })
     }
 
     /// Says whether the card's Evidence Pack was useful (`y` / `n`), with a short note for a no. The machine keeps it as ground truth; it labels no decision.
@@ -1901,6 +1986,157 @@ mod prs_all_tests {
             .refresh_prs_all()
             .unwrap_err();
         assert!(!error.not_found());
+        assert!(error.to_string().contains("machine unreachable"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod brain_tests {
+    use std::{
+        io::{BufRead, BufReader, Read, Write},
+        net::TcpListener,
+        sync::mpsc,
+    };
+
+    use super::*;
+
+    /// A machine that answers every call with `status` and `body`, and hands back each request's line and JSON body.
+    fn machine_answering(status: &str, body: &str) -> (Machine, mpsc::Receiver<(String, Value)>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let (status, body) = (status.to_string(), body.to_string());
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut request = String::new();
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    if request.is_empty() {
+                        request = line.trim().to_string();
+                    }
+                }
+                let mut raw = vec![0; length];
+                let _ = reader.read_exact(&mut raw);
+                let _ = tx.send((request, serde_json::from_slice(&raw).unwrap_or_default()));
+                let reply = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = reader.into_inner().write_all(reply.as_bytes());
+            }
+        });
+        (Machine::at(&format!("http://{addr}")), rx)
+    }
+
+    #[test]
+    fn the_question_is_posted_and_the_answer_read() {
+        let body = r#"{"known":true,"reply":"It changed 412.","cites":[{"slug":"card:6f1c2a9e","kind":"card","text":"Sandbox egress proxy"}],"dropped":[]}"#;
+        let (machine, seen) = machine_answering("200 OK", body);
+        let reply = machine.brain_ask("how big was the proxy?").unwrap();
+        assert!(reply.known);
+        assert_eq!(reply.cites[0].slug, "card:6f1c2a9e");
+        let (line, sent) = seen.recv().unwrap();
+        assert_eq!(line, "POST /brain/ask HTTP/1.1");
+        assert_eq!(sent, json!({ "question": "how big was the proxy?" }));
+    }
+
+    #[test]
+    fn the_machines_refusal_comes_back_as_its_message() {
+        let body =
+            r#"{"error":"brain_off","message":"the company brain is off: set LUNA_BRAIN=1"}"#;
+        let (machine, _) = machine_answering("503 Service Unavailable", body);
+        assert_eq!(
+            machine.brain_ask("anything").unwrap_err(),
+            "the company brain is off: set LUNA_BRAIN=1"
+        );
+    }
+
+    const CLAIM: &str = r#"{"id":"c1","statement":"Seed first.","status":"verified"}"#;
+
+    #[test]
+    fn the_claims_of_a_status_are_asked_for_and_read() {
+        let body = format!(
+            r#"{{"claims":[{CLAIM}],"stats":{{"waiting":0,"decided":1,"agreed":1,"missed":0}}}}"#
+        );
+        let (machine, seen) = machine_answering("200 OK", &body);
+        let list = machine.brain_claims("verified").unwrap();
+        assert_eq!(list.claims[0].id, "c1");
+        assert_eq!(list.stats.agreed, 1);
+        let (line, _) = seen.recv().unwrap();
+        assert_eq!(line, "GET /brain/claims?status=verified HTTP/1.1");
+    }
+
+    #[test]
+    fn the_digest_is_asked_for_by_days_and_read() {
+        let body = r#"{"since":"2026-11-09T12:00:00.000Z","verified":[{"id":"c1","statement":"Seed first.","status":"verified","decidedBy":"jev","proposed":"flag"}],"rejected":[],"atRisk":[{"learning":"learning:1","title":"T","claim":"claim:1"}],"contested":[{"claim":"claim:2","says":"A","contradicts":"claim:3","against":"B"}]}"#;
+        let (machine, seen) = machine_answering("200 OK", body);
+        let digest = machine.brain_digest(7).unwrap();
+        assert_eq!(digest.verified[0].id, "c1");
+        assert_eq!(digest.at_risk[0].title, "T");
+        assert_eq!(digest.contested[0].against, "B");
+        let (line, _) = seen.recv().unwrap();
+        assert_eq!(line, "GET /brain/digest?days=7 HTTP/1.1");
+        let body = r#"{"error":"brain_claims_off","message":"the claim journal is off"}"#;
+        let (machine, _) = machine_answering("503 Service Unavailable", body);
+        assert_eq!(
+            machine.brain_digest(7).unwrap_err(),
+            "the claim journal is off"
+        );
+    }
+
+    #[test]
+    fn verify_and_reject_post_to_the_claim_and_read_it_back() {
+        let (machine, seen) = machine_answering("200 OK", &format!(r#"{{"claim":{CLAIM}}}"#));
+        assert_eq!(machine.brain_claim_verify("c1").unwrap().status, "verified");
+        let (line, sent) = seen.recv().unwrap();
+        assert_eq!(line, "POST /brain/claims/c1/verify HTTP/1.1");
+        assert_eq!(sent, json!({}));
+        machine.brain_claim_reject("c1", None).unwrap();
+        let (line, sent) = seen.recv().unwrap();
+        assert_eq!(line, "POST /brain/claims/c1/reject HTTP/1.1");
+        assert_eq!(sent, json!({}));
+        machine.brain_claim_reject("c1", Some(" stale ")).unwrap();
+        assert_eq!(seen.recv().unwrap().1, json!({ "reason": "stale" }));
+    }
+
+    #[test]
+    fn a_claim_id_cannot_leave_its_path_segment() {
+        let (machine, seen) = machine_answering("200 OK", &format!(r#"{{"claim":{CLAIM}}}"#));
+        machine.brain_claim_verify("a/b?c").unwrap();
+        assert_eq!(
+            seen.recv().unwrap().0,
+            "POST /brain/claims/a%2Fb%3Fc/verify HTTP/1.1"
+        );
+    }
+
+    #[test]
+    fn a_decided_claim_comes_back_as_not_waiting_and_any_other_error_as_its_message() {
+        let body = r#"{"error":"not_waiting","message":"the claim was already decided"}"#;
+        let (machine, _) = machine_answering("409 Conflict", body);
+        let error = machine.brain_claim_verify("c1").unwrap_err();
+        assert!(error.not_waiting(), "{error}");
+        assert_eq!(error.to_string(), "the claim was already decided");
+        let body = r#"{"error":"not_found","message":"no such claim"}"#;
+        let (machine, _) = machine_answering("404 Not Found", body);
+        let error = machine.brain_claim_reject("c1", None).unwrap_err();
+        assert!(!error.not_waiting());
+        assert_eq!(error.to_string(), "no such claim");
+        assert_eq!(
+            machine.brain_claims("unverified").unwrap_err(),
+            "no such claim"
+        );
+        let error = crate::testkit::dead_machine()
+            .brain_claim_verify("c1")
+            .unwrap_err();
+        assert!(!error.not_waiting());
         assert!(error.to_string().contains("machine unreachable"), "{error}");
     }
 }

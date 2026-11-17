@@ -1,0 +1,109 @@
+// Reads over evidence and facts: claims, the sources they quote and the lessons that rest on them.
+// Each one is listed in contracts/src/brain.ts (BRAIN_QUERIES), which says which an agent may run.
+// The two that find lessons leave out one whose claim was rejected since: a lesson is never deleted,
+// so reading only the ones that still stand is the query's job.
+// The others are the machine's own: what a new claim is compared with, and a person's work list.
+
+query search_learnings($q: String) @description("Lessons whose claim is still verified, by full-text match, best first.") {
+    match {
+        $l: Learning
+        $c: Claim { status: "verified" }
+        $l basedOn $c
+    }
+    return { $l.slug as learning, $l.title as title, $l.kind as kind, $l.scope as scope, $l.recorded_at as recorded_at }
+    order { bm25($l.title, $q) }
+    limit 8
+}
+
+query learnings_of_repo($repo: String) @description("The lessons about a repository whose claim is still verified, newest first.") {
+    match {
+        $r: Repo { slug: $repo }
+        $l: Learning
+        $l learningAboutRepo $r
+        $c: Claim { status: "verified" }
+        $l basedOn $c
+    }
+    return { $l.slug as learning, $l.title as title, $l.kind as kind, $l.recorded_at as recorded_at }
+    order { recorded_at desc }
+    limit 20
+}
+
+query claims_of_learning($learning: String) @description("The claims a lesson rests on, each with its exact quote and its status.") {
+    match {
+        $l: Learning { slug: $learning }
+        $c: Claim
+        $l basedOn $c
+        $s: Source
+        $c claimFrom $s
+    }
+    return { $c.slug as claim, $c.statement as statement, $c.quote as quote, $c.status as status, $s.slug as source, $s.title as source_title }
+    order { claim asc }
+    limit 20
+}
+
+query principles_of_repo($repo: String) @description("The rules that bind agents in a repository today.") {
+    match {
+        $r: Repo { slug: $repo }
+        $p: Principle { status: "active" }
+        $p principleOfRepo $r
+    }
+    return { $p.slug as principle, $p.statement as statement, $p.section as section }
+    order { principle asc }
+    limit 60
+}
+
+query search_principles($q: String) @description("Rules that bind agents today, by full-text match, best first.") {
+    match {
+        $p: Principle { status: "active" }
+        $r: Repo
+        $p principleOfRepo $r
+    }
+    return { $p.slug as principle, $p.statement as statement, $p.section as section, $r.slug as repo }
+    order { bm25($p.statement, $q) }
+    limit 8
+}
+
+query precedents($pack: String, $q: String) @description("A decision pack's past answers on cards like this one, with what really happened, best match first.") {
+    match {
+        $c: Card
+        $v: Verdict { pack: $pack }
+        $v verdictOn $c
+    }
+    return { $v.slug as verdict, $v.question as question, $v.answer as answer, $v.truth as truth, $v.truth_source as truth_source, $v.decided_at as decided_at, $c.slug as card, $c.title as title }
+    order { bm25($c.title, $q) }
+    limit 12
+}
+
+query similar_claims($q: String) @description("Claims of any status by full-text match on the statement: what a new claim is compared with.") {
+    match {
+        $c: Claim
+    }
+    return { $c.slug as claim, $c.statement as statement, $c.status as status, $c.kind as kind, $c.scope as scope }
+    order { bm25($c.statement, $q) }
+    limit 5
+}
+
+query contested_claims() @description("Pairs of claims that contradict each other with neither rejected: what a person still has to settle.") {
+    match {
+        $new: Claim
+        $old: Claim
+        $new contradicts $old
+        $new.status != "rejected"
+        $old.status != "rejected"
+    }
+    return { $new.slug as claim, $new.statement as says, $old.slug as contradicts, $old.statement as against }
+    order { claim asc }
+    limit 50
+}
+
+query learnings_at_risk() @description("Lessons that rest on a rejected claim and were not superseded.") {
+    match {
+        $l: Learning
+        not { $n supersedes $l }
+        $c: Claim { status: "rejected" }
+        $l basedOn $c
+    }
+    return { $l.slug as learning, $l.title as title, $c.slug as claim }
+    order { learning asc }
+    limit 50
+}

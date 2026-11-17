@@ -56,7 +56,8 @@ import { checkpointPush } from "./checkpoint.ts";
 import { readScenarioReds } from "./scenario-reds.ts";
 
 import type { TruthSink } from "../decision-truth.ts";
-import { type Decide, buildChecks, buildWatch, cardSearchAnswers, loopAnswers } from "./build-watch.ts";
+import type { BrainQueryAnswerer } from "../brain-query.ts";
+import { type Decide, brainQueryMailbox, buildChecks, buildWatch, cardSearchAnswers, loopAnswers } from "./build-watch.ts";
 import { type CardHit, sourceKindOf } from "../../domain/card-search.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { prepareStageCredentials } from "./stage-credentials.ts";
@@ -132,6 +133,8 @@ export interface AgentDeps {
   pushSleep?: (ms: number) => Promise<void>;
   /** The board search triage's agent asks for (`card_search`): read-only, the task's own repository only. Absent: the tool answers nothing. */
   cards?: { search(request: { repoPath: string | null; selfId: string; selfSource: string | null; query: string }): Promise<CardHit[]> };
+  /** What answers the agent's `brain_query` (`brainQueryAnswerer`): read when a request comes, bound once the brain exists (main.ts); unbound it answers skipped. Absent: the tool is never answered. */
+  brain?: { answer: BrainQueryAnswerer | null };
 }
 
 /** Every branch the pipeline writes starts with this; see `workspaceFor`. */
@@ -568,6 +571,15 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     (pack === "triage" || pack === "question_council") && deps.cards
       ? cardSearchAnswers({ outDir: join(runDir, "out"), search: (query) => deps.cards!.search({ repoPath: task.repoPath, selfId: task.id, selfSource: sourceKindOf(task), query }) })
       : null;
+  // The brain's named queries: the same mailbox, for the packs that hold `brain_query`, answered for this task's own repository.
+  const brainQuery =
+    deps.brain && PACKS[pack].kind === "agent" && PACKS[pack].access.luna.includes("brain_query")
+      ? brainQueryMailbox({
+          outDir: join(runDir, "out"),
+          repoPath: task.repoPath,
+          answer: async (repoPath, request) => (await deps.brain!.answer?.(repoPath, request)) ?? { verdict: "skipped", problems: [], rows: [], note: "the brain is not told to this repository" },
+        })
+      : null;
   // The loop guard's question: any agent pack that runs shell commands has a guard to ask it (the machine's economy input says `judge: true` for the same packs).
   const loopJudge =
     PACKS[pack].kind === "agent" && PACKS[pack].access.commands.length > 0
@@ -583,7 +595,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
         })
       : null;
   const startWatch = (): void => {
-    if ((!checks && !cardSearch && !loopJudge) || watch) return;
+    if ((!checks && !cardSearch && !brainQuery && !loopJudge) || watch) return;
     const hostExec = deps.hostExec;
     watch = buildWatch({
       outDir: join(runDir, "out"),
@@ -591,6 +603,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       log: (line) => void context.note?.(line).catch(() => {}),
       ...(checks ? { onRed: async (...a: Parameters<typeof checks.onRed>) => (await importer?.sync(), checks.onRed(...a)), onScopeRequest: async (...a: Parameters<typeof checks.onScopeRequest>) => (await importer?.sync(), checks.onScopeRequest(...a)) } : {}),
       ...(cardSearch ? { onCardSearch: cardSearch.onCardSearch } : {}),
+      ...(brainQuery ? { onBrainQuery: brainQuery.onBrainQuery } : {}),
       ...(loopJudge ? { onLoopRequest: loopJudge.onLoopRequest } : {}),
       onCommitted: async (slice) => {
         if (!checks) return;

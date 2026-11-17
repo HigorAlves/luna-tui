@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "known",
+      "value": true
+    },
+    {
+      "kind": "mentions",
+      "path": "reply",
+      "words": [
+        "300",
+        "412"
+      ]
+    },
+    {
+      "kind": "count",
+      "path": "cites",
+      "min": 1,
+      "max": 3
+    },
+    {
+      "kind": "oneOf",
+      "path": "cites[]",
+      "values": [
+        "card:c1a9",
+        "card:c2b7",
+        "card:c3d4",
+        "pr:acme/shop#41",
+        "pr:acme/shop#33",
+        "verdict:risk_score/r-81/risk",
+        "verdict:worth_learning/r-97/worth",
+        "component:shop-1a2b3c4d/Stage-Runner"
+      ]
+    }
+  ],
+  "rubric": "The answer says the egress proxy card was estimated at 300 lines and changed 412, so it ran over by 112 lines or about a third. It cites card:c1a9, and may cite its pull request. It gives the numbers as the row gives them and invents no reason for the miss: the rows hold none. Citing a slug that is not in the rows, or naming another card's numbers, is an error."
+}

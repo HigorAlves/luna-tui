@@ -69,8 +69,8 @@ function run(input: unknown, env: Record<string, string> = {}, files: Record<str
   return { code, stdout, out, result };
 }
 
-// slack_triage, chat_triage, foreman and eval_judge have no worktree and read no project context; their dry runs are below. council_second defaults to an eve engine: its dry run is below.
-const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "foreman" && p.id !== "change_exceptions" && p.id !== "access_review" && p.id !== "postmortem" && p.id !== "questionnaire" && p.id !== "vuln_triage" && p.id !== "release_notes" && p.id !== "status_report" && p.id !== "eval_judge" && p.id !== "council_second").map((p) => p.id);
+// slack_triage, chat_triage, foreman, brain_ask and eval_judge have no worktree and read no project context; their dry runs are below. council_second defaults to an eve engine: its dry run is below.
+const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "foreman" && p.id !== "brain_ask" && p.id !== "change_exceptions" && p.id !== "access_review" && p.id !== "postmortem" && p.id !== "questionnaire" && p.id !== "vuln_triage" && p.id !== "release_notes" && p.id !== "status_report" && p.id !== "eval_judge" && p.id !== "council_second").map((p) => p.id);
 
 describe("factory main (dry run)", () => {
   it.each(agentPacks)("%s: renders the prompt, prints the options and leaves a valid result", (pack) => {
@@ -302,6 +302,21 @@ describe("factory main (dry run)", () => {
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });
 
+  it("brain_ask: runs over an empty /work with no tools, renders the rows as data and leaves a valid result", () => {
+    const task = { id: "brain-ask", title: "Brain ask", description: "", criteria: [], repoPath: "", branch: "", source: null };
+    const brainAsk = { question: "how did the export go?", rows: [{ slug: "card:6f1c2a9e", kind: "card", text: "Export CSV · state closed" }] };
+    const { code, stdout, out, result } = run(stageInput("brain_ask", { task, plan: null, context: { projectContext: null, brainAsk } }), {}, {}, { emptyWork: true });
+    expect(code).toBe(0);
+    const prompt = readFileSync(join(out, "prompt.md"), "utf8");
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("`brain-answerer` role running the `brain_ask` stage");
+    expect(prompt).toContain("| card:6f1c2a9e · card · Export CSV · state closed");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: "brain-answerer", agents: ["brain-answerer"], model: "claude-haiku-5-5", effort: "low", tools: [], allowedTools: [] });
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+    expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
+  });
+
   it("jira_intake: runs over the repo checkout read-only with Read, Glob and Grep, renders the issue and leaves a valid result", () => {
     const task = { id: "jira-intake", title: "Login page", description: "Users sign in.", criteria: [], repoPath: "/r/a", branch: "", source: null };
     const jira = { key: "PLAT-123", url: "https://acme.atlassian.net/browse/PLAT-123", summary: "Login page", description: "Users sign in.", issueType: "Story", priority: "High", labels: ["luna"], dueAt: null, comments: ["Marta: please"], repoPath: "/r/a" };
@@ -412,7 +427,7 @@ describe("factory main (dry run)", () => {
       agent: expect.stringMatching(/\.eve-agents\/triage$/),
       model: "chatgpt(gpt-5.6-terra)",
       reasoning: "high",
-      tools: ["bash", "read_file", "glob", "grep", "web_fetch", "step", "decision_get", "card_search", "delegate"],
+      tools: ["bash", "read_file", "glob", "grep", "web_fetch", "step", "decision_get", "card_search", "brain_query", "delegate"],
       guard: { writable: false, commands: expect.arrayContaining(["gh issue view"]), roots: { scratch: expect.stringMatching(/luna-scratch-/), read: [expect.stringMatching(/\/in$/), "/graph"] } },
     });
     expect(result).toMatchObject({ ok: true, summary: "dry-run" });

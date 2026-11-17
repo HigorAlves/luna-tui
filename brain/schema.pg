@@ -1,0 +1,209 @@
+// The company brain's schema (RFC 0010). Generated from contracts/src/brain.ts by
+// `pnpm brain:schema`: change the tables there, never this file.
+//
+// A key or a cardinality cannot change once its type exists. The graph is rebuilt from the
+// machine's own records, so such a change is a new graph and a rebuild.
+
+node Repo
+    @description("A repository Luna works in.")
+{
+    slug: String @key
+    name: String
+}
+
+node Component
+    @description("A part of a repository's code, as the code map names it.")
+{
+    slug: String @key
+    name: String @index
+    path: String?
+}
+
+node Card
+    @description("One unit of work on Luna's board, from intake to close, with what was predicted and what happened.")
+    @instruction("Compare est_loc with actual_loc, and read retries and escalations, before trusting an estimate for similar work.")
+{
+    slug: String @key
+    title: String @index
+    state: enum(open, closed, archived) @index
+    route: String
+    size: String?
+    risk: String?
+    est_loc: I32?
+    actual_loc: I32?
+    retries: I32?
+    escalations: I32?
+    opened_at: DateTime
+    closed_at: DateTime?
+}
+
+node Ticket
+    @description("The tracker item a card came from. The tracker stays the truth; this is a pointer.")
+{
+    slug: String @key
+    tracker: enum(jira, github)
+    key: String
+    title: String @index
+    url: String?
+}
+
+node PR
+    @description("A pull request. GitHub stays the truth; this is a pointer.")
+{
+    slug: String @key
+    number: I32
+    title: String @index
+    state: enum(open, merged, closed)
+    url: String
+    merged_at: DateTime?
+}
+
+node Person
+    @description("Someone who works on the repositories: a GitHub login and a Slack member id, nothing else.")
+    @instruction("Never add an email address or any other fact about a person.")
+{
+    slug: String @key
+    login: String
+    slack: String?
+    active: Bool
+}
+
+node Actor
+    @description("Who writes or reads this graph: a person's own token or one of the machine's jobs. slug is the omnigraph actor id, so the commit history joins to this node.")
+{
+    slug: String @key
+    kind: enum(human, agent)
+    name: String
+    active: Bool
+}
+
+node Verdict
+    @description("One answer of a decision pack and, once it is known, what really happened. The answer never changes; the truth is filled in later.")
+    @instruction("Use a verdict as a precedent only when truth is set.")
+{
+    slug: String @key
+    pack: String @index
+    question: String
+    answer: String
+    confidence: F64?
+    truth: String?
+    truth_source: enum(person, outcome)?
+    decided_at: DateTime
+}
+
+node Source
+    @description("A record the brain learned from: a card's history or a person's note. A source is never edited to say something new.")
+{
+    slug: String @key
+    kind: enum(card, pr, ticket, note)
+    title: String @index
+    url: String?
+    occurred_at: DateTime
+}
+
+node Claim
+    @description("One statement made in a source, with the exact quote. Extracting a claim does not make it true: it stays unverified until Jev or a person verifies or rejects it. Its words never change; only its status does.")
+    @instruction("Treat only a verified claim as something the brain knows. An unverified or rejected claim is what somebody said.")
+{
+    slug: String @key
+    statement: String @index
+    quote: String @index
+    locator: String?
+    kind: enum(fact, pattern, decision, risk)
+    scope: enum(repo, org)
+    status: enum(unverified, verified, rejected) @index
+    risk: enum(low, medium, high)?
+    decided_by: enum(code, jev, person)?
+    recorded_at: DateTime
+    decided_at: DateTime?
+}
+
+node Learning
+    @description("A lesson that rests on verified claims. Never rewritten: a changed lesson is a new one that supersedes it.")
+    @instruction("Before relying on a lesson, check with learnings_at_risk that none of its claims was rejected since.")
+{
+    slug: String @key
+    title: String @index
+    kind: enum(fact, pattern, decision, risk)
+    scope: enum(repo, org)
+    recorded_at: DateTime
+}
+
+node Principle
+    @description("A rule that binds agents in one repository, as its docs/agents/project-context.md states it. The file stays the truth; this is a copy to find it by.")
+    @instruction("A retired principle is no longer in the file. Follow the file, not this copy, when the two differ.")
+{
+    slug: String @key
+    statement: String @index
+    section: String
+    status: enum(active, retired) @index
+    recorded_at: DateTime
+}
+
+edge CardInRepo: Card -> Repo @card(0..1) @description("The repository the card changes.") {
+    @key(@src, @dst)
+}
+
+edge CardForTicket: Card -> Ticket @card(0..1) @description("The tracker item the card came from.") {
+    @key(@src, @dst)
+}
+
+edge CardTouches: Card -> Component @description("A component the card's change touched.") {
+    @key(@src, @dst)
+}
+
+edge ComponentInRepo: Component -> Repo @card(1..1) @description("The repository the component is part of.") {
+    @key(@src, @dst)
+}
+
+edge PrForCard: PR -> Card @card(0..1) @description("The card the pull request was opened for.") {
+    @key(@src, @dst)
+}
+
+edge PrAuthoredBy: PR -> Person @card(0..1) @description("Who opened the pull request.") {
+    @key(@src, @dst)
+}
+
+edge ActsFor: Actor -> Person @card(0..1) @description("The person behind this actor, or the person who answers for an agent.") {
+    @key(@src, @dst)
+}
+
+edge VerdictOn: Verdict -> Card @card(0..1) @description("The card the decision was made about.") {
+    @key(@src, @dst)
+}
+
+edge SourceOfCard: Source -> Card @card(0..1) @description("The card whose history this source is.") {
+    @key(@src, @dst)
+}
+
+edge ClaimFrom: Claim -> Source @card(1..1) @description("The source the claim was made in. The same statement in two sources is two claims.") {
+    @key(@src, @dst)
+}
+
+edge ClaimedBy: Claim -> Person @card(0..1) @description("Who said or wrote it, when a person did.") {
+    @key(@src, @dst)
+}
+
+edge ClaimAboutRepo: Claim -> Repo @card(0..1) @description("The repository the claim is about. A claim about the whole org has none.") {
+    @key(@src, @dst)
+}
+
+edge Contradicts: Claim -> Claim @description("The newer claim says the opposite of the older one. A pair with neither side rejected is contested.") {
+    @key(@src, @dst)
+}
+
+edge BasedOn: Learning -> Claim @card(1..) @description("A claim the lesson rests on.") {
+    @key(@src, @dst)
+}
+
+edge LearningAboutRepo: Learning -> Repo @card(0..1) @description("The repository the lesson is about.") {
+    @key(@src, @dst)
+}
+
+edge Supersedes: Learning -> Learning @card(0..1) @description("The newer lesson replaces the older one.") {
+    @key(@src, @dst)
+}
+
+edge PrincipleOfRepo: Principle -> Repo @card(1..1) @description("The repository whose rule this is.") {
+    @key(@src, @dst)
+}
