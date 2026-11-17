@@ -690,6 +690,11 @@ describe("EvidenceContext and head_moved", () => {
   it("head_moved is an escalation reason", () => {
     expect(EscalationReason.options).toContain("head_moved");
   });
+
+  it("guard_blocked is an escalation reason, and a made-up one is not", () => {
+    expect(EscalationReason.safeParse("guard_blocked").success).toBe(true);
+    expect(EscalationReason.safeParse("guard_unblocked").success).toBe(false);
+  });
 });
 
 describe("the video packs", () => {

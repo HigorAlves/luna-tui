@@ -29,6 +29,13 @@ describe("decideEscalation", () => {
     expect(asked).toEqual([]);
   });
 
+  it("decides a stage the guard held by fact: guard_blocked, no model asked", async () => {
+    const asked: unknown[] = [];
+    const decide: Decide = async (...args) => (asked.push(args), choice("flaky_tests", 0.99));
+    expect(await decideEscalation({ ...base, decide, agent: { reason: "guard_blocked" }, facts: { guardBlocked: true } })).toMatchObject({ reason: "guard_blocked", source: "fact", confidence: 1 });
+    expect(asked).toEqual([]);
+  });
+
   it("asks the decision otherwise, once, with the stage, the summary, the agent's word, the output's tail and the machine's facts, and takes a confident answer", async () => {
     const asked: Array<{ pack: string; check: Record<string, unknown> }> = [];
     const decide: Decide = async (pack, check) => (asked.push({ pack, check: check as never }), choice("plan_wrong", 0.9));

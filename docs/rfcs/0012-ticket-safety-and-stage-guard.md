@@ -1,7 +1,7 @@
 # RFC 0012 — Ticket safety screen and the SafeAgents stage guard
 
 - **Author:** Higor Alves
-- **Status:** Draft
+- **Status:** Accepted, built (2026-11-17)
 - **Created:** 2026-11-17
 - **Related:** [RFC 0009](./0009-sandbox-state-of-the-art.md) (sandbox, trust, the engine relay), [RFC 0005](./0005-software-factory-v1-5.md) (decision packs), [huggingface/safeagents](https://github.com/huggingface/safeagents)
 
@@ -187,3 +187,47 @@ Reading the code corrected the design in these places:
 - How the board lays out two badges when a ticket is both held and untrusted.
 - Guarding Codex and OpenAI stages.
 - The route from the guard to the judge endpoint, and whether a pack run per suspicious call is fast enough (B1 and B6).
+
+## What was built
+
+One PR builds every slice except B1, the spike, which needs the owner's real token. Below is each slice as it stands, and where it differs from the plan.
+
+### Track A: the ticket screen (A1 to A5)
+
+- **A1 to A3.** The `ticket_safety` pack, its questions and the `held_safety` status are in the contracts. A script pre-pass counts what the raw text hides. A script turns the pre-pass and the answer into an outcome. The screen runs in `ingest`, intake, Jira intake, Slack triage, `createTask` and `POST /runs`. It fails closed.
+- **A4.** A person releases or archives a held ticket. The release is ground truth. A released ticket makes an untrusted card (`safetyReleased`).
+- **A5.** The board shows the badge (red or yellow) and the reason in fixed words. The screenshot is an owner step.
+- **A6.** The cases for `evals/ticket_safety` are in the repo. The baselines are an owner step.
+
+### Track B: the stage guard (B2 to B7)
+
+- **B2.** The guard image is `machine/runner/guard/`, built by `pnpm images` (`--guard`). It holds SafeAgents at a pinned commit and no credential.
+- **B3.** The `guard` policy is in `sandbox.yaml`: a mode per trust and `block_severity`. A repo's `luna.yaml` may be stricter and never looser.
+- **B4.** The machine starts one guard per run between the stage and the relay. A guard that will not start escalates as `env_broken`, step `guard`. It never runs unguarded.
+- **B5.** The machine reads the journal after the stage ends and logs `guard.blocked`, `guard.flagged` and `guard.suspicious` on the card, at most 20, then `guard.more` and `guard.skipped`.
+- **B6.** The judge is the `guard_judge` decision pack on Jev. The machine serves `POST /v1/chat/completions` on `MACHINE_GUARD_JUDGE_PORT` (4319), with a per-run key. The cases for `evals/guard_judge` are in the repo.
+- **B7.** On an untrusted card, a `blocked` entry ends the stage `escalated` with the new reason `guard_blocked`. Nothing is imported. The worktree stays as it was. A trusted card only gets the events. The board spells the reason in fixed words. Compose publishes the judge port on the host, as it does for Laminar. The runbook is [verify-the-stage-guard](../runbooks/verify-the-stage-guard.md).
+
+### Differences from the plan
+
+- **The gate is not live.** The journal is read after the container ends. A blocked call is already a notice when the stage goes on. The gate stops what the stage made from entering the card.
+- **`guard_blocked` is decided by fact.** The Build escalation decision takes it as a fact (`guardBlocked`), with no model asked. A person cannot correct a card to it.
+- **The reason has no options to run unguarded.** The options are a retry or an abandon.
+- **A re-attached run keeps an old judge key.** After a machine restart its judge calls get a 401, and SafeAgents' fail rule decides.
+- **The guard is enforced by `ANTHROPIC_BASE_URL`, not by the network.** A stage can reach the relay directly. Only the real SDK runs a tool call from a model reply, and it follows the variable.
+
+### Owner steps that remain
+
+- **B1, the spike.** Run it with the real token and the real SDK through the relay. Check: a blocked streamed `tool_use` block; the false-positive rate on a normal build stage; `NO_PROXY` matching an IP; the time of a real judge call, with a Jev pack start. See the runbook.
+- **Eval baselines** for `ticket_safety` and `guard_judge`: `pnpm eval --pack <pack> --engine <e> --save-baseline`, then `pnpm eval scorecard` and `pnpm eval defaults --write`.
+- **The board screenshot** of the badge.
+- **A live run of the ticket screen** with a real Jev key.
+- **The linux/amd64 guard image build.**
+
+### Still open
+
+- The pinned SafeAgents commit, and whether it is stable enough for `block` (B1 decides).
+- How the board lays out two badges when a ticket is both held and untrusted.
+- Guarding Codex and OpenAI stages.
+- A live gate: ending the stage at the first blocked call, not after it.
+- Whether a pack run per suspicious call is fast enough (B1 and the eval baselines decide).

@@ -2191,7 +2191,10 @@ mod approver_tests {
         ] {
             assert!(screen.contains(needle), "{needle}: {screen}");
         }
-        assert!(screen.contains("answered by the council, not a person"), "{screen}");
+        assert!(
+            screen.contains("answered by the council, not a person"),
+            "{screen}"
+        );
         assert!(!screen.contains("triage council flagged"), "{screen}");
     }
 
@@ -2975,6 +2978,7 @@ mod stopped_tests {
             ("too_complex", "too complex for this engine"),
             ("undeclared_scope", "it changed files outside its scope"),
             ("head_moved", "the branch moved under it"),
+            ("guard_blocked", "the stage guard blocked a tool call"),
             ("other", "it needs a person"),
         ] {
             let mut app = escalated_app();

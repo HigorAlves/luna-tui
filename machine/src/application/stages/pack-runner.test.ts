@@ -1774,6 +1774,26 @@ describe("the stage guard's journal", () => {
     expect(emitted.filter(([k]) => k === "guard.skipped")).toEqual([["guard.skipped", { skipped: 1, truncated: false }]]);
   });
 
+  it("an untrusted card whose guard journal holds a blocked entry ends escalated with guard_blocked and imports no commits; a trusted card only emits", async () => {
+    const stranger = (ctx: StageContext): StageContext => ({ ...ctx, task: { ...ctx.task, id: `gb-${Math.random()}`, source: { kind: "github", repo: "o/a", number: 9, url: "u", authorAssociation: "NONE" } } as unknown as TaskRow });
+    const emitted: string[] = [];
+    const ctx = (c: StageContext): StageContext => ({ ...c, emit: async (kind) => void emitted.push(kind) });
+    const blocked = [line(1, "blocked", "Bash"), line(2, "flagged", "Read"), line(3, "blocked", "Write")];
+    const result = await runAgent(deps(withJournal(blocked)), ctx(stranger(context("implementing"))), "implementing");
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "guard_blocked", reason: "The stage guard blocked 2 tool call(s).", guard: { blocked: 2 } });
+    expect((result.detail as { options: string[] }).options.join(" ")).not.toMatch(/unguarded/i);
+    expect((result.detail as { options: string[] }).options.length).toBeGreaterThan(0);
+    expect(result.detail).not.toHaveProperty("ingested");
+    expect(emitted.filter((k) => k.startsWith("guard."))).toEqual(["guard.blocked", "guard.flagged", "guard.blocked"]);
+    // A flagged or suspicious entry alone does not hold an untrusted card.
+    const soft = await runAgent(deps(withJournal([line(1, "flagged", "Read"), line(2, "suspicious", "Bash")])), ctx(stranger(context("triage"))), "triage");
+    expect(soft.detail).not.toMatchObject({ escalation: "guard_blocked" });
+    // A trusted card only emits.
+    const trusted = await runAgent(deps(withJournal(blocked)), ctx(context("triage")), "triage");
+    expect(trusted.detail).not.toMatchObject({ escalation: "guard_blocked" });
+  });
+
   it("emits nothing for a stage without a guard", async () => {
     const emitted: Array<[string, Record<string, unknown>]> = [];
     await runAgent(deps(fakeSandbox(output())), { ...context("triage"), emit: async (kind, payload) => void emitted.push([kind, payload]) }, "triage");

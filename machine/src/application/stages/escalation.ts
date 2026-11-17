@@ -8,7 +8,7 @@ import { oneLine } from "@hardness/contracts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
 
-/** What an escalation is decided as: one of the decision's six, or `head_moved` where a fact says the branch was moved. */
+/** What an escalation is decided as: one of the decision's six, `head_moved` where a fact says the branch was moved, or `guard_blocked` where the stage guard held the stage. */
 export type DecidedReason = EscalationReason;
 export const DECIDED_REASONS = ["plan_wrong", "env_broken", "flaky_tests", "too_complex", "undeclared_scope", "other"] as const;
 const DECIDED: readonly string[] = DECIDED_REASONS;
@@ -31,6 +31,8 @@ export interface EscalationInput {
     scopeTwice?: boolean;
     /** The branch was moved under the card (a recorded tests commit that is gone, a worktree on another branch). */
     headMoved?: boolean;
+    /** The stage guard blocked a call on a card from outside the team: the machine's own gate held the stage. */
+    guardBlocked?: boolean;
     /** A service that never became ready, or a container that could not start. */
     envBroken?: boolean;
     /** A spent budget: which limit, the numbers as text, and the reds in a row. */
@@ -73,6 +75,7 @@ export async function decideEscalation(input: EscalationInput): Promise<DecidedE
   const summary = flat(input.summary);
   const outputTail = safe(input.output.slice(-OUTPUT_CAP)).slice(-OUTPUT_CAP);
   const kept = { agentReason, summary, outputTail, facts };
+  if (input.facts.guardBlocked) return { reason: "guard_blocked", confidence: 1, source: "fact", ...kept };
   if (input.facts.headMoved) return { reason: "head_moved", confidence: 1, source: "fact", ...kept };
   if (input.facts.scopeTwice) return { reason: "undeclared_scope", confidence: 1, source: "fact", ...kept };
   if (input.facts.envBroken) return { reason: "env_broken", confidence: 1, source: "fact", ...kept };

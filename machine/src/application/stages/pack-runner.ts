@@ -795,7 +795,6 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   for (const payload of blockedPayloads(sandbox.blocked, "stage")) await Promise.resolve(context.emit?.("sandbox.egress_blocked", payload)).catch(() => {});
   // The guard's journal, read now: the run's folder is still there. Each entry is a card event; the outcome is not touched here (the gate is the next slice's).
   const guardEntries: GuardEntry[] = sandbox.guard ? await recordGuardJournal(sandbox.guard.journalPath, context) : [];
-  void guardEntries;
 
   const base: StageResult = {
     outcome: "fail",
@@ -824,6 +823,22 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     const detail = { error, ...extraDetail, ...(ledger ? { ledger } : {}), ...(pushes.attempted ? { pushes } : {}) };
     return dirty({ ...base, detail: hasSecrets ? (redactDeep(detail, redact) as Record<string, unknown>) : detail });
   };
+
+  // The gate: a card from outside the team whose guard blocked a call is held for a person. Nothing is imported or ingested. The journal is read
+  // after the container ended, so this is not live. A trusted card only had the events above.
+  const blockedCalls = guardEntries.filter((entry) => entry.verdict === "blocked").length;
+  if (trust === "untrusted" && blockedCalls > 0) {
+    return {
+      ...base,
+      outcome: "escalated",
+      detail: {
+        escalation: "guard_blocked",
+        reason: `The stage guard blocked ${blockedCalls} tool call(s).`,
+        guard: { blocked: blockedCalls },
+        options: ["read the guard events on the card, then retry the stage", "abandon the card"],
+      },
+    };
+  }
 
   // A nested repository (a `.git` below the folder's top level) is data no host git may read: with a gitlink for it git would start a
   // child in it and read its own configuration. The walk follows no link; what it finds is removed by plain file removal, and the run fails.
