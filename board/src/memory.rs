@@ -292,8 +292,11 @@ impl MemoryState {
     }
 
     /// The claim `id` was decided: it leaves the list now, and the cursor stays where it was, on the row that followed it.
+    /// The lock of a decision on another claim stays.
     pub fn decided(&mut self, id: &str) {
-        self.pending = None;
+        if self.pending.as_deref() == Some(id) {
+            self.pending = None;
+        }
         self.claims.retain(|c| c.id != id);
         self.digest.verified.retain(|c| c.id != id);
         self.digest.rejected.retain(|c| c.id != id);

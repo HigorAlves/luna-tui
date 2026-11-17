@@ -3834,7 +3834,7 @@ impl App {
     }
 
     /// The machine answered a decision: the claim leaves the list and the stats are fetched again. A claim somebody decided first
-    /// only refreshes the list; any other error is a toast.
+    /// only refreshes the list; any other error is a toast. Only the answer for the pending claim releases the lock.
     fn take_memory_decided(
         &mut self,
         id: &str,
@@ -3849,11 +3849,15 @@ impl App {
                 self.fetch_memory();
             }
             Err(error) if error.not_waiting() => {
-                state.pending = None;
+                if state.pending.as_deref() == Some(id) {
+                    state.pending = None;
+                }
                 self.fetch_memory();
             }
             Err(error) => {
-                state.pending = None;
+                if state.pending.as_deref() == Some(id) {
+                    state.pending = None;
+                }
                 self.notify(format!("memory: {error}"), true);
             }
         }
@@ -16438,6 +16442,10 @@ mod memory_tests {
         app.memory.as_ref().expect("the Memory view is open")
     }
 
+    fn state_mut(app: &mut App) -> &mut crate::memory::MemoryState {
+        app.memory.as_mut().expect("the Memory view is open")
+    }
+
     /// The colour of the first cell of `text` on the screen.
     fn fg_of(app: &App, text: &str) -> ratatui::style::Color {
         let mut terminal =
@@ -16632,6 +16640,42 @@ mod memory_tests {
         );
         assert_eq!(seen.lock().unwrap()[1].1, json!({}));
         assert_eq!(state(&app).claims.len(), 2);
+        assert!(state(&app).pending.is_none());
+    }
+
+    #[test]
+    fn an_answer_for_another_claim_leaves_the_lock_of_the_pending_one_alone() {
+        let ok = |id: &str| serde_json::from_value(claim(id, "A fact.", json!({}))).unwrap();
+        let conflict = || crate::memory::DecideError {
+            code: "not_waiting".into(),
+            message: "decided already".into(),
+        };
+        let other = || crate::memory::DecideError {
+            code: "boom".into(),
+            message: "boom".into(),
+        };
+        // A is answered while B is pending: after the success, the 409 and another error alike.
+        for (name, answer) in [
+            ("success", Ok(ok("c2"))),
+            ("409", Err(conflict())),
+            ("error", Err(other())),
+        ] {
+            let (machine, _seen) = brain();
+            let mut app = opened(machine);
+            state_mut(&mut app).pending = Some("c3".into());
+            app.take_memory_decided("c2", answer);
+            assert_eq!(
+                state(&app).pending.as_deref(),
+                Some("c3"),
+                "{name}: the lock holds for B"
+            );
+        }
+        // B's own answer releases it.
+        let (machine, _seen) = brain();
+        let mut app = opened(machine);
+        state_mut(&mut app).pending = Some("c3".into());
+        app.take_memory_decided("c2", Ok(ok("c2")));
+        app.take_memory_decided("c3", Ok(ok("c3")));
         assert!(state(&app).pending.is_none());
     }
 
