@@ -4,15 +4,18 @@
 # hardness-runner:<key>. With --qa it then builds hardness-runner-qa:dev on top (Playwright,
 # chromium, ffmpeg, agent-browser). With --video it builds hardness-runner-video:dev on top of that
 # (kokoro-js, whisper and the video tools; builds the QA image first when it is not current).
+# With --guard it builds hardness-runner-guard:dev (the stage guard, SafeAgents: machine/runner/guard), which stands alone: it is not built on the runner.
 set -euo pipefail
 
 qa=0
 video=0
+guard=0
 for arg in "$@"; do
   case "$arg" in
     --qa) qa=1 ;;
     --video) qa=1; video=1 ;;
-    *) echo "unknown option: $arg (use --qa and/or --video)" >&2; exit 2 ;;
+    --guard) guard=1 ;;
+    *) echo "unknown option: $arg (use --qa, --video and/or --guard)" >&2; exit 2 ;;
   esac
 done
 
@@ -63,5 +66,18 @@ if [ "$video" = 1 ]; then
     docker build --build-arg "BASE=$runner-qa:$key" --label "dev.hardness.build=$video_key" \
       -t "$runner-video:dev" -t "$runner-video:$key" -f "$here/../runner-video/Dockerfile" "$root"
     echo "built $runner-video:dev and $runner-video:$key"
+  fi
+fi
+
+if [ "$guard" = 1 ]; then
+  guard_inputs=()
+  while IFS= read -r f; do guard_inputs+=("$f"); done < <(tree_files machine/runner/guard; echo "$here/luna-env")
+  guard_key="$(key_of "${guard_inputs[@]}")"
+  if [ "${REBUILD:-}" != 1 ] && [ "$(current_key "$runner-guard:dev")" = "$guard_key" ]; then
+    echo "$runner-guard:dev is up to date ($guard_key)"
+  else
+    docker build --label "dev.hardness.build=$guard_key" \
+      -t "$runner-guard:dev" -t "$runner-guard:$guard_key" -f "$here/guard/Dockerfile" "$here"
+    echo "built $runner-guard:dev and $runner-guard:$guard_key"
   fi
 fi

@@ -115,6 +115,11 @@ export async function egressImageProblem(image: string, label: (image: string, n
   return (await label(image, "dev.hardness.egress")) === null ? `image ${image} has no egress proxy (label dev.hardness.egress): rebuild it with pnpm runner:build` : null;
 }
 
+/** Why an image is not the stage guard (it has no dev.hardness.guard label: wrong name, or never built), or null. */
+export async function guardImageProblem(image: string, label: (image: string, name: string) => Promise<string | null> = imageLabel): Promise<string | null> {
+  return (await label(image, "dev.hardness.guard")) === null ? `image ${image} is not the stage guard (label dev.hardness.guard): build it with pnpm images` : null;
+}
+
 /** What the retro reads about a task: the last implementing ledger and every earlier run. */
 export type TaskHistory = (taskId: string) => Promise<{ ledger: Ledger | null; runs: RunSummary[] }>;
 

@@ -28,6 +28,7 @@ describe("loadConfig", () => {
       runnerImage: "hardness-runner:dev",
       runnerQaImage: "hardness-runner-qa:dev",
       runnerVideoImage: "hardness-runner-video:dev",
+      runnerGuardImage: "hardness-runner-guard:dev",
       worktreesDir: "/home/me/Developer/worktrees",
       stateDir: "/home/me/.local/state/hardness",
       githubPoll: { repos: [], intervalMs: 300_000, label: "ready-for-agent" },
@@ -66,6 +67,10 @@ describe("loadConfig", () => {
       sla: { gateSecs: 172_800, cycleSecs: null },
       sandboxPolicy: DEFAULT_MACHINE_POLICY,
     });
+  });
+
+  it("reads the guard image from RUNNER_GUARD_IMAGE", () => {
+    expect(loadConfig({ HOME: "/home/me", RUNNER_GUARD_IMAGE: "g:1" }).runnerGuardImage).toBe("g:1");
   });
 
   it("reads the Slack inbox's tokens and knobs", () => {

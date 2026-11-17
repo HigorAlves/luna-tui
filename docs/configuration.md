@@ -103,6 +103,7 @@ See `machine/.env.example`. The defaults match `compose.yaml`. You need a `.env`
 | `RUNNER_IMAGE` | `hardness-runner:dev` | the stage container image |
 | `RUNNER_QA_IMAGE` | `hardness-runner-qa:dev` | the QA stage image; without it e2e is skipped |
 | `RUNNER_VIDEO_IMAGE` | `hardness-runner-video:dev` | the video image (narration, cards, compose, measure); without it Evidence's video format degrades to captures |
+| `RUNNER_GUARD_IMAGE` | `hardness-runner-guard:dev` | the stage guard image (SafeAgents). Build it with `pnpm images`. Its label `dev.hardness.guard` says what it is |
 | `WORKTREES_DIR` | `~/Developer/worktrees` | where task worktrees are created, as `<worktreesDir>/<repo>/<branch>` |
 | `MACHINE_STATE_DIR` | `~/.local/state/hardness` | where run artifacts, transcripts and ingested output live |
 | `MACHINE_STAGE_USER` | `pnpm start` passes your `uid:gid`; else unset | the user stage and check containers run as. The compose machine runs as root, so its own uid is no use here. A root machine with nothing set leaves the container on the runner image's `node` user. A stage never runs as root: a value of `0:…` is ignored. On the host (`pnpm dev`) the machine's own uid:gid is used |
