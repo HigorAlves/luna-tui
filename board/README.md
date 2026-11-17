@@ -159,6 +159,7 @@ generates the tables below. A test fails when they drift from the registry.
 | `$` | Economy: facts, tool mask, guard, cost |
 | `K` | Tickets: held, assessed, waiting on you |
 | `M` | Compliance: drafts that wait for you |
+| `L` | Memory: what the brain asks of you |
 | `S` | Slack: mentions, DMs and watches |
 
 **Marks & bulk**
@@ -179,6 +180,7 @@ generates the tables below. A test fails when they drift from the registry.
 | `n` | new ticket, then edit it in place |
 | `x` | actions menu for the ticket |
 | `m` | ask the foreman about the open cards |
+| `b` | ask the company brain |
 | `:` | command palette |
 | `esc` | clear the filter and the marks |
 | `?` | keys |
@@ -213,6 +215,7 @@ generates the tables below. A test fails when they drift from the registry.
 | `:economy` | open the Economy |
 | `:tickets` | open the Tickets view |
 | `:compliance` | open the Compliance view |
+| `:memory` | open the Memory view |
 | `:ticket-edit <text>` | post your text, not the draft's |
 | `:dedup duplicate <n> \| related <ns> \| neither` | answer the duplicate question |
 | `:dup <id>` | close as a duplicate of that ticket |
@@ -501,6 +504,35 @@ Review requested, Ready to merge, CI failed and Changes requested count on the B
 
 <!-- keys:end -->
 
+## Memory
+
+`L` (or `:memory`) opens the company brain's claims. What a model learns from finished work enters the brain as a claim: one statement with the exact quote it rests on. Jev judges each claim, and the ones that wait are yours. The header counts them and how often Jev agreed with you; when Jev would have verified a claim you rejected, it says so beside the count. Each row shows the claim's tier, Jev's verdict (`–` when Jev did not run) and the statement. The selected claim's full statement, its quote, its source, who extracted it and the rules that make it yours sit beside the list. `h` and `l` switch between the claims that wait and the verified, rejected and refused ones; a refused claim shows why the machine's checks refused it, and `a` and `x` do nothing on it. `a` and `x` act at once. The board flattens text from outside before it draws it.
+
+<!-- keys:start memory -->
+**Claim**
+
+| Key | Does |
+|---|---|
+| `a` | verify: keeps it (asks if rejected) |
+| `x` | reject: drops it (asks if verified) |
+
+**Move**
+
+| Key | Does |
+|---|---|
+| `j / k` | previous / next row |
+| `h / l` | previous / next page |
+| `esc / L / q` | close |
+
+**App**
+
+| Key | Does |
+|---|---|
+| `r` | fetch the page again |
+| `?` | keys |
+
+<!-- keys:end -->
+
 ## Economy
 
 `$` (or `:economy`) opens the Economy of the repository of the card under the cursor: what the machine learned about its token spend. The list on the left holds the repository's facts (active first, then candidates, promoted, retired and dropped), the tool mask each pack runs with (applied units are marked `masked`, proposals `proposed` with how many runs and cards never used the tool) and the newest twenty loop-guard events. The row's detail sits on the right, with the cost in effective tokens (execution, overhead and the overhead's share) and each pack's envelope, or how many samples it still needs. `d` drops a candidate or active fact, `a` approves the pack's proposed mask, `r` restores a masked or proposed tool, and `I` imports the repository's past runs. A machine running with the economy off answers 404 and the board says so. The board flattens text from outside before it draws it.
@@ -751,6 +783,7 @@ The plan review page has a council section when the plan had a council. It says 
 | Key | Does |
 |---|---|
 | `m` | ask the foreman about the open cards |
+| `b` | ask the company brain |
 | `?` | keys |
 
 <!-- keys:end -->

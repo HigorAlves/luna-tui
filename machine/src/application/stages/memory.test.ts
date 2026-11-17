@@ -1,6 +1,7 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ClaimDraft } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { TaskRow } from "../../domain/task.ts";
@@ -112,6 +113,58 @@ describe("the retro's worth_learning question", () => {
     const promptUpdates = [{ pack: "implementing", change: "ask for the layer map first" }];
     const { run } = wire({ value: true, p: 0.9 }, { incidents: [], patterns: [], recalibration, graphMisses: ["src/auth.ts"], promptUpdates });
     expect((await run(rich)).detail?.rules).toMatchObject({ markdown: "- r\n", recalibration, graphMisses: ["src/auth.ts"], promptUpdates });
+  });
+});
+
+describe("the retro's claims", () => {
+  const rich = { ...context, task: { id: "t1", repoPath: "/repo" } as unknown as TaskRow } as StageContext;
+  const draft = (n: number): ClaimDraft => ({ statement: `The export job retries ${n} times before it fails`, quote: `retries ${n} times`, kind: "fact", scope: "repo" });
+
+  function wire(answer: Record<string, unknown>, claims: (...args: Parameters<NonNullable<Parameters<typeof memoryReviewRunner>[0]["claims"]>>) => unknown, prompt: string | null = "the retro prompt: retries 1 times, retries 2 times") {
+    const stateDir = mkdtempSync(join(tmpdir(), "memory-"));
+    if (prompt !== null) {
+      mkdirSync(join(stateDir, "runs", "r1", "out"), { recursive: true });
+      writeFileSync(join(stateDir, "runs", "r1", "out", "prompt.md"), prompt);
+    }
+    const runPack = async (): Promise<StageResult> => ({ outcome: "pass", detail: { answer }, artifacts: [] });
+    return memoryReviewRunner({ runPack, stateDir, claims: claims as never });
+  }
+
+  it("calls the hook once with both drafts and the text the retro was shown", async () => {
+    const calls: unknown[][] = [];
+    await wire({ claims: [draft(1), draft(2)] }, (...args) => void calls.push(args))(rich);
+    expect(calls).toEqual([[rich, [draft(1), draft(2)], "the retro prompt: retries 1 times, retries 2 times"]]);
+  });
+
+  it("hands over null when the run's prompt cannot be read", async () => {
+    const calls: unknown[][] = [];
+    await wire({ claims: [draft(1)] }, (...args) => void calls.push(args), null)(rich);
+    expect(calls[0]![2]).toBeNull();
+  });
+
+  it("calls nothing for an answer with no claims, an empty list, or an entry that does not parse", async () => {
+    const calls: unknown[][] = [];
+    const hook = (...args: unknown[]) => void calls.push(args);
+    await wire({}, hook)(rich);
+    await wire({ claims: [] }, hook)(rich);
+    await wire({ claims: [draft(1), { statement: "short", quote: "q", kind: "fact", scope: "repo" }] }, hook)(rich);
+    await wire({ claims: Array.from({ length: 9 }, (_, n) => draft(n)) }, hook)(rich);
+    await wire({ claims: "none" }, hook)(rich);
+    expect(calls).toEqual([]);
+  });
+
+  it("is not changed by a hook that throws or returns a rejecting promise", async () => {
+    const plain = await wire({ claims: [draft(1)] }, () => undefined)(rich);
+    const thrown = await wire({ claims: [draft(1)] }, () => { throw new Error("sync"); })(rich);
+    const rejected = await wire({ claims: [draft(1)] }, () => Promise.reject(new Error("async")))(rich);
+    expect(thrown).toEqual(plain);
+    expect(rejected).toEqual(plain);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it("does not wait for a hook that never finishes", async () => {
+    const result = await Promise.race([wire({ claims: [draft(1)] }, () => new Promise(() => {}))(rich), new Promise((resolve) => setTimeout(() => resolve("waited"), 500))]);
+    expect(result).toMatchObject({ outcome: "pass" });
   });
 });
 

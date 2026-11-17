@@ -2,7 +2,7 @@
 // mid-stage, then serves the API on localhost.
 import { expireKept, keepFolder } from "./application/kept-sandboxes.ts";
 import { hostBaselineWorkspace, hostFreshWorkspace, removeLeftovers } from "./adapters/git/clone.ts";
-import { type BudgetAlert, type EvidenceContext, FACTORY_DEFAULTS, Ledger, PrAction, type PullRequest, RUN_OR_GATE, type TicketContext, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
+import { type BudgetAlert, type EvidenceContext, FACTORY_DEFAULTS, Ledger, PACKS, type PackId, PrAction, type PullRequest, RUN_OR_GATE, type TicketContext, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
@@ -43,7 +43,7 @@ import type { PlanDeps } from "./application/stages/plan.ts";
 import type { Decide } from "./application/stages/check-decide.ts";
 import { loadCursor } from "./application/ship-cursor.ts";
 import { shipViewOf } from "./application/ship-view.ts";
-import { CONTEXT_FILE, retroFactsOf } from "./application/stages/memory.ts";
+import { CONTEXT_FILE, type MemoryDeps, retroFactsOf } from "./application/stages/memory.ts";
 import { shippedStream } from "./application/ship-loop.ts";
 import type { ShipDecide } from "./application/stages/ship-fixes.ts";
 import type { TriageSignalDeps } from "./application/stages/triage-signals.ts";
@@ -74,6 +74,7 @@ import { PgPackRunStore } from "./adapters/persistence/pack-run-store.ts";
 import { MINUTE_MS, Ticker } from "./application/ticker.ts";
 import { ChangeEvidence } from "./application/change-evidence.ts";
 import { StatusReport } from "./application/status-report.ts";
+import { brainWeek } from "./application/brain-week.ts";
 import { AccessReview, accessSlicesWriter } from "./application/access-review.ts";
 import { IncidentJob } from "./application/incidents.ts";
 import { mergeBreach } from "./domain/breach.ts";
@@ -90,6 +91,17 @@ import { ComplianceDrafts, publisher as compliancePublisher } from "./applicatio
 import { sharedWiki } from "./adapters/git/wiki.ts";
 import { questionnaireWriters } from "./application/compliance-writers.ts";
 import { Questionnaires } from "./application/questionnaires.ts";
+import { brainProjector, projectAfterClose } from "./application/brain-projector.ts";
+import { brainSources } from "./application/brain-sources.ts";
+import { type BrainQueryAnswerer, brainQueryAnswerer } from "./application/brain-query.ts";
+import { admission as brainAdmission, admitModeFor } from "./application/brain-admission.ts";
+import { retroClaims as handClaims, speakerTrustOf } from "./application/brain-retro.ts";
+import { PgClaimStore } from "./adapters/persistence/brain-claim-store.ts";
+import { brainJournal } from "./adapters/fs/brain-state.ts";
+import { brainAtBoot } from "./adapters/omnigraph/boot.ts";
+import { cardPrecedents } from "./application/brain-precedents.ts";
+import { trackProjector } from "./adapters/http/brain.ts";
+import { repoSlug as graphRepoSlug } from "./adapters/graph/slug.ts";
 import { graphifyGraph } from "./adapters/graph/graphify.ts";
 import { imageId, imageLabel, runSandbox } from "./adapters/docker/docker.ts";
 import { removeRunNetwork } from "./adapters/docker/egress.ts";
@@ -123,6 +135,7 @@ import { ConversationMachine } from "./application/conversation-machine.ts";
 import { enrichConversation } from "./application/conversation-enrich.ts";
 import { SlackSender } from "./application/slack-send.ts";
 import { ConversationDrafter } from "./application/conversation-draft.ts";
+import { conversationBrain } from "./application/conversation-brain.ts";
 import { ConversationDrafts } from "./application/conversation-drafts.ts";
 import { PgDraftStore } from "./adapters/persistence/slack-drafts.ts";
 import { evidenceView } from "./domain/conversation-evidence.ts";
@@ -326,6 +339,10 @@ const stackDeps = {
 const jiraApi = config.jira ? createJira(config.jira) : noTokenJira();
 /** Ship's review-loop decisions run through PackRuns as the `ship` client: bound once it exists. */
 const shipDecisions: { decide: ShipDecide | null } = { decide: null };
+/** Where the retro hands the claims it answered: bound once the brain's admission exists (below). */
+const retroClaims: { hand: NonNullable<MemoryDeps["claims"]> | null } = { hand: null };
+/** What answers an agent's `brain_query`: bound once the brain exists (below); until then, and with the brain off, it answers skipped. */
+const brainQuery: { answer: BrainQueryAnswerer | null } = { answer: null };
 const { stubReason, real, resolveConflicts, verifyPack, checksExec, proofRig, agentDeps, shipGateProbe, compliance: complianceReview, docsDrift: docsDriftReview } = await buildRealStages(
   config,
   watcher,
@@ -381,6 +398,8 @@ const { stubReason, real, resolveConflicts, verifyPack, checksExec, proofRig, ag
     },
     record: (taskId, links, pr) => pipeline.recordReview(taskId, links, pr),
   },
+  retroClaims,
+  brainQuery,
 );
 /** The retro's facts for a task, from the machine's own records. */
 async function retroFactsFor(taskId: string) {
@@ -503,8 +522,11 @@ const channelClaims = new ChannelClaims(
   },
 );
 
+/** The brain's projection after a card closes, bound once the projector exists (below); a close before then starts none. */
+let projectAfterCardClose: () => void = () => {};
 pipeline = new Pipeline(db, runnerFor, {
   economy,
+  onClosed: () => projectAfterCardClose(),
   proposer: factProposer,
   // A card that came from a ticket is split into child tickets, created only after a person approves the split gate (never by a clock or a retry).
   splitTickets: {
@@ -672,6 +694,9 @@ const slackInbox = new SlackInbox({
       return at < 0 ? null : `it ranks ${at + 1} of ${list.length}`;
     },
     docs: (repo, text) => repoDocs(repo, text),
+    // What the brain holds about the thread: only for a repository with `brain.tell: on` (RFC 0010).
+    // `brain` is bound below, so it is read when a draft is made, never before.
+    brain: (repo, text) => conversationBrain({ brain, repoSlug: graphRepoSlug, tells: async (r) => (await policies.for(r)).factory.brain.tell === "on" })(text, repo),
     tone: (channel, isPrivate) => conversationDrafts.recentEdits(channel, isPrivate),
     run: async (context) => {
       if (!packRuns) throw new Error("agents are off: no model to draft the reply");
@@ -751,6 +776,9 @@ const packRuns = buildPackRuns(config, {
   secrets: () => machineSecrets(config, process.env),
   // What the call's repository lets the machine keep: its `learning` section, by the card's repository (a call that names no card keeps the defaults).
   learning: learningOf,
+  // Opt-in per repository and pack (`brain.precedents`): a decision pack's earlier answers on cards like this one. An on-demand call knows its card, not its repository, so the card's is read here.
+  precedents: (pack, title, repoPath, taskId) =>
+    cardPrecedents({ brain, repoSlug: graphRepoSlug, packsOf: async (r) => (await policies.for(r)).factory.brain.precedents, task: (id) => pipeline.get(id), log: (line) => console.warn(line) })(pack, title, repoPath, taskId),
   // A usage limit moves a call to a fallback engine, never to one whose window the pipeline holds.
   latched: () => pipeline.slots.latched.map((latch) => latch.owner),
 });
@@ -987,6 +1015,8 @@ const statusReport = config.managerWikiRepo
         if (!packRuns) throw new Error("agents are off: no model to write the status report");
         return (await ownCalls(packRuns).run({ pack: "status_report", context: { status } }, INTAKE_CLIENT)).answer;
       },
+      // What the brain did in the week, from the claim journal and the graph (both are built below, before the first tick runs).
+      brain: (since, until) => brainWeek({ claims, brain, since, until }),
       repos: complianceRepos,
       wikiRepo: config.managerWikiRepo,
       // The post goes out as the person, with the Slack user token: with none, approve would fail on it, so the report is wiki only.
@@ -1002,7 +1032,67 @@ const approveBase = async (repo: string, base: string): Promise<{ ok: true } | {
   const deps = agentDeps;
   return approveRepoBase({ knownRepos, policyOf: (r) => policies.for(r), sourceOf: (r) => deps.imageSource.for(r), approvals: deps.approvals, approved: (r) => deps.repoImages.approved(r) }, repo, base);
 };
+// The company brain (RFC 0010): a graph the machine fills from its own records. Without an address and tokens it is off; a server that is down changes nothing else.
+const { brain, line: brainLine } = brainAtBoot(config.brain);
+console.log(brainLine);
+let viewer: string | null = null;
+const viewerLogin = async () => (viewer ??= (await github.viewer()).login);
+// What a retro or a person tells the brain: kept in Postgres, judged by memory_admit, copied into the graph by the projector.
+const claims = new PgClaimStore(db);
+const admission = brainAdmission({
+  store: claims,
+  brain,
+  // memory_admit is a decision pack, run through PackRuns as the brain's own call; its answer carries its record's id for admission to keep.
+  decide: packRuns ? async (admit) => tagged(await ownCalls(packRuns).run({ pack: "memory_admit", context: { admit } }, "brain")) : null,
+  overrides: async (repoPath) => (repoPath ? (await policies.for(repoPath)).decisions.memory_admit : undefined),
+  // A repository's luna.yaml says what happens to its claims; a claim of no repository, or a file that cannot be read, is left for a person (shadow). With the brain off, none is admitted.
+  mode: (repoPath) =>
+    admitModeFor(brain.enabled, async () => {
+      if (!repoPath) return "shadow";
+      try {
+        return (await policies.for(repoPath)).factory.brain.admit;
+      } catch {
+        return "shadow";
+      }
+    }),
+  repoSlug: graphRepoSlug,
+  changed: () => projectAfterCardClose(),
+  log: (line) => console.warn(line),
+});
+// A repository's luna.yaml says whether its runs may read the brain (`brain.tell`, off by default); a file that cannot be read says no.
+brainQuery.answer = brainQueryAnswerer({ brain, tell: async (repoPath) => (await policies.for(repoPath)).factory.brain.tell === "on", repoSlug: graphRepoSlug });
+retroClaims.hand = handClaims(admission, (line) => console.warn(line), async (task) => speakerTrustOf(task));
+const projector = trackProjector(
+  brainProjector({
+    brain,
+    journal: brainJournal(config.stateDir),
+    log: (line) => console.warn(line),
+    sources: brainSources({
+      tasks: () => pipeline.list(),
+      events: (taskId) => pipeline.events(taskId),
+      planDetail: async (taskId) => (await pipeline.latestStageFinish(taskId, "test_design"))?.detail,
+      retro: (taskId) => retroFactsFor(taskId),
+      repoSlug: graphRepoSlug,
+      decisions: async (fromDay) => (await Promise.all((Object.keys(PACKS) as PackId[]).filter((pack) => PACKS[pack].kind === "decision").map((pack) => decisionLog.list(pack, { withTruth: true, ...(fromDay ? { fromDay } : {}) })))).flat(),
+      // The login does not change while the machine runs, so a known one is kept.
+      viewerLogin,
+      context: (repoPath) => defaultBranchFile(repoPath, [CONTEXT_FILE]),
+      // The incident job is always built; with no source configured it simply holds none.
+      incidents: () => incidentJob.list(),
+      regimes: async (repoPath) => (await policies.for(repoPath)).compliance ?? [],
+      // The wiki is the repository's own, by its origin's slug, as the compliance jobs find it; a repository with no GitHub origin has none.
+      wikiPages: async (repoPath, prefix) => {
+        const slug = await originSlugOf(repoPath).catch(() => null);
+        return slug ? wiki.readPages(slug, prefix) : null;
+      },
+      // The store pages by `updated_at`, oldest first, and a page is its limit of 200: a projection takes one page and the cursor moves on, so the rest follows on the next run.
+      claims: (since) => claims.list({ except: "refused", order: "updated_asc", limit: 200, ...(since ? { since } : {}) }),
+    }),
+  }),
+);
+projectAfterCardClose = projectAfterClose(projector, (line) => console.warn(line));
 const app = createApp({
+  brain: { brain, projector, claims, admission, speaker: () => viewerLogin() },
   knownRepos,
   // The identity is read on each call, so a machine fixed in place turns healthy without a restart; the token and the stub reason are fixed at boot.
   sandboxPolicy: config.sandboxPolicy,
@@ -1171,6 +1261,12 @@ const incidentSourceNames = Object.entries(incidentSources).filter(([, v]) => v)
 const incidentTicker = config.incidents.enabled && incidentSourceNames.length > 0 ? new Ticker(() => void incidentJob.tick().catch((error: unknown) => console.warn("incidents failed", error)), 5 * MINUTE_MS) : null;
 incidentTicker?.start();
 console.log(incidentTicker ? `incidents: reading ${incidentSourceNames.join(", ")} every 5 minutes` : "incidents: off (MACHINE_INCIDENTS=off, or no Sentry, Datadog, Jira or Slack channel configured)");
+/** The brain's projection on the hour; a card's close starts one too. Off, a run answers at once. */
+const brainTicker = brain.enabled ? new Ticker(() => void projector.run(), 60 * MINUTE_MS) : null;
+brainTicker?.start();
+// One more soon after boot, so a graph that is empty or half restored does not wait an hour. A failure here never reaches boot.
+const brainFirst = brain.enabled ? setTimeout(() => void projector.run().catch((error: unknown) => console.warn("brain: the first projection failed", error)), MINUTE_MS) : null;
+brainFirst?.unref();
 
 /** The minute tick: a gate goes overdue, a stage passes 80% of its target, with no event to say so. */
 // Alerts are read every six hours, and once soon after boot; with no GitHub token every read refuses and the pass only logs.
@@ -1237,6 +1333,7 @@ async function shutdown(): Promise<void> {
   accessTicker?.stop();
   statusTicker?.stop();
   if (accessFirst) clearTimeout(accessFirst);
+  brainTicker?.stop();
   pulls.stop();
   slackInbox.stop();
   socket?.stop();

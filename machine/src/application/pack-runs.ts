@@ -41,7 +41,7 @@ import { recordContext } from "../domain/record-context.ts";
 import { redact } from "../domain/evidence-markdown.ts";
 import { redactDeep, secretRedactor } from "../domain/redact-secrets.ts";
 import { maskPii } from "../domain/secrets-check.ts";
-import { buildContextPackInput } from "../domain/stage-input.ts";
+import { type PrecedentLookup, buildContextPackInput, withPrecedents } from "../domain/stage-input.ts";
 import { type RunFacts, runFacts } from "../domain/task.ts";
 import { applyPolicy } from "@hardness/contracts";
 import type { DecisionAppender } from "./decision-log.ts";
@@ -166,6 +166,9 @@ export interface PackRunsDeps {
   /** What the call's repository lets the machine keep (its `learning` section) and the repository's folder name; absent, the defaults and no repository.
    *  It can only lower what the machine's own switches allow: `MACHINE_DECISIONS=off` (no `decisions`) and `MACHINE_TRACES` (the telemetry's mode) stay ceilings. */
   learning?: (taskId: string | undefined) => Promise<{ repo: string | null; learning: LearningPolicy }>;
+  /** The company brain's precedents (RFC 0010): a decision pack's own earlier answers on cards like the one in front of it, put in its input.
+   *  Absent, or answering nothing, the input is exactly what it was. */
+  precedents?: PrecedentLookup;
 }
 
 /** The `learning` section of a repository's `luna.yaml`, as the machine reads it. */
@@ -323,7 +326,7 @@ export class PackRuns implements PackRunsPort {
     let decided: ReturnType<typeof applyPolicy> | null = null;
     try {
       await mkdir(work, { recursive: true });
-      const input = buildContextPackInput(pack, context, engine);
+      const input = await withPrecedents(buildContextPackInput(pack, context, engine), this.deps.precedents, null, origin.taskId ?? null, this.log);
       const run = await runPackOnce(
         { name: `hardness-run-${pack.replace(/_/g, "-")}-${runDir.slice(-12)}`, image: this.deps.image, runDir, worktree: work, input, engine, labels: { luna: "run" }, extraEnv: mode === "full" ? span.childEnv() : {}, ...(origin.credentialWaitMs !== undefined ? { credentialWaitMs: origin.credentialWaitMs } : {}), signal },
         { credentials: this.deps.credentials, sandbox: this.deps.sandbox, ...(this.deps.policies ? { policies: this.deps.policies } : {}), ...(this.deps.egress ? { egress: this.deps.egress } : {}) },

@@ -68,10 +68,11 @@ export class DecisionLog implements DecisionAppender {
     await this.write(join(dir, `${record.id}.json`), record);
   }
 
-  /** A pack's records, oldest first; `since` keeps those at or after it, `withTruth` those with a truth. */
-  async list(pack: PackId, options: { since?: Date; withTruth?: boolean } = {}): Promise<DecisionRecord[]> {
+  /** A pack's records, oldest first; `since` keeps those at or after it, `withTruth` those with a truth. `fromDay` (`yyyy-mm-dd`) skips the older day folders without opening them. */
+  async list(pack: PackId, options: { since?: Date; withTruth?: boolean; fromDay?: string } = {}): Promise<DecisionRecord[]> {
     const records: DecisionRecord[] = [];
     for (const day of await this.days(pack)) {
+      if (options.fromDay && day < options.fromDay) continue;
       for (const name of await readdir(join(this.root, pack, day)).catch(() => [])) {
         if (!name.endsWith(".json")) continue;
         const record = await this.load(join(this.root, pack, day, name));

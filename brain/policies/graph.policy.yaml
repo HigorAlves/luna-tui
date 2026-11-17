@@ -1,0 +1,44 @@
+# A token selects an actor; this policy says what the actor may do.
+#
+# The machine writes facts as luna-facts and claims as luna-memories, so the commit history says
+# which job wrote what. It reads as luna-reader, which cannot write: a stored write run with that
+# token is refused. luna-mcp is the person's own MCP client (the runbook): it reads the same way,
+# and has its own token so it can be replaced without touching the machine. `owner` is the person
+# who runs Luna.
+#
+# A reader cannot export the whole graph: that is the owner's. It does hold `read`, because the
+# server asks for it on every stored query, and `read` also lets a token run a query of its own.
+# So a reader token reads every repository: keep it out of anything that reads untrusted text.
+# What this policy also cannot do is say which stored query an actor may run: `invoke_query`
+# covers the whole catalog, so the list of queries an agent may run is in contracts/src/brain.ts
+# and the machine's port enforces it. No agent holds a token.
+version: 1
+groups:
+  readers: [owner, luna-facts, luna-memories, luna-reader, luna-mcp]
+  writers: [owner, luna-facts, luna-memories]
+  admins: [owner]
+protected_branches: [main]
+rules:
+  - id: read-data
+    allow:
+      actors: { group: readers }
+      actions: [read]
+      branch_scope: any
+  - id: export-data
+    allow:
+      actors: { group: admins }
+      actions: [export]
+      branch_scope: any
+  - id: invoke-stored-queries
+    allow:
+      actors: { group: readers }
+      actions: [invoke_query]
+  - id: write-data
+    allow:
+      actors: { group: writers }
+      actions: [change]
+      branch_scope: any
+  - id: change-schema
+    allow:
+      actors: { group: admins }
+      actions: [schema_apply]

@@ -113,6 +113,8 @@ export interface Config {
   traces: TracesConfig;
   /** What the owner lets any repository's sandbox ask for (`MACHINE_SANDBOX_POLICY`, default `~/.config/hardness/sandbox.yaml`); the defaults when the file is absent. A repo's luna.yaml stays within it. */
   sandboxPolicy: MachinePolicy;
+  /** The company brain (RFC 0010): omnigraph-server's address (`MACHINE_BRAIN_URL`; unset or empty is off) and the file of its tokens (`MACHINE_BRAIN_TOKENS`, default `~/.config/hardness/brain-tokens.json`). The tokens are read at boot and never logged. */
+  brain: { url: string | null; tokensPath: string };
 }
 
 export interface SlackInboxConfig {
@@ -595,7 +597,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     restartPolicy,
     traces: tracesConfig(env, home),
     sandboxPolicy: sandboxPolicyFrom(env, home),
+    brain: { url: brainUrl(env), tokensPath: env.MACHINE_BRAIN_TOKENS?.trim() || join(home, ".config", "hardness", "brain-tokens.json") },
   };
+}
+
+/** `MACHINE_BRAIN_URL`: an http(s) address without its trailing slash; null when unset or empty. */
+function brainUrl(env: NodeJS.ProcessEnv): string | null {
+  const raw = env.MACHINE_BRAIN_URL?.trim();
+  if (!raw) return null;
+  if (!/^https?:\/\/[^\s<>"']+$/i.test(raw)) throw new Error(`MACHINE_BRAIN_URL must be an http(s) address, got "${raw}"`);
+  return raw.replace(/\/+$/, "");
 }
 
 /** An http(s) URL with no whitespace, angle bracket or quote, without its trailing slash; null for anything else. */

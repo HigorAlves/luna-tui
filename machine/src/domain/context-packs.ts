@@ -1,7 +1,7 @@
 // The context-only packs: those that run in no task state (packStates), so a client may run one
 // on data it sends (`POST /runs`). Each reads one key of the stage input's context, with that
 // key's schema. A context-only pack that is not for clients is on NOT_ON_DEMAND instead. Pure.
-import { AccessReviewContext, ReleaseNotesContext, PostmortemContext, BreachAssessContext, CapacityContext, StatusReportContext, QuestionnaireContext, VulnTriageContext, ChangeExceptionsContext, ChatTriageContext, CheckContext, ConversationContext, DedupContext, ForemanContext, TicketContext, IssueContext, JiraIntakeContext, EvidenceContext, type PackId, PlanContext, PrLinkContext, ProposeContext, ShipContext, SizeContext, SlackTriageContext, SplitContext } from "@hardness/contracts";
+import { AdmitContext, BrainAskContext, AccessReviewContext, ReleaseNotesContext, PostmortemContext, BreachAssessContext, CapacityContext, StatusReportContext, QuestionnaireContext, VulnTriageContext, ChangeExceptionsContext, ChatTriageContext, CheckContext, ConversationContext, DedupContext, ForemanContext, TicketContext, IssueContext, JiraIntakeContext, EvidenceContext, type PackId, PlanContext, PrLinkContext, ProposeContext, ShipContext, SizeContext, SlackTriageContext, SplitContext } from "@hardness/contracts";
 import { z } from "zod";
 
 import { packStates } from "./packs.ts";
@@ -21,6 +21,7 @@ export const CONTEXT_OF = {
   questionnaire: { key: "questionnaire", schema: QuestionnaireContext },
   vuln_triage: { key: "vulns", schema: VulnTriageContext },
   release_notes: { key: "release", schema: ReleaseNotesContext },
+  brain_ask: { key: "brainAsk", schema: BrainAskContext },
   risk_score: { key: "plan", schema: PlanContext },
   coverage_check: { key: "plan", schema: PlanContext },
   plan_check: { key: "plan", schema: PlanContext },
@@ -44,6 +45,7 @@ export const CONTEXT_OF = {
   evidence_valid: { key: "ship", schema: ShipContext },
   worth_learning: { key: "ship", schema: ShipContext },
   intake_dedup: { key: "dedup", schema: DedupContext },
+  memory_admit: { key: "admit", schema: AdmitContext },
   ticket_validity: { key: "ticket", schema: TicketContext },
   ticket_assess: { key: "ticket", schema: TicketContext },
   ticket_recommend: { key: "ticket", schema: TicketContext },
@@ -75,11 +77,13 @@ export type PackContext =
   | { questionnaire: QuestionnaireContext }
   | { vulns: VulnTriageContext }
   | { release: ReleaseNotesContext }
+  | { brainAsk: BrainAskContext }
   | { plan: PlanContext }
   | { check: CheckContext }
   | { evidence: EvidenceContext }
   | { ship: ShipContext }
   | { dedup: DedupContext }
+  | { admit: AdmitContext }
   | { size: SizeContext }
   | { split: SplitContext }
   | { ticket: TicketContext }

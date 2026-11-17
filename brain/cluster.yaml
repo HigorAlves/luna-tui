@@ -1,0 +1,23 @@
+# The company brain's cluster (RFC 0010): one graph, its schema, its stored queries and who may do
+# what. The `brain` compose service boots from this folder through boot.sh, which applies it.
+version: 1
+
+metadata:
+  name: luna-brain
+
+state:
+  backend: cluster
+  lock: true
+
+graphs:
+  brain:
+    schema: schema.pg
+    queries: queries/        # every `query <name>` in queries/*.gq is a stored query
+
+policies:
+  graph-access:
+    file: policies/graph.policy.yaml
+    applies_to: [brain]
+  cluster-access:
+    file: policies/server.policy.yaml
+    applies_to: [cluster]

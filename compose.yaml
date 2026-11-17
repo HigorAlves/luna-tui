@@ -88,6 +88,9 @@ services:
       # The kill switch and the per-engine monthly caps (docs/configuration.md).
       MACHINE_DISABLE_RUNTIMES: ${MACHINE_DISABLE_RUNTIMES:-}
       MACHINE_ENGINE_BUDGETS: ${MACHINE_ENGINE_BUDGETS:-}
+      # The company brain: omnigraph-server's address (unset: off) and its tokens file in the mounted config folder.
+      MACHINE_BRAIN_URL: ${MACHINE_BRAIN_URL:-}
+      MACHINE_BRAIN_TOKENS: /root/.config/hardness/brain-tokens.json
       # Run traces to the local Laminar (`docker compose --profile observe up -d`; docs/configuration.md "Observability").
       # The key is also read from ~/.config/hardness/lmnr-project-api-key (mounted below).
       LMNR_PROJECT_API_KEY: ${LMNR_PROJECT_API_KEY:-}
@@ -129,6 +132,43 @@ services:
       - ${HOME}/.config/hardness:/root/.config/hardness:ro
       # Read-write: a run that refreshed the Codex token writes it back (a temp file, then a rename).
       - ${CODEX_HOME:-${HOME}/.codex}:/root/.codex-host
+
+  # The company brain (RFC 0010): omnigraph-server, a typed graph of cards, pull requests, people and
+  # what was decided, which the machine fills from its own records and reads through named queries.
+  # Opt-in: `pnpm brain` writes the tokens file once and starts it. Luna works the same without it.
+  # It binds to localhost, holds no embedding key and no provider key, so it calls nothing outside.
+  # The image is upstream's, unchanged and pinned (v0.15.0); it is amd64 only, so an arm64 host emulates it.
+  brain:
+    image: modernrelay/omnigraph-server@sha256:1346cc870b86f962f69a694c0872be573977f2a9d6f2dc01fc3e34689c70a661
+    platform: linux/amd64
+    profiles: ["brain"]
+    restart: unless-stopped
+    # boot.sh applies ./brain once per container, clears a lock a crash left (a killed server cannot start again without that)
+    # and starts the server. The container keeps its own copy of the script, so a restart does not need the checkout's folder.
+    entrypoint: ["/bin/sh", "-c", "[ ! -f /config/boot.sh ] || cp /config/boot.sh /tmp/brain-boot.sh; exec /bin/sh /tmp/brain-boot.sh"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      OMNIGRAPH_CLUSTER: /var/lib/omnigraph/cluster
+      BRAIN_CONFIG: /config
+      OMNIGRAPH_SERVER_BEARER_TOKENS_FILE: /tokens.json
+      # v0.15.0 overflows its stack on an MCP tool call without this (omnigraph issue 1411).
+      RUST_MIN_STACK: "8388608"
+    ports:
+      - "127.0.0.1:${BRAIN_PORT:-8090}:8080"
+    volumes:
+      - ./brain:/config:ro
+      # The image's own user owns this folder, so a new volume starts writable for it.
+      - brain-data:/var/lib/omnigraph
+      - ${HOME}/.config/hardness/brain-tokens.json:/tokens.json:ro
+    # Its caches grow until something stops them (omnigraph issue 702): the limit and the restart do.
+    mem_limit: ${BRAIN_MEM_LIMIT:-2g}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/readyz >/dev/null || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
 
   # Laminar (laminar.sh, Apache 2.0): traces of every stage and pack run, and the replay evals'
   # scorecards, in a UI at http://localhost:5667. Opt-in: `docker compose --profile observe up -d`,
@@ -250,6 +290,7 @@ services:
 
 volumes:
   pgdata:
+  brain-data:
   lmnr-pgdata:
   lmnr-clickhouse-data:
   lmnr-clickhouse-logs:

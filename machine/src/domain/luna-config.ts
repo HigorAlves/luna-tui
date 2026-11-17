@@ -1,6 +1,6 @@
 // A repo's `luna.yaml`: everything the machine needs to run that repo, in one file. Pure:
 // parsing and validation only; the store (application/policy.ts) reads it from disk.
-import { FACTORY_DEFAULTS, type JiraConfig, LunaConfig, RUNNING, type SlaConfig, TaskState, factoryConfigOf, hostPatternProblem, normalizeHostPattern } from "@hardness/contracts";
+import { FACTORY_DEFAULTS, type JiraConfig, LunaConfig, PACKS, type PackId, RUNNING, type SlaConfig, TaskState, factoryConfigOf, hostPatternProblem, normalizeHostPattern } from "@hardness/contracts";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 
 import { effortsProblem, stagesProblem } from "./engine-choice.ts";
@@ -148,6 +148,17 @@ function conversationOf(conversation: LunaConfig["conversation"], warn: Warn): L
   return { ...conversation, channels };
 }
 
+/** The `brain` block as policy: an entry of `precedents` that is not the id of a decision pack would do nothing, silently, so it is dropped with a warning that names it. */
+function brainOf(brain: LunaConfig["brain"], warn: Warn): LunaConfig["brain"] {
+  if (!brain?.precedents) return brain;
+  const precedents = brain.precedents.filter((id) => {
+    if (Object.hasOwn(PACKS, id) && PACKS[id as PackId]?.kind === "decision") return true;
+    warn(`brain.precedents: ${id} is not a decision pack; dropped`);
+    return false;
+  });
+  return { ...brain, precedents };
+}
+
 const DEFAULT_INTAKE_EVERY_SECS = 300;
 
 const isState = (key: string): boolean => TaskState.safeParse(key).success;
@@ -249,6 +260,6 @@ export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
     decisions: (policy.decisions ?? {}) as Policy["decisions"],
     evidenceRetentionDays: evidence?.retention_days ?? null,
     freeze: freeze.map((f) => ({ ...f })),
-    factory: lowerAllow(factoryConfigOf({ backlog: config.backlog, tickets: config.tickets, conversation: conversationOf(config.conversation, warn), dedup: config.dedup, triage: config.triage, scoring: config.scoring, graph: config.graph, fast_lane: config.fast_lane, plan: config.plan, size: config.size, build: config.build, sandbox: config.sandbox, verify: config.verify, evidence: config.evidence, learning: config.learning, economy: config.economy, ship: shipOf(config, warn) })),
+    factory: lowerAllow(factoryConfigOf({ backlog: config.backlog, tickets: config.tickets, conversation: conversationOf(config.conversation, warn), dedup: config.dedup, triage: config.triage, scoring: config.scoring, graph: config.graph, fast_lane: config.fast_lane, plan: config.plan, size: config.size, build: config.build, sandbox: config.sandbox, verify: config.verify, evidence: config.evidence, learning: config.learning, economy: config.economy, brain: brainOf(config.brain, warn), ship: shipOf(config, warn) })),
   };
 }

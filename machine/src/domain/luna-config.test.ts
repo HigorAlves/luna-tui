@@ -62,6 +62,23 @@ describe("conversation.channels in a luna.yaml", () => {
   });
 });
 
+describe("brain.precedents in a luna.yaml", () => {
+  it("keeps the ids of decision packs and drops, with a warning naming it, an entry that is a typo, an agent pack or no pack", () => {
+    const warnings: string[] = [];
+    const policy = parseLunaConfig("brain:\n  precedents: [triage_signals, red-check, implementing, constructor]\n", (m) => warnings.push(m));
+    expect(policy.factory.brain.precedents).toEqual(["triage_signals"]);
+    expect(warnings).toHaveLength(3);
+    for (const entry of ["red-check", "implementing", "constructor"]) expect(warnings.find((w) => w.includes(entry)), entry).toContain("brain.precedents");
+  });
+
+  it("warns of nothing when every entry is a decision pack, and leaves a file without the list alone", () => {
+    const warnings: string[] = [];
+    expect(parseLunaConfig("brain:\n  precedents: [triage_signals]\n", (m) => warnings.push(m)).factory.brain.precedents).toEqual(["triage_signals"]);
+    expect(parseLunaConfig("brain:\n  tell: \"on\"\n", (m) => warnings.push(m)).factory.brain.precedents).toEqual([]);
+    expect(warnings).toEqual([]);
+  });
+});
+
 describe("parseLunaConfig", () => {
   it("reads every section into the policy, so one file says how a repo runs", () => {
     expect(parseLunaConfig(full)).toEqual({

@@ -10,6 +10,7 @@ import { type TruthSink, redCheckTruth, scopeFactsTruth } from "../decision-trut
 import { scopeFacts as diffFacts } from "../../domain/scope-facts.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
 import type { CardHit } from "../../domain/card-search.ts";
+import { type BrainQueryAnswer, type BrainQueryRequest, parseBrainRequest } from "../brain-query.ts";
 import { looksLikeTestPath } from "../../domain/locked-files.ts";
 import { type AddedLine, type ScopeFacts, addedLinesOf, removedLinesOf, sanitizeFacts, scopeFacts } from "../../domain/scope.ts";
 
@@ -72,6 +73,8 @@ export interface BuildWatchOptions {
   onScopeRequest?: (request: ScopeRequest) => Promise<void>;
   /** Called once per `checks/card-search-request.json` the triage agent writes (a rewritten request is a new one). */
   onCardSearch?: (query: string) => Promise<void>;
+  /** Called once per `checks/brain-query-request.json` the agent writes (a rewritten request is a new one); a file that is not a request is not called. */
+  onBrainQuery?: (request: BrainQueryRequest) => Promise<void>;
   /** Called once per `checks/loop-request-<nonce>-<n>.json` the loop guard writes, in order of first sight and then `n`; its verdict is written as `loop-answer-<nonce>-<n>.json`. A request already there when the watch starts belongs to an earlier container and is never answered. Not awaited by the watch: a judge takes seconds, and a red slice or a commit does not wait for it. */
   onLoopRequest?: (request: LoopRequest) => Promise<LoopVerdict>;
   log?: (line: string) => void;
@@ -110,6 +113,9 @@ export const MAX_REDS_PER_SLICE = 2;
 export const MAX_SCOPE_REQUESTS = 3;
 /** Board searches answered per run: a triage agent that keeps asking is not helped by more. */
 export const MAX_CARD_SEARCHES = 5;
+/** Brain queries answered per run: the container writes the files, and each one reads the graph. */
+export const MAX_BRAIN_QUERIES = 20;
+const BRAIN_NOT_A_REQUEST = "the request is not a brain query: { name, params } with text of at most 300 characters";
 /** Loop requests judged per run: the container writes the files, and each one is a metered decision. */
 export const MAX_LOOP_REQUESTS = 20;
 /** The most names of `checks/` one look reads. */
@@ -179,6 +185,9 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
   let lastRequest = "";
   let lastSearch = "";
   let cardSearches = 0;
+  let lastBrain = "";
+  let unreadableBrain = "";
+  let brainQueries = 0;
   // The requests of an earlier container are in the folder when the watch starts: they are handled already, and never answered.
   const loopSeen = new Set<string>(options.onLoopRequest ? loopNames(checkNamesNow(options.outDir)).map((r) => r.name) : []);
   const loopQueue: Array<{ name: string; nonce: string; n: number }> = [];
@@ -267,6 +276,43 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
     }
   };
 
+  /** An answer of the machine's own, so the agent's wait ends: a request it will not run still gets a reply. */
+  const refuseBrain = async (reason: string): Promise<void> => {
+    try {
+      await writeMailbox(options.outDir, "brain-query.json", JSON.stringify({ verdict: "refused", problems: [reason], rows: [], note: reason }));
+    } catch (error) {
+      options.log?.(`build watch: brain query: ${(error as Error).message}`);
+    }
+  };
+
+  const brainAsks = async (): Promise<void> => {
+    if (!options.onBrainQuery) return;
+    const text = await readMailbox(options.outDir, "brain-query-request.json");
+    if (text === null || text === lastBrain) return;
+    const request = parseBrainRequest(text);
+    if (!request) {
+      // The tool may be mid-write: the same text on a second look is not a request, and is refused.
+      if (text !== unreadableBrain) {
+        unreadableBrain = text;
+        return;
+      }
+      lastBrain = text;
+      await refuseBrain(BRAIN_NOT_A_REQUEST);
+      return;
+    }
+    lastBrain = text;
+    if (brainQueries >= MAX_BRAIN_QUERIES) {
+      await refuseBrain(`a run may ask the brain ${MAX_BRAIN_QUERIES} times`);
+      return;
+    }
+    brainQueries += 1;
+    try {
+      await options.onBrainQuery(request);
+    } catch (error) {
+      options.log?.(`build watch: brain query: ${(error as Error).message}`);
+    }
+  };
+
   /** The loop guard's questions, one judge at a time, in the order they were first seen and then by `n`: a request that arrives while one is pending waits for a later tick. Each is judged off the tick; once the watch stops its answer is dropped, for the run's folder may be gone. At most `MAX_LOOP_REQUESTS` files are handled per watch, and a file that is not JSON, names another nonce or number than its own, or holds an over-long digest is skipped and counts. */
   const loops = async (): Promise<void> => {
     if (!options.onLoopRequest) return;
@@ -326,7 +372,7 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
   };
 
   const timer = setInterval(() => {
-    tick = tick.then(() => (stopped ? undefined : poll().then(requests).then(searches).then(loops)));
+    tick = tick.then(() => (stopped ? undefined : poll().then(requests).then(searches).then(brainAsks).then(loops)));
   }, options.every);
 
   return {
@@ -338,6 +384,7 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
       await poll();
       await requests();
       await searches();
+      await brainAsks();
       stopped = true;
     },
   };
@@ -585,6 +632,15 @@ export function cardSearchAnswers(deps: { outDir: string; search: (query: string
     async onCardSearch(query: string): Promise<void> {
       const cards = await deps.search(query);
       await writeMailbox(deps.outDir, "card-search.json", JSON.stringify({ verdict: "ok", problems: [], cards }));
+    },
+  };
+}
+
+/** The machine's side of `brain_query`: answers in the mailbox from the task's repository, which the answerer confines every query to; a repository a request names is not read. */
+export function brainQueryMailbox(deps: { outDir: string; repoPath: string | null; answer: (repoPath: string | null, request: BrainQueryRequest) => Promise<BrainQueryAnswer> }) {
+  return {
+    async onBrainQuery(request: BrainQueryRequest): Promise<void> {
+      await writeMailbox(deps.outDir, "brain-query.json", JSON.stringify(await deps.answer(deps.repoPath, request)));
     },
   };
 }

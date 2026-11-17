@@ -1,0 +1,20 @@
+// Hygiene reads. Each returns zero rows on a healthy graph, and the projector runs them after
+// every run. No agent may run one.
+
+query agents_without_owner() @description("Agent actors with no person who answers for them.") {
+    match {
+        $a: Actor { kind: "agent" }
+        not { $a actsFor $_ }
+    }
+    return { $a.slug as actor }
+    order { actor asc }
+}
+
+query prs_without_card() @description("Pull requests that belong to no card. The machine writes a pull request only with its card.") {
+    match {
+        $p: PR
+        not { $p prForCard $_ }
+    }
+    return { $p.slug as pr }
+    order { pr asc }
+}

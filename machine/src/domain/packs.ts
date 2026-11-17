@@ -53,6 +53,7 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   evidence_valid: [],
   worth_learning: [],
   intake_dedup: [],
+  memory_admit: [],
   ticket_validity: [],
   ticket_assess: [],
   conversation_assess: [],
@@ -94,6 +95,8 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   vuln_triage: [],
   // The release writer, run on demand by POST /compliance/release-notes.
   release_notes: [],
+  // The company brain's answerer, run on demand by POST /brain/ask.
+  brain_ask: [],
 };
 
 /** The task states in which the pipeline runs the pack. */

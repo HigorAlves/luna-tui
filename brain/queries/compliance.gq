@@ -1,0 +1,65 @@
+// Reads over incidents and the compliance pages of the wikis (RFC 0010, wave 6). Each one is listed in
+// contracts/src/brain.ts (BRAIN_QUERIES). The graph holds names and paths: an incident's timeline,
+// a control's text and an answer's text stay where they are.
+
+query open_incidents() @description("The incidents that are still open, newest first.") {
+    match {
+        $i: Incident { status: "open" }
+    }
+    return { $i.slug as incident, $i.title as title, $i.severity as severity, $i.service as service, $i.breach as breach, $i.started_at as started_at }
+    order { started_at desc }
+    limit 20
+}
+
+query search_incidents($q: String) @description("Incidents by full-text match on the title, best first.") {
+    match {
+        $i: Incident
+    }
+    return { $i.slug as incident, $i.title as title, $i.severity as severity, $i.status as status, $i.service as service, $i.breach as breach, $i.started_at as started_at, $i.resolved_at as resolved_at }
+    order { bm25($i.title, $q) }
+    limit 8
+}
+
+query regimes_of_repo($repo: String) @description("The compliance regimes a repository declares.") {
+    match {
+        $r: Repo { slug: $repo }
+        $g: Regime
+        $r repoUnderRegime $g
+    }
+    return { $g.slug as regime, $g.name as name }
+    order { regime asc }
+    limit 10
+}
+
+query controls_of_repo($repo: String) @description("The policy and control pages of a repository's wiki.") {
+    match {
+        $r: Repo { slug: $repo }
+        $c: Control
+        $c controlOfRepo $r
+    }
+    return { $c.slug as control, $c.title as title, $c.kind as kind, $c.path as path }
+    order { control asc }
+    limit 60
+}
+
+query search_controls($q: String) @description("Policy and control pages by full-text match on the title, best first.") {
+    match {
+        $c: Control
+        $r: Repo
+        $c controlOfRepo $r
+    }
+    return { $c.slug as control, $c.title as title, $c.kind as kind, $c.path as path, $r.slug as repo }
+    order { bm25($c.title, $q) }
+    limit 8
+}
+
+query search_answers($q: String) @description("Approved questionnaire answers by full-text match on the question, best first.") {
+    match {
+        $a: Answer
+        $r: Repo
+        $a answerOfRepo $r
+    }
+    return { $a.slug as answer, $a.question as question, $a.path as path, $r.slug as repo }
+    order { bm25($a.question, $q) }
+    limit 8
+}

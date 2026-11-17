@@ -17,6 +17,7 @@ For the board (the Rust TUI): [`board/README.md`](../board/README.md).
 | [upgrade-a-model.md](./runbooks/upgrade-a-model.md) | A new Claude, OpenAI or Jev model, or a runtime SDK bump |
 | [verify-the-engine-relay.md](./runbooks/verify-the-engine-relay.md) | Run the real smoke test of the Claude credential relay, read its output, roll back |
 | [turn-on-gvisor.md](./runbooks/turn-on-gvisor.md) | Install `runsc` and run untrusted cards under gVisor |
+| [the-brain.md](./runbooks/the-brain.md) | Start the company brain, read a projection, rebuild the graph, upgrade omnigraph or clear a stuck lock |
 | [token-economy.md](./runbooks/token-economy.md) | See what the token economy learned, drop a fact, approve a tool mask, import old runs, or read a loop guard stop |
 
 ## RFCs
@@ -32,4 +33,5 @@ Design proposals. The numbers follow the order in which the authors wrote them. 
 | [0005](./rfcs/0005-software-factory-v1-5.md) | Software Factory v1.5: typed decisions at every gate, a Plan stage, a video Evidence Pack and a maintenance loop in Ship |
 | [0007](./rfcs/0007-token-economy.md) | Token economy: a loop guard, learned repo facts and tool pruning, ported from TokenEconomizer |
 | [0009](./rfcs/0009-sandbox-state-of-the-art.md) | Sandbox state of the art: dropped capabilities, secrets as files, a credential relay, a machine policy, trust and devcontainer images |
+| [0010](./rfcs/0010-company-brain-on-omnigraph.md) | A company brain on omnigraph: facts by code, claims verified by Jev, the person only on high risk |
 | [0011](./rfcs/0011-small-agent-teams.md) | Small agent teams: effort per run, config proposals, a plan council, a question council and a foreman |

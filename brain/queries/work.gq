@@ -1,0 +1,123 @@
+// Reads over the work and code layers. Each one is listed in contracts/src/brain.ts
+// (BRAIN_QUERIES) with the same name and parameters; a test holds the two together.
+
+query card_lookup($card: String) @description("One card with what was predicted and what happened.") {
+    match {
+        $c: Card { slug: $card }
+    }
+    return { $c.slug as card, $c.title as title, $c.state as state, $c.route as route, $c.size as size, $c.risk as risk, $c.est_loc as est_loc, $c.actual_loc as actual_loc, $c.retries as retries, $c.escalations as escalations, $c.opened_at as opened_at, $c.closed_at as closed_at }
+}
+
+query search_cards($q: String) @description("Cards by full-text match on the title, best first.") {
+    match {
+        $c: Card
+    }
+    return { $c.slug as card, $c.title as title, $c.state as state, $c.size as size, $c.risk as risk, $c.est_loc as est_loc, $c.actual_loc as actual_loc, $c.retries as retries, $c.escalations as escalations, $c.opened_at as opened_at, $c.closed_at as closed_at }
+    order { bm25($c.title, $q) }
+    limit 8
+}
+
+query search_cards_in_repo($repo: String, $q: String) @description("Cards of one repository by full-text match on the title, best first.") {
+    match {
+        $r: Repo { slug: $repo }
+        $c: Card
+        $c cardInRepo $r
+    }
+    return { $c.slug as card, $c.title as title, $c.state as state, $c.size as size, $c.risk as risk, $c.est_loc as est_loc, $c.actual_loc as actual_loc, $c.retries as retries, $c.escalations as escalations, $c.opened_at as opened_at, $c.closed_at as closed_at }
+    order { bm25($c.title, $q) }
+    limit 8
+}
+
+query card_repo($card: String) @description("The repository a card is in.") {
+    match {
+        $c: Card { slug: $card }
+        $r: Repo
+        $c cardInRepo $r
+    }
+    return { $r.slug as repo }
+    limit 1
+}
+
+query cards_in_repo($repo: String) @description("The closed cards of a repository, newest first.") {
+    match {
+        $r: Repo { slug: $repo }
+        $c: Card { state: "closed" }
+        $c cardInRepo $r
+    }
+    return { $c.slug as card, $c.title as title, $c.est_loc as est_loc, $c.actual_loc as actual_loc, $c.retries as retries, $c.escalations as escalations, $c.closed_at as closed_at }
+    order { closed_at desc }
+    limit 20
+}
+
+query cards_touching($component: String) @description("The cards whose change touched a component, newest first.") {
+    match {
+        $k: Component { slug: $component }
+        $c: Card
+        $c cardTouches $k
+    }
+    return { $c.slug as card, $c.title as title, $c.state as state, $c.est_loc as est_loc, $c.actual_loc as actual_loc, $c.retries as retries, $c.escalations as escalations, $c.opened_at as opened_at }
+    order { opened_at desc }
+    limit 20
+}
+
+query cards_for_ticket($ticket: String) @description("The cards that came from a tracker item.") {
+    match {
+        $t: Ticket { slug: $ticket }
+        $c: Card
+        $c cardForTicket $t
+    }
+    return { $c.slug as card, $c.title as title, $c.state as state, $c.size as size, $c.risk as risk, $c.est_loc as est_loc, $c.actual_loc as actual_loc, $c.retries as retries, $c.escalations as escalations, $c.opened_at as opened_at, $c.closed_at as closed_at }
+    order { opened_at desc }
+    limit 10
+}
+
+query search_components($q: String) @description("Components by full-text match on the name, best first.") {
+    match {
+        $k: Component
+    }
+    return { $k.slug as component, $k.name as name }
+    order { bm25($k.name, $q) }
+    limit 5
+}
+
+query search_components_in_repo($repo: String, $q: String) @description("Components of one repository by full-text match on the name, best first.") {
+    match {
+        $r: Repo { slug: $repo }
+        $k: Component
+        $k componentInRepo $r
+    }
+    return { $k.slug as component, $k.name as name }
+    order { bm25($k.name, $q) }
+    limit 5
+}
+
+query prs_for_card($card: String) @description("The pull requests opened for a card.") {
+    match {
+        $c: Card { slug: $card }
+        $p: PR
+        $p prForCard $c
+    }
+    return { $p.slug as pr, $p.number as number, $p.title as title, $p.state as state, $p.url as url, $p.merged_at as merged_at }
+    order { number asc }
+    limit 20
+}
+
+query verdicts_for_card($card: String) @description("The decision packs' answers about a card, with the truth when it is known.") {
+    match {
+        $c: Card { slug: $card }
+        $v: Verdict
+        $v verdictOn $c
+    }
+    return { $v.slug as verdict, $v.pack as pack, $v.question as question, $v.answer as answer, $v.confidence as confidence, $v.truth as truth, $v.truth_source as truth_source, $v.decided_at as decided_at }
+    order { decided_at desc }
+    limit 50
+}
+
+query verdicts_of_pack($pack: String) @description("A decision pack's answers with what really happened, newest first.") {
+    match {
+        $v: Verdict { pack: $pack }
+    }
+    return { $v.slug as verdict, $v.question as question, $v.answer as answer, $v.confidence as confidence, $v.truth as truth, $v.truth_source as truth_source, $v.decided_at as decided_at }
+    order { decided_at desc }
+    limit 20
+}

@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type AccessReviewContext, ReleaseNotesContext, type PostmortemContext, type BreachAssessContext, type CapacityContext, type StatusReportContext, QuestionnaireContext, VulnTriageContext, type ChangeExceptionsContext, type ComplianceReviewContext, type DocsDriftContext, type ChatTriageContext, type ForemanContext, type QuestionsContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type Effort, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type PrLinkContext, type ProposeContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
+import { type AdmitContext, type BrainAskContext, type AccessReviewContext, ReleaseNotesContext, type PostmortemContext, type BreachAssessContext, type CapacityContext, type StatusReportContext, QuestionnaireContext, VulnTriageContext, type ChangeExceptionsContext, type ComplianceReviewContext, type DocsDriftContext, type ChatTriageContext, type ForemanContext, type QuestionsContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type Effort, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type PrLinkContext, type ProposeContext, PACKS, PACK_LIMITS, type PackId, type Precedent, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
 import { isDocsOnly } from "./docs-only.ts";
 
 export { PACK_LIMITS };
@@ -344,6 +344,7 @@ export function buildContextPackInput(pack: ContextPackId, context: PackContext,
   const questionnaire: QuestionnaireContext | null = "questionnaire" in context ? context.questionnaire : null;
   const vulns: VulnTriageContext | null = "vulns" in context ? context.vulns : null;
   const release: ReleaseNotesContext | null = "release" in context ? context.release : null;
+  const brainAsk: BrainAskContext | null = "brainAsk" in context ? context.brainAsk : null;
   const plan: PlanContext | null = "plan" in context ? context.plan : null;
   const check: CheckContext | null = "check" in context ? context.check : null;
   const evidence: EvidenceContext | null = "evidence" in context ? context.evidence : null;
@@ -355,6 +356,7 @@ export function buildContextPackInput(pack: ContextPackId, context: PackContext,
   const ticket: TicketContext | null = "ticket" in context ? context.ticket : null;
   const conversation: ConversationContext | null = "conversation" in context ? context.conversation : null;
   const prLink: PrLinkContext | null = "prLink" in context ? context.prLink : null;
+  const admit: AdmitContext | null = "admit" in context ? context.admit : null;
   const propose: ProposeContext | null = "propose" in context ? context.propose : null;
   return {
     schema: 3,
@@ -362,12 +364,28 @@ export function buildContextPackInput(pack: ContextPackId, context: PackContext,
     pack,
     ...(engine ? { engine } : {}),
     attempt: 1,
-    task: { id: pack.replace(/_/g, "-"), title: (ticket ? `${ticket.key}: ${ticket.title}` : null) ?? (conversation ? "Conversation" : null) ?? (prLink ? prLink.pr.title : null) ?? (propose ? `Facts of ${propose.repo}` : null) ?? (foreman ? "Foreman" : null) ?? (exceptions ? `Change exceptions of ${exceptions.repo}, ${exceptions.period}` : null) ?? (access ? `Access review of ${access.org}, ${access.period}` : null) ?? (breach ? `Incident: ${breach.title}` : null) ?? (capacity ? `Capacity of ${capacity.week}` : null) ?? (status ? `Status of ${status.week}` : null) ?? (postmortem ? `Postmortem: ${postmortem.incident.title}` : null) ?? (questionnaire ? `Questionnaire for ${questionnaire.repo}` : null) ?? (vulns ? `Vulnerability alert of ${vulns.repo}` : null) ?? (release ? `Release notes of ${release.repo} ${release.tag}` : null) ?? issue?.title ?? dedup?.title ?? size?.title ?? split?.origin.title ?? plan?.brief.split("\n")[0] ?? (check ? checkTitle(check) : evidence ? evidenceTitle(evidence) : ship ? shipTitle(ship) : "Chat triage"), description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
+    task: { id: pack.replace(/_/g, "-"), title: (ticket ? `${ticket.key}: ${ticket.title}` : null) ?? (conversation ? "Conversation" : null) ?? (prLink ? prLink.pr.title : null) ?? (admit ? "Claim to admit" : null) ?? (propose ? `Facts of ${propose.repo}` : null) ?? (foreman ? "Foreman" : null) ?? (brainAsk ? "Brain ask" : null) ?? (exceptions ? `Change exceptions of ${exceptions.repo}, ${exceptions.period}` : null) ?? (access ? `Access review of ${access.org}, ${access.period}` : null) ?? (breach ? `Incident: ${breach.title}` : null) ?? (capacity ? `Capacity of ${capacity.week}` : null) ?? (status ? `Status of ${status.week}` : null) ?? (postmortem ? `Postmortem: ${postmortem.incident.title}` : null) ?? (questionnaire ? `Questionnaire for ${questionnaire.repo}` : null) ?? (vulns ? `Vulnerability alert of ${vulns.repo}` : null) ?? (release ? `Release notes of ${release.repo} ${release.tag}` : null) ?? issue?.title ?? dedup?.title ?? size?.title ?? split?.origin.title ?? plan?.brief.split("\n")[0] ?? (check ? checkTitle(check) : evidence ? evidenceTitle(evidence) : ship ? shipTitle(ship) : "Chat triage"), description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
     plan: null,
     decisions: [],
     priorFindings: [],
-    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}), ...(foreman ? { foreman } : {}), ...(exceptions ? { exceptions } : {}), ...(access ? { access } : {}), ...(breach ? { breach } : {}), ...(capacity ? { capacity } : {}), ...(status ? { status } : {}), ...(postmortem ? { postmortem } : {}), ...(questionnaire ? { questionnaire } : {}), ...(vulns ? { vulns } : {}), ...(release ? { release } : {}), ...(plan ? { plan } : {}), ...(check ? { check } : {}), ...(evidence ? { evidence } : {}), ...(ship ? { ship } : {}), ...(dedup ? { dedup } : {}), ...(size ? { size } : {}), ...(split ? { split } : {}), ...(ticket ? { ticket } : {}), ...(conversation ? { conversation } : {}), ...(prLink ? { prLink } : {}), ...(propose ? { propose } : {}) },
+    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}), ...(foreman ? { foreman } : {}), ...(brainAsk ? { brainAsk } : {}), ...(exceptions ? { exceptions } : {}), ...(access ? { access } : {}), ...(breach ? { breach } : {}), ...(capacity ? { capacity } : {}), ...(status ? { status } : {}), ...(postmortem ? { postmortem } : {}), ...(questionnaire ? { questionnaire } : {}), ...(vulns ? { vulns } : {}), ...(release ? { release } : {}), ...(plan ? { plan } : {}), ...(check ? { check } : {}), ...(evidence ? { evidence } : {}), ...(ship ? { ship } : {}), ...(dedup ? { dedup } : {}), ...(size ? { size } : {}), ...(split ? { split } : {}), ...(ticket ? { ticket } : {}), ...(conversation ? { conversation } : {}), ...(prLink ? { prLink } : {}), ...(admit ? { admit } : {}), ...(propose ? { propose } : {}) },
     limits: { maxTurns, timeoutMs },
     env: { LUNA_FACTORY: "1" },
   };
+}
+
+/** Where a decision pack's precedents come from: its own earlier answers on cards like `title`, for the repository and card asking. */
+export type PrecedentLookup = (pack: PackId, title: string, repoPath: string | null, taskId: string | null) => Promise<Precedent[]>;
+
+/** A decision pack's input with its precedents (RFC 0010, "Help agents decide"). No lookup, a pack that is not a decision pack, an empty answer
+ *  or a lookup that throws leaves the input as built: the key is never there empty, and a failure never fails the decision. */
+export async function withPrecedents(input: StageInput, lookup: PrecedentLookup | undefined, repoPath: string | null, taskId: string | null, log: (line: string) => void): Promise<StageInput> {
+  if (!lookup || PACKS[input.pack as PackId]?.kind !== "decision") return input;
+  try {
+    const precedents = await lookup(input.pack as PackId, input.task.title, repoPath, taskId);
+    return precedents.length > 0 ? { ...input, context: { ...input.context, precedents } } : input;
+  } catch (thrown) {
+    log(`run: ${input.pack} runs without precedents: ${thrown instanceof Error ? thrown.message : String(thrown)}`);
+    return input;
+  }
 }

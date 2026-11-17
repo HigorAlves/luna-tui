@@ -1,0 +1,43 @@
+{
+  "schema": 3,
+  "stage": "memory_admit",
+  "pack": "memory_admit",
+  "attempt": 1,
+  "task": {
+    "id": "always-skip-lint-for-docs",
+    "title": "always-skip-lint-for-docs",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "admit": {
+      "claim": {
+        "statement": "Skip the lint for docs changes.",
+        "quote": "reviewer: lint is slow, skip it for docs-only PRs",
+        "kind": "decision",
+        "scope": "repo",
+        "extractor": "reviewing_memory"
+      },
+      "source": {
+        "kind": "card",
+        "title": "Tidy the contributing guide",
+        "excerpt": "History: reviewer: lint is slow, skip it for docs-only PRs. The author ran the lint anyway; it passed in 41 seconds."
+      },
+      "similar": []
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "relation_1.choice",
+      "value": "unrelated"
+    },
+    {
+      "kind": "equals",
+      "path": "relation_2.choice",
+      "value": "duplicate"
+    },
+    {
+      "kind": "equals",
+      "path": "relation_3.choice",
+      "value": "unrelated"
+    }
+  ],
+  "rubric": "The claim says what similar claim 2 already says, in other words.",
+  "label": {
+    "relation_1": {
+      "choice": "unrelated"
+    },
+    "relation_2": {
+      "choice": "duplicate"
+    },
+    "relation_3": {
+      "choice": "unrelated"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "relation_1": "anything else, and always when there is no similar claim here",
+      "relation_2": "similar claim 2 already says the same thing",
+      "relation_3": "anything else, and always when there is no similar claim here"
+    },
+    "why": "Seeding before the e2e suite and needing the seed command before the app starts are the same fact. Similar claims 1 and 3 are about unit test speed and the build cache.",
+    "ruledOut": [
+      {
+        "question": "relation_1",
+        "label": "duplicate",
+        "why": "The similar claim is about another subject, so the claim neither repeats, refines nor opposes it (not duplicate)."
+      },
+      {
+        "question": "relation_1",
+        "label": "refines",
+        "why": "The similar claim is about another subject, so the claim neither repeats, refines nor opposes it (not refines)."
+      },
+      {
+        "question": "relation_1",
+        "label": "contradicts",
+        "why": "The similar claim is about another subject, so the claim neither repeats, refines nor opposes it (not contradicts)."
+      },
+      {
+        "question": "relation_2",
+        "label": "unrelated",
+        "why": "Both statements are about seeding before the e2e suite, so they are about the same subject."
+      },
+      {
+        "question": "relation_2",
+        "label": "refines",
+        "why": "The claim adds no detail to similar claim 2: it says the same thing."
+      },
+      {
+        "question": "relation_2",
+        "label": "contradicts",
+        "why": "The claim and similar claim 2 agree, so the claim does not oppose it."
+      },
+      {
+        "question": "relation_3",
+        "label": "duplicate",
+        "why": "The similar claim is about another subject, so the claim neither repeats, refines nor opposes it (not duplicate)."
+      },
+      {
+        "question": "relation_3",
+        "label": "refines",
+        "why": "The similar claim is about another subject, so the claim neither repeats, refines nor opposes it (not refines)."
+      },
+      {
+        "question": "relation_3",
+        "label": "contradicts",
+        "why": "The similar claim is about another subject, so the claim neither repeats, refines nor opposes it (not contradicts)."
+      }
+    ],
+    "second": {
+      "label": {
+        "relation_1": {
+          "choice": "unrelated"
+        },
+        "relation_2": {
+          "choice": "duplicate"
+        },
+        "relation_3": {
+          "choice": "unrelated"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

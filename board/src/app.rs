@@ -25,6 +25,7 @@ use crate::digest::{self, DigestState};
 use crate::economy::{Economy, EconomyState, Row, RowKind};
 use crate::inbox::{self, InboxState, Split};
 use crate::keys::{self, Scope};
+use crate::memory::MemoryState;
 use crate::model::now_secs;
 use crate::notify::{self, Notice};
 use crate::pulls::{self, PrKey, PrSplit, PullsState};
@@ -49,6 +50,8 @@ use crate::{
 /// Two clicks on one file row within this long open it.
 const DOUBLE_CLICK: Duration = Duration::from_millis(500);
 const INFO_TOAST_FOR: Duration = Duration::from_secs(3);
+/// How far back the Memory view's "since last week" page looks.
+const MEMORY_DIGEST_DAYS: u32 = 7;
 /// How long a prefix key (`g`, `z`) waits before the footer lists its second keys.
 pub const WHICH_KEY_DELAY: Duration = Duration::from_millis(400);
 /// The PATCH body of a done tap: `done: true`, and the reason a draft was dismissed when there is one.
@@ -367,6 +370,7 @@ pub enum View {
     Economy,
     Tickets,
     Compliance,
+    Memory,
     Slack,
 }
 
@@ -484,6 +488,8 @@ pub enum Mode {
     },
     /// `m`: ask the foreman, then walk the actions it suggests. Each runs on its own `y`.
     Foreman(crate::foreman::State),
+    /// `b`: ask the company brain a question and read its reply with the nodes it cites.
+    Brain(crate::brain::State),
     ConfirmDelete(String),
     ConfirmAbort(String),
     ConfirmWorktree(String),
@@ -619,6 +625,13 @@ pub enum Mode {
     },
     /// `J` on a linked ticket: one yes, then the link is dropped (the issue stays).
     ConfirmJiraUnlink(String),
+    /// `a` on a rejected claim or `x` on a verified one in Memory: one yes, then the person's new decision replaces the old
+    /// one. `statement` is the claim on one line, for the question.
+    ConfirmClaim {
+        id: String,
+        verify: bool,
+        statement: String,
+    },
     /// `E` in the popup's Engines section: the engines `pack` may run on for ticket `id`;
     /// enter sets the one under `cursor`, esc goes back to the popup.
     EnginePicker {
@@ -763,6 +776,12 @@ pub struct App {
     /// The Compliance view, open while this is `Some`, and the drafts it fetched when it opened, in list order.
     pub compliance: Option<ComplianceState>,
     pub compliance_items: Vec<ComplianceDraft>,
+    /// The Memory view, open while this is `Some`, with the brain's claims it fetched.
+    pub memory: Option<MemoryState>,
+    /// The last question number the brain popup sent: a reply counts only for the popup that holds its number.
+    brain_seq: u64,
+    /// The last fetch number of the Memory view, kept over closes so an answer for a closed view never fits the next one.
+    memory_seq: u64,
     /// A dispatch waiting for a clone to land: the PR's key and the action to run then.
     pending_dispatch: Option<(String, PrAction)>,
     /// A full repaint is due (`ctrl-l`): the terminal may show cells the last frame did not draw.
@@ -911,6 +930,9 @@ impl App {
             ticket_items: Vec::new(),
             compliance: None,
             compliance_items: Vec::new(),
+            memory: None,
+            brain_seq: 0,
+            memory_seq: 0,
             pending_dispatch: None,
             redraw: false,
             clones_running: BTreeSet::new(),
@@ -1243,6 +1265,14 @@ impl App {
                     self.slack_catalog_pending = false;
                 }
                 Incoming::Foreman(result) => self.take_foreman(result),
+                Incoming::Brain { seq, result } => self.take_brain(seq, result),
+                Incoming::MemoryClaims {
+                    status,
+                    seq,
+                    result,
+                } => self.take_memory_claims(status, seq, result),
+                Incoming::MemoryDigest { seq, result } => self.take_memory_digest(seq, result),
+                Incoming::MemoryDecided { id, result } => self.take_memory_decided(&id, result),
             }
         }
     }
@@ -2151,6 +2181,7 @@ impl App {
             (View::Economy, self.economy.is_some()),
             (View::Tickets, self.tickets.is_some()),
             (View::Compliance, self.compliance.is_some()),
+            (View::Memory, self.memory.is_some()),
             (View::Slack, self.slack.is_some()),
         ]
         .into_iter()
@@ -2168,6 +2199,7 @@ impl App {
         self.economy = None;
         self.tickets = None;
         self.compliance = None;
+        self.memory = None;
         self.slack = None;
     }
 
@@ -3000,6 +3032,9 @@ impl App {
             Mode::Foreman(state) if state.phase == crate::foreman::Phase::Typing => {
                 state.input.push_str(&flat())
             }
+            Mode::Brain(state) if state.phase == crate::brain::Phase::Typing => {
+                state.type_str(&flat())
+            }
             _ => {}
         }
     }
@@ -3018,6 +3053,7 @@ impl App {
                 Some(View::Economy) => return self.handle_economy(key),
                 Some(View::Tickets) => return self.handle_tickets(key),
                 Some(View::Compliance) => return self.handle_compliance(key),
+                Some(View::Memory) => return self.handle_memory(key),
                 Some(View::Slack) => return self.handle_slack(key),
                 None => {}
             }
@@ -3044,6 +3080,7 @@ impl App {
             Mode::Reject { .. } => self.handle_reject(key),
             Mode::EvidenceNote { .. } => self.handle_evidence_note(key),
             Mode::Foreman(_) => self.handle_foreman(key),
+            Mode::Brain(_) => self.handle_brain(key),
             Mode::ConfirmApprove(_) => self.handle_confirm_approve(key),
             Mode::ConfirmDelete(id) | Mode::ConfirmAbort(id) | Mode::ConfirmWorktree(id) => {
                 let id = id.clone();
@@ -3076,6 +3113,7 @@ impl App {
             Mode::SlackActions { .. } => self.handle_slack_actions(key),
             Mode::JiraLink { .. } => self.handle_jira_link(key),
             Mode::ConfirmJiraUnlink(_) => self.handle_confirm_jira_unlink(key),
+            Mode::ConfirmClaim { .. } => self.handle_confirm_claim(key),
             Mode::EnginePicker { .. } => self.handle_engine_picker(key),
             Mode::Help { .. } => self.handle_help(key),
         }
@@ -3376,7 +3414,7 @@ impl App {
     #[cfg(test)]
     pub(crate) const HANDLED_INBOX: &[&str] = &[
         "esc", "I", "q", "?", "j", "k", "l", "h", "1-5", "enter", "A", "a", "S", "e", "R", "r",
-        "N", "u", "X", "w", "Z", "C", "d", "f", "o", "J", "T", "p", "m",
+        "N", "u", "X", "w", "Z", "C", "d", "f", "o", "J", "T", "p", "m", "b",
     ];
 
     /// The Inbox's keys: move, switch split, act in place, open, approve the split.
@@ -3404,6 +3442,10 @@ impl App {
             }
             KeyCode::Char('m') => {
                 self.open_foreman();
+                return Outcome::Continue;
+            }
+            KeyCode::Char('b') => {
+                self.open_brain();
                 return Outcome::Continue;
             }
             KeyCode::Char('j') | KeyCode::Down => {
@@ -3643,6 +3685,213 @@ impl App {
                     Err(error) => self.notify(format!("backlog: {error}"), true),
                 }
             }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// Opens the Memory view and asks the machine for the claims that wait.
+    fn open_memory(&mut self) {
+        self.close_views();
+        self.memory = Some(MemoryState::default());
+        self.fetch_memory();
+    }
+
+    /// Fetches the shown page off the UI thread: the status's claims, which come back as `Incoming::MemoryClaims`, or the
+    /// week's digest, as `Incoming::MemoryDigest`.
+    fn fetch_memory(&mut self) {
+        let Some(state) = self.memory.as_mut() else {
+            return;
+        };
+        let status = state.status;
+        self.memory_seq += 1;
+        let seq = self.memory_seq;
+        state.seq = seq;
+        let machine = self.machine.clone();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            if status == crate::memory::Status::Week {
+                let _ = tx.send(Incoming::MemoryDigest {
+                    seq,
+                    result: machine.brain_digest(MEMORY_DIGEST_DAYS),
+                });
+                // The digest carries no stats, so the week page also asks for the waiting claims and keeps only their
+                // numbers.
+                let waiting = crate::memory::Status::Unverified;
+                let _ = tx.send(Incoming::MemoryClaims {
+                    status: waiting,
+                    seq,
+                    result: machine.brain_claims(waiting.wire()),
+                });
+            } else {
+                let _ = tx.send(Incoming::MemoryClaims {
+                    status,
+                    seq,
+                    result: machine.brain_claims(status.wire()),
+                });
+            }
+        });
+    }
+
+    /// The digest arrived: it shows if the view is still on that page. A failure is a toast and the pane says why, as for a list.
+    fn take_memory_digest(&mut self, seq: u64, result: Result<crate::memory::Digest, String>) {
+        let Some(state) = self
+            .memory
+            .as_mut()
+            .filter(|s| s.status == crate::memory::Status::Week && s.seq == seq)
+        else {
+            return;
+        };
+        match result {
+            Ok(digest) => state.take_digest(digest),
+            Err(error) => {
+                state.error = Some(error.clone());
+                self.notify(format!("memory: {error}"), true);
+            }
+        }
+    }
+
+    /// The claims of `status` arrived: they show if the view is still on that status. A failure is a toast, and the list stays as it was.
+    fn take_memory_claims(
+        &mut self,
+        status: crate::memory::Status,
+        seq: u64,
+        result: Result<crate::memory::ClaimList, String>,
+    ) {
+        let Some(state) = self.memory.as_mut().filter(|s| s.seq == seq) else {
+            return;
+        };
+        // The week page also asks for the waiting claims, for the header's numbers; their list is not its rows.
+        if state.status == crate::memory::Status::Week
+            && status == crate::memory::Status::Unverified
+        {
+            if let Ok(list) = result {
+                state.stats = list.stats;
+            }
+            return;
+        }
+        if state.status != status {
+            return;
+        }
+        match result {
+            Ok(list) => state.take(list),
+            Err(error) => {
+                state.error = Some(error.clone());
+                self.notify(format!("memory: {error}"), true);
+            }
+        }
+    }
+
+    /// `a` or `x` on the selected claim. A claim that waits is decided at once; one that was decided asks first, because the
+    /// decision undoes the last one.
+    fn decide_memory(&mut self, verify: bool) {
+        let Some(decision) = self.memory.as_ref().and_then(|s| s.decision(verify)) else {
+            return;
+        };
+        if decision.undoes {
+            self.mode = Mode::ConfirmClaim {
+                id: decision.id,
+                verify,
+                statement: decision.statement,
+            };
+        } else {
+            self.send_memory_decision(decision.id, verify);
+        }
+    }
+
+    /// The confirm of a changed decision: y sends it, n and esc leave the claim as it is.
+    fn handle_confirm_claim(&mut self, key: KeyEvent) -> Outcome {
+        match key.code {
+            KeyCode::Char('y') => {
+                if let Mode::ConfirmClaim { id, verify, .. } =
+                    std::mem::replace(&mut self.mode, Mode::Normal)
+                {
+                    self.send_memory_decision(id, verify);
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Esc => self.mode = Mode::Normal,
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// Sends the decision on claim `id` off the UI thread; the answer comes back as `Incoming::MemoryDecided`.
+    fn send_memory_decision(&mut self, id: String, verify: bool) {
+        let Some(state) = self.memory.as_mut() else {
+            return;
+        };
+        state.pending = Some(id.clone());
+        let machine = self.machine.clone();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let result = if verify {
+                machine.brain_claim_verify(&id)
+            } else {
+                machine.brain_claim_reject(&id, None)
+            };
+            let _ = tx.send(Incoming::MemoryDecided { id, result });
+        });
+    }
+
+    /// The machine answered a decision: the claim leaves the list and the stats are fetched again. A claim somebody decided first
+    /// only refreshes the list; any other error is a toast. Only the answer for the pending claim releases the lock.
+    fn take_memory_decided(
+        &mut self,
+        id: &str,
+        result: Result<crate::memory::Claim, crate::memory::DecideError>,
+    ) {
+        let Some(state) = self.memory.as_mut() else {
+            return;
+        };
+        match result {
+            Ok(_) => {
+                state.decided(id);
+                self.fetch_memory();
+            }
+            Err(error) if error.not_waiting() => {
+                if state.pending.as_deref() == Some(id) {
+                    state.pending = None;
+                }
+                self.fetch_memory();
+            }
+            Err(error) => {
+                if state.pending.as_deref() == Some(id) {
+                    state.pending = None;
+                }
+                self.notify(format!("memory: {error}"), true);
+            }
+        }
+    }
+
+    /// The keys `handle_memory` matches.
+    #[cfg(test)]
+    pub(crate) const HANDLED_MEMORY: &[&str] =
+        &["esc", "L", "q", "?", "j", "k", "h", "l", "r", "a", "x"];
+
+    /// The Memory view's keys: move, switch page, verify, reject, refetch.
+    fn handle_memory(&mut self, key: KeyEvent) -> Outcome {
+        let Some(state) = self.memory.as_mut() else {
+            return Outcome::Continue;
+        };
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('L') | KeyCode::Char('q') => self.memory = None,
+            KeyCode::Char('?') => self.open_help(),
+            KeyCode::Char('j') | KeyCode::Down => {
+                state.cursor = (state.cursor + 1).min(state.len().saturating_sub(1));
+            }
+            KeyCode::Char('k') | KeyCode::Up => state.cursor = state.cursor.saturating_sub(1),
+            KeyCode::Char(c @ ('h' | 'l')) => {
+                let status = if c == 'l' {
+                    state.status.next()
+                } else {
+                    state.status.prev()
+                };
+                state.show(status);
+                self.fetch_memory();
+            }
+            KeyCode::Char('r') => self.fetch_memory(),
+            KeyCode::Char('a') => self.decide_memory(true),
+            KeyCode::Char('x') => self.decide_memory(false),
             _ => {}
         }
         Outcome::Continue
@@ -5379,6 +5628,7 @@ impl App {
         "V",
         "?",
         "m",
+        "b",
         ":",
         "esc",
         "enter",
@@ -5401,6 +5651,7 @@ impl App {
         "p",
         "K",
         "M",
+        "L",
     ];
 
     fn handle_normal(&mut self, key: KeyEvent) -> Outcome {
@@ -5471,6 +5722,7 @@ impl App {
             KeyCode::Char('$') => self.open_economy(),
             KeyCode::Char('K') => self.open_tickets(),
             KeyCode::Char('M') => self.open_compliance(),
+            KeyCode::Char('L') => self.open_memory(),
             KeyCode::Char('S') => self.open_slack(),
             KeyCode::Char('v') => {
                 // Toggle: remove it if it was marked, else mark it.
@@ -5494,6 +5746,7 @@ impl App {
             }
             KeyCode::Char('?') => self.open_help(),
             KeyCode::Char('m') => self.open_foreman(),
+            KeyCode::Char('b') => self.open_brain(),
             KeyCode::Char(':') => {
                 self.mode = Mode::Command {
                     text: String::new(),
@@ -6470,6 +6723,7 @@ impl App {
         "economy",
         "tickets",
         "compliance",
+        "memory",
         "ticket-edit",
         "context",
         "dedup",
@@ -6612,6 +6866,7 @@ impl App {
             "economy" => self.open_economy(),
             "tickets" => self.open_tickets(),
             "compliance" => self.open_compliance(),
+            "memory" => self.open_memory(),
             "ticket-edit" => self.ticket_edit(rest),
             "context" => self.give_context(rest),
             "dedup" => self.answer_dedup(rest),
@@ -6767,6 +7022,71 @@ impl App {
             },
         }
         Outcome::Continue
+    }
+
+    /// `b`: the company brain's prompt over the board or the Inbox.
+    fn open_brain(&mut self) {
+        self.mode = Mode::Brain(crate::brain::State::new());
+    }
+
+    /// The brain's popup: type a question and enter sends it; the reply shows under it, and `i` asks another.
+    fn handle_brain(&mut self, key: KeyEvent) -> Outcome {
+        use crate::brain::Phase;
+        let Mode::Brain(state) = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match state.phase {
+            Phase::Typing => match key.code {
+                KeyCode::Char(c) => state.type_str(c.encode_utf8(&mut [0; 4])),
+                KeyCode::Backspace => {
+                    state.error = None;
+                    state.input.pop();
+                }
+                KeyCode::Esc if state.reply.is_none() => self.mode = Mode::Normal,
+                KeyCode::Esc => state.phase = Phase::Answer,
+                KeyCode::Enter => {
+                    if let Some(question) = state.ask() {
+                        self.brain_seq += 1;
+                        let seq = self.brain_seq;
+                        state.seq = seq;
+                        let machine = self.machine.clone();
+                        let tx = self.tx.clone();
+                        thread::spawn(move || {
+                            let result = machine.brain_ask(&question);
+                            let _ = tx.send(Incoming::Brain { seq, result });
+                        });
+                    }
+                }
+                _ => {}
+            },
+            // The reply is on its way; esc leaves, and the reply is dropped when it lands.
+            Phase::Waiting => {
+                if key.code == KeyCode::Esc {
+                    self.mode = Mode::Normal;
+                }
+            }
+            Phase::Answer => match key.code {
+                KeyCode::Char('i') => state.phase = Phase::Typing,
+                KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+                _ => {}
+            },
+        }
+        Outcome::Continue
+    }
+
+    /// The brain answered question number `seq`: its reply shows, unless the popup was closed meanwhile or now waits on a
+    /// later question.
+    fn take_brain(&mut self, seq: u64, result: Result<crate::brain::Reply, String>) {
+        let Mode::Brain(state) = &mut self.mode else {
+            return;
+        };
+        if state.phase != crate::brain::Phase::Waiting || state.seq != seq {
+            return;
+        }
+        match result {
+            Ok(reply) => state.answered(reply),
+            Err(message) => state.failed(message),
+        }
     }
 
     /// The foreman answered: its reply and actions show, unless the popup was closed meanwhile.
@@ -7464,6 +7784,7 @@ pub(crate) mod handled {
     pub(crate) const ECONOMY: &[&str] = App::HANDLED_ECONOMY;
     pub(crate) const TICKETS: &[&str] = App::HANDLED_TICKETS;
     pub(crate) const COMPLIANCE: &[&str] = App::HANDLED_COMPLIANCE;
+    pub(crate) const MEMORY: &[&str] = App::HANDLED_MEMORY;
     pub(crate) const SLACK: &[&str] = App::HANDLED_SLACK;
     pub(crate) const WATCHES: &[&str] = App::HANDLED_WATCHES;
     pub(crate) const DIGEST: &[&str] = App::HANDLED_DIGEST;
@@ -15586,5 +15907,2125 @@ mod foreman_tests {
             dropped: vec![],
         }));
         assert!(matches!(app.mode, Mode::Normal));
+    }
+}
+
+#[cfg(test)]
+mod brain_tests {
+    use super::confirm_tests::{PostBodies, body_recording_machine};
+    use super::*;
+    use crate::brain::{Cite, Phase, Reply};
+    use crate::testkit::{dead_machine, plan_gate_app, render};
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    /// The bodies posted to `path`; the call runs on its own thread, so this waits a moment for it.
+    fn bodies_posted(seen: &PostBodies, path: &str) -> Vec<serde_json::Value> {
+        for _ in 0..100 {
+            let found: Vec<_> = seen
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(p, _)| p == path)
+                .map(|(_, body)| body.clone())
+                .collect();
+            if !found.is_empty() {
+                return found;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        Vec::new()
+    }
+
+    fn type_in(app: &mut App, text: &str) {
+        for c in text.chars() {
+            press(app, KeyCode::Char(c));
+        }
+    }
+
+    fn reply(known: bool) -> Reply {
+        Reply {
+            known,
+            reply: if known {
+                "The egress proxy card was estimated at 300 lines and changed 412.".into()
+            } else {
+                "The brain holds nothing about that.".into()
+            },
+            cites: vec![Cite {
+                slug: "card:6f1c2a9e".into(),
+                kind: "card".into(),
+                text:
+                    "Sandbox egress proxy · state closed · estimated 300 lines · actual 412 lines"
+                        .into(),
+            }],
+            dropped: vec![],
+        }
+    }
+
+    fn state(app: &App) -> &crate::brain::State {
+        let Mode::Brain(state) = &app.mode else {
+            panic!("the popup is not open")
+        };
+        state
+    }
+
+    /// The two views the key opens the popup from: the board, and the Inbox over it.
+    fn hosts() -> Vec<(&'static str, App)> {
+        let board = plan_gate_app();
+        let mut inbox = plan_gate_app();
+        inbox.mode = Mode::Normal;
+        press(&mut inbox, KeyCode::Char('I'));
+        assert!(inbox.inbox.is_some());
+        let mut board = board;
+        board.mode = Mode::Normal;
+        vec![("board", board), ("inbox", inbox)]
+    }
+
+    /// The question typed and sent on a machine that answers nothing useful, then answered by hand.
+    fn answered(app: &mut App, known: bool) {
+        press(app, KeyCode::Char('b'));
+        type_in(app, "how big was the proxy?");
+        press(app, KeyCode::Enter);
+        let seq = state(app).seq;
+        app.take_brain(seq, Ok(reply(known)));
+    }
+
+    #[test]
+    fn b_opens_the_brain_from_the_board_and_from_the_inbox() {
+        for (host, mut app) in hosts() {
+            press(&mut app, KeyCode::Char('b'));
+            assert!(
+                matches!(&app.mode, Mode::Brain(s) if s.phase == Phase::Typing),
+                "{host}"
+            );
+            let screen = render(&mut app, 120, 40);
+            assert!(screen.contains("Brain"), "{host}: {screen}");
+            assert!(screen.contains("ask:"), "{host}: {screen}");
+            assert!(screen.contains("enter  ask"), "{host}: {screen}");
+            press(&mut app, KeyCode::Esc);
+            assert!(matches!(app.mode, Mode::Normal), "{host}");
+        }
+    }
+
+    #[test]
+    fn typing_shows_in_the_box_and_enter_waits_and_sends_the_question() {
+        let (machine, seen) = body_recording_machine();
+        let mut app = plan_gate_app();
+        app.mode = Mode::Normal;
+        app.machine = machine;
+        press(&mut app, KeyCode::Char('b'));
+        type_in(&mut app, "how big was the proxy?");
+        let screen = render(&mut app, 120, 40);
+        assert!(screen.contains("how big was the proxy?"), "{screen}");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(state(&app).phase, Phase::Waiting);
+        let screen = render(&mut app, 120, 40);
+        assert!(screen.contains("The brain is reading"), "{screen}");
+        assert!(screen.contains("esc  close"), "{screen}");
+        let sent = bodies_posted(&seen, "/brain/ask");
+        assert_eq!(
+            sent,
+            vec![serde_json::json!({ "question": "how big was the proxy?" })]
+        );
+    }
+
+    #[test]
+    fn an_empty_question_stays_in_the_box() {
+        let mut app = App::new(dead_machine());
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(state(&app).phase, Phase::Typing);
+    }
+
+    #[test]
+    fn the_answer_shows_the_question_the_reply_and_a_row_per_cite() {
+        for (host, mut app) in hosts() {
+            answered(&mut app, true);
+            assert_eq!(state(&app).phase, Phase::Answer, "{host}");
+            let screen = render(&mut app, 120, 40);
+            for want in [
+                "how big was the proxy?",
+                "estimated at 300 lines and changed 412",
+                "card:6f1c2a9e",
+                "Sandbox egress proxy",
+                "i  ask more",
+            ] {
+                assert!(screen.contains(want), "{host}: {want}: {screen}");
+            }
+            let question = screen
+                .lines()
+                .position(|l| l.contains("how big was"))
+                .unwrap();
+            let cite = screen
+                .lines()
+                .position(|l| l.contains("card:6f1c2a9e"))
+                .unwrap();
+            assert!(
+                question < cite,
+                "{host}: the answer shows under the question"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cite_is_cut_to_the_popups_width() {
+        let mut app = plan_gate_app();
+        app.mode = Mode::Normal;
+        answered(&mut app, true);
+        let screen = render(&mut app, 60, 30);
+        let row = screen
+            .lines()
+            .find(|l| l.contains("card:6f1c2a9e"))
+            .unwrap();
+        assert!(row.contains('…'), "{row}");
+        assert!(!screen.contains("actual 412 lines"), "{screen}");
+    }
+
+    #[test]
+    fn a_reply_that_knows_nothing_shows_muted_and_no_cites() {
+        for (host, mut app) in hosts() {
+            answered(&mut app, false);
+            let screen = render(&mut app, 120, 40);
+            assert!(
+                screen.contains("The brain holds nothing about that."),
+                "{host}: {screen}"
+            );
+            assert!(!screen.contains("card:6f1c2a9e"), "{host}: {screen}");
+            assert!(!screen.contains("Sandbox egress proxy"), "{host}: {screen}");
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+            terminal.draw(|frame| crate::ui::draw(frame, &app)).unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let (x, y) = (0..40u16)
+                .flat_map(|y| (0..120u16).map(move |x| (x, y)))
+                .find(|&(x, y)| {
+                    buffer[(x, y)].symbol() == "T"
+                        && buffer[(x + 1, y)].symbol() == "h"
+                        && buffer[(x + 2, y)].symbol() == "e"
+                        && buffer[(x + 4, y)].symbol() == "b"
+                })
+                .expect("the reply is on screen");
+            assert_eq!(
+                buffer[(x, y)].fg,
+                crate::theme::SUBTEXT0,
+                "{host}: the reply is secondary text"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_question_shows_the_message_and_comes_back_to_the_box() {
+        for (host, mut app) in hosts() {
+            press(&mut app, KeyCode::Char('b'));
+            type_in(&mut app, "hello");
+            press(&mut app, KeyCode::Enter);
+            let message =
+                "the company brain is off: set LUNA_BRAIN=1 on the machine and restart it";
+            let seq = state(&app).seq;
+            app.take_brain(seq, Err(message.into()));
+            assert_eq!(state(&app).phase, Phase::Typing, "{host}");
+            assert_eq!(state(&app).input, "hello", "{host}");
+            let screen = render(&mut app, 120, 40);
+            assert!(screen.contains(message), "{host}: {screen}");
+            press(&mut app, KeyCode::Char('!'));
+            let screen = render(&mut app, 120, 40);
+            assert!(
+                !screen.contains(message),
+                "{host}: typing clears it: {screen}"
+            );
+        }
+    }
+
+    #[test]
+    fn esc_closes_from_every_phase_and_i_asks_another_question() {
+        let mut app = App::new(dead_machine());
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        press(&mut app, KeyCode::Char('b'));
+        type_in(&mut app, "q");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal), "esc leaves while waiting");
+        answered(&mut app, true);
+        press(&mut app, KeyCode::Char('i'));
+        assert_eq!(state(&app).phase, Phase::Typing);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(
+            state(&app).phase,
+            Phase::Answer,
+            "esc goes back to the answer"
+        );
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn the_reply_of_a_closed_question_never_shows_under_the_next_one() {
+        let mut app = App::new(dead_machine());
+        press(&mut app, KeyCode::Char('b'));
+        type_in(&mut app, "Q1");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('b'));
+        type_in(&mut app, "Q2");
+        press(&mut app, KeyCode::Enter);
+        let mut slow = reply(true);
+        slow.reply = "the answer to Q1".into();
+        app.take_brain(1, Ok(slow));
+        assert_eq!(
+            state(&app).phase,
+            Phase::Waiting,
+            "Q1's reply is not Q2's answer"
+        );
+        let mut own = reply(true);
+        own.reply = "the answer to Q2".into();
+        app.take_brain(2, Ok(own));
+        assert_eq!(state(&app).question, "Q2");
+        assert_eq!(
+            state(&app).reply.as_ref().unwrap().reply,
+            "the answer to Q2"
+        );
+    }
+
+    #[test]
+    fn a_reply_after_the_popup_closed_or_moved_on_is_ignored() {
+        let mut app = App::new(dead_machine());
+        press(&mut app, KeyCode::Char('b'));
+        type_in(&mut app, "q");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Esc);
+        app.take_brain(1, Ok(reply(true)));
+        assert!(matches!(app.mode, Mode::Normal));
+        app.take_brain(1, Err("late".into()));
+        assert!(app.toast.is_none());
+        answered(&mut app, true);
+        press(&mut app, KeyCode::Char('i'));
+        let seq = state(&app).seq;
+        app.take_brain(seq, Ok(reply(false)));
+        assert!(
+            state(&app).reply.as_ref().unwrap().known,
+            "a reply in Typing is dropped"
+        );
+    }
+
+    #[test]
+    fn a_pasted_question_lands_in_the_box() {
+        let mut app = App::new(dead_machine());
+        press(&mut app, KeyCode::Char('b'));
+        app.handle_paste("how big\nwas it?");
+        assert_eq!(state(&app).input, "how big was it?");
+    }
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use std::{
+        io::{BufRead, BufReader, Read, Write},
+        net::TcpListener,
+        sync::{Arc, Mutex},
+    };
+
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::memory::Status;
+    use crate::testkit::{dead_machine, plan_gate_app, render};
+
+    type Seen = Arc<Mutex<Vec<(String, Value)>>>;
+
+    /// A machine that answers each call with what `answer` says for its `METHOD /path?query` and body, and records the calls.
+    fn machine_with(
+        answer: impl Fn(&str, &Value) -> (&'static str, String) + Send + 'static,
+    ) -> (Machine, Seen) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+        let record = seen.clone();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut request = String::new();
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    if request.is_empty() {
+                        let mut parts = line.split_whitespace();
+                        request = format!(
+                            "{} {}",
+                            parts.next().unwrap_or_default(),
+                            parts.next().unwrap_or_default()
+                        );
+                    }
+                }
+                let mut raw = vec![0; length];
+                let _ = reader.read_exact(&mut raw);
+                let body: Value = serde_json::from_slice(&raw).unwrap_or_default();
+                let (status, reply) = answer(&request, &body);
+                record.lock().unwrap().push((request, body));
+                let reply = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{reply}",
+                    reply.len()
+                );
+                let _ = reader.into_inner().write_all(reply.as_bytes());
+            }
+        });
+        (Machine::at(&format!("http://{addr}")), seen)
+    }
+
+    fn requests(seen: &Seen) -> Vec<String> {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .map(|(r, _)| r.clone())
+            .collect()
+    }
+
+    fn count(seen: &Seen, request: &str) -> usize {
+        requests(seen).iter().filter(|r| *r == request).count()
+    }
+
+    const WAITING: &str = "GET /brain/claims?status=unverified";
+
+    fn claim(id: &str, statement: &str, extra: Value) -> Value {
+        let mut claim = json!({
+            "id": id, "repo": "luna-tui-1a2b3c4d", "repoPath": "/Users/me/luna-tui", "taskId": "6f1c2a9e",
+            "statement": statement, "quote": format!("the log says: {statement}"), "kind": "fact", "scope": "repo",
+            "source": { "kind": "card", "ref": "6f1c2a9e", "title": "Wire the e2e start mode" },
+            "speaker": null, "speakerTrust": "machine", "extractor": "reviewing_memory",
+            "status": "unverified", "refusal": null, "tier": "low", "proposed": "verify",
+            "reasons": [], "durable": true, "contradicts": [], "recordId": "rec-1",
+            "decidedBy": null, "decidedAt": null, "createdAt": "2026-11-16T12:00:00.000Z"
+        });
+        for (key, value) in extra.as_object().into_iter().flatten() {
+            claim[key] = value.clone();
+        }
+        claim
+    }
+
+    /// Three waiting claims: a low one Jev would verify, a high one it would reject, one it never judged.
+    fn waiting() -> Vec<Value> {
+        vec![
+            claim(
+                "c1",
+                "The e2e suite needs the seed command before the app starts.",
+                json!({}),
+            ),
+            claim(
+                "c2",
+                "Billing retries are idempotent.",
+                json!({"tier": "high", "proposed": "reject", "kind": "risk", "scope": "org",
+                    "reasons": ["applies to the whole org", "contradicts a verified claim"]}),
+            ),
+            claim(
+                "c3",
+                "Deploys are frozen on Fridays.",
+                json!({"tier": null, "proposed": null, "kind": "decision"}),
+            ),
+        ]
+    }
+
+    fn list(claims: &[Value], missed: u64) -> (&'static str, String) {
+        (
+            "200 OK",
+            json!({"claims": claims, "stats": {"waiting": 3, "decided": 14, "agreed": 12, "missed": missed}})
+                .to_string(),
+        )
+    }
+
+    fn failing(code: &str, message: &str, status: &'static str) -> (&'static str, String) {
+        (
+            status,
+            json!({"error": code, "message": message}).to_string(),
+        )
+    }
+
+    /// A machine whose waiting list is `waiting()` minus the claims it was told to verify or reject.
+    fn brain() -> (Machine, Seen) {
+        let gone = Arc::new(Mutex::new(Vec::<String>::new()));
+        machine_with(move |request, _| {
+            let verb = request.rsplit('/').next().unwrap_or_default();
+            if request.starts_with("POST /brain/claims/") {
+                let id = request.split('/').nth(3).unwrap_or_default().to_string();
+                gone.lock().unwrap().push(id.clone());
+                let status = if verb == "verify" {
+                    "verified"
+                } else {
+                    "rejected"
+                };
+                return (
+                    "200 OK",
+                    json!({"claim": claim(&id, "x", json!({"status": status}))}).to_string(),
+                );
+            }
+            if request == WAITING {
+                let gone = gone.lock().unwrap();
+                let left: Vec<Value> = waiting()
+                    .into_iter()
+                    .filter(|c| !gone.iter().any(|g| c["id"] == *g))
+                    .collect();
+                return list(&left, 1);
+            }
+            list(&[], 0)
+        })
+    }
+
+    fn typed(claim: Value) -> crate::memory::Claim {
+        serde_json::from_value(claim).unwrap()
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    fn type_command(app: &mut App, name: &str) {
+        press(app, KeyCode::Char(':'));
+        for c in name.chars() {
+            press(app, KeyCode::Char(c));
+        }
+        press(app, KeyCode::Enter);
+    }
+
+    /// Takes the next answer of a Memory call off the stream; the stream thread's own messages are dropped.
+    fn landed(app: &mut App) {
+        loop {
+            let incoming = app
+                .stream
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the machine answers");
+            let ours = matches!(
+                incoming,
+                Incoming::MemoryClaims { .. }
+                    | Incoming::MemoryDigest { .. }
+                    | Incoming::MemoryDecided { .. }
+            );
+            if ours {
+                app.take_incoming(incoming);
+                return;
+            }
+        }
+    }
+
+    /// The two hosts the view opens from: the board, and a card's popup over it.
+    fn open(host: &str, machine: Machine) -> App {
+        let mut app = if host == "board" {
+            let mut app = plan_gate_app();
+            app.mode = Mode::Normal;
+            app
+        } else {
+            plan_gate_app()
+        };
+        app.machine = machine;
+        if host == "board" {
+            press(&mut app, KeyCode::Char('L'));
+        } else {
+            type_command(&mut app, "memory");
+        }
+        app
+    }
+
+    fn opened(machine: Machine) -> App {
+        let mut app = open("board", machine);
+        landed(&mut app);
+        app
+    }
+
+    fn state(app: &App) -> &crate::memory::MemoryState {
+        app.memory.as_ref().expect("the Memory view is open")
+    }
+
+    fn state_mut(app: &mut App) -> &mut crate::memory::MemoryState {
+        app.memory.as_mut().expect("the Memory view is open")
+    }
+
+    /// The colour of the first cell of `text` on the screen.
+    fn fg_of(app: &App, text: &str) -> ratatui::style::Color {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(200, 40)).unwrap();
+        terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let want: Vec<String> = text.chars().map(|c| c.to_string()).collect();
+        (0..40u16)
+            .flat_map(|y| (0..200u16).map(move |x| (x, y)))
+            .find(|&(x, y)| {
+                want.iter()
+                    .enumerate()
+                    .all(|(i, s)| buffer[(x + i as u16, y)].symbol() == s)
+            })
+            .map(|(x, y)| buffer[(x, y)].fg)
+            .unwrap_or_else(|| panic!("{text:?} is not on the screen"))
+    }
+
+    fn screen(app: &mut App) -> String {
+        render(app, 200, 40)
+    }
+
+    #[test]
+    fn m_and_the_command_open_the_memory_and_fetch_the_waiting_claims() {
+        for host in ["board", "card"] {
+            let (machine, seen) = brain();
+            let mut app = open(host, machine);
+            assert_eq!(app.active_view(), Some(View::Memory), "{host}");
+            assert_eq!(keys::active_scope(&app), Scope::Memory, "{host}");
+            assert!(matches!(app.mode, Mode::Normal), "{host}");
+            let before = screen(&mut app);
+            assert!(before.contains("Memory"), "{host}: {before}");
+            assert!(
+                !before.contains("Nothing waits on you"),
+                "{host}: not before the answer"
+            );
+            landed(&mut app);
+            assert_eq!(state(&app).claims.len(), 3, "{host}");
+            assert_eq!(requests(&seen), vec![WAITING], "{host}");
+        }
+    }
+
+    #[test]
+    fn opening_the_view_closes_the_others_and_another_view_closes_it() {
+        let (machine, _) = brain();
+        let mut app = plan_gate_app();
+        app.mode = Mode::Normal;
+        app.machine = machine;
+        app.run_command("inbox");
+        app.run_command("memory");
+        assert!(app.inbox.is_none() && app.memory.is_some());
+        assert_eq!(app.active_view(), Some(View::Memory));
+        app.run_command("inbox");
+        assert!(app.memory.is_none() && app.inbox.is_some());
+        assert_eq!(app.active_view(), Some(View::Inbox));
+    }
+
+    #[test]
+    fn the_list_shows_the_header_a_row_each_and_the_detail_of_the_selected_one() {
+        for host in ["board", "card"] {
+            let (machine, _) = brain();
+            let mut app = open(host, machine);
+            landed(&mut app);
+            let screen = screen(&mut app);
+            assert!(
+                screen.contains("Memory · 3 waiting · Jev agreed with you on 12 of 14"),
+                "{host}: {screen}"
+            );
+            let rows: Vec<&str> = screen
+                .lines()
+                .filter(|l| {
+                    l.contains("The e2e suite needs")
+                        || l.contains("Billing retries")
+                        || l.contains("Deploys are frozen")
+                })
+                .collect();
+            let first = rows
+                .iter()
+                .find(|l| l.contains("▌"))
+                .expect("the selected row");
+            assert!(
+                first.contains("low")
+                    && first.contains("verify")
+                    && first.contains("The e2e suite needs"),
+                "{host}: {first}"
+            );
+            let high = rows
+                .iter()
+                .find(|l| l.contains("high"))
+                .expect("the high row");
+            assert!(
+                high.contains("reject") && high.contains("Billing retries"),
+                "{host}: {high}"
+            );
+            let unjudged = rows
+                .iter()
+                .find(|l| l.contains("Deploys are frozen"))
+                .unwrap();
+            assert!(
+                unjudged.contains("–") && !unjudged.contains("verify"),
+                "{host}: {unjudged}"
+            );
+            for want in [
+                "the log says: The e2e suite needs the seed command before the app starts.",
+                "source: card · Wire the e2e start mode",
+                "fact · repo",
+                "extracted by reviewing_memory · machine",
+            ] {
+                assert!(screen.contains(want), "{host}: {want}: {screen}");
+            }
+            assert!(
+                !screen.contains("waits on you because"),
+                "{host}: the first claim has no reason"
+            );
+        }
+    }
+
+    #[test]
+    fn the_tier_is_coloured_as_a_finding_s_severity() {
+        use crate::theme::{RED, SUBTEXT0, YELLOW};
+        let (machine, _) = brain();
+        let mut app = opened(machine);
+        let medium = claim("c4", "Medium one.", json!({"tier": "medium"}));
+        app.memory.as_mut().unwrap().claims.push(typed(medium));
+        assert_eq!(fg_of(&app, "high"), RED);
+        assert_eq!(fg_of(&app, "medium"), YELLOW);
+        assert_eq!(fg_of(&app, "low"), SUBTEXT0);
+    }
+
+    #[test]
+    fn the_header_warns_in_the_warning_colour_when_jev_would_have_verified_what_you_rejected() {
+        let (machine, _) = brain();
+        let mut app = opened(machine);
+        let text = "1 it would have verified and you rejected";
+        assert!(screen(&mut app).contains(&format!("· {text}")));
+        assert_eq!(fg_of(&app, text), crate::theme::PEACH);
+        let (machine, _) = machine_with(|_, _| list(&waiting(), 0));
+        let mut app = opened(machine);
+        assert!(!screen(&mut app).contains("you rejected"));
+    }
+
+    #[test]
+    fn the_selection_moves_with_j_and_k_and_the_detail_follows() {
+        let (machine, _) = brain();
+        let mut app = opened(machine);
+        press(&mut app, KeyCode::Char('j'));
+        let on_second = screen(&mut app);
+        for want in [
+            "the log says: Billing retries are idempotent.",
+            "risk · org",
+            "waits on you because",
+            "  · applies to the whole org",
+            "  · contradicts a verified claim",
+        ] {
+            assert!(on_second.contains(want), "{want}: {on_second}");
+        }
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(state(&app).cursor, 2, "the end of the list holds");
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Char('k'));
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(state(&app).cursor, 0, "the top holds");
+    }
+
+    #[test]
+    fn a_verifies_the_selected_claim_refreshes_and_the_selection_stays_on_the_next_row() {
+        let (machine, seen) = brain();
+        let mut app = opened(machine);
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('a'));
+        landed(&mut app);
+        assert_eq!(
+            state(&app)
+                .claims
+                .iter()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["c1", "c3"],
+            "the decided claim leaves the list at once"
+        );
+        assert_eq!(state(&app).cursor, 1);
+        let shown = screen(&mut app);
+        assert!(
+            shown.contains("the log says: Deploys are frozen on Fridays."),
+            "{shown}"
+        );
+        landed(&mut app);
+        assert_eq!(
+            requests(&seen),
+            vec![WAITING, "POST /brain/claims/c2/verify", WAITING]
+        );
+        assert_eq!(seen.lock().unwrap()[1].1, json!({}));
+        assert_eq!(state(&app).claims.len(), 2);
+        assert!(state(&app).pending.is_none());
+    }
+
+    #[test]
+    fn an_answer_for_another_claim_leaves_the_lock_of_the_pending_one_alone() {
+        let ok = |id: &str| serde_json::from_value(claim(id, "A fact.", json!({}))).unwrap();
+        let conflict = || crate::memory::DecideError {
+            code: "not_waiting".into(),
+            message: "decided already".into(),
+        };
+        let other = || crate::memory::DecideError {
+            code: "boom".into(),
+            message: "boom".into(),
+        };
+        // A is answered while B is pending: after the success, the 409 and another error alike.
+        for (name, answer) in [
+            ("success", Ok(ok("c2"))),
+            ("409", Err(conflict())),
+            ("error", Err(other())),
+        ] {
+            let (machine, _seen) = brain();
+            let mut app = opened(machine);
+            state_mut(&mut app).pending = Some("c3".into());
+            app.take_memory_decided("c2", answer);
+            assert_eq!(
+                state(&app).pending.as_deref(),
+                Some("c3"),
+                "{name}: the lock holds for B"
+            );
+        }
+        // B's own answer releases it.
+        let (machine, _seen) = brain();
+        let mut app = opened(machine);
+        state_mut(&mut app).pending = Some("c3".into());
+        app.take_memory_decided("c2", Ok(ok("c2")));
+        app.take_memory_decided("c3", Ok(ok("c3")));
+        assert!(state(&app).pending.is_none());
+    }
+
+    #[test]
+    fn x_rejects_the_selected_claim_and_the_last_row_hands_the_selection_back_up() {
+        let (machine, seen) = brain();
+        let mut app = opened(machine);
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('x'));
+        landed(&mut app);
+        landed(&mut app);
+        assert_eq!(
+            requests(&seen),
+            vec![WAITING, "POST /brain/claims/c3/reject", WAITING]
+        );
+        assert_eq!(seen.lock().unwrap()[1].1, json!({}));
+        assert_eq!(state(&app).cursor, 1, "the list is two long now");
+    }
+
+    #[test]
+    fn a_second_key_while_a_call_is_out_sends_nothing() {
+        let (machine, seen) = brain();
+        let mut app = opened(machine);
+        press(&mut app, KeyCode::Char('a'));
+        assert!(state(&app).pending.is_some());
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Char('x'));
+        landed(&mut app);
+        landed(&mut app);
+        let posts = requests(&seen)
+            .into_iter()
+            .filter(|r| r.starts_with("POST"))
+            .count();
+        assert_eq!(posts, 1);
+    }
+
+    #[test]
+    fn l_and_h_cycle_the_five_pages_and_fetch_each() {
+        let (machine, seen) = brain();
+        let mut app = opened(machine);
+        let mut want = vec![WAITING.to_string()];
+        for (status, title, route) in [
+            ("verified", "Verified", "GET /brain/claims?status=verified"),
+            ("rejected", "Rejected", "GET /brain/claims?status=rejected"),
+            ("refused", "Refused", "GET /brain/claims?status=refused"),
+            ("digest", "Since last week", DIGEST),
+            ("unverified", "Waiting", WAITING),
+        ] {
+            press(&mut app, KeyCode::Char('l'));
+            assert_eq!(state(&app).status.wire(), status);
+            assert!(
+                state(&app).claims.is_empty() && state(&app).digest.len() == 0,
+                "the last page's rows are not shown"
+            );
+            landed(&mut app);
+            want.push(route.to_string());
+            if status == "digest" {
+                // The week page also asks for the waiting claims, for the header's numbers.
+                landed(&mut app);
+                want.push(WAITING.to_string());
+            }
+            let shown = screen(&mut app);
+            assert!(shown.contains(&format!(" {title} ")), "{title}: {shown}");
+        }
+        press(&mut app, KeyCode::Char('h'));
+        assert_eq!(state(&app).status, Status::Week);
+        landed(&mut app);
+        landed(&mut app);
+        want.push(DIGEST.to_string());
+        want.push(WAITING.to_string());
+        press(&mut app, KeyCode::Char('h'));
+        assert_eq!(state(&app).status, Status::Refused);
+        landed(&mut app);
+        want.push("GET /brain/claims?status=refused".to_string());
+        assert_eq!(requests(&seen), want);
+    }
+
+    #[test]
+    fn a_refused_claim_shows_why_and_a_and_x_do_nothing() {
+        let refused = claim(
+            "r1",
+            "Staging is a copy of prod.",
+            json!({"status": "refused", "refusal": "the quote is not in the source", "tier": null, "proposed": null}),
+        );
+        let (machine, seen) = machine_with(move |request, _| {
+            if request.ends_with("status=refused") {
+                list(std::slice::from_ref(&refused), 0)
+            } else {
+                list(&waiting(), 0)
+            }
+        });
+        let mut app = opened(machine);
+        for _ in 0..3 {
+            press(&mut app, KeyCode::Char('l'));
+            landed(&mut app);
+        }
+        let shown = screen(&mut app);
+        assert!(
+            shown.contains("refused: the quote is not in the source"),
+            "{shown}"
+        );
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Char('x'));
+        assert!(state(&app).pending.is_none());
+        thread::sleep(Duration::from_millis(150));
+        assert!(
+            requests(&seen).iter().all(|r| r.starts_with("GET")),
+            "{:?}",
+            requests(&seen)
+        );
+    }
+
+    #[test]
+    fn a_on_a_verified_claim_and_x_on_a_rejected_one_do_nothing() {
+        let (machine, seen) = decided_machine();
+        let mut app = opened(machine);
+        press(&mut app, KeyCode::Char('l'));
+        landed(&mut app);
+        press(&mut app, KeyCode::Char('a'));
+        assert!(state(&app).pending.is_none() && matches!(app.mode, Mode::Normal));
+        press(&mut app, KeyCode::Char('l'));
+        landed(&mut app);
+        press(&mut app, KeyCode::Char('x'));
+        assert!(state(&app).pending.is_none() && matches!(app.mode, Mode::Normal));
+        thread::sleep(Duration::from_millis(150));
+        assert!(requests(&seen).iter().all(|r| r.starts_with("GET")));
+        // Even a decided claim that was left in the waiting list, as a stale answer might.
+        let (machine, seen) = machine_with(|_, _| list(&[], 0));
+        let mut app = opened(machine);
+        let stale = claim("v2", "Seed first.", json!({"status": "verified"}));
+        app.memory.as_mut().unwrap().claims.push(typed(stale));
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Char('x'));
+        assert!(matches!(app.mode, Mode::Normal));
+        thread::sleep(Duration::from_millis(150));
+        assert_eq!(count(&seen, "POST /brain/claims/v2/verify"), 0);
+        assert_eq!(count(&seen, "POST /brain/claims/v2/reject"), 0);
+    }
+
+    #[test]
+    fn nothing_is_sent_while_the_list_is_still_on_its_way() {
+        let (machine, seen) = brain();
+        let mut app = open("board", machine);
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Char('x'));
+        landed(&mut app);
+        assert_eq!(requests(&seen), vec![WAITING]);
+    }
+
+    #[test]
+    fn an_empty_list_says_so_in_one_line_for_each_status() {
+        let (machine, _) = machine_with(|_, _| list(&[], 0));
+        let mut app = opened(machine);
+        assert!(screen(&mut app).contains("Nothing waits on you."));
+        for status in ["verified", "rejected", "refused"] {
+            press(&mut app, KeyCode::Char('l'));
+            landed(&mut app);
+            let shown = screen(&mut app);
+            assert!(
+                shown.contains(&format!("No {status} claim.")),
+                "{status}: {shown}"
+            );
+            assert!(!shown.contains("Nothing waits on you."), "{status}");
+        }
+    }
+
+    #[test]
+    fn a_failed_fetch_says_why_and_a_later_one_clears_it() {
+        let broken = Arc::new(Mutex::new(true));
+        let flag = broken.clone();
+        let (machine, _) = machine_with(move |_, _| {
+            if *flag.lock().unwrap() {
+                failing(
+                    "brain_off",
+                    "the company brain is off: set LUNA_BRAIN=1",
+                    "503 Service Unavailable",
+                )
+            } else {
+                list(&waiting(), 0)
+            }
+        });
+        let mut app = open("board", machine);
+        landed(&mut app);
+        let toast = app.toast.as_ref().expect("a toast says it");
+        assert!(toast.error);
+        assert_eq!(
+            toast.text,
+            "memory: the company brain is off: set LUNA_BRAIN=1"
+        );
+        let shown = screen(&mut app);
+        assert!(
+            shown.contains("the company brain is off: set LUNA_BRAIN=1"),
+            "{shown}"
+        );
+        assert!(
+            !shown.contains("Nothing waits on you."),
+            "an error is not an empty list"
+        );
+        *broken.lock().unwrap() = false;
+        press(&mut app, KeyCode::Char('r'));
+        landed(&mut app);
+        assert!(state(&app).error.is_none());
+        assert!(screen(&mut app).contains("Memory · 3 waiting"));
+    }
+
+    #[test]
+    fn a_failed_fetch_keeps_the_list_the_view_had() {
+        let broken = Arc::new(Mutex::new(false));
+        let flag = broken.clone();
+        let (machine, _) = machine_with(move |_, _| {
+            if *flag.lock().unwrap() {
+                failing("boom", "boom", "500 Internal Server Error")
+            } else {
+                list(&waiting(), 0)
+            }
+        });
+        let mut app = opened(machine);
+        *broken.lock().unwrap() = true;
+        press(&mut app, KeyCode::Char('r'));
+        landed(&mut app);
+        assert_eq!(state(&app).claims.len(), 3);
+        assert!(screen(&mut app).contains("Billing retries"));
+    }
+
+    #[test]
+    fn r_fetches_the_list_again() {
+        let (machine, seen) = brain();
+        let mut app = opened(machine);
+        press(&mut app, KeyCode::Char('r'));
+        landed(&mut app);
+        assert_eq!(count(&seen, WAITING), 2);
+    }
+
+    #[test]
+    fn any_other_error_on_an_action_is_a_toast_and_the_list_stays() {
+        let (machine, seen) = machine_with(|request, _| {
+            if request.starts_with("POST") {
+                failing("not_found", "no such claim", "404 Not Found")
+            } else {
+                list(&waiting(), 0)
+            }
+        });
+        let mut app = opened(machine);
+        press(&mut app, KeyCode::Char('a'));
+        landed(&mut app);
+        let toast = app.toast.as_ref().expect("the error shows");
+        assert!(toast.error);
+        assert_eq!(toast.text, "memory: no such claim");
+        assert_eq!(state(&app).claims.len(), 3);
+        assert!(state(&app).pending.is_none(), "the next key may try again");
+        assert_eq!(count(&seen, WAITING), 1, "no refetch on an error");
+    }
+
+    #[test]
+    fn a_409_not_waiting_refetches_quietly() {
+        let (machine, seen) = machine_with(|request, _| {
+            if request.starts_with("POST") {
+                failing(
+                    "not_waiting",
+                    "the claim was already decided",
+                    "409 Conflict",
+                )
+            } else {
+                list(&waiting()[1..], 0)
+            }
+        });
+        let mut app = opened(machine);
+        assert_eq!(
+            state(&app).claims.len(),
+            2,
+            "the first fetch already lacks c1"
+        );
+        // The person is still looking at a row somebody decided meanwhile.
+        app.memory
+            .as_mut()
+            .unwrap()
+            .claims
+            .insert(0, typed(waiting().remove(0)));
+        press(&mut app, KeyCode::Char('a'));
+        landed(&mut app);
+        assert!(
+            app.toast.is_none(),
+            "{:?}",
+            app.toast.as_ref().map(|t| &t.text)
+        );
+        landed(&mut app);
+        assert_eq!(count(&seen, WAITING), 2);
+        assert_eq!(
+            state(&app).claims.len(),
+            2,
+            "the list is the machine's again"
+        );
+        assert!(state(&app).error.is_none());
+    }
+
+    #[test]
+    fn esc_and_q_leave_the_view() {
+        for key in [KeyCode::Esc, KeyCode::Char('q')] {
+            let (machine, _) = brain();
+            let mut app = opened(machine);
+            press(&mut app, key);
+            assert!(app.memory.is_none() && app.active_view().is_none());
+            assert!(matches!(app.mode, Mode::Normal));
+        }
+    }
+
+    #[test]
+    fn question_mark_opens_the_view_s_keys_and_closing_them_keeps_the_view() {
+        for host in ["board", "card"] {
+            let (machine, _) = brain();
+            let mut app = open(host, machine);
+            landed(&mut app);
+            press(&mut app, KeyCode::Char('?'));
+            assert!(
+                matches!(
+                    app.mode,
+                    Mode::Help {
+                        scope: Scope::Memory,
+                        ..
+                    }
+                ),
+                "{host}"
+            );
+            let shown = screen(&mut app);
+            assert!(
+                shown.contains("verify") && shown.contains("reject"),
+                "{host}: {shown}"
+            );
+            press(&mut app, KeyCode::Esc);
+            assert!(app.memory.is_some(), "{host}");
+        }
+    }
+
+    #[test]
+    fn an_answer_for_another_status_or_a_closed_view_is_dropped() {
+        let (machine, _) = brain();
+        let mut app = opened(machine);
+        let late = crate::memory::ClaimList {
+            claims: Vec::new(),
+            stats: Default::default(),
+        };
+        app.take_incoming(Incoming::MemoryClaims {
+            status: Status::Rejected,
+            seq: state(&app).seq,
+            result: Ok(late.clone()),
+        });
+        assert_eq!(
+            state(&app).claims.len(),
+            3,
+            "an answer for the status left behind"
+        );
+        app.take_incoming(Incoming::MemoryClaims {
+            status: Status::Unverified,
+            seq: state(&app).seq,
+            result: Err("late".into()),
+        });
+        app.toast = None;
+        press(&mut app, KeyCode::Esc);
+        app.take_incoming(Incoming::MemoryClaims {
+            status: Status::Unverified,
+            seq: 1,
+            result: Err("later".into()),
+        });
+        assert!(app.memory.is_none() && app.toast.is_none());
+    }
+
+    #[test]
+    fn an_older_list_applied_after_a_newer_one_is_dropped() {
+        let (machine, _) = brain();
+        let mut app = opened(machine);
+        let one = |id: &str| crate::memory::ClaimList {
+            claims: vec![typed(claim(id, "x", json!({})))],
+            stats: Default::default(),
+        };
+        app.fetch_memory();
+        app.fetch_memory();
+        let (first, second) = (state(&app).seq - 1, state(&app).seq);
+        app.take_incoming(Incoming::MemoryClaims {
+            status: Status::Unverified,
+            seq: second,
+            result: Ok(one("newer")),
+        });
+        app.take_incoming(Incoming::MemoryClaims {
+            status: Status::Unverified,
+            seq: first,
+            result: Ok(one("older")),
+        });
+        assert_eq!(state(&app).claims[0].id, "newer");
+    }
+
+    #[test]
+    fn an_answer_of_a_closed_view_is_dropped_by_the_view_opened_after_it() {
+        let (machine, _) = brain();
+        let mut app = opened(machine.clone());
+        let stale = state(&app).seq;
+        press(&mut app, KeyCode::Esc);
+        assert!(app.memory.is_none());
+        press(&mut app, KeyCode::Char('L'));
+        let late = crate::memory::ClaimList {
+            claims: Vec::new(),
+            stats: Default::default(),
+        };
+        app.take_incoming(Incoming::MemoryClaims {
+            status: Status::Unverified,
+            seq: stale,
+            result: Ok(late),
+        });
+        assert!(
+            !state(&app).loaded,
+            "the old view's answer is not the new view's"
+        );
+    }
+
+    #[test]
+    fn text_from_a_claim_never_puts_a_control_character_on_the_screen() {
+        let hostile = claim(
+            "h1",
+            "Seed\u{1b}[2Jfirst\u{7}.",
+            json!({"quote": "a\u{1b}]0;owned\u{7}b", "reasons": ["why\u{1b}[31m"],
+                "source": {"kind": "note", "ref": "n", "title": "t\u{1b}[0m"}}),
+        );
+        let (machine, _) = machine_with(move |_, _| list(std::slice::from_ref(&hostile), 0));
+        for host in ["board", "card"] {
+            let mut app = open(host, machine.clone());
+            landed(&mut app);
+            let shown = screen(&mut app);
+            assert!(shown.contains("Seed [2Jfirst ."), "{host}: {shown}");
+            assert!(
+                !shown.chars().any(|c| c.is_control() && c != '\n'),
+                "{host}: {shown:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_view_draws_at_a_narrow_and_a_short_terminal() {
+        let (machine, _) = brain();
+        let mut app = opened(machine);
+        for (width, height) in [(100, 30), (60, 14), (30, 6), (12, 3)] {
+            let shown = render(&mut app, width, height);
+            assert!(shown.lines().count() == height as usize, "{width}x{height}");
+        }
+        let footer = render(&mut app, 100, 24);
+        assert!(footer.contains("h/l  page"), "{footer}");
+    }
+
+    #[test]
+    fn the_view_is_drawn_without_a_machine() {
+        let mut app = App::new(dead_machine());
+        press(&mut app, KeyCode::Char('L'));
+        landed(&mut app);
+        let shown = screen(&mut app);
+        assert!(shown.contains("machine unreachable"), "{shown}");
+    }
+
+    const VERIFIED: &str = "GET /brain/claims?status=verified";
+    const REJECTED: &str = "GET /brain/claims?status=rejected";
+    const DIGEST: &str = "GET /brain/digest?days=7";
+
+    fn jev(id: &str, statement: &str, status: &str, proposed: &str) -> Value {
+        claim(
+            id,
+            statement,
+            json!({"status": status, "decidedBy": "jev", "proposed": proposed,
+                "decidedAt": "2026-11-12T10:00:00.000Z"}),
+        )
+    }
+
+    fn you(id: &str, statement: &str, status: &str) -> Value {
+        claim(
+            id,
+            statement,
+            json!({"status": status, "decidedBy": "person", "proposed": "verify"}),
+        )
+    }
+
+    fn digest() -> Value {
+        json!({
+            "since": "2026-11-09T12:00:00.000Z",
+            "verified": [
+                jev("v1", "Jev was unsure of this one.", "verified", "flag"),
+                jev("v2", "Jev was sure of this one.", "verified", "verify")
+            ],
+            "rejected": [jev("r1", "Jev dropped this one.", "rejected", "reject")],
+            "atRisk": [{"learning": "learning:0b9c",
+                "title": "The e2e suite needs the seed command before the app starts.",
+                "claim": "claim:0b9c"}],
+            "contested": [{"claim": "claim:7ae9",
+                "says": "The board lint may be skipped for a docs change.",
+                "contradicts": "claim:1c2d",
+                "against": "The board lint must be clean before a commit."}]
+        })
+    }
+
+    /// A machine with decided claims in both lists and a digest; a decision answers the claim in its new status.
+    fn decided_machine() -> (Machine, Seen) {
+        machine_with(|request, _| {
+            if request.starts_with("POST /brain/claims/") {
+                let id = request.split('/').nth(3).unwrap_or_default();
+                let status = if request.ends_with("/verify") {
+                    "verified"
+                } else {
+                    "rejected"
+                };
+                return (
+                    "200 OK",
+                    json!({"claim": claim(id, "x", json!({"status": status}))}).to_string(),
+                );
+            }
+            match request {
+                VERIFIED => list(
+                    &[
+                        jev("v1", "Jev was unsure of this one.", "verified", "flag"),
+                        jev("v2", "Jev was sure of this one.", "verified", "verify"),
+                        you("v3", "You verified this one.", "verified"),
+                        claim(
+                            "v4",
+                            "The code verified this one.",
+                            json!({"status": "verified", "decidedBy": "code", "proposed": null}),
+                        ),
+                    ],
+                    0,
+                ),
+                REJECTED => list(
+                    &[
+                        jev("r1", "Jev dropped this one.", "rejected", "reject"),
+                        you("r2", "You dropped this one.", "rejected"),
+                    ],
+                    0,
+                ),
+                DIGEST => ("200 OK", digest().to_string()),
+                _ => list(&[], 0),
+            }
+        })
+    }
+
+    /// The view on its `pages`th page after the first, each fetched, in a host.
+    fn on_page(host: &str, machine: Machine, pages: usize) -> App {
+        let mut app = open(host, machine);
+        landed(&mut app);
+        for _ in 0..pages {
+            press(&mut app, KeyCode::Char('l'));
+            landed(&mut app);
+            if state(&app).status == Status::Week {
+                landed(&mut app);
+            }
+        }
+        app
+    }
+
+    const VERIFIED_PAGE: usize = 1;
+    const REJECTED_PAGE: usize = 2;
+    const WEEK_PAGE: usize = 4;
+
+    /// The row of the list pane (the left 60 per cent of a 200 cell screen) that has `text`.
+    fn list_row(shown: &str, text: &str) -> String {
+        shown
+            .lines()
+            .find(|l| l.chars().take(120).collect::<String>().contains(text))
+            .map(|l| l.chars().take(120).collect())
+            .unwrap_or_else(|| panic!("{text:?} has no row: {shown}"))
+    }
+
+    fn no_posts(seen: &Seen) {
+        thread::sleep(Duration::from_millis(150));
+        let posts: Vec<String> = requests(seen)
+            .into_iter()
+            .filter(|r| r.starts_with("POST"))
+            .collect();
+        assert!(posts.is_empty(), "{posts:?}");
+    }
+
+    fn stats_machine(ready: Option<bool>) -> Machine {
+        let mut stats = json!({"waiting": 3, "decided": 14, "agreed": 12, "missed": 0});
+        if let Some(ready) = ready {
+            stats["ready"] = json!(ready);
+        }
+        machine_with(move |_, _| {
+            (
+                "200 OK",
+                json!({"claims": waiting(), "stats": stats}).to_string(),
+            )
+        })
+        .0
+    }
+
+    #[test]
+    fn the_header_says_the_shadow_bar_is_met_in_the_calm_colour_only_when_it_is() {
+        let text = "the shadow bar is met";
+        for host in ["board", "card"] {
+            let mut app = open(host, stats_machine(Some(true)));
+            landed(&mut app);
+            let shown = screen(&mut app);
+            assert!(
+                shown.contains("Jev agreed with you on 12 of 14 · the shadow bar is met"),
+                "{host}: {shown}"
+            );
+            assert_eq!(fg_of(&app, text), crate::theme::GREEN, "{host}");
+            assert!(shown.contains("Memory · 3 waiting"), "{host}");
+        }
+        for (name, ready) in [("false", Some(false)), ("missing", None)] {
+            let mut app = open("board", stats_machine(ready));
+            landed(&mut app);
+            let shown = screen(&mut app);
+            assert!(!shown.contains(text), "{name}: {shown}");
+            assert!(shown.contains("Jev agreed with you on 12 of 14"), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_verified_row_says_who_decided_it_and_marks_what_jev_was_not_sure_of() {
+        for host in ["board", "card"] {
+            let (machine, _) = decided_machine();
+            let mut app = on_page(host, machine, VERIFIED_PAGE);
+            let shown = screen(&mut app);
+            let unsure = list_row(&shown, "Jev was unsure of this one.");
+            assert!(
+                unsure.contains("jev") && unsure.contains("flagged"),
+                "{host}: {unsure}"
+            );
+            let sure = list_row(&shown, "Jev was sure of this one.");
+            assert!(
+                sure.contains("jev") && !sure.contains("flagged"),
+                "{host}: {sure}"
+            );
+            let yours = list_row(&shown, "You verified this one.");
+            assert!(
+                yours.contains(" you ") && !yours.contains("flagged"),
+                "{host}: {yours}"
+            );
+            let code = list_row(&shown, "The code verified this one.");
+            assert!(
+                code.contains("–") && !code.contains("jev") && !code.contains(" you "),
+                "{host}: {code}"
+            );
+            assert_eq!(fg_of(&app, "flagged"), crate::theme::PEACH, "{host}");
+            assert!(
+                shown.contains("Jev verified this alone and flagged it."),
+                "{host}: the selected claim says it in words: {shown}"
+            );
+            assert!(
+                crate::theme::PEACH == fg_of(&app, "Jev verified this alone and flagged it."),
+                "{host}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rejected_row_says_who_decided_it_and_has_no_flag() {
+        let (machine, _) = decided_machine();
+        let mut app = on_page("board", machine, REJECTED_PAGE);
+        let shown = screen(&mut app);
+        let jev_row = list_row(&shown, "Jev dropped this one.");
+        assert!(
+            jev_row.contains("jev") && !jev_row.contains("flagged"),
+            "{jev_row}"
+        );
+        let your_row = list_row(&shown, "You dropped this one.");
+        assert!(your_row.contains(" you "), "{your_row}");
+        assert!(shown.contains("Jev rejected this alone."), "{shown}");
+        press(&mut app, KeyCode::Char('j'));
+        assert!(screen(&mut app).contains("You rejected this."));
+    }
+
+    #[test]
+    fn x_on_a_verified_claim_asks_first_and_y_sends_the_reject() {
+        for host in ["board", "card"] {
+            let (machine, seen) = decided_machine();
+            let mut app = on_page(host, machine, VERIFIED_PAGE);
+            press(&mut app, KeyCode::Char('x'));
+            assert!(
+                matches!(&app.mode, Mode::ConfirmClaim { id, verify: false, .. } if id == "v1"),
+                "{host}"
+            );
+            assert!(state(&app).pending.is_none(), "{host}: nothing is out yet");
+            let shown = screen(&mut app);
+            assert!(shown.contains("Reject this claim?"), "{host}: {shown}");
+            assert!(
+                shown.contains("Jev was unsure of this one.")
+                    && shown.contains("Agents stop reading the lessons that rest on it."),
+                "{host}: {shown}"
+            );
+            assert!(
+                shown.contains("y  reject it") || shown.contains("reject it"),
+                "{host}: {shown}"
+            );
+            no_posts(&seen);
+            press(&mut app, KeyCode::Char('y'));
+            assert!(matches!(app.mode, Mode::Normal), "{host}");
+            assert_eq!(state(&app).pending.as_deref(), Some("v1"), "{host}");
+            landed(&mut app);
+            assert!(
+                state(&app).claims.iter().all(|c| c.id != "v1"),
+                "{host}: the row leaves the list at once"
+            );
+            landed(&mut app);
+            let tail: Vec<String> = requests(&seen).into_iter().skip(2).collect();
+            assert_eq!(
+                tail,
+                vec![
+                    "POST /brain/claims/v1/reject".to_string(),
+                    VERIFIED.to_string()
+                ],
+                "{host}: the list is fetched again"
+            );
+            assert_eq!(seen.lock().unwrap()[2].1, json!({}), "{host}");
+        }
+    }
+
+    #[test]
+    fn a_on_a_rejected_claim_asks_first_and_y_sends_the_verify() {
+        for host in ["board", "card"] {
+            let (machine, seen) = decided_machine();
+            let mut app = on_page(host, machine, REJECTED_PAGE);
+            press(&mut app, KeyCode::Char('j'));
+            press(&mut app, KeyCode::Char('a'));
+            assert!(
+                matches!(&app.mode, Mode::ConfirmClaim { id, verify: true, .. } if id == "r2"),
+                "{host}"
+            );
+            let shown = screen(&mut app);
+            assert!(shown.contains("Verify this claim?"), "{host}: {shown}");
+            assert!(
+                shown.contains("You dropped this one.")
+                    && shown.contains("The brain keeps it again."),
+                "{host}: {shown}"
+            );
+            no_posts(&seen);
+            press(&mut app, KeyCode::Char('y'));
+            landed(&mut app);
+            landed(&mut app);
+            let tail: Vec<String> = requests(&seen).into_iter().skip(3).collect();
+            assert_eq!(
+                tail,
+                vec![
+                    "POST /brain/claims/r2/verify".to_string(),
+                    REJECTED.to_string()
+                ],
+                "{host}"
+            );
+        }
+    }
+
+    #[test]
+    fn n_and_esc_cancel_the_confirm_and_another_key_leaves_it_open() {
+        let (machine, seen) = decided_machine();
+        let mut app = on_page("board", machine, VERIFIED_PAGE);
+        for cancel in [KeyCode::Char('n'), KeyCode::Esc] {
+            press(&mut app, KeyCode::Char('x'));
+            assert!(matches!(app.mode, Mode::ConfirmClaim { .. }));
+            press(&mut app, KeyCode::Char('j'));
+            press(&mut app, KeyCode::Char('l'));
+            assert!(matches!(app.mode, Mode::ConfirmClaim { .. }), "a stray key");
+            assert_eq!(state(&app).cursor, 0);
+            press(&mut app, cancel);
+            assert!(matches!(app.mode, Mode::Normal));
+            assert!(state(&app).pending.is_none());
+            assert_eq!(state(&app).claims.len(), 4, "the claim stays");
+        }
+        no_posts(&seen);
+        assert_eq!(
+            count(&seen, VERIFIED),
+            1,
+            "no refetch either: only the page fetch"
+        );
+    }
+
+    #[test]
+    fn the_confirm_cuts_a_long_statement_and_never_draws_a_control_character() {
+        let long = format!("Seed\u{1b}[2J first. {}", "and again ".repeat(30));
+        let verified = claim(
+            "v9",
+            &long,
+            json!({"status": "verified", "decidedBy": "jev", "proposed": "verify"}),
+        );
+        let (machine, _) = machine_with(move |_, _| list(std::slice::from_ref(&verified), 0));
+        let mut app = on_page("board", machine, VERIFIED_PAGE);
+        press(&mut app, KeyCode::Char('x'));
+        let shown = screen(&mut app);
+        let box_line = shown
+            .lines()
+            .find(|l| l.contains("Seed [2J first."))
+            .expect("the statement is in the box");
+        assert!(box_line.contains('…'), "{box_line}");
+        assert!(
+            !shown.chars().any(|c| c.is_control() && c != '\n'),
+            "{shown:?}"
+        );
+    }
+
+    #[test]
+    fn a_waiting_claim_is_still_decided_at_once() {
+        let (machine, seen) = brain();
+        let mut app = opened(machine);
+        press(&mut app, KeyCode::Char('x'));
+        assert!(matches!(app.mode, Mode::Normal));
+        assert_eq!(state(&app).pending.as_deref(), Some("c1"));
+        landed(&mut app);
+        landed(&mut app);
+        assert_eq!(count(&seen, "POST /brain/claims/c1/reject"), 1);
+    }
+
+    #[test]
+    fn the_confirm_is_a_hint_in_the_footer_too() {
+        let (machine, _) = decided_machine();
+        let mut app = on_page("board", machine, VERIFIED_PAGE);
+        press(&mut app, KeyCode::Char('x'));
+        let shown = render(&mut app, 100, 24);
+        assert!(
+            shown.contains("reject it") && shown.contains("cancel"),
+            "{shown}"
+        );
+        let narrow = render(&mut app, 30, 8);
+        assert_eq!(narrow.lines().count(), 8);
+    }
+
+    #[test]
+    fn the_last_page_shows_four_sections_each_with_a_title_a_count_and_its_rows() {
+        for host in ["board", "card"] {
+            let (machine, seen) = decided_machine();
+            let mut app = on_page(host, machine, WEEK_PAGE);
+            assert_eq!(
+                requests(&seen)
+                    .iter()
+                    .rev()
+                    .take(2)
+                    .rev()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                vec![DIGEST.to_string(), WAITING.to_string()],
+                "the digest, then the waiting claims for the header"
+            );
+            let shown = screen(&mut app);
+            for want in [
+                " Since last week 5 ",
+                "Jev verified alone · 2 · 1 flagged",
+                "Jev rejected alone · 1",
+                "Lessons at risk · 1",
+                "Contested claims · 1",
+                "The e2e suite needs the seed command before the app starts.",
+                "The board lint may be skipped for a docs change. · against: The board lint must be clean",
+            ] {
+                assert!(shown.contains(want), "{host}: {want}: {shown}");
+            }
+            let flagged = list_row(&shown, "Jev was unsure of this one.");
+            assert!(
+                flagged.contains("jev") && flagged.contains("flagged"),
+                "{flagged}"
+            );
+            let titles: Vec<usize> = [
+                "Jev verified alone",
+                "Jev was unsure of this one.",
+                "Jev rejected alone",
+                "Jev dropped this one.",
+                "Lessons at risk",
+                "The e2e suite needs",
+                "Contested claims",
+                "The board lint may be skipped",
+            ]
+            .iter()
+            .map(|t| {
+                shown
+                    .lines()
+                    .position(|l| l.chars().take(120).collect::<String>().contains(t))
+                    .unwrap()
+            })
+            .collect();
+            assert!(
+                titles.windows(2).all(|w| w[0] < w[1]),
+                "{host}: in order: {titles:?}"
+            );
+            assert!(!shown.contains("none"), "{host}: no section is empty");
+        }
+    }
+
+    #[test]
+    fn an_empty_section_says_none_and_an_empty_digest_says_it_four_times() {
+        let (machine, _) = machine_with(|request, _| {
+            if request == DIGEST {
+                (
+                    "200 OK",
+                    json!({"since": "2026-11-09T12:00:00.000Z", "verified": [], "rejected": [],
+                        "atRisk": [], "contested": []})
+                    .to_string(),
+                )
+            } else {
+                list(&[], 0)
+            }
+        });
+        let mut app = on_page("board", machine, WEEK_PAGE);
+        let shown = screen(&mut app);
+        for want in [
+            "Jev verified alone · 0",
+            "Jev rejected alone · 0",
+            "Lessons at risk · 0",
+            "Contested claims · 0",
+            " Since last week 0 ",
+        ] {
+            assert!(shown.contains(want), "{want}: {shown}");
+        }
+        let nones = shown
+            .lines()
+            .filter(|l| l.chars().take(120).collect::<String>().contains("none"))
+            .count();
+        assert_eq!(nones, 4, "{shown}");
+        assert!(shown.contains("nothing selected"), "{shown}");
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Char('x'));
+        assert!(matches!(app.mode, Mode::Normal) && state(&app).pending.is_none());
+        // A digest where only some sections are empty.
+        let (machine, _) = machine_with(|request, _| {
+            if request == DIGEST {
+                (
+                    "200 OK",
+                    json!({"since": "x", "verified": [], "rejected": [],
+                        "atRisk": [{"learning": "l", "title": "A lesson.", "claim": "c"}],
+                        "contested": []})
+                    .to_string(),
+                )
+            } else {
+                list(&[], 0)
+            }
+        });
+        let mut app = on_page("board", machine, WEEK_PAGE);
+        let shown = screen(&mut app);
+        let nones = shown
+            .lines()
+            .filter(|l| l.chars().take(120).collect::<String>().contains("none"))
+            .count();
+        assert_eq!(nones, 3, "{shown}");
+        assert!(shown.contains("Lessons at risk · 1") && shown.contains("A lesson."));
+    }
+
+    #[test]
+    fn the_selection_moves_through_the_rows_of_all_the_sections_as_one_list() {
+        let (machine, _) = decided_machine();
+        let mut app = on_page("board", machine, WEEK_PAGE);
+        let kind = |app: &App| match state(app).selected_row().expect("a row") {
+            crate::memory::Row::Verified(c) => format!("verified {}", c.id),
+            crate::memory::Row::Rejected(c) => format!("rejected {}", c.id),
+            crate::memory::Row::AtRisk(_) => "lesson".to_string(),
+            crate::memory::Row::Contested(_) => "pair".to_string(),
+        };
+        let mut seen_kinds = vec![kind(&app)];
+        for _ in 0..4 {
+            press(&mut app, KeyCode::Char('j'));
+            seen_kinds.push(kind(&app));
+        }
+        assert_eq!(
+            seen_kinds,
+            [
+                "verified v1",
+                "verified v2",
+                "rejected r1",
+                "lesson",
+                "pair"
+            ]
+        );
+        press(&mut app, KeyCode::Down);
+        assert_eq!(state(&app).cursor, 4, "the end holds");
+        for _ in 0..6 {
+            press(&mut app, KeyCode::Char('k'));
+        }
+        assert_eq!(state(&app).cursor, 0, "the top holds");
+        let on = screen(&mut app);
+        assert!(list_row(&on, "Jev was unsure of this one.").contains('▌'));
+        for _ in 0..4 {
+            press(&mut app, KeyCode::Char('j'));
+        }
+        let end = screen(&mut app);
+        assert!(
+            list_row(&end, "The board lint may be skipped").contains('▌'),
+            "{end}"
+        );
+        assert!(!list_row(&end, "Jev was unsure of this one.").contains('▌'));
+    }
+
+    #[test]
+    fn the_detail_of_a_claim_a_lesson_and_a_pair() {
+        let (machine, _) = decided_machine();
+        let mut app = on_page("board", machine, WEEK_PAGE);
+        let claim_detail = screen(&mut app);
+        for want in [
+            " Claim ",
+            "the log says: Jev was unsure of this one.",
+            "Jev verified this alone and flagged it.",
+            "source: card · Wire the e2e start mode",
+        ] {
+            assert!(claim_detail.contains(want), "{want}: {claim_detail}");
+        }
+        for _ in 0..3 {
+            press(&mut app, KeyCode::Char('j'));
+        }
+        let lesson = screen(&mut app);
+        for want in [
+            " Lesson ",
+            "The claim it rests on was rejected. Agents no longer read this lesson.",
+        ] {
+            assert!(lesson.contains(want), "{want}: {lesson}");
+        }
+        assert!(
+            !lesson.contains("Jev verified this alone"),
+            "the claim's detail is gone: {lesson}"
+        );
+        press(&mut app, KeyCode::Char('j'));
+        let pair = screen(&mut app);
+        for want in [
+            " Contested ",
+            "The board lint may be skipped for a docs change.",
+            "The board lint must be clean before a commit.",
+            "Reject one of the two to settle it.",
+        ] {
+            assert!(pair.contains(want), "{want}: {pair}");
+        }
+        assert_eq!(
+            pair.matches("The board lint must be clean before a commit.")
+                .count(),
+            2,
+            "in the row and, in full, in the detail: {pair}"
+        );
+    }
+
+    #[test]
+    fn x_on_a_row_of_the_first_section_rejects_that_claim_after_a_yes_and_the_digest_is_fetched_again()
+     {
+        let (machine, seen) = decided_machine();
+        let mut app = on_page("board", machine, WEEK_PAGE);
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('x'));
+        assert!(matches!(&app.mode, Mode::ConfirmClaim { id, verify: false, .. } if id == "v2"));
+        assert!(screen(&mut app).contains("Reject this claim?"));
+        no_posts(&seen);
+        press(&mut app, KeyCode::Char('y'));
+        landed(&mut app);
+        assert_eq!(
+            state(&app)
+                .digest
+                .verified
+                .iter()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["v1"],
+            "the row leaves at once"
+        );
+        landed(&mut app);
+        landed(&mut app);
+        let tail: Vec<String> = requests(&seen).into_iter().skip(6).collect();
+        assert_eq!(
+            tail,
+            vec![
+                "POST /brain/claims/v2/reject".to_string(),
+                DIGEST.to_string(),
+                WAITING.to_string()
+            ]
+        );
+        assert_eq!(state(&app).digest.len(), 5, "the machine's digest is back");
+    }
+
+    #[test]
+    fn a_on_a_row_of_the_second_section_verifies_that_claim_after_a_yes() {
+        let (machine, seen) = decided_machine();
+        let mut app = on_page("board", machine, WEEK_PAGE);
+        for _ in 0..2 {
+            press(&mut app, KeyCode::Char('j'));
+        }
+        press(&mut app, KeyCode::Char('a'));
+        assert!(matches!(&app.mode, Mode::ConfirmClaim { id, verify: true, .. } if id == "r1"));
+        let shown = screen(&mut app);
+        assert!(
+            shown.contains("Verify this claim?") && shown.contains("Jev dropped this one."),
+            "{shown}"
+        );
+        press(&mut app, KeyCode::Char('y'));
+        landed(&mut app);
+        landed(&mut app);
+        landed(&mut app);
+        let tail: Vec<String> = requests(&seen).into_iter().skip(6).collect();
+        assert_eq!(
+            tail,
+            vec![
+                "POST /brain/claims/r1/verify".to_string(),
+                DIGEST.to_string(),
+                WAITING.to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn the_opposite_key_on_the_digest_does_nothing_and_so_does_n() {
+        let (machine, seen) = decided_machine();
+        let mut app = on_page("board", machine, WEEK_PAGE);
+        // Row 0 is verified: `a` is nothing. Row 2 is rejected: `x` is nothing.
+        press(&mut app, KeyCode::Char('a'));
+        assert!(matches!(app.mode, Mode::Normal));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('x'));
+        assert!(matches!(app.mode, Mode::Normal));
+        press(&mut app, KeyCode::Char('k'));
+        press(&mut app, KeyCode::Char('x'));
+        press(&mut app, KeyCode::Char('n'));
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(state(&app).pending.is_none());
+        no_posts(&seen);
+    }
+
+    #[test]
+    fn a_and_x_do_nothing_on_a_lesson_or_a_contested_pair() {
+        let (machine, seen) = decided_machine();
+        let mut app = on_page("board", machine, WEEK_PAGE);
+        for at in [3, 4] {
+            state_cursor(&mut app, at);
+            press(&mut app, KeyCode::Char('a'));
+            press(&mut app, KeyCode::Char('x'));
+            assert!(matches!(app.mode, Mode::Normal), "row {at}");
+            assert!(state(&app).pending.is_none(), "row {at}");
+        }
+        no_posts(&seen);
+    }
+
+    fn state_cursor(app: &mut App, at: usize) {
+        app.memory.as_mut().unwrap().cursor = at;
+    }
+
+    #[test]
+    fn a_decision_on_the_week_page_brings_the_headers_numbers_up_to_date() {
+        let decided = Arc::new(Mutex::new(false));
+        let flag = decided.clone();
+        let (machine, _) = machine_with(move |request, _| {
+            if request.starts_with("POST /brain/claims/") {
+                *flag.lock().unwrap() = true;
+                return (
+                    "200 OK",
+                    json!({"claim": claim("v1", "x", json!({"status": "rejected"}))}).to_string(),
+                );
+            }
+            let (left, decided, agreed) = if *flag.lock().unwrap() {
+                (2, 15, 13)
+            } else {
+                (3, 14, 12)
+            };
+            match request {
+                DIGEST => ("200 OK", digest().to_string()),
+                WAITING => (
+                    "200 OK",
+                    json!({"claims": waiting(), "stats": {"waiting": left, "decided": decided, "agreed": agreed, "missed": 0}})
+                        .to_string(),
+                ),
+                _ => list(&[], 0),
+            }
+        });
+        let mut app = on_page("board", machine, WEEK_PAGE);
+        assert!(screen(&mut app).contains("Memory · 3 waiting · Jev agreed with you on 12 of 14"));
+        press(&mut app, KeyCode::Char('x'));
+        press(&mut app, KeyCode::Char('y'));
+        landed(&mut app);
+        landed(&mut app);
+        landed(&mut app);
+        let shown = screen(&mut app);
+        assert!(
+            shown.contains("Memory · 2 waiting · Jev agreed with you on 13 of 15"),
+            "{shown}"
+        );
+        assert_eq!(
+            state(&app).claims.len(),
+            0,
+            "only the numbers are taken, not the list"
+        );
+    }
+
+    #[test]
+    fn the_digests_note_is_one_line_above_the_lists_and_no_note_is_no_line() {
+        let note = "the graph did not answer: lessons at risk and contested claims are unknown";
+        for (with, hostile) in [(true, false), (true, true), (false, false)] {
+            let mut body = digest();
+            if with {
+                body["note"] = json!(if hostile {
+                    format!("{note}\u{1b}[31m\nsecond line")
+                } else {
+                    note.to_string()
+                });
+            }
+            let (machine, _) = machine_with(move |request, _| {
+                if request == DIGEST {
+                    ("200 OK", body.to_string())
+                } else {
+                    list(&[], 0)
+                }
+            });
+            let mut app = on_page("board", machine, WEEK_PAGE);
+            let shown = screen(&mut app);
+            let lines: Vec<&str> = shown.lines().collect();
+            let head = lines
+                .iter()
+                .position(|l| l.contains("Memory · 3 waiting"))
+                .expect("the header");
+            if with {
+                let at = lines
+                    .iter()
+                    .position(|l| l.contains("the graph did not answer"))
+                    .unwrap_or_else(|| panic!("no note line: {shown}"));
+                assert_eq!(at, head + 1, "right under the header: {shown}");
+                assert!(!lines[at].contains('\u{1b}'), "{shown}");
+                if hostile {
+                    assert!(lines[at].contains("second line"), "one line: {shown}");
+                }
+                assert!(
+                    lines[at + 1].contains("Since last week"),
+                    "the lists follow it: {shown}"
+                );
+                assert_eq!(fg_of(&app, "the graph did not answer"), crate::theme::PEACH);
+            } else {
+                assert!(!shown.contains("the graph did not answer"), "{shown}");
+                assert!(lines[head + 1].contains("Since last week"), "{shown}");
+            }
+        }
+    }
+
+    #[test]
+    fn r_fetches_the_digest_again() {
+        let (machine, seen) = decided_machine();
+        let mut app = on_page("board", machine, WEEK_PAGE);
+        press(&mut app, KeyCode::Char('r'));
+        landed(&mut app);
+        assert_eq!(count(&seen, DIGEST), 2);
+    }
+
+    #[test]
+    fn a_failed_digest_says_why_in_the_pane_and_a_toast_and_a_later_one_clears_it() {
+        let broken = Arc::new(Mutex::new(true));
+        let flag = broken.clone();
+        let (machine, _) = machine_with(move |request, _| {
+            if request == DIGEST && *flag.lock().unwrap() {
+                failing("boom", "the digest broke", "500 Internal Server Error")
+            } else if request == DIGEST {
+                ("200 OK", digest().to_string())
+            } else {
+                list(&[], 0)
+            }
+        });
+        let mut app = on_page("board", machine, WEEK_PAGE);
+        let toast = app.toast.as_ref().expect("a toast says it");
+        assert!(toast.error);
+        assert_eq!(toast.text, "memory: the digest broke");
+        let shown = screen(&mut app);
+        assert!(shown.contains("the digest broke"), "{shown}");
+        assert!(
+            !shown.contains("none") && !shown.contains("Lessons at risk"),
+            "an error is not an empty digest: {shown}"
+        );
+        *broken.lock().unwrap() = false;
+        press(&mut app, KeyCode::Char('r'));
+        landed(&mut app);
+        assert!(state(&app).error.is_none());
+        assert!(screen(&mut app).contains("Lessons at risk · 1"));
+    }
+
+    #[test]
+    fn a_machine_without_a_claim_journal_shows_its_message_in_the_pane() {
+        let (machine, _) = machine_with(|request, _| {
+            if request == DIGEST {
+                failing(
+                    "brain_claims_off",
+                    "the machine keeps no claim journal",
+                    "503 Service Unavailable",
+                )
+            } else {
+                list(&[], 0)
+            }
+        });
+        let mut app = on_page("board", machine, WEEK_PAGE);
+        let shown = screen(&mut app);
+        assert!(
+            shown.contains("the machine keeps no claim journal"),
+            "{shown}"
+        );
+        assert_eq!(
+            app.toast.as_ref().map(|t| t.text.as_str()),
+            Some("memory: the machine keeps no claim journal")
+        );
+    }
+
+    #[test]
+    fn a_digest_for_a_page_the_view_has_left_is_dropped() {
+        let (machine, _) = brain();
+        let mut app = opened(machine);
+        let late: crate::memory::Digest = serde_json::from_value(digest()).unwrap();
+        app.take_incoming(Incoming::MemoryDigest {
+            seq: state(&app).seq,
+            result: Ok(late),
+        });
+        assert_eq!(state(&app).digest.len(), 0);
+        assert_eq!(state(&app).claims.len(), 3);
+        app.take_incoming(Incoming::MemoryDigest {
+            seq: state(&app).seq,
+            result: Err("late".into()),
+        });
+        assert!(app.toast.is_none());
+    }
+
+    #[test]
+    fn text_from_the_digest_never_puts_a_control_character_on_the_screen() {
+        let hostile = json!({
+            "since": "x",
+            "verified": [jev("h1", "Seed\u{1b}[2Jfirst\u{7}.", "verified", "flag")],
+            "rejected": [],
+            "atRisk": [{"learning": "l", "title": "Lesson\u{1b}]0;owned\u{7} one", "claim": "c"}],
+            "contested": [{"claim": "c", "says": "Says\u{1b}[31m this", "contradicts": "d",
+                "against": "Against\nthat\u{8}"}]
+        });
+        let (machine, _) = machine_with(move |request, _| {
+            if request == DIGEST {
+                ("200 OK", hostile.to_string())
+            } else {
+                list(&[], 0)
+            }
+        });
+        let mut app = on_page("board", machine, WEEK_PAGE);
+        for at in 0..3 {
+            state_cursor(&mut app, at);
+            let shown = screen(&mut app);
+            assert!(
+                !shown.chars().any(|c| c.is_control() && c != '\n'),
+                "row {at}: {shown:?}"
+            );
+        }
+        assert!(screen(&mut app).contains("Against that"));
+    }
+
+    #[test]
+    fn the_digest_draws_at_a_narrow_and_a_short_terminal() {
+        let (machine, _) = decided_machine();
+        let mut app = on_page("board", machine, WEEK_PAGE);
+        for (width, height) in [(100, 30), (60, 14), (30, 6), (12, 3), (80, 4)] {
+            for at in 0..5 {
+                state_cursor(&mut app, at);
+                let shown = render(&mut app, width, height);
+                assert!(shown.lines().count() == height as usize, "{width}x{height}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_short_terminal_scrolls_the_digest_to_the_selected_row() {
+        let (machine, _) = decided_machine();
+        let mut app = on_page("board", machine, WEEK_PAGE);
+        state_cursor(&mut app, 4);
+        let shown = render(&mut app, 120, 9);
+        assert!(shown.contains("The board lint may be skipped"), "{shown}");
     }
 }

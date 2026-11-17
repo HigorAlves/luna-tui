@@ -296,7 +296,12 @@ const statusText = (status: StageInput["context"]["status"]) => {
   const c = status.compliance;
   const yes = (b: boolean) => (b ? "yes" : "no");
   const section = (heading: string, lines: string[]) => (lines.length > 0 ? [`${heading}:`, ...lines] : []);
+  const b = status.brain;
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  // The brain's week is the machine's own count: numbers and fixed words, no claim's text.
+  const brainLine = b ? [`Company brain: Jev verified ${plural(b.verifiedByJev, "claim", "claims")} alone (${b.flagged} flagged) and rejected ${b.rejectedByJev}; ${b.waiting} ${b.waiting === 1 ? "waits" : "wait"} for you; ${b.atRisk === null ? "lessons at risk unknown" : `${plural(b.atRisk, "lesson", "lessons")} at risk`}; ${b.contested === null ? "contested unknown" : `${b.contested} contested`}.`] : [];
   const compliance = [
+    ...brainLine,
     ...section("Drafts waiting for the person", c.waitingDrafts.map((d) => `- ${d.kind}: ${d.title}`)),
     ...section("Change evidence", c.evidence.map((e) => `- ${e.repo} ${e.period}: ${e.exceptions} exceptions`)),
     ...section("Access review", c.access.map((a) => `- ${a.org} ${a.period}: ${a.flags} flags, ${a.signed ? "signed" : "not signed"}`)),
@@ -314,6 +319,15 @@ const statusText = (status: StageInput["context"]["status"]) => {
     merged: list(status.merged.map((x) => `- ${x.repo}: ${x.count} merged PRs`)),
     compliance: list(compliance),
     capacity: status.capacity ? `over agent capacity: ${yes(status.capacity.answers.overAgentCapacity)}\nover review capacity: ${yes(status.capacity.answers.overReviewCapacity)}\nat risk: ${status.capacity.answers.atRisk}` : "not assessed",
+  };
+};
+
+/** The brain's rows, as brain_ask reads them: the question as text, one line per row (a title in it is a person's, so quoted as data). */
+const brainAskText = (brainAsk: StageInput["context"]["brainAsk"]) => {
+  if (!brainAsk) return { question: NONE, rows: NONE };
+  return {
+    question: brainAsk.question,
+    rows: brainAsk.rows.length > 0 ? brainAsk.rows.map((row) => `${row.slug} · ${row.kind} · ${row.text}`).join("\n") : NONE,
   };
 };
 
@@ -652,6 +666,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
   const postmortem = postmortemText(input.context.postmortem);
   const docsDrift = docsDriftText(input.context.docsDrift);
   const questionnaire = questionnaireText(input.context.questionnaire);
+  const brainAsk = brainAskText(input.context.brainAsk);
   const questions = questionsText(input.context.questions);
   const video = videoText(input.context.video);
   const subs: Record<string, string> = {
@@ -666,7 +681,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.check}}": input.context.check ? renderCheck(input.context.check) : NONE,
     "{{context.propose}}": proposeText(input.context.propose),
     "{{context.factCandidates}}": candidatesText(input.context.factCandidates),
-    ...(input.context.conversation ? conversationText(input.context.conversation) : Object.fromEntries(Object.keys(CONVERSATION_VARIABLES).map((name) => [`{{context.conversation.${name}}}`, NONE]))),
+    ...(input.context.conversation ? conversationText(input.context.conversation) : Object.fromEntries(Object.keys(CONVERSATION_VARIABLES).map((name) => [`{{context.conversation.${name}}}`, name.startsWith("brain") ? "" : NONE]))),
     "{{context.plan.council}}": councilText(input.context.plan?.council),
     "{{context.questions.list}}": questions.list,
     "{{context.questions.card}}": questions.card,
@@ -806,6 +821,8 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.questionnaire.markdown}}": questionnaire.markdown,
     "{{context.questionnaire.policies}}": questionnaire.policies,
     "{{context.questionnaire.bank}}": questionnaire.bank,
+    "{{context.brainAsk.question}}": brainAsk.question,
+    "{{context.brainAsk.rows}}": brainAsk.rows,
     "{{context.jira.issue}}": jira.issue,
     "{{context.jira.description}}": jira.description,
     "{{context.jira.comments}}": jira.comments,

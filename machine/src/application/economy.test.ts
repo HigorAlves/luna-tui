@@ -114,9 +114,9 @@ describe("economy.inputFor", () => {
   });
 });
 
-// Tool pruning: the `triage` pack has web, a subagent and `card_search` (and a skill, which is not a unit); the runs below use none of them unless they say so.
+// Tool pruning: the `triage` pack has web, a subagent, `card_search` and `brain_query` (and a skill, which is not a unit); the runs below use none of them unless they say so.
 const pruning: EconomyConfig = { ...config, loop_guard: "off", prune: { runs: 3, min_cards: 2, cards: 5 } };
-const TRIAGE = ["web", "agent", "luna:card_search"];
+const TRIAGE = ["web", "agent", "luna:card_search", "luna:brain_query"];
 const runOn = (n: number, cardId: string, extra: unknown[] = []) => ({ [`t${n}`]: [...calls(1), ...extra] });
 async function idleRuns(eco: ReturnType<typeof economy>, from: number, n: number, config = pruning) {
   for (let i = from; i < from + n; i++) await eco.afterRun(finished(`t${i}`, { pack: "triage", cardId: `c${i % 2}`, config }));
@@ -148,7 +148,7 @@ describe("economy: tool pruning", () => {
     const eco = economy(store);
     await idleRuns(eco, 0, 3);
     expect(await eco.approveMask("/r", "triage")).toBe(true);
-    expect((await eco.inputFor("/r", "triage", pruning, "t"))?.mask).toEqual({ web: true, agent: true, luna: ["card_search"] });
+    expect((await eco.inputFor("/r", "triage", pruning, "t"))?.mask).toEqual({ web: true, agent: true, luna: ["card_search", "brain_query"] });
     expect((await eco.status("/r")).tools?.triage).toMatchObject({ mask: expect.arrayContaining(TRIAGE), proposal: [] });
     expect(EconomyStatus.safeParse(await eco.status("/r")).success).toBe(true);
   });

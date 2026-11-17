@@ -54,7 +54,7 @@ export type VariableKind = "machine" | "line" | "block";
 // Only what the machine alone writes (a constant, a count, an enum, a hash, a path it chose). Traced one by one: the checks and QA targets
 // are the repository's own text, the scenario tests and the video's narration and sheets carry names a model or a tool wrote, the coverage
 // report lists paths from a report the container wrote, and a classification holds labels a model answered: all foreign.
-const machine = ["agent", "attempt", "skills", "plan.risk", "context.plan.risk", "context.baseCommit", "context.testsCommit", "context.docsOnly", "context.unlockedTests.note", "context.browserScenarios", "context.plan.docsOnly", "context.graph", "context.chat.source", "context.jira.repoPath", "plan.fallback", "context.video.budgetS", "context.conversation.relation", "context.conversation.note", "context.foreman.now", "context.foreman.truncated", "context.foreman.packs", "context.exceptions.repo", "context.exceptions.period", "context.status.week", "context.status.from", "context.status.to", "context.status.metrics", "context.status.capacity", "context.vulns.repo", "context.vulns.today", "context.release.repo", "context.release.tag", "context.release.since", "context.compliance.repo", "context.questionnaire.repo", "context.compliance.regimes", "context.access.org", "context.access.period", "context.postmortem.breach", "context.docsDrift.repo", "context.questionnaire.source"];
+const machine = ["agent", "attempt", "skills", "plan.risk", "context.plan.risk", "context.baseCommit", "context.testsCommit", "context.docsOnly", "context.unlockedTests.note", "context.browserScenarios", "context.plan.docsOnly", "context.graph", "context.chat.source", "context.jira.repoPath", "plan.fallback", "context.video.budgetS", "context.conversation.relation", "context.conversation.note", "context.conversation.brainNote", "context.foreman.now", "context.foreman.truncated", "context.foreman.packs", "context.exceptions.repo", "context.exceptions.period", "context.status.week", "context.status.from", "context.status.to", "context.status.metrics", "context.status.capacity", "context.vulns.repo", "context.vulns.today", "context.release.repo", "context.release.tag", "context.release.since", "context.compliance.repo", "context.questionnaire.repo", "context.compliance.regimes", "context.access.org", "context.access.period", "context.postmortem.breach", "context.docsDrift.repo", "context.questionnaire.source"];
 const line = ["task.title", "task.branch", "task.goal", "task.classification", "context.jira.classification", "context.slack.me", "context.chat.me", "context.questionnaire.requester", "context.questionnaire.name", "context.eval.pack", "context.eval.case"];
 const block = [
   "task.description", "task.criteria", "task.record", "task.evidence", "plan.brief", "plan.criteria", "plan.criteria.ids", "plan.assumptions", "plan.slices",
@@ -68,8 +68,9 @@ const block = [
   "context.postmortem.incident",
   "context.docsDrift.changedFiles", "context.docsDrift.docFiles",
   "context.questionnaire.markdown", "context.questionnaire.policies", "context.questionnaire.bank",
+  "context.brainAsk.question", "context.brainAsk.rows",
   "context.split", "context.jira.issue", "context.jira.description", "context.jira.comments", "context.intake", "context.ticket", "context.check", "context.propose", "context.factCandidates",
-  "context.conversation.thread", "context.conversation.card", "context.conversation.evidence", "context.conversation.docs", "context.conversation.tone",
+  "context.conversation.thread", "context.conversation.card", "context.conversation.evidence", "context.conversation.docs", "context.conversation.tone", "context.conversation.brain",
   "context.eval.rubric", "context.eval.input", "context.eval.checks", "context.eval.answer",
 ];
 
@@ -138,6 +139,8 @@ export const CAPS: Readonly<Record<string, number>> = {
   "context.conversation.tone": 16_000,
   "context.conversation.card": 16_000,
   "context.conversation.evidence": 16_000,
+  // Twelve rows of at most 600 characters, plus the slug and kind on each line.
+  "context.conversation.brain": 12_000,
   "context.slack.watches": 16_000,
   "context.slack.rules": 32_000,
   "context.slack.items": 120_000,
@@ -176,6 +179,9 @@ export const CAPS: Readonly<Record<string, number>> = {
   "context.questionnaire.markdown": 100_000,
   "context.questionnaire.policies": 250_000,
   "context.questionnaire.bank": 210_000,
+  // The brain's answerer reads the question whole and up to sixty rows of at most 600 characters, plus the slug and kind on each line.
+  "context.brainAsk.question": 2_000,
+  "context.brainAsk.rows": 40_000,
   // The video packs.
   "context.video.scenarios": 200_000,
   "context.video.steps": 32_000,

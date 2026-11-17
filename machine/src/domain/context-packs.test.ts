@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { CONTEXT_OF, NOT_ON_DEMAND, contextSchema, isContextPack } from "./context-packs.ts";
 import { packStates } from "./packs.ts";
-import { buildContextPackInput, buildJiraIntakeInput, buildSlackTriageInput } from "./stage-input.ts";
+import { buildContextPackInput, buildJiraIntakeInput, buildSlackTriageInput, withPrecedents } from "./stage-input.ts";
 
 const chat = { source: "slack" as const, me: { id: "U1", name: "higor" }, items: [{ id: "C1:1", place: "#eng", kind: "channel" as const, author: "@marta", isBot: false, text: "review?" }] };
 const issue = { title: "Board crashes on resize", description: "It panics.", labels: ["bug"] };
@@ -16,7 +16,7 @@ describe("context-only packs", () => {
     const none = PackId.options.filter((id) => packStates(id).length === 0);
     // A new context-only pack must be given a context key or be denied: never on demand by accident.
     expect(none.filter((id) => !NOT_ON_DEMAND.includes(id)).sort()).toEqual(Object.keys(CONTEXT_OF).sort());
-    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["access_review", "breach_assess", "capacity_check", "change_exceptions", "chat_triage", "ci_failure_class", "comment_intent", "conversation_assess", "conversation_relation", "conversation_reply", "coverage_check", "decompose", "e2e_failure_cause", "escalation_reason", "event_class", "evidence_format", "evidence_valid", "fact_propose", "finding_classify", "fix_scope", "foreman", "frame_privacy", "intake_dedup", "jira_intake", "loop_judge", "loop_redirect", "plan_check", "postmortem", "pr_link", "questionnaire", "red_check", "release_notes", "risk_score", "scope_check", "size_estimate", "slack_triage", "split_check", "status_report", "ticket_assess", "ticket_recommend", "ticket_reply", "ticket_validity", "triage_signals", "vuln_triage", "worth_learning"]);
+    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["access_review", "brain_ask", "breach_assess", "capacity_check", "change_exceptions", "chat_triage", "ci_failure_class", "comment_intent", "conversation_assess", "conversation_relation", "conversation_reply", "coverage_check", "decompose", "e2e_failure_cause", "escalation_reason", "event_class", "evidence_format", "evidence_valid", "fact_propose", "finding_classify", "fix_scope", "foreman", "frame_privacy", "intake_dedup", "jira_intake", "loop_judge", "loop_redirect", "memory_admit", "plan_check", "postmortem", "pr_link", "questionnaire", "red_check", "release_notes", "risk_score", "scope_check", "size_estimate", "slack_triage", "split_check", "status_report", "ticket_assess", "ticket_recommend", "ticket_reply", "ticket_validity", "triage_signals", "vuln_triage", "worth_learning"]);
     expect(isContextPack("triage")).toBe(false);
     expect(isContextPack("reviewing_memory")).toBe(false);
     expect(isContextPack("chat_triage")).toBe(true);
@@ -189,6 +189,17 @@ describe("buildContextPackInput", () => {
     expect(input).toMatchObject({ pack: "capacity_check", task: { id: "capacity-check", title: "Capacity of 2026-W47", repoPath: "" }, context: { projectContext: null, capacity }, limits: { maxTurns: 1 } });
   });
 
+  it("builds brain_ask's input around a synthetic task with the question and the rows under context.brainAsk", () => {
+    const brainAsk = { question: "how did the export go?", rows: [{ slug: "card:6f1c2a9e", kind: "card" as const, text: "Export CSV · state closed" }] };
+    expect(isContextPack("brain_ask")).toBe(true);
+    expect(packStates("brain_ask")).toEqual([]);
+    expect(contextSchema("brain_ask").safeParse({ brainAsk }).success).toBe(true);
+    expect(contextSchema("brain_ask").safeParse({ chat }).success).toBe(false);
+    const input = buildContextPackInput("brain_ask", { brainAsk });
+    expect(StageInput.parse(input)).toEqual(input);
+    expect(input).toMatchObject({ pack: "brain_ask", stage: "brain_ask", task: { id: "brain-ask", title: "Brain ask", repoPath: "" }, context: { projectContext: null, brainAsk }, limits: { maxTurns: 2, timeoutMs: 120_000 } });
+  });
+
   it("builds the plan checks' input around a synthetic task named for the brief, the plan under context.plan", () => {
     for (const pack of ["risk_score", "coverage_check", "plan_check"] as const) {
       const input = buildContextPackInput(pack, { plan });
@@ -276,5 +287,34 @@ describe("the change-size decisions", () => {
       expect(input).toMatchObject({ pack, stage: pack, plan: null, context: { projectContext: null, ...context }, limits: { maxTurns: 1 } });
     }
     expect(buildContextPackInput("size_estimate", { size }).task.title).toBe("Export");
+  });
+});
+
+describe("withPrecedents", () => {
+  const precedent = { question: "kind", answer: "bug", truth: "feature", truthSource: "person" as const, card: "Export CSV", decidedAt: "2026-10-03T08:15:00.000Z" };
+  const base = () => buildContextPackInput("triage_signals", { issue }, "claude:haiku");
+
+  it("leaves the input exactly as built when there is no lookup, or it answers nothing, or it throws", async () => {
+    const lines: string[] = [];
+    expect(await withPrecedents(base(), undefined, "/r/a", "t1", (l) => lines.push(l))).toEqual(base());
+    expect(await withPrecedents(base(), async () => [], "/r/a", "t1", (l) => lines.push(l))).not.toHaveProperty("context.precedents");
+    expect(await withPrecedents(base(), async () => { throw new Error("graph down"); }, "/r/a", "t1", (l) => lines.push(l))).toEqual(base());
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("graph down");
+  });
+
+  it("asks with the pack, the synthetic title, the repository and the card, and carries two precedents", async () => {
+    const asked: unknown[][] = [];
+    const input = await withPrecedents(base(), async (...args) => (asked.push(args), [precedent, precedent]), "/r/a", "t1", () => {});
+    expect(asked).toEqual([["triage_signals", "Board crashes on resize", "/r/a", "t1"]]);
+    expect(input.context.precedents).toEqual([precedent, precedent]);
+    expect(StageInput.parse(input)).toEqual(input);
+  });
+
+  it("never asks for a pack that is not a decision pack", async () => {
+    let asked = 0;
+    const input = await withPrecedents(buildContextPackInput("foreman", { foreman: { question: "q", history: [], board: { now: "2026-11-16T12:00:00.000Z", cards: [], packs: [] } } }), async () => (asked++, [precedent]), null, null, () => {});
+    expect(asked).toBe(0);
+    expect(input.context).not.toHaveProperty("precedents");
   });
 });

@@ -1,0 +1,49 @@
+{
+  "schema": 3,
+  "stage": "memory_admit",
+  "pack": "memory_admit",
+  "attempt": 1,
+  "task": {
+    "id": "one-off-this-card-only",
+    "title": "one-off-this-card-only",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "admit": {
+      "claim": {
+        "statement": "The CI runner ran out of disk on 12 November.",
+        "quote": "CI runner out of disk on Nov 12, cleared the cache by hand",
+        "kind": "risk",
+        "scope": "repo",
+        "extractor": "reviewing_memory"
+      },
+      "source": {
+        "kind": "card",
+        "title": "Unblock the release build",
+        "excerpt": "Run 4 failed: CI runner out of disk on Nov 12, cleared the cache by hand and re-ran. The build passed on attempt 5. Nothing in the repo changed."
+      },
+      "similar": [
+        {
+          "id": "c-cache",
+          "statement": "The build cache is keyed on the lockfile hash.",
+          "status": "verified"
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

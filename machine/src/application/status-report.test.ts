@@ -108,6 +108,41 @@ describe("StatusReport.build", () => {
     expect(context.compliance.vulns).toEqual([{ repo: "acme/api", severity: "high", deadline: "2026-11-20", overdue: true }]);
   });
 
+  describe("the brain's week", () => {
+    const zero = { verifiedByJev: 0, flagged: 0, rejectedByJev: 0, waiting: 0, atRisk: 0, contested: 0 };
+
+    it("carries the week's counts when one is above zero, asking for the report's own window", async () => {
+      const brain = vi.fn(async (_since: Date, _until: Date) => ({ ...zero, verifiedByJev: 4, flagged: 1, waiting: 3 }));
+      const { job, write } = world({ brain });
+      await job.build("2026-W46");
+      expect(write.mock.calls[0]![0].brain).toEqual({ verifiedByJev: 4, flagged: 1, rejectedByJev: 0, waiting: 3, atRisk: 0, contested: 0 });
+      expect(brain.mock.calls[0]![0]).toEqual(new Date(2026, 10, 9, 0, 0, 0, 0));
+      expect(brain.mock.calls[0]![1]).toEqual(new Date(2026, 10, 15, 23, 59, 59, 999));
+    });
+
+    it("keeps an unknown count as null, and does not carry a week whose only numbers are zero or unknown", async () => {
+      const unknown = world({ brain: async () => ({ ...zero, verifiedByJev: 2, atRisk: null, contested: null }) });
+      await unknown.job.build("2026-W46");
+      expect(unknown.write.mock.calls[0]![0].brain).toEqual({ ...zero, verifiedByJev: 2, atRisk: null, contested: null });
+      const none = world({ brain: async () => ({ ...zero, atRisk: null, contested: null }) });
+      await none.job.build("2026-W46");
+      expect("brain" in none.write.mock.calls[0]![0]).toBe(false);
+    });
+
+    it("leaves the key out, and the input as it was, with all zeros, with no journal, or with a source that fails", async () => {
+      const base = world();
+      await base.job.build("2026-W46");
+      const before = JSON.stringify(base.write.mock.calls[0]![0]);
+      for (const brain of [async () => zero, async () => null, async (): Promise<never> => { throw new Error("pg down"); }]) {
+        const { job, write, log } = world({ brain });
+        await job.build("2026-W46");
+        expect("brain" in write.mock.calls[0]![0]).toBe(false);
+        expect(JSON.stringify(write.mock.calls[0]![0])).toBe(before);
+        void log;
+      }
+    });
+  });
+
   it("keeps a resolved incident whose breach clock is still running or ran out within the week, and drops the rest", async () => {
     const inc = (id: string, status: "open" | "resolved", clocks?: Record<string, string>) => ({ id, title: id, severity: "high", status, startedAt: at(1).toISOString(), resolvedAt: status === "resolved" ? at(2).toISOString() : null, service: null, signals: [], timeline: [], ...(clocks ? { breach: { assessedAt: "x", answers: {}, regimes: Object.keys(clocks), clocks } } : {}) });
     const { job, write } = world({

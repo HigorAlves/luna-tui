@@ -1,0 +1,43 @@
+{
+  "schema": 3,
+  "stage": "memory_admit",
+  "pack": "memory_admit",
+  "attempt": 1,
+  "task": {
+    "id": "retry-limit-repo-or-org",
+    "title": "retry-limit-repo-or-org",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "admit": {
+      "claim": {
+        "statement": "Services retry failed HTTP calls with exponential backoff.",
+        "quote": "the shared http client retries with exponential backoff, used by billing and this repo",
+        "kind": "pattern",
+        "scope": "org",
+        "extractor": "reviewing_memory"
+      },
+      "source": {
+        "kind": "card",
+        "title": "Harden the export call",
+        "excerpt": "Review: the shared http client retries with exponential backoff, used by billing and this repo. The export call needed no retry code of its own."
+      },
+      "similar": []
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

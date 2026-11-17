@@ -188,6 +188,22 @@ describe("PackRuns", () => {
     expect(StageInput.parse(seen[2]!.input)).toMatchObject({ pack: "jira_intake", engine: "claude:sonnet", context: { jira } });
   });
 
+  it("puts a decision pack's precedents in its input, asked with the card's id, and keeps them out of the stored record", async () => {
+    const labels = { kind: { choice: "bug", confidence: 0.9 }, type_of_work: { choice: "frontend", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { choice: "S", confidence: 0.7 }, who: { score: 1, confidence: 0.8 }, what: { score: 1, confidence: 0.8 }, impact: { score: 1, confidence: 0.8 }, time: { score: 1, confidence: 0.8 }, demand: { score: 0, confidence: 0.8 }, risk_prelim: { choice: "low", confidence: 0.8 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.9 } };
+    const precedent = { question: "kind", answer: "bug", truth: "feature", truthSource: "person" as const, card: "Export CSV", decidedAt: "2026-10-03T08:15:00.000Z" };
+    const asked: unknown[][] = [];
+    const appended: DecisionRecord[] = [];
+    const call = { pack: "triage_signals" as const, context: { issue: { title: "Board crashes on resize", description: "It panics." } } };
+    const r = runs(fakeSandbox(output({ answer: labels })), { precedents: async (...args) => (asked.push(args), [precedent]), decisions: { append: async (record) => void appended.push(record) } });
+    await r.run({ ...call, taskId: "t1" }, "intake", undefined, { own: true });
+    expect(asked).toEqual([["triage_signals", "Board crashes on resize", null, "t1"]]);
+    expect(StageInput.parse(seen[0]!.input).context.precedents).toEqual([precedent]);
+    expect(appended[0]!.context).not.toHaveProperty("precedents");
+    // Without the dependency the input has no such key.
+    await runs(fakeSandbox(output({ answer: labels }))).run(call, "intake");
+    expect(StageInput.parse(seen[1]!.input).context).not.toHaveProperty("precedents");
+  });
+
   it("refuses a pack that runs in a task, eval_judge, an engine the pack does not allow and a context that does not fit, before running anything", async () => {
     const r = runs(fakeSandbox(output()));
     await expect(r.run({ pack: "triage", context: {} }, null)).rejects.toThrow(NotOnDemandError);

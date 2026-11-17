@@ -62,6 +62,8 @@ export interface StatusReportDeps {
   assess(context: CapacityContext): Promise<unknown>;
   /** The one run of the `status_report` pack; its answer is validated here. */
   write(context: StatusReportContext): Promise<unknown>;
+  /** What the brain did in a window, as counts; null when the machine keeps no claim journal. Optional: a failure leaves the report as it was. */
+  brain?(since: Date, until: Date): Promise<StatusReportContext["brain"] | null>;
   /** The `owner/name` of every compliance repository. */
   repos(): Promise<string[]>;
   /** The home wiki the page is written to. */
@@ -97,6 +99,7 @@ export class StatusReport {
     const until = local(to, 23, 59, 59, 999);
     const [tasks, metrics, merged, compliance] = await Promise.all([this.deps.tasks(), this.deps.metrics(since, until), this.merged(since, until), this.complianceFacts(week, since, this.now())]);
     const capacity = await this.capacity(week, until, tasks);
+    const brain = await this.brainFacts(since, until);
     const inWindow = (d: Date | null) => d !== null && d >= since && d <= until;
     const shipped = tasks.filter((t) => t.state === "closed" && t.archiveReason === null && inWindow(t.stateSince ?? t.updatedAt));
     const m = metrics;
@@ -120,6 +123,7 @@ export class StatusReport {
       merged,
       compliance,
       capacity,
+      ...(brain ? { brain } : {}),
     });
     const answer = StatusReportAnswer.parse(await this.deps.write(facts));
     return this.deps.drafts.open({
@@ -195,6 +199,18 @@ export class StatusReport {
         .slice(0, 40)
         .map((v) => ({ repo: v.repo, severity: String(v.severity).slice(0, 20), deadline: String(v.deadline).slice(0, 40), overdue: v.overdue })),
     };
+  }
+
+  /** The brain's week; undefined (the key stays out) with no journal, with every count at zero, or when the read fails. */
+  private async brainFacts(since: Date, until: Date): Promise<StatusReportContext["brain"]> {
+    if (!this.deps.brain) return undefined;
+    try {
+      const facts = await this.deps.brain(since, until);
+      return facts && Object.values(facts).some((n) => n !== null && n > 0) ? facts : undefined;
+    } catch (error) {
+      this.log(`status report: the brain's week skipped: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    }
   }
 
   /** capacity_check's reading of the coming week; null, with a note, when the check fails or answers nothing usable. */

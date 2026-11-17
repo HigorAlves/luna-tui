@@ -3,9 +3,13 @@
 // `requested.rules` from the pack's answer and the host copy of its `rules.md` artifact, and
 // owns the merge that the close step applies when the proposal is approved.
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 
-import { type DecisionOverrides, type Ledger, PACKS, PROJECT_CONTEXT_SECTIONS, ProjectContextSection, type ShipContext, applyPolicy } from "@hardness/contracts";
+import { z } from "zod";
 
+import { ClaimDraft, type DecisionOverrides, type Ledger, PACKS, PROJECT_CONTEXT_SECTIONS, ProjectContextSection, type ShipContext, applyPolicy } from "@hardness/contracts";
+
+import { readRegularFile } from "../../adapters/fs/bounded.ts";
 import { recordIdOf } from "../decision-truth.ts";
 import type { EventRow, TaskRow } from "../../domain/task.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
@@ -30,7 +34,24 @@ export interface MemoryDeps {
   decide?: ((pack: "worth_learning", ship: ShipContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
   /** The repo's own confidence bars for worth_learning (luna.yaml `policy.decisions`). */
   overrides?: (repoPath: string | null) => Promise<DecisionOverrides | undefined>;
+  /** Hands the claims the retro answered to admission, with the text the retro was shown (null when the machine cannot read it). Never awaited: a slow or failing admission must not slow or fail the retro. */
+  claims?: (context: StageContext, drafts: ClaimDraft[], prompt: string | null) => void;
 }
+
+const CLAIMS_MAX = 8;
+const PROMPT_CAP = 8 * 1024 * 1024;
+
+/** What the retro wrote as claims. The pack's schema already dropped a claim out of bounds; a list that still does not parse is no claims. */
+function draftsOf(answer: Record<string, unknown>, log: (line: string) => void): ClaimDraft[] {
+  if (answer.claims === undefined) return [];
+  const parsed = z.array(ClaimDraft).max(CLAIMS_MAX).safeParse(answer.claims);
+  if (parsed.success) return parsed.data;
+  log("the retro's claims did not parse; none were remembered");
+  return [];
+}
+
+/** The prompt the factory wrote for this stage run, in the run's out folder; null when it is not there. */
+const promptOf = (stateDir: string, runId: string): Promise<string | null> => readRegularFile(join(stateDir, "runs", runId, "out", "prompt.md"), PROMPT_CAP).catch(() => null);
 
 const answerOf = (detail: Record<string, unknown> | undefined): Record<string, unknown> => {
   const answer = detail?.answer;
@@ -99,6 +120,17 @@ export function memoryReviewRunner(deps: MemoryDeps): StageRunner {
     if (result.outcome !== "pass") return result;
 
     const answer = answerOf(result.detail);
+    const drafts = draftsOf(answer, (line) => void context.note?.(line).catch(() => {}));
+    if (drafts.length > 0 && deps.claims) {
+      const prompt = await promptOf(deps.stateDir, context.runId);
+      const failed = (error: unknown) => void context.note?.(`claims were not handed over: ${String(error)}`).catch(() => {});
+      try {
+        // Never awaited; the hook may return a promise in spite of its type, and a rejection is caught here too.
+        void Promise.resolve(deps.claims(context, drafts, prompt)).catch(failed);
+      } catch (error) {
+        failed(error);
+      }
+    }
     const artifact = result.artifacts?.find((a) => a.kind === "rules");
     let markdown = "";
     if (artifact) {

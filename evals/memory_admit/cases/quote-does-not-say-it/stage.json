@@ -1,0 +1,43 @@
+{
+  "schema": 3,
+  "stage": "memory_admit",
+  "pack": "memory_admit",
+  "attempt": 1,
+  "task": {
+    "id": "quote-does-not-say-it",
+    "title": "quote-does-not-say-it",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "admit": {
+      "claim": {
+        "statement": "The payments service retries failed webhooks three times.",
+        "quote": "the webhook handler logs the failure and returns 500",
+        "kind": "fact",
+        "scope": "repo",
+        "extractor": "reviewing_memory"
+      },
+      "source": {
+        "kind": "card",
+        "title": "Handle failed payment webhooks",
+        "excerpt": "Slice 1: the webhook handler logs the failure and returns 500 so the provider sees it. Slice 2: added a test for the 500 path. No retry logic was written on this card."
+      },
+      "similar": []
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

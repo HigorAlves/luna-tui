@@ -189,7 +189,7 @@ async function decide(ctx: RunContext, transport?: Transport): Promise<RunOutcom
     env: { ...env, LUNA_FACTORY: "1" },
   };
   if (dry) return dryRun(ctx, JSON.stringify({ ...options, env: undefined }, null, 2));
-  const prompt = renderDecision(pack.questions, stateOf(input));
+  const prompt = renderDecision(pack.questions, stateOf(input), input.context.precedents);
   const run = await drive(ctx, transport, prompt, options, new CallJoin(emit, isGuarded));
   if (run.structured) emit({ kind: "text", payload: { text: decisionSummary(pack.questions, run.structured, lowestBar(pack.policy)) } });
   return run;
