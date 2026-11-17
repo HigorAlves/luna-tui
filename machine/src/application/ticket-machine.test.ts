@@ -8,6 +8,7 @@ import { PgTicketStore } from "../adapters/persistence/ticket-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import type { AssessAnswer } from "../domain/ticket-score.ts";
 import { createTicketScreen } from "./ticket-screen.ts";
+import { SCREENED_TEXT_LIMIT } from "../domain/ticket-screen.ts";
 import { TicketMachine, TicketNotFound, TicketRefusal, parseTicketKey, splitTargetOf, ticketSource } from "./ticket-machine.ts";
 import { trustOf } from "../domain/trust.ts";
 import { draftHash } from "./ticket-drafts.ts";
@@ -963,6 +964,13 @@ describe("the safety screen", () => {
     expect(items[0]!.sources).toEqual([expect.objectContaining({ kind: "jira", safetyReleased: true })]);
     await machine.card("PAY-12");
     expect(cards[0]).toMatchObject({ source: { kind: "jira", key: "PAY-12", safetyReleased: true } });
+  });
+
+  it("a card made from a 40000-character ticket carries at most the screened limit", async () => {
+    const { machine, cards } = setup();
+    await machine.ingest(ticket({ description: "x".repeat(40000) }), ctx);
+    await machine.card("PAY-12");
+    expect((cards[0] as { description: string }).description.length).toBeLessThanOrEqual(SCREENED_TEXT_LIMIT);
   });
 
   it("a released ingest skips the screen", async () => {

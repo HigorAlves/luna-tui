@@ -82,6 +82,24 @@ describe("JiraIntake with the ticket machine's scope", () => {
   });
 });
 
+describe("JiraIntake passes on only what the screen read", () => {
+  it("hands the triager, and makes the card from, no more than the canonical ticket the screen reads", async () => {
+    const comments = Array.from({ length: 40 }, (_, i) => ({ author: `u${i}`, authorId: `a${i}`, text: `${i === 39 ? "TAIL-PAYLOAD " : ""}${"c".repeat(1990)}`, created: "" }));
+    const jira = fakeJira({ issues: [{ key: "PLAT-1", summary: "Long one", description: `${"d".repeat(9000)}LATE-PAYLOAD`, comments }] });
+    const seen: JiraIssue[] = [];
+    const triager = { triage: async (issue: JiraIssue) => (seen.push(issue), { verdict: "ready" as const, reason: "ok" }) };
+    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn, jiraSite: "https://acme.atlassian.net" });
+    const intake = new JiraIntake({ pipeline, jira, policies: { for: async () => ({ ...DEFAULT_POLICY, jira: { ...policy } }) }, repos: async () => ["/r/a"], triager, now: () => new Date("2026-10-28T12:00:00Z"), log: () => {} });
+    await intake.tick();
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.description.length).toBeLessThanOrEqual(8000);
+    expect(seen[0]!.comments.reduce((n, c) => n + c.text.length, 0)).toBeLessThanOrEqual(32000);
+    const [task] = await pipeline.list();
+    expect(task!.description.length).toBeLessThanOrEqual(8000);
+    expect(task!.description).not.toContain("LATE-PAYLOAD");
+  });
+});
+
 describe("JiraIntake with triage_signals", () => {
   it("reads each new issue first, declines a question Jev is sure of without jira_intake, saying why once with the classification", async () => {
     const { jira, pipeline, intake, triaged, read, logs } = wire({ classify: (issue) => classified(issue.title === "Rotate the prod password" ? "question" : "feature") });

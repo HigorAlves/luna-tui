@@ -977,6 +977,13 @@ describe("SlackInbox actions", () => {
     expect(inbox.snapshot.items[0]!.linked.taskId).toBeNull();
   });
 
+  it("toTask makes a card of at most the screened limit from a long message", async () => {
+    const w = setup({ hits: [hit({ ts: ts(30), text: `<@U1> ${"long ".repeat(9000)}` })] });
+    const { items } = await poll(w.inbox);
+    await w.inbox.toTask(items[0]!.id, {}, TAP);
+    expect((w.created[0] as { description: string }).description.length).toBeLessThanOrEqual(32000);
+  });
+
   it("toTask with a screen that passes the message makes the task as before", async () => {
     const screen = { screen: async () => ({ verdict: "safe" as const, reasons: [], hash: "h" }) };
     const { inbox, item, created } = await seeded({ screen });

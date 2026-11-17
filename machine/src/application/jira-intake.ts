@@ -10,7 +10,8 @@
 import { type IssueContext, type JiraIntakeAnswer, type TaskClassification, classificationLine } from "@hardness/contracts";
 
 import type { Policy } from "../domain/policy.ts";
-import { canonicalTicketOf } from "../domain/ticket.ts";
+import { canonicalTicketOf, screenedIssue } from "../domain/ticket.ts";
+import { cardText } from "../domain/ticket-screen.ts";
 import { inScope, scopeConfigured, settled } from "../domain/ticket-scope.ts";
 import type { TaskRow } from "../domain/task.ts";
 import { type IssueClassifier, confidentQuestion } from "./classify.ts";
@@ -175,8 +176,9 @@ export class JiraIntake {
   }
 
   /** The ticket machine's path: the issue becomes a ticket object with its drafts. Nothing is written to Jira and no card is made. */
-  private async hold(issue: JiraIssue, repoPath: string): Promise<void> {
-    if (await this.held(issue, repoPath)) return;
+  private async hold(fetched: JiraIssue, repoPath: string): Promise<void> {
+    if (await this.held(fetched, repoPath)) return;
+    const issue = screenedIssue(fetched);
     const classification = (await this.options.classifier?.classify(issueContext(issue)).catch(() => null)) ?? null;
     if (await this.requested(issue, classification)) {
       // A questionnaire is not a ticket: it lives in the Compliance view.
@@ -185,7 +187,7 @@ export class JiraIntake {
       return;
     }
     const overrides = (await this.options.policies.for(repoPath)).decisions.triage_signals ?? {};
-    await this.options.tickets!.ingest(canonicalTicketOf({ tool: "jira", issue }), { repoPath, question: confidentQuestion(classification, overrides), ...(this.options.tickets!.screenAndHold ? { screened: true } : {}) });
+    await this.options.tickets!.ingest(canonicalTicketOf({ tool: "jira", issue: fetched }), { repoPath, question: confidentQuestion(classification, overrides), ...(this.options.tickets!.screenAndHold ? { screened: true } : {}) });
     this.answered.set(issue.key, issue.updated);
   }
 
@@ -202,8 +204,10 @@ export class JiraIntake {
     return true;
   }
 
-  private async consider(issue: JiraIssue, repoPath: string, comments: "none" | "milestones" | "gates"): Promise<void> {
-    if (await this.held(issue, repoPath)) return;
+  private async consider(fetched: JiraIssue, repoPath: string, comments: "none" | "milestones" | "gates"): Promise<void> {
+    if (await this.held(fetched, repoPath)) return;
+    // From here on the issue is what the screen read of it: the classifier, the triager and the card never see a character past it.
+    const issue = screenedIssue(fetched);
     const classification = (await this.options.classifier?.classify(issueContext(issue))) ?? null;
     if (await this.requested(issue, classification)) {
       // A questionnaire is not agent work: it lives in the Compliance view, not on the board.
@@ -222,7 +226,7 @@ export class JiraIntake {
     if (answer.verdict === "ready") {
       const task = await this.options.pipeline.createTask({
         title: answer.title?.trim() || issue.summary,
-        description: answer.description?.trim() || issue.description,
+        description: cardText(answer.description?.trim() || issue.description),
         criteria: answer.criteria?.length ? answer.criteria : parseChecklist(issue.description),
         repoPath,
         source: { kind: "jira", key: issue.key, url: issue.url, issueType: issue.issueType, ...(issue.labels.length > 0 ? { labels: issue.labels.slice(0, 50).map((l) => l.slice(0, 100)) } : {}) },

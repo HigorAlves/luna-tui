@@ -54,6 +54,8 @@ export const CanonicalTicket = z.object({
   permalink: z.string().max(500),
   /** GitHub's `author_association` of a GitHub issue's author; absent when it was not read (the card then runs untrusted). */
   authorAssociation: z.string().max(40).optional(),
+  /** A hash of the title, description and comments as the tool sent them, before the caps above: an edit anywhere in the text, past a cap too, changes it (the safety screen's hash covers it). */
+  textHash: z.string().max(64).optional(),
 });
 export type CanonicalTicket = z.infer<typeof CanonicalTicket>;
 

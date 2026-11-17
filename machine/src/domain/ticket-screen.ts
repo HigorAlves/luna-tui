@@ -4,7 +4,35 @@ import { createHash } from "node:crypto";
 
 import { SAFETY_REASONS, type SafetyReason } from "@hardness/contracts";
 
-export type RawTicket = { title: string; description: string; comments: string[] };
+/** `full` is the hash of the text before the canonical caps (`CanonicalTicket.textHash`), when the intake read it. */
+export type RawTicket = { title: string; description: string; comments: string[]; full?: string };
+
+/**
+ * The most ticket text a card, a backlog item or a task may carry, and the most the screen reads: every card is capped to it, so no card carries a character the screen did not read.
+ * (The canonical ticket's own caps are lower; this bounds the text that reaches a card without passing through it: a Slack message, a split child, a raw issue body.)
+ */
+export const SCREENED_TEXT_LIMIT = 32000;
+
+/** The most flattened text one screen call reads (title apart). */
+export const SCREEN_CHUNK = 4000;
+
+/** Consecutive description parts share this many characters, so an instruction split by a boundary is whole in one part. */
+export const SCREEN_OVERLAP = 500;
+
+/** Comment texts cut so that all of them together hold at most `SCREENED_TEXT_LIMIT` characters (the last one that fits is cut; later ones are dropped). The screen reads exactly these. */
+export function screenedComments(texts: readonly string[]): string[] {
+  let left = SCREENED_TEXT_LIMIT;
+  const out: string[] = [];
+  for (const t of texts) {
+    if (left <= 0) break;
+    out.push(t.slice(0, left));
+    left -= t.length;
+  }
+  return out;
+}
+
+/** `text` cut to what a card may carry. */
+export const cardText = (text: string): string => (text.length > SCREENED_TEXT_LIMIT ? text.slice(0, SCREENED_TEXT_LIMIT) : text);
 
 export type Prepass = { invisible: number; bidi: number; tagChars: number; htmlComments: number; encodedRuns: number; linkMismatch: number; hard: boolean };
 
@@ -101,5 +129,5 @@ export function screenFailed(): { verdict: "suspicious"; reasons: ["screen_faile
 
 /** A hash of everything the screen read, so an edited ticket is screened again. */
 export function contentHash(raw: RawTicket): string {
-  return createHash("sha256").update(JSON.stringify([raw.title, raw.description, raw.comments])).digest("hex");
+  return createHash("sha256").update(JSON.stringify(raw.full ? [raw.title, raw.description, raw.comments, raw.full] : [raw.title, raw.description, raw.comments])).digest("hex");
 }

@@ -58,6 +58,18 @@ describe("GitHubIntake.pollOnce", () => {
     expect(await pipeline.list()).toHaveLength(2);
   });
 
+  it("a card carries no more of a long issue than the screen read, and the classifier reads no more either", async () => {
+    const body = `${"b".repeat(9000)}LATE-PAYLOAD`;
+    const github = found([{ number: 9, title: "Long", body, url: "https://github.com/o/a/issues/9" }]);
+    const asked: string[] = [];
+    const classifier = { classify: async (i: { description: string }) => (asked.push(i.description), null) };
+    await new GitHubIntake({ pipeline, github, repos: ["o/a"], label: "x", intervalMs: 1000, classifier }).pollOnce();
+    const [task] = await pipeline.list();
+    expect(task!.description.length).toBeLessThanOrEqual(8000);
+    expect(task!.description).not.toContain("LATE-PAYLOAD");
+    expect(asked.every((d) => d.length <= 8000)).toBe(true);
+  });
+
   it("sets the task's repoPath from the resolver, so an imported issue needs no hand edit", async () => {
     const github = found([issues[0]!]);
     const asked: string[] = [];

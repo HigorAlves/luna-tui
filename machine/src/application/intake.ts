@@ -8,7 +8,7 @@ import { classificationLine } from "@hardness/contracts";
 import { type IssueClassifier, confidentQuestion } from "./classify.ts";
 import type { GitHub } from "./github.ts";
 import { canonicalTicketOf } from "../domain/ticket.ts";
-import { contentHash } from "../domain/ticket-screen.ts";
+import { cardText, contentHash } from "../domain/ticket-screen.ts";
 import { rawOf } from "./ticket-screen.ts";
 import type { Pipeline } from "./pipeline.ts";
 import type { TicketIntake } from "./ticket-machine.ts";
@@ -93,8 +93,9 @@ export class GitHubIntake {
     for (const issue of issues) {
       const ref = `${repo}#${issue.number}`;
       if (this.declined.has(ref) || (await this.options.pipeline.findBySource(repo, issue.number))) continue;
-      const body = issue.body ?? "";
       const ticket = canonicalTicketOf({ tool: "github", slug: repo, issue });
+      // The text everything after the screen reads (the classifier, the card) is the canonical ticket's: no more than the screen read.
+      const body = cardText(ticket.description);
       const seen = `${ref}@${contentHash(rawOf(ticket))}`;
       if (this.held.has(seen)) continue;
       // The safety screen reads the issue before anything else does, the classifier included: one that is not safe has a held ticket row and goes no further.
@@ -106,12 +107,12 @@ export class GitHubIntake {
         continue;
       }
       if (this.options.tickets && !(await this.options.ticketsAuto?.(repoPath).catch(() => false))) {
-        const asked = (await this.options.classifier?.classify({ title: issue.title, description: body, labels: issue.labels ?? [], source: issue.url }).catch(() => null)) ?? null;
+        const asked = (await this.options.classifier?.classify({ title: ticket.title, description: body, labels: issue.labels ?? [], source: issue.url }).catch(() => null)) ?? null;
         await this.options.tickets.ingest(ticket, { repoPath, question: confidentQuestion(asked), ...(this.options.tickets.screenAndHold ? { screened: true } : {}) });
         this.held.add(seen);
         continue;
       }
-      const classification = (await this.options.classifier?.classify({ title: issue.title, description: body, labels: issue.labels ?? [], source: issue.url })) ?? null;
+      const classification = (await this.options.classifier?.classify({ title: ticket.title, description: body, labels: issue.labels ?? [], source: issue.url })) ?? null;
       if (confidentQuestion(classification)) {
         this.declined.add(ref);
         const line = classificationLine(classification);
@@ -122,7 +123,7 @@ export class GitHubIntake {
         continue;
       }
       const task = await this.options.pipeline.createTask({
-        title: issue.title,
+        title: ticket.title,
         description: body,
         criteria: parseChecklist(body),
         repoPath,

@@ -67,6 +67,7 @@ import { type ChannelInfo, type Conversation, type RawMessage, type Slack, type 
 import type { SlackStore } from "./slack-store.ts";
 import { type TriageItem, TriageRunError, type Triager } from "./slack-triage.ts";
 import { Ticker } from "./ticker.ts";
+import { cardText } from "../domain/ticket-screen.ts";
 import { type TicketScreen, ticketOfText } from "./ticket-screen.ts";
 import { HeldSafetyError } from "./ticket-machine.ts";
 
@@ -1243,7 +1244,7 @@ export class SlackInbox implements SlackInboxPort {
       const confidence = c.classification?.confidence;
       const task = await this.options.createTask({
         title: input.title ?? candidate.title,
-        description: c.private ? candidate.text : `From Slack: @${row.author.name} in ${where}${row.permalink ? ` · ${row.permalink}` : ""}\n\n${candidate.text}`,
+        description: cardText(c.private ? candidate.text : `From Slack: @${row.author.name} in ${where}${row.permalink ? ` · ${row.permalink}` : ""}\n\n${candidate.text}`),
         repoPath: input.repoPath ?? c.repo ?? null,
         source: { kind: "slack", channel: row.channel.id, ts: row.slackTs, permalink: row.permalink },
         reporter: { id: row.author.id, name: row.author.name, channel: "slack" },
@@ -1263,7 +1264,7 @@ export class SlackInbox implements SlackInboxPort {
     ].join("\n");
     const task = await this.options.createTask({
       title: input.title ?? maskPii(row.triage?.summary ?? firstLine(row.text)),
-      description,
+      description: cardText(description),
       repoPath: input.repoPath ?? null,
       source: { kind: "slack", channel: row.channel.id, ts: row.slackTs, permalink: row.permalink },
       reporter: { id: row.author.id, name: row.author.name, channel: "slack" },

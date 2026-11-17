@@ -18,7 +18,7 @@ import { type Draft, type RecommendDeps, type ReplyDeps, assessmentDraft, declin
 import { ticketClocks } from "../domain/ticket-sla.ts";
 import { enrichTicket } from "./ticket-enrich.ts";
 import { type TicketScreen, rawOf } from "./ticket-screen.ts";
-import { contentHash } from "../domain/ticket-screen.ts";
+import { cardText, contentHash } from "../domain/ticket-screen.ts";
 import { type SizeDecision, type SizedCard, similarCards, sizeContextOf, sizeDecisionOf } from "./size-estimate.ts";
 import { type ValidityDeps, checkValidity } from "./ticket-validity.ts";
 import type { NewTask } from "./pipeline.ts";
@@ -477,8 +477,8 @@ export class TicketMachine implements TicketIntake {
     let card: { id: string };
     try {
       card = await this.deps.createCard({
-      title: t.title,
-      description: t.description,
+      title: cardText(t.title),
+      description: cardText(t.description),
       ...(repo ? { repoPath: repo } : {}),
       source: sourceOfRow(row, t),
       // Linked only to its own source: no Jira key is looked for in the text a stranger wrote.
@@ -600,7 +600,7 @@ export class TicketMachine implements TicketIntake {
     const existing = await this.deps.store.get(created.key);
     if (!existing) {
       await this.deps.store.read({
-        tool: origin.tool, id: created.key, key: created.key, title: text.title.slice(0, 200), description: text.body, type: null, status: null, priority: null, reporter: origin.reporter, assignee: null,
+        tool: origin.tool, id: created.key, key: created.key, title: text.title.slice(0, 200), description: cardText(text.body), type: null, status: null, priority: null, reporter: origin.reporter, assignee: null,
         labels: origin.tool === "github" && this.deps.intakeLabel ? [this.deps.intakeLabel] : [], components: [], links: { blocks: [], duplicates: [], epic: null }, comments: [], attachments: [], sprint: null,
         dueAt: null, createdAt: at, updatedAt: at, permalink: created.permalink || origin.permalink,
       } as CanonicalTicket);

@@ -1367,6 +1367,8 @@ export const TicketContext = z.object({
   candidates: z.array(z.object({ slot: z.number().int().min(1).max(5), kind: z.enum(["open", "closed", "backlog"]), title: z.string().max(500), summary: z.string().max(1000) })).max(5),
   /** The assessment, for the packs that read it (ticket_recommend, ticket_reply). */
   /** What the machine's own scan counted in the raw text: the evidence for the hidden-content question. */
+  /** Set when the ticket is read in parts (a long ticket): which part this call holds, 1-based. Every part carries the title. */
+  chunk: z.object({ index: z.number().int().min(1).max(200), of: z.number().int().min(1).max(200) }).optional(),
   signals: z.object({ invisible: z.number().int().min(0), bidi: z.number().int().min(0), htmlComments: z.number().int().min(0), encodedRuns: z.number().int().min(0), linkMismatch: z.number().int().min(0) }).optional(),
   assessment: z.object({ priority: z.string().max(10), size: z.string().max(10), blastRadius: z.string().max(10), costOfDelay: z.number(), costOfDoing: z.number(), score: z.number() }).nullable().optional(),
 });

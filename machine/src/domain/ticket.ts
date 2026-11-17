@@ -1,10 +1,13 @@
 // The canonical ticket, built from what a tool says: pure. A ticket's words are a stranger's, so every text is
 // redacted of token-shaped strings and capped, the title is one line, and every list is bounded.
+import { createHash } from "node:crypto";
+
 import { type CanonicalTicket, TICKET_CAPS } from "@hardness/contracts";
 
 import type { GhIssue } from "../application/github.ts";
 import type { JiraIssue } from "../application/jira.ts";
 import { redact } from "./evidence-markdown.ts";
+import { screenedComments } from "./ticket-screen.ts";
 
 const cap = (text: string, max: number): string => {
   const clean = redact(text);
@@ -13,6 +16,9 @@ const cap = (text: string, max: number): string => {
 const line = (text: string, max: number): string => cap(text.replace(/\s+/g, " ").trim(), max);
 const word = (text: string | null | undefined): string | null => (text ? line(text, TICKET_CAPS.name) : null);
 const words = (items: readonly string[], max: number): string[] => items.slice(0, max).map((i) => line(i, TICKET_CAPS.name));
+
+/** A hash of the text as the tool sent it, before the caps: an edit past a cap is still an edit. */
+const textHashOf = (title: string, description: string, comments: readonly string[]): string => createHash("sha256").update(JSON.stringify([title, description, comments])).digest("hex");
 
 export type TicketSource = { tool: "jira"; issue: JiraIssue } | { tool: "github"; slug: string; issue: GhIssue };
 
@@ -40,6 +46,7 @@ export function canonicalTicketOf(source: TicketSource): CanonicalTicket {
       createdAt: null,
       updatedAt: i.updated,
       permalink: line(i.url, 500),
+      textHash: textHashOf(i.summary, i.description, i.comments.map((c) => c.text)),
     };
   }
   const g = source.issue;
@@ -66,5 +73,17 @@ export function canonicalTicketOf(source: TicketSource): CanonicalTicket {
     updatedAt: null,
     permalink: line(g.url, 500),
     ...(g.authorAssociation ? { authorAssociation: line(g.authorAssociation, 40) } : {}),
+    textHash: textHashOf(g.title, g.body ?? "", []),
   };
+}
+
+/**
+ * A Jira issue cut to what the safety screen reads of it: the canonical ticket's title and description, and the last comments with their texts held to the screen's total. What a classifier
+ * or a triager reads of an issue goes through this, so none of them is handed a character the screen did not read.
+ */
+export function screenedIssue(issue: JiraIssue): JiraIssue {
+  const t = canonicalTicketOf({ tool: "jira", issue });
+  const kept = issue.comments.slice(-TICKET_CAPS.comments);
+  const texts = screenedComments(t.comments.map((c) => c.text));
+  return { ...issue, summary: t.title, description: t.description, comments: texts.map((text, i) => ({ ...kept[i]!, author: t.comments[i]!.author, text })) };
 }
