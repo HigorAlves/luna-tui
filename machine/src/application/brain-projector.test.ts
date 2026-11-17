@@ -1,8 +1,13 @@
 import type { BrainClaim, BrainEdgeName, BrainRow, DecisionRecord } from "@hardness/contracts";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import type { Incident } from "../domain/incident.ts";
 import type { TaskRow } from "../domain/task.ts";
 import type { BrainPull, RetroFacts } from "../domain/brain/rows.ts";
+import { brainJournal } from "../adapters/fs/brain-state.ts";
 import { BrainError, noBrain, type Brain, type BrainAnswer } from "./brain.ts";
 import { brainProjector, projectAfterClose, type BrainJournal, type BrainSources, type BrainState, type ProjectionResult } from "./brain-projector.ts";
 
@@ -61,7 +66,7 @@ function fakeBrain(options: { failLoad?: number; hygiene?: Record<string, number
 }
 
 function memoryJournal(start?: BrainState) {
-  const state = { current: start ?? { cursor: { tasks: null, verdicts: null, claims: null }, nodes: {}, edges: [] } as BrainState, writes: 0 };
+  const state = { current: start ?? { cursor: { tasks: null, verdicts: null, claims: null, wiki: {} }, nodes: {}, edges: [] } as BrainState, writes: 0 };
   const journal: BrainJournal = {
     read: async () => structuredClone(state.current),
     write: async (next) => {
@@ -83,6 +88,9 @@ function sources(tasks: TaskRow[], over: Partial<BrainSources> = {}): BrainSourc
     claims: async () => [] as BrainClaim[],
     owner: async () => null,
     principlesOf: async () => null,
+    incidents: async () => [],
+    regimesOf: async () => [],
+    wikiPagesOf: async () => null,
     ...over,
   };
 }
@@ -392,7 +400,7 @@ describe("brainProjector claims", () => {
 
   it("asks the claims source from its cursor", async () => {
     const { brain } = fakeBrain();
-    const { journal } = memoryJournal({ cursor: { tasks: null, verdicts: null, claims: "2026-04-05T00:00:00.000Z" }, nodes: {}, edges: [] });
+    const { journal } = memoryJournal({ cursor: { tasks: null, verdicts: null, claims: "2026-04-05T00:00:00.000Z", wiki: {} }, nodes: {}, edges: [] });
     const asked: Array<Date | null> = [];
     await brainProjector({ brain, sources: sources([], { claims: async (since) => (asked.push(since), []) }), journal }).run();
     expect(asked).toEqual([new Date("2026-04-05T00:00:00.000Z")]);
@@ -524,5 +532,181 @@ describe("brainProjector.run, principles", () => {
     expect(slugsOf(loads.flat())).toContain("card:a");
     expect(result.note).toBeNull();
     expect(lines.join("\n")).toContain("git is down");
+  });
+});
+
+describe("brainProjector.run, compliance", () => {
+  const incident = (over: Partial<Incident> = {}): Incident => ({ id: "jira:OPS-9", title: "Bucket public", severity: "high", status: "open", startedAt: "2026-11-10T09:00:00.000Z", resolvedAt: null, service: null, signals: [], timeline: [], ...over });
+  const types = (rows: BrainRow[], type: string) => rows.filter((row) => "type" in row && row.type === type).map((row) => ("type" in row ? row.data : {}));
+  const PAGES = [{ path: "Compliance/Controls/Access.md", text: "# Access control" }];
+
+  it("loads incidents, and nothing on a second run over the same ones", async () => {
+    const { brain, loads } = fakeBrain();
+    const { journal } = memoryJournal();
+    const projector = brainProjector({ brain, sources: sources([], { incidents: async () => [incident()] }), journal });
+    await projector.run();
+    expect(types(loads.flat(), "Incident").map((data) => [data.slug, data.status])).toEqual([["incident:jira:OPS-9", "open"]]);
+    loads.length = 0;
+    expect((await projector.run()).loaded).toBe(0);
+    expect(loads).toEqual([]);
+  });
+
+  it("loads a resolved incident again as resolved", async () => {
+    const { brain, loads } = fakeBrain();
+    const { journal } = memoryJournal();
+    let current = incident();
+    const projector = brainProjector({ brain, sources: sources([], { incidents: async () => [current] }), journal });
+    await projector.run();
+    loads.length = 0;
+    current = incident({ status: "resolved", resolvedAt: "2026-11-10T12:00:00.000Z" });
+    await projector.run();
+    expect(types(loads.flat(), "Incident").map((data) => [data.status, data.resolved_at])).toEqual([["resolved", "2026-11-10T12:00:00.000Z"]]);
+  });
+
+  it("lands the tasks when the incidents source throws, and logs it", async () => {
+    const { brain, loads } = fakeBrain();
+    const { journal, state } = memoryJournal();
+    const lines: string[] = [];
+    const incidents = async (): Promise<Incident[]> => {
+      throw new Error("disk gone");
+    };
+    const result = await brainProjector({ brain, journal, log: (line) => lines.push(line), sources: sources([task("a")], { incidents }) }).run();
+    expect(slugsOf(loads.flat())).toContain("card:a");
+    expect(result.note).toBeNull();
+    expect(lines.join("\n")).toContain("disk gone");
+    expect(state.current.cursor.tasks).not.toBeNull();
+  });
+
+  it("loads the regimes of a task's repository once, with their edges", async () => {
+    const { brain, loads } = fakeBrain();
+    const { journal } = memoryJournal();
+    const asked: string[] = [];
+    await brainProjector({ brain, journal, sources: sources([task("a"), task("b")], { regimesOf: async (path) => (asked.push(path), ["soc2", "gdpr"]) }) }).run();
+    expect(asked).toEqual(["/work/luna"]);
+    expect(types(loads.flat(), "Regime").map((data) => data.slug)).toEqual(["regime:soc2", "regime:gdpr"]);
+    expect(loads.flat().filter((row) => "edge" in row && row.edge === "RepoUnderRegime")).toHaveLength(2);
+  });
+
+  it("unlinks a regime the repository no longer declares", async () => {
+    const { brain, unlinks } = fakeBrain();
+    const { journal } = memoryJournal();
+    let regimes = ["soc2", "gdpr"];
+    const projector = brainProjector({ brain, journal, sources: sources([task("a")], { regimesOf: async () => regimes }) });
+    await projector.run();
+    regimes = ["soc2"];
+    await projector.run();
+    expect(unlinks).toEqual([{ edge: "RepoUnderRegime", from: "repo:luna-ab12", to: "regime:gdpr" }]);
+  });
+
+  it("keeps the regimes when the source could not read them: null is not an empty list", async () => {
+    const { brain, unlinks } = fakeBrain();
+    const { journal } = memoryJournal();
+    let regimes: string[] | null = ["soc2"];
+    const projector = brainProjector({ brain, journal, sources: sources([task("a")], { regimesOf: async () => regimes }) });
+    await projector.run();
+    regimes = null;
+    await projector.run();
+    expect(unlinks).toEqual([]);
+  });
+
+  it("keeps the regimes when the source throws", async () => {
+    const { brain, unlinks, loads } = fakeBrain();
+    const { journal } = memoryJournal();
+    let fail = false;
+    const projector = brainProjector({
+      brain,
+      journal,
+      log: () => {},
+      sources: sources([task("a")], {
+        regimesOf: async () => {
+          if (fail) throw new Error("yaml");
+          return ["soc2"];
+        },
+      }),
+    });
+    await projector.run();
+    fail = true;
+    loads.length = 0;
+    await projector.run();
+    expect(unlinks).toEqual([]);
+  });
+
+  describe("the wiki", () => {
+    function run(start: Date, over: Partial<BrainSources> = {}) {
+      const fake = fakeBrain();
+      const memory = memoryJournal();
+      const clock = { at: start };
+      const asked: string[] = [];
+      const wikiPagesOf = async (path: string) => (asked.push(path), PAGES);
+      const projector = brainProjector({ brain: fake.brain, journal: memory.journal, now: () => clock.at, sources: sources([task("a")], { wikiPagesOf, ...over }) });
+      return { ...fake, ...memory, projector, clock, asked };
+    }
+    const hours = (from: Date, h: number) => new Date(from.getTime() + h * 3_600_000);
+    const T0 = new Date("2026-11-10T09:00:00.000Z");
+
+    it("reads the pages on the first run, not an hour later, and again after 25 hours", async () => {
+      const { projector, clock, asked, loads, state } = run(T0);
+      await projector.run();
+      expect(asked).toEqual(["/work/luna"]);
+      expect(types(loads.flat(), "Control").map((data) => [data.slug, data.title, data.kind])).toEqual([["control:luna-ab12/Compliance/Controls/Access.md", "Access control", "control"]]);
+      expect(state.current.cursor.wiki).toEqual({ "luna-ab12": T0.toISOString() });
+      clock.at = hours(T0, 1);
+      await projector.run();
+      expect(asked).toHaveLength(1);
+      expect(state.current.cursor.wiki).toEqual({ "luna-ab12": T0.toISOString() });
+      clock.at = hours(T0, 25);
+      await projector.run();
+      expect(asked).toHaveLength(2);
+      expect(state.current.cursor.wiki).toEqual({ "luna-ab12": hours(T0, 25).toISOString() });
+    });
+
+    it("keeps the time per repository: one repository's pass does not put off another's", async () => {
+      const fake = fakeBrain();
+      const memory = memoryJournal();
+      const clock = { at: T0 };
+      const asked: string[] = [];
+      let tasks = [task("a")];
+      const projector = brainProjector({
+        brain: fake.brain,
+        journal: memory.journal,
+        now: () => clock.at,
+        sources: {
+          ...sources([], { wikiPagesOf: async (path) => (asked.push(path), PAGES) }),
+          tasks: async () => tasks,
+          repoOf: (path) => (path === "/work/shop" ? { ...repo, slug: "shop-cd34", name: "shop" } : repo),
+        },
+      });
+      await projector.run();
+      clock.at = hours(T0, 1);
+      tasks = [task("b", { repoPath: "/work/shop" })];
+      await projector.run();
+      expect(asked).toEqual(["/work/luna", "/work/shop"]);
+      expect(memory.state.current.cursor.wiki).toEqual({ "luna-ab12": T0.toISOString(), "shop-cd34": hours(T0, 1).toISOString() });
+    });
+
+    it("loads no page and still lands the tasks when the source throws or answers null", async () => {
+      for (const wikiPagesOf of [
+        async (): Promise<null> => null,
+        async (): Promise<never> => {
+          throw new Error("no network");
+        },
+      ]) {
+        const { projector, loads, state } = run(T0, { wikiPagesOf });
+        const result = await projector.run();
+        expect(types(loads.flat(), "Control")).toEqual([]);
+        expect(slugsOf(loads.flat())).toContain("card:a");
+        expect(result.note).toBeNull();
+        expect(state.current.cursor.tasks).not.toBeNull();
+      }
+    });
+  });
+});
+
+describe("brainProjector, the journal's wiki cursor", () => {
+  it("reads a journal without the key as no pass yet", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "brain-journal-"));
+    await mkdir(join(dir, "brain"));
+    await writeFile(join(dir, "brain", "journal.json"), JSON.stringify({ cursor: { tasks: "2026-01-01T00:00:00.000Z", verdicts: null }, nodes: {}, edges: [] }));
+    expect((await brainJournal(dir).read()).cursor).toEqual({ tasks: "2026-01-01T00:00:00.000Z", verdicts: null, claims: null, wiki: {} });
   });
 });

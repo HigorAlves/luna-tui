@@ -74,6 +74,7 @@ import { PgPackRunStore } from "./adapters/persistence/pack-run-store.ts";
 import { MINUTE_MS, Ticker } from "./application/ticker.ts";
 import { ChangeEvidence } from "./application/change-evidence.ts";
 import { StatusReport } from "./application/status-report.ts";
+import { brainWeek } from "./application/brain-week.ts";
 import { AccessReview, accessSlicesWriter } from "./application/access-review.ts";
 import { IncidentJob } from "./application/incidents.ts";
 import { mergeBreach } from "./domain/breach.ts";
@@ -1016,6 +1017,8 @@ const statusReport = config.managerWikiRepo
         if (!packRuns) throw new Error("agents are off: no model to write the status report");
         return (await ownCalls(packRuns).run({ pack: "status_report", context: { status } }, INTAKE_CLIENT)).answer;
       },
+      // What the brain did in the week, from the claim journal and the graph (both are built below, before the first tick runs).
+      brain: (since, until) => brainWeek({ claims, brain, since, until }),
       repos: complianceRepos,
       wikiRepo: config.managerWikiRepo,
       // The post goes out as the person, with the Slack user token: with none, approve would fail on it, so the report is wiki only.
@@ -1075,6 +1078,14 @@ const projector = trackProjector(
       // The login does not change while the machine runs, so a known one is kept.
       viewerLogin,
       context: (repoPath) => defaultBranchFile(repoPath, [CONTEXT_FILE]),
+      // The incident job is always built; with no source configured it simply holds none.
+      incidents: () => incidentJob.list(),
+      regimes: async (repoPath) => (await policies.for(repoPath)).compliance ?? [],
+      // The wiki is the repository's own, by its origin's slug, as the compliance jobs find it; a repository with no GitHub origin has none.
+      wikiPages: async (repoPath, prefix) => {
+        const slug = await originSlugOf(repoPath).catch(() => null);
+        return slug ? wiki.readPages(slug, prefix) : null;
+      },
       // The store pages by `updated_at`, oldest first, and a page is its limit of 200: a projection takes one page and the cursor moves on, so the rest follows on the next run.
       claims: (since) => claims.list({ except: "refused", order: "updated_asc", limit: 200, ...(since ? { since } : {}) }),
     }),

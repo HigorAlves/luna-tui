@@ -2,6 +2,7 @@
 import type { BrainClaim, DecisionRecord } from "@hardness/contracts";
 
 import type { BrainPull, BrainRepo, RetroFacts } from "../domain/brain/rows.ts";
+import type { Incident } from "../domain/incident.ts";
 import type { EventRow, TaskRow } from "../domain/task.ts";
 import type { BrainSources } from "./brain-projector.ts";
 
@@ -22,7 +23,16 @@ export interface BrainSourceDeps {
   viewerLogin(): Promise<string | null>;
   /** The text of the repository's `docs/agents/project-context.md` on its default branch; null when it has none. */
   context(repoPath: string): Promise<string | null>;
+  /** Every stored incident; empty when the machine has no incident job. */
+  incidents(): Promise<Incident[]>;
+  /** The `compliance` list of the repository's `luna.yaml`. */
+  regimes(repoPath: string): Promise<string[]>;
+  /** The wiki's pages under `prefix`; null when the repository has no GitHub slug the machine knows. A wiki that cannot be reached throws. */
+  wikiPages(repoPath: string, prefix: string): Promise<{ path: string; text: string }[] | null>;
 }
+
+/** The wiki folders the brain points at. */
+export const WIKI_FOLDERS = ["Compliance/Controls/", "Compliance/Policies/", "Compliance/Answers/"] as const;
 
 /** How far back of its cursor a verdict sweep opens the decision log's day folders. A record is filed under the day it was decided, and its
  *  truth comes later: at the card's close, or when a person corrects it. A truth that comes later than this after its decision is not read. */
@@ -95,6 +105,26 @@ export function brainSources(deps: BrainSourceDeps): BrainSources {
 
     // A failure is not an empty file: it is null, which retires nothing.
     principlesOf: async (repoPath) => deps.context(repoPath).catch(() => null),
+
+    incidents: async () => deps.incidents(),
+
+    // A failure is not an empty list: it is null, which unlinks nothing.
+    regimesOf: async (repoPath) => deps.regimes(repoPath).catch(() => null),
+
+    // One failed folder is a failed pass: a half-read wiki must not look like a wiki that lost its pages.
+    wikiPagesOf: async (repoPath) => {
+      try {
+        const pages: { path: string; text: string }[] = [];
+        for (const folder of WIKI_FOLDERS) {
+          const found = await deps.wikiPages(repoPath, folder);
+          if (found === null) return null;
+          pages.push(...found);
+        }
+        return pages;
+      } catch {
+        return null;
+      }
+    },
 
     owner: async () => {
       const login = await deps.viewerLogin().catch(() => null);

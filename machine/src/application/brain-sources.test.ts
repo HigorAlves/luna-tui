@@ -20,6 +20,9 @@ function deps(over: Partial<BrainSourceDeps> = {}): BrainSourceDeps {
     claims: async () => [],
     viewerLogin: async () => null,
     context: async () => null,
+    incidents: async () => [],
+    regimes: async () => [],
+    wikiPages: async () => null,
     ...over,
   };
 }
@@ -134,5 +137,33 @@ describe("principlesOf", () => {
     expect(await brainSources(deps({ context: async () => "## A\n- x\n" })).principlesOf("/work/luna")).toBe("## A\n- x\n");
     expect(await brainSources(deps({ context: async () => null })).principlesOf("/work/luna")).toBeNull();
     expect(await brainSources(deps({ context: async () => { throw new Error("git"); } })).principlesOf("/work/luna")).toBeNull();
+  });
+});
+
+describe("regimesOf", () => {
+  it("gives the repository's list, and null for a failure: a file that could not be read declares nothing either way", async () => {
+    expect(await brainSources(deps({ regimes: async () => ["soc2"] })).regimesOf("/work/luna")).toEqual(["soc2"]);
+    expect(await brainSources(deps({ regimes: async () => { throw new Error("yaml"); } })).regimesOf("/work/luna")).toBeNull();
+  });
+});
+
+describe("wikiPagesOf", () => {
+  it("gathers the three Compliance folders in order", async () => {
+    const asked: string[] = [];
+    const pages = await brainSources(deps({ wikiPages: async (_path, prefix) => (asked.push(prefix), [{ path: `${prefix}x.md`, text: "t" }]) })).wikiPagesOf("/work/luna");
+    expect(asked).toEqual(["Compliance/Controls/", "Compliance/Policies/", "Compliance/Answers/"]);
+    expect(pages?.map((page) => page.path)).toEqual(["Compliance/Controls/x.md", "Compliance/Policies/x.md", "Compliance/Answers/x.md"]);
+  });
+
+  it("is null when the repository has no known slug, or any read throws", async () => {
+    expect(await brainSources(deps({ wikiPages: async () => null })).wikiPagesOf("/work/luna")).toBeNull();
+    let n = 0;
+    expect(await brainSources(deps({ wikiPages: async () => (++n === 2 ? Promise.reject(new Error("net")) : []) })).wikiPagesOf("/work/luna")).toBeNull();
+  });
+});
+
+describe("incidents", () => {
+  it("passes the stored incidents through", async () => {
+    expect(await brainSources(deps({ incidents: async () => [] })).incidents()).toEqual([]);
   });
 });

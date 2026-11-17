@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { brainJournal } from "./brain-state.ts";
 
-const empty = { cursor: { tasks: null, verdicts: null, claims: null }, nodes: {}, edges: [] };
+const empty = { cursor: { tasks: null, verdicts: null, claims: null, wiki: {} }, nodes: {}, edges: [] };
 
 describe("brainJournal", () => {
   it("reads as the empty state when the file is missing", async () => {
@@ -17,7 +17,7 @@ describe("brainJournal", () => {
   it("writes the state to a 0600 file in a 0700 folder and reads it back", async () => {
     const dir = await mkdtemp(join(tmpdir(), "brain-journal-"));
     const state = {
-      cursor: { tasks: "2026-01-01T00:00:00.000Z", verdicts: null, claims: "2026-01-02T00:00:00.000Z" },
+      cursor: { tasks: "2026-01-01T00:00:00.000Z", verdicts: null, claims: "2026-01-02T00:00:00.000Z", wiki: { "luna-ab12": "2026-01-02T01:00:00.000Z" } },
       nodes: { "repo:a": { type: "Repo" as const, data: { slug: "repo:a", name: "a" } } },
       edges: [{ edge: "CardInRepo" as const, from: "card:1", to: "repo:a" }],
     };
@@ -45,14 +45,14 @@ describe("brainJournal", () => {
     const journal = brainJournal(dir);
     await journal.write(empty);
     await writeFile(join(dir, "brain", "journal.json"), JSON.stringify({ cursor: { tasks: "t", verdicts: "v" }, nodes: {}, edges: [] }));
-    expect((await journal.read()).cursor).toEqual({ tasks: "t", verdicts: "v", claims: null });
+    expect((await journal.read()).cursor).toEqual({ tasks: "t", verdicts: "v", claims: null, wiki: {} });
   });
 
   it("serves two writes one at a time, leaving the last", async () => {
     const dir = await mkdtemp(join(tmpdir(), "brain-journal-"));
     const journal = brainJournal(dir);
-    const a = { ...empty, cursor: { tasks: "a", verdicts: null, claims: null } };
-    const b = { ...empty, cursor: { tasks: "b", verdicts: null, claims: null } };
+    const a = { ...empty, cursor: { tasks: "a", verdicts: null, claims: null, wiki: {} } };
+    const b = { ...empty, cursor: { tasks: "b", verdicts: null, claims: null, wiki: {} } };
     await Promise.all([journal.write(a), journal.write(b)]);
     expect((await journal.read()).cursor.tasks).toBe("b");
     expect(JSON.parse(await readFile(join(dir, "brain", "journal.json"), "utf8")).cursor.tasks).toBe("b");

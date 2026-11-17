@@ -7,8 +7,10 @@ import { brainBatches } from "../domain/brain/batches.ts";
 import { type BrainPull, type BrainRepo, type RetroFacts, cardRows, prRows, repoRows, ticketRows } from "../domain/brain/rows.ts";
 import { actorRows, componentRows } from "../domain/brain/rows-people.ts";
 import { claimRows } from "../domain/brain/rows-claims.ts";
+import { incidentRows, pageRows, regimeRows } from "../domain/brain/rows-compliance.ts";
 import { principleRows } from "../domain/brain/rows-principles.ts";
 import { verdictRows } from "../domain/brain/rows-verdicts.ts";
+import type { Incident } from "../domain/incident.ts";
 import type { TaskRow } from "../domain/task.ts";
 import { BrainError, type Brain } from "./brain.ts";
 
@@ -27,11 +29,18 @@ export interface BrainSources {
   owner(): Promise<{ actor: string; login: string } | null>;
   /** The text of the repository's `docs/agents/project-context.md` on its default branch; null when it has none or could not be read. */
   principlesOf(repoPath: string): Promise<string | null>;
+  /** Every stored incident; empty when the machine has no incident job. */
+  incidents(): Promise<Incident[]>;
+  /** The regimes the repository's `luna.yaml` declares under `compliance`; empty when it declares none, null when it could not be read. */
+  regimesOf(repoPath: string): Promise<string[] | null>;
+  /** The wiki's pages under `Compliance/Controls/`, `Policies/` and `Answers/`; null when the repository has no GitHub slug the machine knows, wikis cannot be reached, or the read failed. */
+  wikiPagesOf(repoPath: string): Promise<{ path: string; text: string }[] | null>;
 }
 
 export interface BrainState {
-  /** How far the projection got: the newest `updatedAt` of a projected task, the newest verdict time and the newest claim time, as ISO strings. */
-  cursor: { tasks: string | null; verdicts: string | null; claims: string | null };
+  /** How far the projection got: the newest `updatedAt` of a projected task, the newest verdict time and the newest claim time, as ISO
+   *  strings, and the time each repository's wiki was last read, by the repository's slug. */
+  cursor: { tasks: string | null; verdicts: string | null; claims: string | null; wiki: Record<string, string> };
   /** Every node row written, by slug. */
   nodes: Record<string, BrainNodeRow>;
   /** Every edge written. */
@@ -56,7 +65,10 @@ const OFF = "the brain is off";
 const empty = (note: string | null): ProjectionResult => ({ tasks: 0, loaded: 0, skipped: 0, unlinked: 0, hygiene: [], note });
 
 /** The node types whose edges the projector owns: when one is built again, an edge it no longer builds is removed. */
-const OWNERS = new Set(["Card", "PR", "Component", "Actor", "Verdict", "Claim"]);
+const OWNERS = new Set(["Card", "PR", "Component", "Actor", "Verdict", "Claim", "Incident"]);
+
+/** A repository's wiki is read over the network, so at most this often. */
+const WIKI_EVERY_MS = 24 * 3_600_000;
 
 const edgeKey = (edge: BrainEdgeRow): string => `${edge.edge}\u0000${edge.from}\u0000${edge.to}`;
 const sameData = (a: BrainNodeRow, b: BrainNodeRow): boolean => JSON.stringify(sortKeys(a.data)) === JSON.stringify(sortKeys(b.data)) && a.type === b.type;
@@ -80,9 +92,10 @@ const claimTouched = (claim: BrainClaim): string => {
 /** What a failure says: a BrainError by its code, never its message, since a message may carry the server's words. */
 const describe = (error: unknown): string => (error instanceof BrainError ? `the brain refused the load: ${error.code}` : error instanceof Error ? error.message : String(error));
 
-export function brainProjector(deps: { brain: Brain; sources: BrainSources; journal: BrainJournal; log?: (line: string) => void }): { run(): Promise<ProjectionResult>; rebuild(): Promise<ProjectionResult> } {
+export function brainProjector(deps: { brain: Brain; sources: BrainSources; journal: BrainJournal; log?: (line: string) => void; now?: () => Date }): { run(): Promise<ProjectionResult>; rebuild(): Promise<ProjectionResult> } {
   const { brain, sources, journal } = deps;
   const log = deps.log ?? (() => {});
+  const now = deps.now ?? (() => new Date());
 
   let chain: Promise<unknown> = Promise.resolve();
   const serial = (job: () => Promise<ProjectionResult>): Promise<ProjectionResult> => {
@@ -152,6 +165,52 @@ export function brainProjector(deps: { brain: Brain; sources: BrainSources; jour
         log(`brain: skipped the principles of ${task.repoPath}: ${describe(error)}`);
       }
     }
+    // A repository's regimes come from its luna.yaml as it stands now, and its compliance pages from its wiki, at most once a day
+    // each. A failure skips that repository's part and nothing else. A repository whose regimes were read owns its RepoUnderRegime
+    // edges; one whose file could not be read keeps what it had.
+    const regimeOwners = new Set<string>();
+    const wikiSeen = state.cursor.wiki ?? {};
+    const wikiCursor = { ...wikiSeen };
+    let wikiRead = false;
+    const compliance = new Set<string>();
+    for (const task of tasks) {
+      if (!task.repoPath) continue;
+      let repo: BrainRepo;
+      try {
+        repo = sources.repoOf(task.repoPath);
+      } catch (error) {
+        log(`brain: skipped the compliance of ${task.repoPath}: ${describe(error)}`);
+        continue;
+      }
+      if (compliance.has(repo.slug)) continue;
+      compliance.add(repo.slug);
+      try {
+        const regimes = await sources.regimesOf(task.repoPath);
+        if (regimes) {
+          rows.push(...regimeRows(repo, regimes));
+          regimeOwners.add(brainSlug("repo", repo.slug));
+        }
+      } catch (error) {
+        log(`brain: skipped the regimes of ${task.repoPath}: ${describe(error)}`);
+      }
+      const seen = wikiSeen[repo.slug];
+      if (seen !== undefined && now().getTime() - new Date(seen).getTime() <= WIKI_EVERY_MS) continue;
+      // The time moves even when the read fails: a wiki that is down is asked again tomorrow, not on every card.
+      wikiCursor[repo.slug] = now().toISOString();
+      wikiRead = true;
+      try {
+        const pages = await sources.wikiPagesOf(task.repoPath);
+        if (pages) rows.push(...pageRows(pages, repo));
+      } catch (error) {
+        log(`brain: skipped the wiki of ${task.repoPath}: ${describe(error)}`);
+      }
+    }
+    try {
+      for (const incident of await sources.incidents()) rows.push(...incidentRows(incident));
+    } catch (error) {
+      log(`brain: skipped the incidents: ${describe(error)}`);
+    }
+
     let verdictCursor = state.cursor.verdicts;
     for (const record of records) {
       rows.push(...verdictRows(record));
@@ -183,7 +242,8 @@ export function brainProjector(deps: { brain: Brain; sources: BrainSources; jour
     // What moved or went away goes first: a load only adds edges.
     const stale = state.edges.filter((edge) => {
       const owner = built.get(edge.from);
-      return owner !== undefined && OWNERS.has(owner.type) && !builtEdges.has(edgeKey(edge));
+      if (builtEdges.has(edgeKey(edge))) return false;
+      return (owner !== undefined && OWNERS.has(owner.type)) || (edge.edge === "RepoUnderRegime" && regimeOwners.has(edge.from));
     });
     const kept = new Set(state.edges.map(edgeKey));
     try {
@@ -232,8 +292,12 @@ export function brainProjector(deps: { brain: Brain; sources: BrainSources; jour
     }
 
     if (!skippedTask) {
-      state.cursor = { tasks: taskCursor, verdicts: verdictCursor, claims: claimCursor };
-      if (state.cursor.tasks !== null || state.cursor.verdicts !== null || state.cursor.claims !== null) await journal.write(state);
+      state.cursor = { tasks: taskCursor, verdicts: verdictCursor, claims: claimCursor, wiki: wikiCursor };
+      if (state.cursor.tasks !== null || state.cursor.verdicts !== null || state.cursor.claims !== null || Object.keys(wikiCursor).length > 0) await journal.write(state);
+    } else if (wikiRead) {
+      // A skipped task holds the other cursors; the wiki was read all the same.
+      state.cursor = { ...state.cursor, wiki: wikiCursor };
+      await journal.write(state);
     }
     if (result.loaded > 0 || result.unlinked > 0) result.hygiene = await hygiene();
     return result;
