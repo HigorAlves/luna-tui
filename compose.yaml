@@ -143,8 +143,11 @@ services:
     platform: linux/amd64
     profiles: ["brain"]
     restart: unless-stopped
-    # boot.sh applies ./brain, clears a lock a crash left (a killed server cannot start again without that) and starts the server.
-    entrypoint: ["/bin/sh", "/config/boot.sh"]
+    # boot.sh applies ./brain once per container, clears a lock a crash left (a killed server cannot start again without that)
+    # and starts the server. The container keeps its own copy of the script, so a restart does not need the checkout's folder.
+    entrypoint: ["/bin/sh", "-c", "[ ! -f /config/boot.sh ] || cp /config/boot.sh /tmp/brain-boot.sh; exec /bin/sh /tmp/brain-boot.sh"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     environment:
       OMNIGRAPH_CLUSTER: /var/lib/omnigraph/cluster
       BRAIN_CONFIG: /config

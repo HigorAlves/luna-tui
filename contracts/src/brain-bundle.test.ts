@@ -97,7 +97,12 @@ describe("brain/policies and cluster.yaml", () => {
 
   it("lets the reader read and never write", () => {
     const policy = bundle("policies/graph.policy.yaml");
-    expect(group(policy, "readers").sort()).toEqual(["luna-facts", "luna-memories", "luna-reader", "owner"]);
+    expect(group(policy, "readers").sort()).toEqual(["luna-facts", "luna-mcp", "luna-memories", "luna-reader", "owner"]);
+    // a reader reads and runs the stored queries (the server asks for both); exporting the whole graph is the owner's
+    expect(policy).toMatch(/actors: \{ group: readers \}\n\s+actions: \[read\]/);
+    expect(policy).toMatch(/actors: \{ group: readers \}\n\s+actions: \[invoke_query\]/);
+    expect(policy).toMatch(/actors: \{ group: admins \}\n\s+actions: \[export\]/);
+    expect(policy.match(/actions: \[[^\]]*export[^\]]*\]/g)).toHaveLength(1);
     expect(group(policy, "writers").sort()).toEqual(["luna-facts", "luna-memories", "owner"]);
     expect(group(policy, "admins")).toEqual(["owner"]);
     // `change` and `schema_apply` are granted to the writers and the admins alone
@@ -126,7 +131,10 @@ describe("the brain service in compose.yaml", () => {
   });
 
   it("starts through boot.sh, with a memory limit and a restart", () => {
-    expect(service).toMatch(/entrypoint: \["\/bin\/sh", "\/config\/boot\.sh"\]/);
+    // through the container's own copy of the script, so a restart does not depend on the checkout's folder
+    expect(service).toMatch(/entrypoint: \["\/bin\/sh", "-c", "\[ ! -f \/config\/boot\.sh \] \|\| cp \/config\/boot\.sh \/tmp\/brain-boot\.sh; exec \/bin\/sh \/tmp\/brain-boot\.sh"\]/);
+    expect(service).toMatch(/cap_drop: \[ALL\]/);
+    expect(service).toMatch(/no-new-privileges:true/);
     expect(service).toMatch(/mem_limit:/);
     expect(service).toMatch(/restart: unless-stopped/);
     expect(service).toMatch(/RUST_MIN_STACK: "8388608"/);

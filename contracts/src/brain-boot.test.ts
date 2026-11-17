@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 const BOOT = fileURLToPath(new URL("../../brain/boot.sh", import.meta.url));
 
 /** A folder with a fake `omnigraph` and a fake server on it: each writes what it was asked to `log`. The fake apply leaves a lock, as the real one does. */
-function stage(options: { applyFails?: true } = {}) {
+function stage(options: { applyFails?: true; volumeHeld?: true } = {}) {
   const root = mkdtempSync(join(tmpdir(), "brain-boot-"));
   const bin = join(root, "bin");
   const cluster = join(root, "cluster");
@@ -26,11 +26,14 @@ esac
 `,
   );
   writeFileSync(join(bin, "server"), `#!/bin/sh\necho "server" >> "${log}"\n`);
+  // The image has flock and a developer's Mac may not: a fake one stands in, and says whether the volume is free.
+  writeFileSync(join(bin, "flock"), `#!/bin/sh\nexit ${options.volumeHeld ? 1 : 0}\n`);
+  chmodSync(join(bin, "flock"), 0o755);
   chmodSync(join(bin, "omnigraph"), 0o755);
   chmodSync(join(bin, "server"), 0o755);
   const run = (): number => {
     try {
-      execFileSync("/bin/sh", [BOOT], { env: { PATH: `${bin}:/usr/bin:/bin`, OMNIGRAPH_CLUSTER: cluster, BRAIN_CONFIG: root, BRAIN_SERVER: join(bin, "server") }, stdio: "pipe" });
+      execFileSync("/bin/sh", [BOOT], { env: { PATH: `${bin}:/usr/bin:/bin`, OMNIGRAPH_CLUSTER: cluster, BRAIN_CONFIG: root, BRAIN_SERVER: join(bin, "server"), BRAIN_APPLIED: join(root, "applied") }, stdio: "pipe" });
       return 0;
     } catch (error) {
       return (error as { status?: number }).status ?? 1;
@@ -69,5 +72,30 @@ describe("brain/boot.sh", () => {
     const boot = stage({ applyFails: true });
     expect(boot.run()).not.toBe(0);
     expect(boot.said()).toEqual(["cluster apply --target"]);
+  });
+
+  // The config is the checkout's folder, mounted live. A restart (a crash, the memory limit) must not apply whatever the
+  // checkout holds at that moment: only a new container applies.
+  it("applies once per container: a restart only clears the lock and starts the server", () => {
+    const boot = stage();
+    expect(boot.run()).toBe(0);
+    boot.lock('{\n  "version": 1,\n  "lock_id": "LOCK-CRASH",\n  "operation": "serve",\n  "pid": 1\n}\n');
+    expect(boot.run()).toBe(0);
+    expect(boot.said()).toEqual(["cluster apply --target", "cluster force-unlock LOCK-APPLY", "server", "cluster force-unlock LOCK-CRASH", "server"]);
+  });
+
+  it("applies again after an apply that failed", () => {
+    const boot = stage({ applyFails: true });
+    expect(boot.run()).not.toBe(0);
+    expect(boot.run()).not.toBe(0);
+    expect(boot.said()).toEqual(["cluster apply --target", "cluster apply --target"]);
+  });
+
+  // Clearing a lock is safe only for the volume's one user: a second container must not clear the running server's lock.
+  it("does not touch a volume another process holds", () => {
+    const boot = stage({ volumeHeld: true });
+    boot.lock('{\n  "version": 1,\n  "lock_id": "LOCK-LIVE",\n  "operation": "serve",\n  "pid": 1\n}\n');
+    expect(boot.run()).not.toBe(0);
+    expect(boot.said()).toEqual([]);
   });
 });

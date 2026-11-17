@@ -22,7 +22,7 @@
     "golden": "pnpm --filter @hardness/machine golden",
     "brain:schema": "node scripts/brain-schema.mts",
     "brain-tokens": "node scripts/brain-tokens.mjs",
-    "brain": "pnpm brain-tokens && docker compose --profile brain up -d --wait brain",
+    "brain": "pnpm brain-tokens && docker compose --profile brain up -d --force-recreate --wait brain",
     "eval": "node evals/cli.ts",
     "site:dev": "pnpm --filter site dev",
     "site:build": "pnpm --filter site build",
