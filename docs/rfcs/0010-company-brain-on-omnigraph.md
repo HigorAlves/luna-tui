@@ -3,7 +3,7 @@
 - **Author:** Higor Alves
 - **Status:** Accepted (2026-11-16). Wave 0 (the spike) is done and says go.
 - **Created:** 2026-11-16
-- **Discussion:** the PR that carries this file and its implementation, stacked on #228
+- **Discussion:** the PR that carries this file and its implementation. It was built on #228 and sits on `main` since #228 and #229 merged.
 - **Related:** [RFC 0002](./0002-native-agent-runtimes.md) (runtimes, decision packs), [RFC 0005](./0005-software-factory-v1-5.md) (the retro), [RFC 0007](./0007-token-economy.md) (learned facts)
 - **Source:** [ModernRelay/omnigraph](https://github.com/ModernRelay/omnigraph) v0.15.0 (MIT), read at `8ab6571`. Its examples, [omnigraph-cookbooks](https://github.com/ModernRelay/omnigraph-cookbooks) at `c13bac1`: `company-brain` and `dev-graph`.
 
@@ -390,7 +390,7 @@ Wave 4 is living with `auto`. The switch itself came with wave 3, as `brain.admi
 
 ### Where the build differs
 
-- **The digest is not in the weekly report.** That report is RFC 0008's, which this branch does not have. The route is what the report will read.
+- **The digest was not in the weekly report in this wave.** That report is RFC 0008's, which the branch did not have yet. See the last section for what the report reads now.
 - **The bar is reported, not enforced.** `stats.ready` is true at 50 decided, 95 in 100 agreed and none missed. A person still changes `brain.admit`.
 - **A lesson at risk is hidden by the queries, not retired.** A lesson is never deleted. The two queries that find lessons for an agent ask for a claim that is still verified. Superseding a lesson is not built.
 
@@ -418,10 +418,38 @@ Wave 5 tells a run what the brain holds. Wave 6 adds a repository's rules to the
 
 ### Not built
 
-- **Incidents, controls, regimes and the answer bank in the graph, and the digest in the weekly report.** They are RFC 0008's, which this branch does not have. When that RFC lands: a row builder per type in `domain/brain/`, their node types in `contracts/src/brain.ts`, and a source each in `brain-sources.ts`, the way principles were added.
+- **Incidents, controls, regimes and the answer bank in the graph, and the digest in the weekly report.** They were RFC 0008's, which the branch did not have on that day. They are built now: see the next section.
 - **A lesson over several claims, a `Decision` type and superseding a lesson.**
 - **Embeddings.** Search is by words.
 - **Agents writing claims in the middle of a run.**
+
+## What the move onto main and the compliance layer built (2026-11-17)
+
+PR #228 and RFC 0008 (PR #229) merged into `main`, so the branch moved onto `main` and the last layer of wave 6 could be built.
+
+### As designed
+
+- **Four more node types.** `Regime`, `Incident`, `Control` and `Answer`, with the edges `RepoUnderRegime`, `IncidentUnderRegime`, `ControlOfRepo` and `AnswerOfRepo`, and six queries an agent may read (`brain/queries/compliance.gq`).
+- **The projector fills them.** Incidents come from the incident job's files, regimes from `luna.yaml` `compliance:`, and the pages from the repository's wiki, read at most once a day per repository.
+- **`brain_ask` reads them.** A question finds up to three incidents, three control or policy pages and three approved answers.
+
+### Where the build differs
+
+- **The graph holds names and paths, never contents.** An incident is its title, severity, status, service and one boolean: whether its last good breach assessment named a regime. A control or an answer is a title and a path. The timeline, the page and the answer stay where they are. Titles pass the secret and personal-data screen.
+- **The weekly report gets counts, not the digest's lists.** The design said the report lists what was verified. The report is written by a pack for leadership, and a claim's text is a person's or a model's words, so the report carries one line of six numbers and the lists stay in `GET /brain/digest` and on the board. The line is absent when every number is zero, and then the report's input is the same bytes as before.
+- **A control or answer page that left the wiki stays** until a rebuild. Those types have no retired status.
+- **A failed read unlinks nothing.** A `luna.yaml` that could not be read gives null, not an empty list, so the repository keeps its regimes.
+- **The Memory view is on `L`.** RFC 0008's Compliance view took `M` on the board. `:memory` is unchanged.
+
+### Checked
+
+- The four types and the six queries against omnigraph v0.15.0: the live test loads them into a new graph and reads them back.
+- The whole suite after the move: contracts, factory, machine, site, evals and the board.
+
+### Not verified
+
+- The projector's path from a real incident file, a real `luna.yaml` and a real wiki to the graph. Its tests use fakes.
+- The status report with the brain's line against a model.
 
 ### Not verified, across all waves
 

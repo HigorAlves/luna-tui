@@ -722,11 +722,15 @@ The graph is served by [omnigraph](https://github.com/ModernRelay/omnigraph) (MI
 | `Claim` | one statement with the exact quote from its source, and a status | `claim:<claim id>` |
 | `Learning` | a lesson that rests on a verified claim; never rewritten | `learning:<claim id>` |
 | `Principle` | a rule of a repository's `project-context.md`, copied to be found; retired when it leaves the file | `principle:<repo slug>/<hash of the rule>` |
+| `Regime` | a compliance regime a repository declares in `luna.yaml` `compliance:` | `regime:<id>` |
+| `Incident` | an incident the machine folded from its sources: title, severity, status, service, and whether its breach assessment found a regime | `incident:<incident id>` |
+| `Control` | a policy or control page of a repository's wiki, as a pointer: title, kind and path | `control:<repo slug>/<path>` |
+| `Answer` | an approved answer of the questionnaire answer bank, as a pointer: question and path | `answer:<repo slug>/<path>` |
 
 Three rules hold for every row:
 
 - **A row is whole.** A load replaces the row, and a field left out becomes null. So `brainNode()` gives every row every key of its type.
-- **The only free text is a title.** It is flattened to one line and capped at 200 characters. No description, comment, reason or email reaches the graph.
+- **The only free text is a title.** It is flattened to one line and capped at 200 characters. No description, comment, reason or email reaches the graph. The compliance rows hold names and paths only: an incident's timeline, a control's text and an answer's text stay with the machine and the wiki, and their titles pass the secret and personal-data screen first.
 - **A key is a slug,** `<system>:<native id>`. Its prefix names its type, and loading the same item twice changes nothing.
 
 A verdict is written only once its truth is known, because the graph keeps verdicts as precedents.
@@ -735,7 +739,7 @@ A verdict is written only once its truth is known, because the graph keeps verdi
 
 `application/brain-projector.ts` turns the machine's records into rows and loads them. It runs after a card closes and once an hour. A brain that is down never fails or slows a close.
 
-1. It reads the tasks, the decision records and the claims that changed since its cursor, and the `project-context.md` of each repository those tasks belong to.
+1. It reads the tasks, the decision records and the claims that changed since its cursor, and the `project-context.md` of each repository those tasks belong to. For those repositories it also reads the regimes `luna.yaml` declares, and, at most once a day per repository, the wiki's pages under `Compliance/Controls/`, `Compliance/Policies/` and `Compliance/Answers/`. It reads every stored incident on each run; the journal skips the ones that did not change. A source that fails is logged and skipped: a `luna.yaml` that could not be read unlinks no regime, and a wiki that is down is asked again a day later.
 2. It builds the rows with the pure functions in `domain/brain/`.
 3. It loads only what differs from its journal. Every load is a commit in omnigraph, even one that changes nothing.
 4. A load only adds edges. So the projector first removes an edge that moved or went away, such as a card linked to another ticket.
@@ -757,7 +761,7 @@ A read is a named query, never a query that a caller writes. `BRAIN_QUERIES` lis
 
 `POST /brain/ask` takes a question. The board sends one from the `b` popup.
 
-1. `application/brain-ask.ts` gathers the rows for the question, through `agentQuery()` alone. A ticket key in the question finds that ticket's cards. The question's words find cards and components by full-text match. The first five cards bring their pull requests and their verdicts. At most 60 rows go on, each one line of at most 600 characters that the machine writes from the columns.
+1. `application/brain-ask.ts` gathers the rows for the question, through `agentQuery()` alone. A ticket key in the question finds that ticket's cards. The question's words find cards and components by full-text match, and also lessons, rules, incidents, control pages and approved answers (at most three of each of the last three). The first five cards bring their pull requests and their verdicts. At most 60 rows go on, each one line of at most 600 characters that the machine writes from the columns.
 2. With no row, the machine answers that the brain holds nothing about it. No pack runs.
 3. Otherwise the `brain_ask` pack runs, as the foreman's does: `claude:haiku`, low effort, no tools, no worktree. The rows reach it as a data block, because a title in them is a person's text. It answers `known`, a `reply` and `cites`, the slugs of the rows the reply rests on.
 4. The machine drops a cite of a row it never showed. An answer with no cite left is returned as not known.
@@ -833,10 +837,11 @@ Nothing the brain holds reaches a pack until a repository says so. Two keys of `
 - Precedents, `brain_query` and the rows in a reply draft were never run against a model. Each is off until a repository turns it on.
 - A decision record keeps the context without the precedents, so a replay of that record does not show the pack what it saw.
 - A repository's rules are read again only when one of its cards is in a run. A change to the file with no card activity waits for the next card.
-- Incidents, controls, regimes and the answer bank are not in the graph. They belong to RFC 0008, which this branch does not have.
+- A repository's regimes and wiki pages are read again only when one of its cards is in a run, like its rules. A control or answer page that left the wiki stays in the graph until `POST /brain/rebuild`: those two types have no retired status.
+- The compliance rows were loaded into a real omnigraph by the live test. The projector's path from an incident file or a wiki to the graph was run only against fakes.
 - `memory_admit` has eight eval cases and no baseline. It is in the unmeasured list, and nobody has run it against a model.
 - A person's decision is not written back as the pack's ground truth. The agreement is counted from the journal.
-- The digest is a route and a page of the board. The weekly status report of RFC 0008 does not read it yet.
+- The weekly status report carries the brain's week as six counts in one line (`application/brain-week.ts`): claims Jev verified alone, how many of those it flagged, claims it rejected alone, claims that wait, lessons at risk and contested claims. The line is there only when one count is above zero. The report gets no claim's text: the lists stay in `GET /brain/digest` and the board. A week with more than 200 of Jev's own decisions of one kind counts 200.
 - A contradiction is linked only to the similar claims the pack was shown, the five that match by words.
 - A lesson is one claim. Nothing joins several claims into one lesson or supersedes a lesson yet.
 - The board has no way to type a note. `POST /brain/remember` is the only entry.

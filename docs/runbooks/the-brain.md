@@ -32,6 +32,8 @@ curl -s -X POST 127.0.0.1:4317/brain/project
 
 From the board, press the brain's key (see the key table in `board/README.md`), type a question and press enter. The answer names the rows it rests on.
 
+It can answer about cards, pull requests, verdicts, components, lessons and a repository's rules. It also finds incidents by title, and the policy, control and approved-answer pages of a wiki by title. For a page it gives the path, never the text: open the wiki to read it.
+
 From a shell:
 
 ```sh
