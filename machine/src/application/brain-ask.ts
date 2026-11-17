@@ -2,7 +2,7 @@
 // the one line of text each that the brain_ask pack reads. The graph is read through `agentQuery` only, so no query is composed here.
 import type { BrainAskRow } from "@hardness/contracts";
 
-import { type Brain, type BrainValue, agentQuery } from "./brain.ts";
+import { type Brain, type BrainValue, agentQuery, answered } from "./brain.ts";
 
 type Row = Record<string, BrainValue>;
 
@@ -21,13 +21,18 @@ const MAX_TOUCHED_BY = 8;
 const MAX_ROWS = 60;
 const MAX_TEXT = 600;
 
-/** A query's rows; a failure is no rows. */
-async function rowsOf(brain: Brain, name: string, params: Record<string, string>): Promise<Row[]> {
+/** A query's rows; a failure is no rows. `answered` is whether the brain answered it, even with none. */
+async function search(brain: Brain, name: string, params: Record<string, string>): Promise<{ rows: Row[]; answered: boolean }> {
   try {
-    return (await agentQuery(brain, name, params)).rows;
+    const answer = await agentQuery(brain, name, params);
+    return { rows: answer.rows, answered: answered(name, answer) };
   } catch {
-    return [];
+    return { rows: [], answered: false };
   }
+}
+
+async function rowsOf(brain: Brain, name: string, params: Record<string, string>): Promise<Row[]> {
+  return (await search(brain, name, params)).rows;
 }
 
 const day = (value: BrainValue | undefined) => (typeof value === "string" ? value.slice(0, 10) : null);
@@ -107,27 +112,36 @@ function pageText(title: BrainValue | undefined, label: string, row: Row): strin
  * The rows that answer a question, in the order the pack should weigh them: lessons, then principles, then incidents, control pages and answers, then cards, then their pull requests, then their verdicts,
  * then the components that matched. Never throws: a query that fails, or a brain that is off, adds nothing.
  * With `options.repo` (a `repo:<slug>`) it reads that one repository: for a question that does not come from the owner, whose words may steer the search.
- * Cards and lessons come from the repository's own searches, principles and components are kept only when they are its own, and incidents,
+ * Cards, components, lessons and principles come from the repository's own searches, so no other repository's row can crowd out its own, and incidents,
  * control pages, answers and ticket lookups, which cannot be held to a repository, are not asked.
  */
 export async function brainEvidence(brain: Brain, question: string, options: { repo?: string } = {}): Promise<BrainAskRow[]> {
-  if (!brain.enabled) return [];
+  return (await brainSearch(brain, question, options)).rows;
+}
+
+/** `brainEvidence` and whether the brain answered: false when none of the searches it asked was answered (a wrong token, a query the server lacks, a server that is down), so "holds nothing" is told apart from "did not answer". */
+export async function brainSearch(brain: Brain, question: string, options: { repo?: string } = {}): Promise<{ rows: BrainAskRow[]; answered: boolean }> {
+  if (!brain.enabled) return { rows: [], answered: false };
   const { repo } = options;
   const keys = repo ? [] : [...new Set(question.match(TICKET_KEY) ?? [])].slice(0, MAX_TICKETS);
+  const asked: Array<{ rows: Row[]; answered: boolean }> = [];
+  /** A first-level search: what it returns, and whether it counts towards the brain having answered. */
+  const first = async (name: string, params: Record<string, string>): Promise<Row[]> => {
+    const result = await search(brain, name, params);
+    asked.push(result);
+    return result.rows;
+  };
   const none: Promise<Row[]> = Promise.resolve([]);
-  const [ticketHits, searchHits, rawComponents, lessonHits, rawPrinciples, incidentHits, controlHits, answerHits] = await Promise.all([
+  const [ticketHits, searchHits, components, lessonHits, principleHits, incidentHits, controlHits, answerHits] = await Promise.all([
     Promise.all(keys.map((key) => rowsOf(brain, "cards_for_ticket", { ticket: `ticket:jira/${key}` }))),
-    repo ? rowsOf(brain, "search_cards_in_repo", { repo, q: question }) : rowsOf(brain, "search_cards", { q: question }),
-    rowsOf(brain, "search_components", { q: question }),
-    repo ? rowsOf(brain, "search_learnings_in_repo", { repo, q: question }) : rowsOf(brain, "search_learnings", { q: question }),
-    rowsOf(brain, "search_principles", { q: question }),
-    repo ? none : rowsOf(brain, "search_incidents", { q: question }),
-    repo ? none : rowsOf(brain, "search_controls", { q: question }),
-    repo ? none : rowsOf(brain, "search_answers", { q: question }),
+    repo ? first("search_cards_in_repo", { repo, q: question }) : first("search_cards", { q: question }),
+    repo ? first("search_components_in_repo", { repo, q: question }) : first("search_components", { q: question }),
+    repo ? first("search_learnings_in_repo", { repo, q: question }) : first("search_learnings", { q: question }),
+    repo ? first("search_principles_in_repo", { repo, q: question }) : first("search_principles", { q: question }),
+    repo ? none : first("search_incidents", { q: question }),
+    repo ? none : first("search_controls", { q: question }),
+    repo ? none : first("search_answers", { q: question }),
   ]);
-  const componentPrefix = repo ? `component:${repo.replace(/^repo:/, "")}/` : null;
-  const components = componentPrefix ? rawComponents.filter((row) => typeof row.component === "string" && row.component.startsWith(componentPrefix)) : rawComponents;
-  const principleHits = repo ? rawPrinciples.filter((row) => row.repo === repo) : rawPrinciples;
   const lessons = lessonHits.flatMap((row) => {
     const slug = slugOf(row, "learning");
     return slug ? [{ slug, row }] : [];
@@ -186,5 +200,5 @@ export async function brainEvidence(brain: Brain, question: string, options: { r
     const touching = [...new Set((componentHits[i] ?? []).flatMap((row) => slugOf(row, "card") ?? []))].slice(0, MAX_TOUCHED_BY);
     add(component.slug, "component", line([component.name, touching.length > 0 ? `touched by ${touching.join(", ")}` : null]));
   });
-  return rows.slice(0, MAX_ROWS);
+  return { rows: rows.slice(0, MAX_ROWS), answered: asked.some((result) => result.answered) };
 }

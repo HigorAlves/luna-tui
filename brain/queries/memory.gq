@@ -76,6 +76,17 @@ query search_principles($q: String) @description("Rules that bind agents today, 
     limit 8
 }
 
+query search_principles_in_repo($repo: String, $q: String) @description("Rules that bind agents in one repository today, by full-text match, best first.") {
+    match {
+        $r: Repo { slug: $repo }
+        $p: Principle { status: "active" }
+        $p principleOfRepo $r
+    }
+    return { $p.slug as principle, $p.statement as statement, $p.section as section, $r.slug as repo }
+    order { bm25($p.statement, $q) }
+    limit 8
+}
+
 query precedents($pack: String, $q: String, $repo: String) @description("A decision pack's past answers on cards of one repository like this one, with what really happened, best match first.") {
     match {
         $r: Repo { slug: $repo }
@@ -89,9 +100,11 @@ query precedents($pack: String, $q: String, $repo: String) @description("A decis
     limit 12
 }
 
-query similar_claims($q: String) @description("Claims of any status by full-text match on the statement: what a new claim is compared with.") {
+query similar_claims($repo: String, $q: String) @description("Claims of one repository, of any status, by full-text match on the statement: what a new claim is compared with.") {
     match {
+        $r: Repo { slug: $repo }
         $c: Claim
+        $c claimAboutRepo $r
     }
     return { $c.slug as claim, $c.statement as statement, $c.status as status, $c.kind as kind, $c.scope as scope }
     order { bm25($c.statement, $q) }

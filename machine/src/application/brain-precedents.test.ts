@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { brainPrecedents } from "./brain-precedents.ts";
+import { brainPrecedents, cardPrecedents } from "./brain-precedents.ts";
 import type { Brain } from "./brain.ts";
 
 type Row = Record<string, string | null>;
@@ -19,6 +19,7 @@ function fakeBrain(rows: Row[], options: { enabled?: boolean; fails?: boolean } 
       return { rows: rows as never, note: null };
     },
     unlink: async () => 0,
+    remove: async () => 0,
     reset: async () => {},
   };
 }
@@ -79,5 +80,31 @@ describe("brainPrecedents", () => {
 
   it("gives nothing when the query fails", async () => {
     expect(await on(fakeBrain([row()], { fails: true }))("triage_signals", "Export", "/r/a", "t1")).toEqual([]);
+  });
+});
+
+describe("cardPrecedents", () => {
+  const lookup = (brain: Brain, task: { repoPath: string | null; title: string } | null) =>
+    cardPrecedents({ brain, repoSlug: (repoPath) => repoPath.split("/").pop()!, packsOf: async () => ["triage_signals"], task: async () => task });
+
+  it("searches with the card's own title, not the synthetic one the stage input carries", async () => {
+    const brain = fakeBrain([row()]);
+    await lookup(brain, { repoPath: "/r/a", title: "Export CSV of reports" })("triage_signals", "Red check", null, "t1");
+    expect(brain.asked).toEqual([{ name: "precedents", params: { pack: "triage_signals", q: "Export CSV of reports", repo: "repo:a" } }]);
+  });
+
+  it("falls back to the given title when there is no task, or the task cannot be loaded", async () => {
+    const brain = fakeBrain([row()]);
+    await lookup(brain, null)("triage_signals", "Red check", "/r/a", null);
+    await cardPrecedents({ brain, repoSlug: (r) => r.split("/").pop()!, packsOf: async () => ["triage_signals"], task: async () => { throw new Error("gone"); } })("triage_signals", "Scope check", "/r/a", "t1");
+    expect(brain.asked.map((a) => (a.params as { q: string }).q)).toEqual(["Red check", "Scope check"]);
+  });
+
+  it("loads nothing when the brain is off", async () => {
+    let loaded = 0;
+    const brain = fakeBrain([row()], { enabled: false });
+    const none = cardPrecedents({ brain, repoSlug: () => "a", packsOf: async () => ["triage_signals"], task: async () => { loaded += 1; return null; } });
+    expect(await none("triage_signals", "Red check", null, "t1")).toEqual([]);
+    expect(loaded).toBe(0);
   });
 });

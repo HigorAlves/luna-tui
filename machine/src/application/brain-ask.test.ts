@@ -2,7 +2,7 @@ import { BRAIN_QUERIES } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import { type Brain, type BrainAnswer, type BrainValue, noBrain } from "./brain.ts";
-import { brainEvidence } from "./brain-ask.ts";
+import { brainEvidence, brainSearch } from "./brain-ask.ts";
 
 type Row = Record<string, BrainValue>;
 type Params = Record<string, string | number>;
@@ -241,25 +241,41 @@ describe("brainEvidence for one repository", () => {
     await brainEvidence(brain, "what went wrong with PLAT-1?", { repo });
     expect(asked).toEqual([
       { name: "search_cards_in_repo", params: { repo, q: "what went wrong with PLAT-1?" } },
-      { name: "search_components", params: { q: "what went wrong with PLAT-1?" } },
+      { name: "search_components_in_repo", params: { repo, q: "what went wrong with PLAT-1?" } },
       { name: "search_learnings_in_repo", params: { repo, q: "what went wrong with PLAT-1?" } },
-      { name: "search_principles", params: { q: "what went wrong with PLAT-1?" } },
+      { name: "search_principles_in_repo", params: { repo, q: "what went wrong with PLAT-1?" } },
     ]);
   });
 
-  it("keeps the principles and components of that repository and drops the others", async () => {
+  it("keeps every row of the repository's own searches: no other repository's rows can crowd them out, so none are filtered afterwards", async () => {
     const { brain } = fake({
-      search_principles: [
-        { principle: "principle:a", statement: "Mine", section: "s", repo },
-        { principle: "principle:b", statement: "Theirs", section: "s", repo: "repo:other" },
-      ],
-      search_components: [
-        { component: "component:mine/board", name: "board" },
-        { component: "component:other/board", name: "board" },
-      ],
+      search_principles_in_repo: [{ principle: "principle:a", statement: "Mine", section: "s", repo }],
+      search_components_in_repo: [{ component: "component:mine/board", name: "board" }],
+      // The global searches are never asked in this mode: rows of another repository would show if they were.
+      search_principles: [{ principle: "principle:b", statement: "Theirs", section: "s", repo: "repo:other" }],
+      search_components: [{ component: "component:other/board", name: "board" }],
     });
     const rows = await brainEvidence(brain, "board", { repo });
     expect(rows.map((r) => r.slug)).toEqual(["principle:a", "component:mine/board"]);
   });
 });
 
+describe("brainSearch", () => {
+  const failing = (note: string): Brain => ({ ...noBrain(), enabled: true, query: async () => ({ rows: [], note }) });
+
+  it("says the brain did not answer when every search failed, and that it did when one ran, even to an empty list", async () => {
+    expect(await brainSearch(failing("401 unauthorized"), "export")).toEqual({ rows: [], answered: false });
+    expect(await brainSearch({ ...noBrain(), enabled: true, query: async () => { throw new Error("down"); } }, "export")).toEqual({ rows: [], answered: false });
+    const some: Brain = { ...noBrain(), enabled: true, query: async (name) => (name === "search_cards" ? { rows: [], note: "search_cards found nothing" } : { rows: [], note: "boom" }) };
+    expect((await brainSearch(some, "export")).answered).toBe(true);
+    expect((await brainSearch(fake({ search_cards: [card("a")] }).brain, "export")).rows.map((r) => r.slug)).toEqual(["card:a"]);
+    expect((await brainSearch(noBrain(), "export")).answered).toBe(false);
+  });
+
+  it("counts only the searches it asked: in a repository the global ones are not", async () => {
+    const asked: string[] = [];
+    const brain: Brain = { ...noBrain(), enabled: true, query: async (name) => (asked.push(name), { rows: [], note: null }) };
+    expect((await brainSearch(brain, "q", { repo: "repo:mine" })).answered).toBe(true);
+    expect(asked).not.toContain("search_incidents");
+  });
+});

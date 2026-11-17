@@ -10,6 +10,7 @@ function fakeBrain(answer: BrainAnswer = { rows: [{ card: "card:1", title: "Expo
     health: async () => ({ ok: true, version: "x", note: null }),
     load: async () => ({ entities: 0, commit: null }),
     unlink: async () => 0,
+    remove: async () => 0,
     reset: async () => {},
     query: async (name, params) => (asked.push({ name, params }), answer),
   };
@@ -29,6 +30,25 @@ describe("parseBrainRequest", () => {
     for (const bad of ["{", "null", "[]", JSON.stringify({ name: 5 }), JSON.stringify({ name: "" }), JSON.stringify({ name: "x".repeat(81) }), JSON.stringify({ name: "a", params: [] }), JSON.stringify({ name: "a", params: { q: { deep: 1 } } }), JSON.stringify({ name: "a", params: { q: true } }), JSON.stringify({ name: "a", params: Object.fromEntries(Array.from({ length: 11 }, (_, i) => [`k${i}`, "v"])) })]) {
       expect(parseBrainRequest(bad)).toBeNull();
     }
+  });
+
+  it("caps what the tool's schema caps, for the container can write the file itself: a text over 300 characters, a key over 40, a key that is not a plain identifier", () => {
+    const params = (p: Record<string, string | number>) => JSON.stringify({ name: "a", params: p });
+    expect(parseBrainRequest(params({ q: "x".repeat(300) }))).not.toBeNull();
+    expect(parseBrainRequest(params({ q: "x".repeat(301) }))).toBeNull();
+    expect(parseBrainRequest(params({ ["k".repeat(40)]: "v" }))).not.toBeNull();
+    expect(parseBrainRequest(params({ ["k".repeat(41)]: "v" }))).toBeNull();
+    for (const key of ["a b", "a-b", "1a", "", "a.b", "__proto__x\n"]) expect(parseBrainRequest(params({ [key]: "v" })), key).toBeNull();
+  });
+
+  it("accepts the tool's per-call counter and ignores it", () => {
+    expect(parseBrainRequest(JSON.stringify({ name: "search_cards", params: { q: "csv" }, n: 7 }))).toEqual({ name: "search_cards", params: { q: "csv" } });
+  });
+
+  it("builds its parameters without a prototype, so a key named like an Object member is data", () => {
+    const parsed = parseBrainRequest('{"name":"a","params":{"constructor":"x"}}');
+    expect(Object.getPrototypeOf(parsed!.params)).toBeNull();
+    expect(Object.keys(parsed!.params)).toEqual(["constructor"]);
   });
 });
 

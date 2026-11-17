@@ -80,6 +80,17 @@ query search_components($q: String) @description("Components by full-text match 
     limit 5
 }
 
+query search_components_in_repo($repo: String, $q: String) @description("Components of one repository by full-text match on the name, best first.") {
+    match {
+        $r: Repo { slug: $repo }
+        $k: Component
+        $k componentInRepo $r
+    }
+    return { $k.slug as component, $k.name as name }
+    order { bm25($k.name, $q) }
+    limit 5
+}
+
 query prs_for_card($card: String) @description("The pull requests opened for a card.") {
     match {
         $c: Card { slug: $card }

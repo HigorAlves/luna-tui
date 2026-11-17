@@ -94,12 +94,12 @@ import { Questionnaires } from "./application/questionnaires.ts";
 import { brainProjector, projectAfterClose } from "./application/brain-projector.ts";
 import { brainSources } from "./application/brain-sources.ts";
 import { type BrainQueryAnswerer, brainQueryAnswerer } from "./application/brain-query.ts";
-import { admission as brainAdmission } from "./application/brain-admission.ts";
+import { admission as brainAdmission, admitModeFor } from "./application/brain-admission.ts";
 import { retroClaims as handClaims, speakerTrustOf } from "./application/brain-retro.ts";
 import { PgClaimStore } from "./adapters/persistence/brain-claim-store.ts";
 import { brainJournal } from "./adapters/fs/brain-state.ts";
 import { brainAtBoot } from "./adapters/omnigraph/boot.ts";
-import { brainPrecedents } from "./application/brain-precedents.ts";
+import { cardPrecedents } from "./application/brain-precedents.ts";
 import { trackProjector } from "./adapters/http/brain.ts";
 import { repoSlug as graphRepoSlug } from "./adapters/graph/slug.ts";
 import { graphifyGraph } from "./adapters/graph/graphify.ts";
@@ -777,10 +777,8 @@ const packRuns = buildPackRuns(config, {
   // What the call's repository lets the machine keep: its `learning` section, by the card's repository (a call that names no card keeps the defaults).
   learning: learningOf,
   // Opt-in per repository and pack (`brain.precedents`): a decision pack's earlier answers on cards like this one. An on-demand call knows its card, not its repository, so the card's is read here.
-  precedents: async (pack, title, repoPath, taskId) => {
-    const repo = repoPath ?? (taskId ? ((await pipeline.get(taskId).catch(() => null))?.repoPath ?? null) : null);
-    return brainPrecedents({ brain, repoSlug: graphRepoSlug, packsOf: async (r) => (await policies.for(r)).factory.brain.precedents, log: (line) => console.warn(line) })(pack, title, repo, taskId);
-  },
+  precedents: (pack, title, repoPath, taskId) =>
+    cardPrecedents({ brain, repoSlug: graphRepoSlug, packsOf: async (r) => (await policies.for(r)).factory.brain.precedents, task: (id) => pipeline.get(id), log: (line) => console.warn(line) })(pack, title, repoPath, taskId),
   // A usage limit moves a call to a fallback engine, never to one whose window the pipeline holds.
   latched: () => pipeline.slots.latched.map((latch) => latch.owner),
 });
@@ -1047,15 +1045,16 @@ const admission = brainAdmission({
   // memory_admit is a decision pack, run through PackRuns as the brain's own call; its answer carries its record's id for admission to keep.
   decide: packRuns ? async (admit) => tagged(await ownCalls(packRuns).run({ pack: "memory_admit", context: { admit } }, "brain")) : null,
   overrides: async (repoPath) => (repoPath ? (await policies.for(repoPath)).decisions.memory_admit : undefined),
-  // A repository's luna.yaml says what happens to its claims; a claim of no repository, or a file that cannot be read, is left for a person (shadow).
-  mode: async (repoPath) => {
-    if (!repoPath) return "shadow";
-    try {
-      return (await policies.for(repoPath)).factory.brain.admit;
-    } catch {
-      return "shadow";
-    }
-  },
+  // A repository's luna.yaml says what happens to its claims; a claim of no repository, or a file that cannot be read, is left for a person (shadow). With the brain off, none is admitted.
+  mode: (repoPath) =>
+    admitModeFor(brain.enabled, async () => {
+      if (!repoPath) return "shadow";
+      try {
+        return (await policies.for(repoPath)).factory.brain.admit;
+      } catch {
+        return "shadow";
+      }
+    }),
   repoSlug: graphRepoSlug,
   changed: () => projectAfterCardClose(),
   log: (line) => console.warn(line),
@@ -1265,6 +1264,9 @@ console.log(incidentTicker ? `incidents: reading ${incidentSourceNames.join(", "
 /** The brain's projection on the hour; a card's close starts one too. Off, a run answers at once. */
 const brainTicker = brain.enabled ? new Ticker(() => void projector.run(), 60 * MINUTE_MS) : null;
 brainTicker?.start();
+// One more soon after boot, so a graph that is empty or half restored does not wait an hour. A failure here never reaches boot.
+const brainFirst = brain.enabled ? setTimeout(() => void projector.run().catch((error: unknown) => console.warn("brain: the first projection failed", error)), MINUTE_MS) : null;
+brainFirst?.unref();
 
 /** The minute tick: a gate goes overdue, a stage passes 80% of its target, with no event to say so. */
 // Alerts are read every six hours, and once soon after boot; with no GitHub token every read refuses and the pass only logs.

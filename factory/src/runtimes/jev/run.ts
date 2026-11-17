@@ -67,7 +67,7 @@ export function jevRuntime(transport: () => JevTransport = jevTransport): Runtim
       let via: JevTransport | null = null;
       try {
         via = transport();
-        // Jev takes the state and the questions on its own wire, so precedents ride at the end of the description.
+        // Jev takes the state and the questions on its own wire, so precedents ride under their own key of the state.
         const call: JevCall = { state: stateWithPrecedents(stateOf(input), input.context.precedents), questions: pack.questions, engine };
         if (dry) {
           emit({ kind: "session", payload: { model: engine.modelId, text: JSON.stringify(await via.request(call), null, 2) } });

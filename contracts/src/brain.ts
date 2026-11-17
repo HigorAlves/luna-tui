@@ -282,7 +282,7 @@ export interface BrainQuery {
   description: string;
   /** Parameter name to its type in the query language. */
   params: Record<string, "String" | "I32">;
-  /** Whether a pack or an agent may get its rows. The port refuses any other name from one. */
+  /** Whether `agentQuery()` runs it: the person's ask, the reply drafts and, with `tool`, the `brain_query` tool. A query without it is run only by the machine's own code, which decides what a pack sees (the precedents, the similar claims). */
   agent: boolean;
   /** A check that returns zero rows on a healthy graph; the projector runs it after each run. */
   hygiene?: true;
@@ -303,6 +303,7 @@ export const BRAIN_QUERIES: readonly BrainQuery[] = [
   { name: "cards_touching", description: "The cards whose change touched a component, newest first.", params: { component: "String" }, agent: true, tool: "component" },
   { name: "cards_for_ticket", description: "The cards that came from a tracker item.", params: { ticket: "String" }, agent: true },
   { name: "search_components", description: "Components by full-text match on the name, best first.", params: { q: "String" }, agent: true },
+  { name: "search_components_in_repo", description: "Components of one repository by full-text match on the name, best first.", params: { repo: "String", q: "String" }, agent: true },
   { name: "prs_for_card", description: "The pull requests opened for a card.", params: { card: "String" }, agent: true, tool: "card" },
   { name: "verdicts_for_card", description: "The decision packs' answers about a card, with the truth when it is known.", params: { card: "String" }, agent: true, tool: "card" },
   { name: "verdicts_of_pack", description: "A decision pack's answers with what really happened, newest first.", params: { pack: "String" }, agent: true },
@@ -312,6 +313,7 @@ export const BRAIN_QUERIES: readonly BrainQuery[] = [
   { name: "claims_of_learning", description: "The claims a lesson rests on, each with its exact quote and its status.", params: { learning: "String" }, agent: true },
   { name: "principles_of_repo", description: "The rules that bind agents in a repository today.", params: { repo: "String" }, agent: true, tool: "repo" },
   { name: "search_principles", description: "Rules that bind agents today, by full-text match, best first.", params: { q: "String" }, agent: true },
+  { name: "search_principles_in_repo", description: "Rules that bind agents in one repository today, by full-text match, best first.", params: { repo: "String", q: "String" }, agent: true },
   { name: "open_incidents", description: "The incidents that are still open, newest first.", params: {}, agent: true },
   { name: "search_incidents", description: "Incidents by full-text match on the title, best first.", params: { q: "String" }, agent: true },
   { name: "regimes_of_repo", description: "The compliance regimes a repository declares.", params: { repo: "String" }, agent: true, tool: "repo" },
@@ -320,7 +322,7 @@ export const BRAIN_QUERIES: readonly BrainQuery[] = [
   { name: "search_answers", description: "Approved questionnaire answers by full-text match on the question, best first.", params: { q: "String" }, agent: true },
   { name: "precedents", description: "A decision pack's past answers on cards of one repository like this one, with what really happened, best match first.", params: { pack: "String", q: "String", repo: "String" }, agent: false },
   { name: "card_repo", description: "The repository a card is in.", params: { card: "String" }, agent: false },
-  { name: "similar_claims", description: "Claims of any status by full-text match on the statement: what a new claim is compared with.", params: { q: "String" }, agent: false },
+  { name: "similar_claims", description: "Claims of one repository, of any status, by full-text match on the statement: what a new claim is compared with.", params: { repo: "String", q: "String" }, agent: false },
   { name: "contested_claims", description: "Pairs of claims that contradict each other with neither rejected: what a person still has to settle.", params: {}, agent: false },
   { name: "learnings_at_risk", description: "Lessons that rest on a rejected claim and were not superseded.", params: {}, agent: false },
   { name: "agents_without_owner", description: "Agent actors with no person who answers for them.", params: {}, agent: false, hygiene: true },

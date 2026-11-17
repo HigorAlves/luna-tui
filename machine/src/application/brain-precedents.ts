@@ -50,3 +50,18 @@ export function brainPrecedents(deps: BrainPrecedentsDeps): PrecedentLookup {
     }
   };
 }
+
+export interface CardPrecedentsDeps extends BrainPrecedentsDeps {
+  /** The card's repository and own title; null when there is no such card. May throw. */
+  task: (taskId: string) => Promise<{ repoPath: string | null; title: string } | null>;
+}
+
+/** The lookup a decision pack gets. Most packs carry a made-up title ("Red check"), so the search uses the card's own, and the card's repository when the call names none. The card is not loaded while the brain is off. */
+export function cardPrecedents(deps: CardPrecedentsDeps): PrecedentLookup {
+  const lookup = brainPrecedents(deps);
+  return async (pack, title, repoPath, taskId) => {
+    if (!deps.brain.enabled) return [];
+    const task = taskId ? await deps.task(taskId).catch(() => null) : null;
+    return lookup(pack, task?.title || title, repoPath ?? task?.repoPath ?? null, taskId);
+  };
+}

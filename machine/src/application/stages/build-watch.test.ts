@@ -307,20 +307,48 @@ describe("the brain query mailbox", () => {
     expect(answer).toEqual({ verdict: "ok", problems: [], rows: [{ card: "card:1" }], note: null });
   });
 
-  it("answers at most MAX_BRAIN_QUERIES requests per run and leaves a malformed request unanswered", async () => {
+  const answerFile = (out: string) => join(out, "checks", "brain-query.json");
+  const REFUSED = (reason: string) => ({ verdict: "refused", problems: [reason], rows: [], note: reason });
+
+  it("answers the same query twice when the tool's counter tells the two requests apart", async () => {
+    const out = mkdtempSync(join(tmpdir(), "brain-query-twice-"));
+    mkdirSync(join(out, "checks"), { recursive: true });
+    const names: string[] = [];
+    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onBrainQuery: async (r) => void names.push(r.name) });
+    for (const n of [1, 2]) {
+      writeFileSync(join(out, "checks", "brain-query-request.json"), JSON.stringify({ name: "search_cards", params: { q: "csv" }, n }));
+      await settle(40);
+    }
+    await watch.stop();
+    expect(names).toEqual(["search_cards", "search_cards"]);
+  });
+
+  it("answers at most MAX_BRAIN_QUERIES requests per run, and the next one at once with a refusal", async () => {
     const out = mkdtempSync(join(tmpdir(), "brain-query-caps-"));
     mkdirSync(join(out, "checks"), { recursive: true });
     const names: string[] = [];
     const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onBrainQuery: async (r) => void names.push(r.name) });
-    writeFileSync(join(out, "checks", "brain-query-request.json"), JSON.stringify({ name: 5 }));
-    await settle(30);
-    for (let n = 1; n <= MAX_BRAIN_QUERIES + 2; n++) {
-      writeFileSync(join(out, "checks", "brain-query-request.json"), JSON.stringify({ name: `q${n}` }));
+    for (let n = 1; n <= MAX_BRAIN_QUERIES; n++) {
+      writeFileSync(join(out, "checks", "brain-query-request.json"), JSON.stringify({ name: `q${n}`, n }));
       await settle(30);
     }
+    expect(existsSync(answerFile(out))).toBe(false); // the fake answers nothing: the file below is the machine's own
+    writeFileSync(join(out, "checks", "brain-query-request.json"), JSON.stringify({ name: "one-more", n: MAX_BRAIN_QUERIES + 1 }));
+    expect(await waitFor(answerFile(out))).toEqual(REFUSED(`a run may ask the brain ${MAX_BRAIN_QUERIES} times`));
     await watch.stop();
     expect(names).toHaveLength(MAX_BRAIN_QUERIES);
     expect(names[0]).toBe("q1");
+  });
+
+  it("refuses a request that does not parse, instead of leaving the agent to wait", async () => {
+    const out = mkdtempSync(join(tmpdir(), "brain-query-bad-"));
+    mkdirSync(join(out, "checks"), { recursive: true });
+    const names: string[] = [];
+    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onBrainQuery: async (r) => void names.push(r.name) });
+    writeFileSync(join(out, "checks", "brain-query-request.json"), JSON.stringify({ name: 5 }));
+    expect(await waitFor(answerFile(out))).toEqual(REFUSED("the request is not a brain query: { name, params } with text of at most 300 characters"));
+    await watch.stop();
+    expect(names).toEqual([]);
   });
 });
 

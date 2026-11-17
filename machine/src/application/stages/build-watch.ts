@@ -115,6 +115,7 @@ export const MAX_SCOPE_REQUESTS = 3;
 export const MAX_CARD_SEARCHES = 5;
 /** Brain queries answered per run: the container writes the files, and each one reads the graph. */
 export const MAX_BRAIN_QUERIES = 20;
+const BRAIN_NOT_A_REQUEST = "the request is not a brain query: { name, params } with text of at most 300 characters";
 /** Loop requests judged per run: the container writes the files, and each one is a metered decision. */
 export const MAX_LOOP_REQUESTS = 20;
 /** The most names of `checks/` one look reads. */
@@ -185,6 +186,7 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
   let lastSearch = "";
   let cardSearches = 0;
   let lastBrain = "";
+  let unreadableBrain = "";
   let brainQueries = 0;
   // The requests of an earlier container are in the folder when the watch starts: they are handled already, and never answered.
   const loopSeen = new Set<string>(options.onLoopRequest ? loopNames(checkNamesNow(options.outDir)).map((r) => r.name) : []);
@@ -274,14 +276,35 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
     }
   };
 
+  /** An answer of the machine's own, so the agent's wait ends: a request it will not run still gets a reply. */
+  const refuseBrain = async (reason: string): Promise<void> => {
+    try {
+      await writeMailbox(options.outDir, "brain-query.json", JSON.stringify({ verdict: "refused", problems: [reason], rows: [], note: reason }));
+    } catch (error) {
+      options.log?.(`build watch: brain query: ${(error as Error).message}`);
+    }
+  };
+
   const brainAsks = async (): Promise<void> => {
     if (!options.onBrainQuery) return;
     const text = await readMailbox(options.outDir, "brain-query-request.json");
     if (text === null || text === lastBrain) return;
     const request = parseBrainRequest(text);
-    if (!request) return; // half-written, or not a request: the next tick looks again
+    if (!request) {
+      // The tool may be mid-write: the same text on a second look is not a request, and is refused.
+      if (text !== unreadableBrain) {
+        unreadableBrain = text;
+        return;
+      }
+      lastBrain = text;
+      await refuseBrain(BRAIN_NOT_A_REQUEST);
+      return;
+    }
     lastBrain = text;
-    if (brainQueries >= MAX_BRAIN_QUERIES) return;
+    if (brainQueries >= MAX_BRAIN_QUERIES) {
+      await refuseBrain(`a run may ask the brain ${MAX_BRAIN_QUERIES} times`);
+      return;
+    }
     brainQueries += 1;
     try {
       await options.onBrainQuery(request);

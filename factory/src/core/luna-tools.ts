@@ -129,6 +129,9 @@ export function lunaHandlers(options: LunaToolsOptions) {
     if (options.checksDir) rmSync(join(options.checksDir, file), { force: true });
   };
 
+  // The machine skips a request whose text it has just answered: the count makes two identical queries two requests.
+  let brainCalls = 0;
+
   const handlers: { [T in LunaTool]: (args: Args<T>) => unknown } = {
     step: ({ label, n = 0, of = 0 }) => {
       note({ kind: "step", payload: { label, n, of } });
@@ -184,7 +187,7 @@ export function lunaHandlers(options: LunaToolsOptions) {
       if (!options.checksDir) return SKIPPED;
       mkdirSync(options.checksDir, { recursive: true });
       clear("brain-query.json");
-      writeFileSync(join(options.checksDir, "brain-query-request.json"), JSON.stringify({ name, params: params ?? {} }) + "\n");
+      writeFileSync(join(options.checksDir, "brain-query-request.json"), JSON.stringify({ name, params: params ?? {}, n: (brainCalls += 1) }) + "\n");
       return answerOf("brain-query.json");
     },
     scenario_red: ({ scenario, output }) => {

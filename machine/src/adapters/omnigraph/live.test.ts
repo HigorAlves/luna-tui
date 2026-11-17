@@ -82,6 +82,7 @@ describe.skipIf(!process.env.BRAIN_LIVE_URL)("omnigraph, live", () => {
       verdicts_of_pack: { pack: `risk_score_${id}` },
       cards_for_ticket: { ticket: `ticket:jira/${id}-1` },
       search_components: { q: "stage runner" },
+      search_components_in_repo: { repo: `repo:${id}`, q: "stage runner" },
       search_learnings: { q: `board lint ${id}` },
       search_learnings_in_repo: { repo: `repo:${id}`, q: `board lint ${id}` },
       learnings_of_repo: { repo: `repo:${id}` },
@@ -93,6 +94,7 @@ describe.skipIf(!process.env.BRAIN_LIVE_URL)("omnigraph, live", () => {
       search_controls: { q: `access control ${id}` },
       search_answers: { q: `encrypted at rest ${id}` },
       search_principles: { q: `board lint ${id}` },
+      search_principles_in_repo: { repo: `repo:${id}`, q: `board lint ${id}` },
     };
     for (const query of BRAIN_QUERIES.filter((q) => q.agent)) {
       const answer = await agentQuery(brain, query.name, params[query.name]);
@@ -109,7 +111,9 @@ describe.skipIf(!process.env.BRAIN_LIVE_URL)("omnigraph, live", () => {
     const mine = (rows: Array<Record<string, unknown>>, key: string) => rows.filter((row) => String(row[key]).includes(id));
     expect(mine((await brain.query("contested_claims")).rows, "claim")).toEqual([expect.objectContaining({ claim: `claim:${id}-b`, contradicts: `claim:${id}-a` })]);
     expect(mine((await brain.query("learnings_at_risk")).rows, "learning")).toEqual([]);
-    expect(mine((await brain.query("similar_claims", { q: `board lint ${id}` })).rows, "claim").length).toBe(2);
+    // only the claim about this repository: the other has no repository edge, and another repository's claims are never compared
+    expect(mine((await brain.query("similar_claims", { repo: `repo:${id}`, q: `board lint ${id}` })).rows, "claim")).toEqual([expect.objectContaining({ claim: `claim:${id}-a` })]);
+    expect((await brain.query("similar_claims", { repo: `repo:other-${id}`, q: `board lint ${id}` })).rows).toEqual([]);
     // the verified claim is rejected later: its words stay, its status moves, and the lesson on it shows as at risk
     await brain.load([brainNode("Claim", { slug: `claim:${id}-a`, statement: `The board lint must be clean before a commit ${id}`, quote: "cargo clippy must be clean before every commit", kind: "pattern", scope: "repo", status: "rejected", risk: "low", decided_by: "person", recorded_at: at, decided_at: at })]);
     expect(mine((await brain.query("learnings_at_risk")).rows, "learning")).toEqual([expect.objectContaining({ learning: `learning:${id}`, claim: `claim:${id}-a` })]);
@@ -127,7 +131,7 @@ describe.skipIf(!process.env.BRAIN_LIVE_URL)("omnigraph, live", () => {
     // the machine's own check of which repository a card is in
     expect((await brain.query("card_repo", { card })).rows).toEqual([{ repo: `repo:${id}` }]);
     // an agent may not run the machine's own queries
-    expect((await agentQuery(brain, "similar_claims", { q: "lint" })).note).toMatch(/not a query an agent may run/);
+    expect((await agentQuery(brain, "similar_claims", { repo: `repo:${id}`, q: "lint" })).note).toMatch(/not a query an agent may run/);
   });
 
   it("finds nothing wrong: every hygiene query returns no row", async () => {
@@ -151,6 +155,14 @@ describe.skipIf(!process.env.BRAIN_LIVE_URL)("omnigraph, live", () => {
   it("refuses a second ticket for a card, and writes nothing of that load", async () => {
     const second = [brainNode("Ticket", { slug: `ticket:jira/${id}-2`, tracker: "jira", key: `${id}-2`, title: "Another", url: null }), brainEdge("CardForTicket", card, `ticket:jira/${id}-2`)];
     await expect(brain.load(second)).rejects.toBeInstanceOf(BrainError);
+  });
+
+  it("removes one node by its slug, and no query returns it any more", async () => {
+    const ask = { pack: `risk_score_${id}`, q: `egress proxy ${id}`, repo: `repo:${id}` };
+    expect((await brain.query("precedents", ask)).rows).toHaveLength(1);
+    await expect(brain.remove([{ type: "Verdict", slug: `verdict:risk_score/${id}/risk` }])).resolves.toBe(1);
+    expect((await brain.query("precedents", ask)).rows).toEqual([]);
+    expect((await agentQuery(brain, "card_lookup", { card })).rows).toHaveLength(1);
   });
 
   // Wipes the graph it is pointed at, so it runs only when asked.

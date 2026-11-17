@@ -153,10 +153,23 @@ describe("brain_query", () => {
     writeFileSync(join(checksDir, "brain-query.json"), JSON.stringify({ verdict: "ok", rows: [{ stale: true }] }));
     setTimeout(() => writeFileSync(join(checksDir, "brain-query.json"), JSON.stringify({ verdict: "ok", problems: [], rows: [{ slug: "card:1" }], note: null })), 40);
     expect(await luna.call("brain_query", { name: "search_cards", params: { q: "export" } })).toMatchObject({ verdict: "ok", rows: [{ slug: "card:1" }] });
-    expect(JSON.parse(readFileSync(join(checksDir, "brain-query-request.json"), "utf8"))).toEqual({ name: "search_cards", params: { q: "export" } });
+    expect(JSON.parse(readFileSync(join(checksDir, "brain-query-request.json"), "utf8"))).toEqual({ name: "search_cards", params: { q: "export" }, n: 1 });
     expect(await make(0).call("brain_query", { name: "search_cards" })).toMatchObject({ verdict: "skipped" });
     expect(await make(0, false).call("brain_query", { name: "search_cards" })).toMatchObject({ verdict: "skipped" });
     expect(await luna.call("brain_query", {})).toMatchObject({ error: expect.stringContaining("name") });
     expect(await luna.call("brain_query", { name: "x", params: { a: true } })).toMatchObject({ error: expect.stringContaining("params") });
+  });
+
+  it("numbers each request, so asking the same query twice writes two different files for the machine", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "luna-brain-n-"));
+    const checksDir = join(dir, "checks");
+    const luna = lunaHandlers({ ledgerPath: join(dir, "ledger.json"), decisions: [], emit: () => {}, checksDir, checkWaitMs: 0 });
+    const written: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      await luna.call("brain_query", { name: "search_cards", params: { q: "export" } });
+      written.push(readFileSync(join(checksDir, "brain-query-request.json"), "utf8"));
+    }
+    expect(written[0]).not.toBe(written[1]);
+    expect(written.map((text) => JSON.parse(text).n)).toEqual([1, 2]);
   });
 });

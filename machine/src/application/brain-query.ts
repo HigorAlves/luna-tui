@@ -11,6 +11,8 @@ export const MAX_BRAIN_ROWS = 20;
 export const MAX_BRAIN_TEXT = 300;
 const MAX_NAME = 80;
 const MAX_PARAMS = 10;
+const MAX_KEY = 40;
+const KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export interface BrainQueryRequest {
   name: string;
@@ -24,7 +26,7 @@ export interface BrainQueryAnswer {
   note: string | null;
 }
 
-/** The request file's text as a request, or null when it is not one: the container writes it, so a wrong shape is skipped, never guessed at. */
+/** The request file's text as a request, or null when it is not one: the container writes it, so a wrong shape is refused, never guessed at. The tool's own counter (`n`) is read past: it only makes two identical queries two different files. */
 export function parseBrainRequest(text: string): BrainQueryRequest | null {
   let parsed: unknown;
   try {
@@ -39,9 +41,13 @@ export function parseBrainRequest(text: string): BrainQueryRequest | null {
   if (typeof params !== "object" || params === null || Array.isArray(params)) return null;
   const entries = Object.entries(params);
   if (entries.length > MAX_PARAMS) return null;
-  const clean: Record<string, string | number> = {};
+  // No prototype: a key named `constructor` is a key, never a member of Object.
+  const clean: Record<string, string | number> = Object.create(null);
   for (const [key, value] of entries) {
-    if (typeof value === "string" || (typeof value === "number" && Number.isFinite(value))) clean[key] = value;
+    // The tool's schema caps these, but the container can write the file itself: the machine holds the same limits.
+    if (key.length > MAX_KEY || !KEY.test(key)) return null;
+    if (typeof value === "string" && value.length <= MAX_BRAIN_TEXT) clean[key] = value;
+    else if (typeof value === "number" && Number.isFinite(value)) clean[key] = value;
     else return null;
   }
   return { name, params: clean };

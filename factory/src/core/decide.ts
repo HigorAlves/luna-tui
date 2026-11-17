@@ -11,6 +11,8 @@ export type DecisionState = {
   description: string;
   labels?: string[];
   source?: string;
+  /** The machine's own earlier answers on like cards, for a runtime that sends the state on its wire (Jev). Its own key: `description` is a stranger's text. */
+  precedents?: Array<{ question: string; answer: string; truth: string; truthSource: string; card: string; decidedAt: string }>;
 };
 
 const KIND_WORDS = { open: "open card", closed: "closed card", backlog: "backlog item" } as const;
@@ -427,10 +429,13 @@ function renderPrecedents(precedents: readonly Precedent[] | null | undefined): 
   return ["# Precedents", PRECEDENTS_NOTE, dataBlock("precedents", precedentLines(precedents).join("\n")), ""];
 }
 
-/** The state with the precedents at the end of its description: for a runtime that sends the state and the questions on its own wire and renders no prompt (Jev). Unchanged with none. The lines stay plain: nothing there reads a data block, and each is already one flat line. */
+/** The state with the precedents under their own key: for a runtime that sends the state and the questions on its own wire and renders no prompt (Jev). Unchanged with none. Each text is flattened and capped as in the prompt's lines, and `description` is never touched: an issue may end with a copied "# Precedents" section, and the model must tell it from the machine's. */
 export function stateWithPrecedents(state: DecisionState, precedents?: readonly Precedent[] | null): DecisionState {
   if (!precedents?.length) return state;
-  return { ...state, description: [state.description, "", "# Precedents", PRECEDENTS_NOTE, ...precedentLines(precedents)].join("\n").trimEnd() };
+  return {
+    ...state,
+    precedents: precedents.map((p) => ({ question: flatLine(p.question, 60), answer: flatLine(p.answer, 60), truth: flatLine(p.truth, 60), truthSource: p.truthSource, card: flatLine(p.card, 200), decidedAt: flatLine(p.decidedAt.slice(0, 10), 10) })),
+  };
 }
 
 export function renderDecision(questions: QuestionSet, state: DecisionState, precedents?: readonly Precedent[] | null): string {
