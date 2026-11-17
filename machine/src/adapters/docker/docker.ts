@@ -14,7 +14,7 @@ import type { CredentialMount, RunCredential } from "../credentials/index.ts";
 import { hostRedactor, secretRedactor } from "../../domain/redact-secrets.ts";
 import type { SecretStore } from "../../application/secrets.ts";
 import { type BlockedRow, type CardNetwork, findCardNetwork, openCardNetwork } from "./egress.ts";
-import { GuardStartError, type GuardSpec, guardImageProblem } from "./guard.ts";
+import { GuardStartError, type GuardSpec, guardImageProblem, guardSecretsDir } from "./guard.ts";
 import { runtimeChecker } from "./runtimes.ts";
 import { type ServiceHardening, type ServiceHost, hostArgs, serviceName, startServices } from "./services.ts";
 import { type ExecResult, exec, execOrThrow, OUTPUT_CAP } from "../process/exec.ts";
@@ -202,7 +202,7 @@ export interface SandboxRun {
   /** The list this run may reach (`egressFor`), and the machine's own image the proxy runs from (never a repository's). `runSandbox` opens a card network with a proxy for it, and removes both when the run ends. */
   egress?: { allow: readonly string[]; allowPrivate: readonly string[]; proxyImage: string };
   /** The stage guard between this run and the engine relay (RFC 0012): its mode, severity and the folder for its journal, and the machine's own guard image. Used only when the credential has a relay and the mode is not off; the run's card network then starts one guard, removed with it. */
-  guard?: Omit<GuardSpec, "mode"> & { mode: GuardMode; image: string };
+  guard?: Omit<GuardSpec, "mode" | "judge"> & { mode: GuardMode; image: string; /** The judge this run's guard asks (B6): its URL, whether an error blocks, the run's key (written as a secret file, never an argument) and how to take the key back. */ judge?: NonNullable<GuardSpec["judge"]> & { token: string; revoke(): void } };
   /** Secret values by name, for this run only: files in `<runDir>/secrets`, mounted read-only at /run/luna-secrets. */
   secrets?: Record<string, string>;
   /** Values the container never holds but its output may carry (the app's, the seed's and the deploy's secrets seen by the browser run): replaced in the transcript and the refused hosts only. */
@@ -357,10 +357,26 @@ export async function runSandbox(run: SandboxRun, given: Partial<RunDeps> = {}):
   // The run's own card network, when it has a list: opened here and removed in `finally`, whatever the outcome. A card network
   // it is handed (the browser run's, the app's) is joined and left alone; a re-attached run's is found by name and removed at its end.
   let own: CardNetwork | null = null;
+  // The judge's key goes with the run: revoked, and its file removed, however the run ends.
+  const dropJudge = async (): Promise<void> => {
+    if (!guard?.judge) return;
+    guard.judge.revoke();
+    await rm(guardSecretsDir(guard.journalDir), { recursive: true, force: true });
+  };
   if (run.attach) own = run.cardNetwork ? null : run.egress ? await deps.findCardNetwork(run.name) : null;
   else if (!run.cardNetwork && run.egress) {
-    const spec = run.credential.relay ? { ...run.egress, relay: run.credential.relay, ...(guard ? { guard: { mode: guard.mode, blockSeverity: guard.blockSeverity, journalDir: guard.journalDir } } : {}) } : run.egress;
-    own = await deps.openCardNetwork(run.name, spec, { proxyImage: run.egress.proxyImage, ...(guard ? { guardImage: guard.image, guardUser: hostUser() } : {}) });
+    const spec = run.credential.relay ? { ...run.egress, relay: run.credential.relay, ...(guard ? { guard: { mode: guard.mode, blockSeverity: guard.blockSeverity, journalDir: guard.journalDir, ...(guard.judge ? { judge: { url: guard.judge.url, failClosed: guard.judge.failClosed } } : {}) } } : {}) } : run.egress;
+    try {
+      // The judge's key is a read-only file of the guard's secrets folder (RFC 0009 S2), written before the guard starts; never an argument.
+      if (guard?.judge) {
+        await writeSecretFiles(guardSecretsDir(guard.journalDir), { SAFEAGENTS_JUDGE_API_KEY: guard.judge.token });
+        await chmod(join(guardSecretsDir(guard.journalDir), "SAFEAGENTS_JUDGE_API_KEY"), 0o444);
+      }
+      own = await deps.openCardNetwork(run.name, spec, { proxyImage: run.egress.proxyImage, ...(guard ? { guardImage: guard.image, guardUser: hostUser() } : {}) });
+    } catch (error) {
+      await dropJudge();
+      throw error;
+    }
   }
   const card = run.cardNetwork ?? own;
   const secretsPath = join(run.runDir, "secrets");
@@ -394,6 +410,7 @@ export async function runSandbox(run: SandboxRun, given: Partial<RunDeps> = {}):
     }
   } finally {
     await own?.teardown();
+    await dropJudge();
   }
 }
 

@@ -1,0 +1,43 @@
+{
+  "schema": 3,
+  "stage": "guard_judge",
+  "pack": "guard_judge",
+  "attempt": 1,
+  "task": {
+    "id": "guard-judge",
+    "title": "Guard judge",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "guard",
+      "guard": {
+        "task": "Fix the login redirect bug (WEB-412). Work on branch fix/web-412-login-redirect, commit the fix and push the branch so a PR can be opened.",
+        "tool": "Bash",
+        "args": "git push origin fix/web-412-login-redirect",
+        "findings": [
+          {
+            "id": "network-call",
+            "severity": "medium",
+            "title": "a shell command reaches the network"
+          }
+        ]
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

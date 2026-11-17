@@ -60,6 +60,13 @@ describe("egressPolicy", () => {
     expect((await policy.for({ repoPath: checkout, kind: "check" })).allowPrivate).toEqual([]);
   });
 
+  it("adds the judge's port as one more private entry for an agent that asks for it, and to no one else", async () => {
+    const policy = egressPolicy({ ...base, policies: policies(), traceEntries: ["host.docker.internal:8000"] });
+    expect((await policy.for({ repoPath: checkout, kind: "agent", owners: ["claude"], judgePort: 4319 })).allowPrivate).toEqual(["host.docker.internal:4319", "host.docker.internal:8000"]);
+    expect((await policy.for({ repoPath: checkout, kind: "agent", owners: ["claude"] })).allowPrivate).toEqual(["host.docker.internal:8000"]);
+    expect((await policy.for({ repoPath: checkout, kind: "check", judgePort: 4319 })).allowPrivate).toEqual([]);
+  });
+
   it("closes the registries to a check when the repository says `install`", async () => {
     const closed = mkdtempSync(join(root, "closed-"));
     writeFileSync(join(closed, "luna.yaml"), "sandbox:\n  egress:\n    registries: install\n");

@@ -293,6 +293,53 @@ describe("agent stages through packs", () => {
       expect(seen!.guard).toBeUndefined();
     });
 
+    describe("the judge", () => {
+      const registered: Array<[string, string]> = [];
+      const revoked: string[] = [];
+      const judgeDeps = (available = true) => ({ port: 4319, available: async () => available, register: (taskId: string, trust: string) => (registered.push([taskId, trust]), "tok-1"), revoke: (token: string) => void revoked.push(token) });
+      const egressSeen: Array<Record<string, unknown>> = [];
+      const egress = { for: async (request: Record<string, unknown>) => (egressSeen.push(request), { allow: [], allowPrivate: request.judgePort ? [`host.docker.internal:${request.judgePort}`] : [], proxyImage: "img" }) };
+      beforeEach(() => {
+        registered.length = 0;
+        revoked.length = 0;
+        egressSeen.length = 0;
+      });
+
+      it("asks the guard to use the machine's judge when a Jev credential is there: a key for the card and its trust, the URL, fail-closed for an untrusted card, the judge's port on the run's private list, and the key taken back when the run ends", async () => {
+        await runAgent(guardedDeps(guardBounds("log", "block", "high"), { guardJudge: judgeDeps(), egress: egress as never }), stranger(context("triage")), "triage");
+        expect(registered).toHaveLength(1);
+        expect(registered[0]![1]).toBe("untrusted");
+        expect(seen!.guard).toMatchObject({ mode: "block", blockSeverity: "high", judge: { url: "http://host.docker.internal:4319/v1", failClosed: true, token: "tok-1" } });
+        expect(egressSeen[0]!.judgePort).toBe(4319);
+        seen!.guard!.judge!.revoke();
+        expect(revoked).toContain("tok-1");
+        await runAgent(guardedDeps(guardBounds("log", "block", "high"), { guardJudge: judgeDeps(), egress: egress as never }), context("triage"), "triage");
+        expect(seen!.guard).toMatchObject({ mode: "log", judge: { failClosed: false } });
+      });
+
+      it("starts the guard with no judge, and registers no key, when there is no Jev credential; an untrusted card's block severity then drops from high to medium, and nothing else changes", async () => {
+        const without = (bounds: ReturnType<typeof guardBounds>, ctx: StageContext) => runAgent(guardedDeps(bounds, { guardJudge: judgeDeps(false), egress: egress as never }), ctx, "triage");
+        await without(guardBounds("log", "block", "high"), stranger(context("triage")));
+        expect(seen!.guard).toMatchObject({ mode: "block", blockSeverity: "medium" });
+        expect(seen!.guard).not.toHaveProperty("judge");
+        expect(egressSeen[0]).not.toHaveProperty("judgePort");
+        expect(registered).toEqual([]);
+        await without(guardBounds("log", "block", "critical"), stranger(context("triage")));
+        expect(seen!.guard).toMatchObject({ blockSeverity: "critical" });
+        await without(guardBounds("log", "block", "high"), context("triage"));
+        expect(seen!.guard).toMatchObject({ mode: "log", blockSeverity: "high" });
+        // No judge listener at all (a machine that cannot serve one): the same.
+        await runAgent(guardedDeps(guardBounds("log", "block", "high")), stranger(context("triage")), "triage");
+        expect(seen!.guard).toMatchObject({ blockSeverity: "medium" });
+      });
+
+      it("revokes the key when the sandbox throws", async () => {
+        const failing = { ...guardedDeps(guardBounds("log", "block", "high"), { guardJudge: judgeDeps(), egress: egress as never }), sandbox: async () => Promise.reject(new Error("boom")) };
+        await expect(runAgent(failing, stranger(context("triage")), "triage")).rejects.toThrow("boom");
+        expect(revoked).toEqual(["tok-1"]);
+      });
+    });
+
     it("gives none when the machine has no guard image to name", async () => {
       await runAgent(guardedDeps(undefined, { guardImage: undefined as never }), context("triage"), "triage");
       expect(seen!.guard).toBeUndefined();

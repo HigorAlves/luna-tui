@@ -16,6 +16,9 @@ import { machineSecrets } from "./bootstrap/machine-secrets.ts";
 import { useTruthSecrets } from "./application/ground-truth.ts";
 import { buildTelemetry, probeCollector } from "./bootstrap/telemetry.ts";
 import { buildPackRuns, buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
+import { GuardJudge } from "./application/guard-judge.ts";
+import { type GuardJudgeServer, startGuardJudgeServer } from "./adapters/http/guard-judge.ts";
+import type { Trust } from "./domain/trust.ts";
 import { loadConfig, sandboxPolicyNotes } from "./config.ts";
 import { createDataSource, poolSizeFor } from "./adapters/persistence/data-source.ts";
 import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
@@ -327,6 +330,15 @@ const stackDeps = {
 const jiraApi = config.jira ? createJira(config.jira) : noTokenJira();
 /** Ship's review-loop decisions run through PackRuns as the `ship` client: bound once it exists. */
 const shipDecisions: { decide: ShipDecide | null } = { decide: null };
+/** The stage guards' judge (RFC 0012, B6): a run asks it for a key, and only when its listener is up and a Jev credential can run the pack. Bound after PackRuns is built. */
+const guardJudge: { current: GuardJudge | null } = { current: null };
+let guardJudgeServer: GuardJudgeServer | null = null;
+const guardJudgeFacade = {
+  port: config.guardJudgePort,
+  available: async () => guardJudge.current !== null && (await credentials.check("jev")).available,
+  register: (taskId: string, trust: Trust) => guardJudge.current!.register(taskId, trust),
+  revoke: (token: string) => guardJudge.current?.revoke(token),
+};
 const { stubReason, real, resolveConflicts, verifyPack, checksExec, proofRig, agentDeps, shipGateProbe, compliance: complianceReview, docsDrift: docsDriftReview } = await buildRealStages(
   config,
   watcher,
@@ -382,6 +394,8 @@ const { stubReason, real, resolveConflicts, verifyPack, checksExec, proofRig, ag
     },
     record: (taskId, links, pr) => pipeline.recordReview(taskId, links, pr),
   },
+  // The stage guards' judge: the listener below binds it once PackRuns exists; until then, and with no Jev credential, a guard has none.
+  guardJudgeFacade,
 );
 /** The retro's facts for a task, from the machine's own records. */
 async function retroFactsFor(taskId: string) {
@@ -762,6 +776,35 @@ const packRuns = buildPackRuns(config, {
   // A usage limit moves a call to a fallback engine, never to one whose window the pipeline holds.
   latched: () => pipeline.slots.latched.map((latch) => latch.owner),
 });
+// The judge listener: only where a guard can run (the relay on, the policy not off for both trusts) and agents are on. It has its own PackRuns, two at once and four waiting,
+// so judge calls never wait behind the notch's two. A listener that cannot bind leaves the guards without a judge, said once.
+if (packRuns && config.egress.relay && (config.sandboxPolicy.guard.trusted !== "off" || config.sandboxPolicy.guard.untrusted !== "off")) {
+  const judgeRuns = buildPackRuns(config, {
+    policies,
+    ...(config.egress.enabled && agentDeps?.egress ? { egress: agentDeps.egress } : {}),
+    credentials,
+    store: new PgPackRunStore(db),
+    budget: { dailyUsd: pipeline.budget.dailyUsd, spentTodayUsd: () => pipeline.spentTodayUsd() },
+    engineBudgets,
+    telemetry,
+    decisions: decisionLog,
+    secrets: () => machineSecrets(config, process.env),
+    learning: learningOf,
+    latched: () => pipeline.slots.latched.map((latch) => latch.owner),
+    max: 2,
+    queue: 4,
+  });
+  if (judgeRuns) {
+    const judge = new GuardJudge({ runs: judgeRuns });
+    try {
+      guardJudgeServer = await startGuardJudgeServer({ judge, host: "0.0.0.0", port: config.guardJudgePort });
+      guardJudge.current = judge;
+      console.log(`guard judge: listening on 0.0.0.0:${config.guardJudgePort} (a guard reaches it as host.docker.internal through the egress proxy)`);
+    } catch (error) {
+      console.warn(`guard judge: could not listen on port ${config.guardJudgePort}, so stage guards run without a judge: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+}
 // The last red the card's CI stage called a real failure: its decision record and the failing job, read from the stage's own finish.
 verifyDecisions.lastRed = async (taskId) => {
   const detail = (await pipeline.latestStageFinish(taskId, "ci_watch"))?.detail;
@@ -1264,6 +1307,7 @@ async function shutdown(): Promise<void> {
   if (digestTimer) clearTimeout(digestTimer);
   pipeline.stopSupervisor();
   server.close();
+  await guardJudgeServer?.close();
   await pipeline.shutdown();
   await telemetry.flush();
   await db.destroy();

@@ -40,6 +40,8 @@ export interface Config {
   runnerVideoImage: string;
   /** Docker image of the stage guard (SafeAgents), built by `runner:build --guard`; its label dev.hardness.guard says what it is. */
   runnerGuardImage: string;
+  /** The port of the listener the stage guards call for the judge (`MACHINE_GUARD_JUDGE_PORT`, 4319). It binds beyond loopback (the guards reach it through the egress proxy as host.docker.internal) and takes only a per-run key. */
+  guardJudgePort: number;
   /** Task worktrees go in `<worktreesDir>/<repo>/<branch>`, like `herdr worktree`. */
   worktreesDir: string;
   /** Run inputs, outputs and transcripts. */
@@ -250,6 +252,8 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 export const DEFAULT_DATABASE_URL = "postgres://hardness:hardness@127.0.0.1:5433/hardness";
 export const DEFAULT_PORT = 4317;
+/** Where the stage guards' judge listens (`MACHINE_GUARD_JUDGE_PORT`): free in the repo's port table (4317 the API, 4318 compose's, 5433 Postgres, 5667 and 8000-8001 Laminar). */
+export const DEFAULT_GUARD_JUDGE_PORT = 4319;
 export const DEFAULT_MAX_CONCURRENT_TASKS = 4;
 export const DEFAULT_RETENTION_DAYS = 90;
 export const DEFAULT_WORKTREE_RETENTION_DAYS = 7;
@@ -562,6 +566,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     runnerQaImage: env.RUNNER_QA_IMAGE ?? "hardness-runner-qa:dev",
     runnerVideoImage: env.RUNNER_VIDEO_IMAGE ?? "hardness-runner-video:dev",
     runnerGuardImage: env.RUNNER_GUARD_IMAGE ?? "hardness-runner-guard:dev",
+    guardJudgePort: portFrom(env, "MACHINE_GUARD_JUDGE_PORT", DEFAULT_GUARD_JUDGE_PORT),
     worktreesDir: env.WORKTREES_DIR ?? join(home, "Developer", "worktrees"),
     stateDir,
     githubPoll: { repos, intervalMs: pollSeconds * 1000, label: env.MACHINE_GITHUB_LABEL ?? "ready-for-agent" },

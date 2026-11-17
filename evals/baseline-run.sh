@@ -70,6 +70,8 @@ pnpm eval --pack ticket_validity --engine jev --save-baseline
 pnpm eval --pack ticket_safety --engine claude:haiku --save-baseline
 pnpm eval --pack ticket_safety --engine codex:luna --save-baseline
 pnpm eval --pack ticket_safety --engine jev --save-baseline
+# guard_judge runs on Jev only: no other engine is allowed for it.
+pnpm eval --pack guard_judge --engine jev --save-baseline
 pnpm eval --pack ticket_assess --engine claude:haiku --save-baseline
 pnpm eval --pack ticket_assess --engine codex:luna --save-baseline
 pnpm eval --pack ticket_assess --engine jev --save-baseline

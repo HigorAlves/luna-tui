@@ -77,6 +77,8 @@ export interface AgentDeps {
   imageId?: (image: string) => Promise<string>;
   /** The base stage image. */
   image: string;
+  /** The machine's judge for stage guards (RFC 0012, B6), when its listener is up: its port, whether a Jev credential is there to run its pack, and the per-run keys. Absent: no guard has a judge. */
+  guardJudge?: { port: number; available(): Promise<boolean>; register(taskId: string, trust: Trust): string; revoke(token: string): void };
   /** The machine's own stage guard image (`RUNNER_GUARD_IMAGE`); absent, no run is guarded (tests). */
   guardImage?: string;
   /** Resolves the image a repository's stages run in (its own, built from its base, or `image`); absent, every repository runs in `image`. */
@@ -319,7 +321,7 @@ async function recordGuardJournal(journalPath: string, context: StageContext): P
 }
 
 /** The guard a run asks for, or null. Pure. The default (no machine policy loaded) is the policy's own: `log` for both trusts. */
-export function stageGuardOf(input: { pack: (typeof PACKS)[PackId]; engineRuntime: string; relayed: boolean; image: string | undefined; bounds: SandboxBounds | undefined; trust: Trust; journalDir: string }): (GuardSpec & { image: string }) | null {
+export function stageGuardOf(input: { pack: (typeof PACKS)[PackId]; engineRuntime: string; relayed: boolean; image: string | undefined; bounds: SandboxBounds | undefined; trust: Trust; journalDir: string }): (Omit<GuardSpec, "judge"> & { image: string }) | null {
   const { pack, bounds } = input;
   if (!input.image || !input.relayed || input.engineRuntime !== "claude" || pack.kind !== "agent") return null;
   const a = pack.access;
@@ -327,6 +329,9 @@ export function stageGuardOf(input: { pack: (typeof PACKS)[PackId]; engineRuntim
   const { mode, blockSeverity } = guardOf(bounds ?? { guard: { trusted: DEFAULT_MACHINE_POLICY.guard.trusted, untrusted: DEFAULT_MACHINE_POLICY.guard.untrusted, blockSeverity: DEFAULT_MACHINE_POLICY.guard.block_severity } }, input.trust);
   return mode === "off" ? null : { mode, blockSeverity, journalDir: input.journalDir, image: input.image };
 }
+
+/** The guard's bounds when no machine policy was loaded: the policy's own defaults. */
+const DEFAULT_GUARD_BOUNDS = { guard: { trusted: DEFAULT_MACHINE_POLICY.guard.trusted, untrusted: DEFAULT_MACHINE_POLICY.guard.untrusted, blockSeverity: DEFAULT_MACHINE_POLICY.guard.block_severity } };
 
 /** The cards whose untrusted run has been said on the task, so it is said once. */
 const untrustedNoted = new Set<string>();
@@ -698,11 +703,32 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const owners = [credentialOwner(choice.engine), ...(found.kind === "decision" ? [] : helpersOn(found, resolveEngine(choice.engine).runtime).map((h) => credentialOwner(h.engine)))];
   // The stage guard (RFC 0012): only an agent pack that has tools, on a Claude engine whose credential is relayed (the guard forwards to the relay).
   // The mode is the policy's for the card's trust; `off` or a missing image means none. A resumed run re-attaches to the guard it started with.
-  const askedGuard = stageGuardOf({ pack: found, engineRuntime: resolveEngine(choice.engine).runtime, relayed: credential.relay !== undefined, image: deps.guardImage, bounds: policy.bounds, trust, journalDir: join(runDir, "guard") });
-  const egress = deps.egress
-    ? await guard(() => deps.egress!.for({ repoPath: task.repoPath, kind: egressKindOf(found), owners: [...new Set(owners)], ...(credential.relay ? { relayed: ["claude" as const] } : {}), targets: found.kind !== "decision" && found.network === "full" && (pack === "e2e" || pack === "recording") ? targetHosts(input.context.qaTargets ?? []) : [] }))
+  const askedGuardBase = stageGuardOf({ pack: found, engineRuntime: resolveEngine(choice.engine).runtime, relayed: credential.relay !== undefined, image: deps.guardImage, bounds: policy.bounds, trust, journalDir: join(runDir, "guard") });
+  // The guard's judge: a key for this run when the guard is new, the machine serves a judge and a Jev credential can run its pack. Without one the guard runs
+  // with no judge, and an untrusted card's block severity drops one step, high to medium: the findings the judge would have weighed are then blocked by the scan alone.
+  let askedGuard: NonNullable<SandboxRun["guard"]> | null = askedGuardBase;
+  let judge: NonNullable<NonNullable<SandboxRun["guard"]>["judge"]> | null = null;
+  if (askedGuardBase && !resume) {
+    if (deps.guardJudge && (await deps.guardJudge.available().catch(() => false))) {
+      const port = deps.guardJudge.port;
+      const registry = deps.guardJudge;
+      const token = registry.register(task.id, trust);
+      let taken = false;
+      judge = { url: `http://host.docker.internal:${port}/v1`, failClosed: guardOf(policy.bounds ?? DEFAULT_GUARD_BOUNDS, trust).failClosed, token, revoke: () => { if (!taken) { taken = true; registry.revoke(token); } } };
+      askedGuard = { ...askedGuardBase, judge };
+    } else if (trust === "untrusted" && askedGuardBase.blockSeverity === "high") askedGuard = { ...askedGuardBase, blockSeverity: "medium" };
+  }
+  let egress: Awaited<ReturnType<NonNullable<AgentDeps["egress"]>["for"]>> | undefined;
+  let identity: Awaited<ReturnType<typeof gitIdentity>> | null;
+  try {
+  egress = deps.egress
+    ? await guard(() => deps.egress!.for({ repoPath: task.repoPath, kind: egressKindOf(found), owners: [...new Set(owners)], ...(judge && deps.guardJudge ? { judgePort: deps.guardJudge.port } : {}), ...(credential.relay ? { relayed: ["claude" as const] } : {}), targets: found.kind !== "decision" && found.network === "full" && (pack === "e2e" || pack === "recording") ? targetHosts(input.context.qaTargets ?? []) : [] }))
     : undefined;
-  const identity = limits.writable ? await guard(() => gitIdentity(task.repoPath!)) : null;
+  identity = limits.writable ? await guard(() => gitIdentity(task.repoPath!)) : null;
+  } catch (error) {
+    judge?.revoke();
+    throw error;
+  }
   let sandbox: SandboxResult;
   try {
   sandbox = await (deps.sandbox ?? runSandbox)({
@@ -754,6 +780,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   });
     ran.container = true;
   } catch (error) {
+    // The run's network was torn down with the sandbox (or never made): the judge's key goes too.
+    judge?.revoke();
     const broken = envBrokenDetail(error);
     if (!broken) throw error;
     return { outcome: "escalated", detail: broken };

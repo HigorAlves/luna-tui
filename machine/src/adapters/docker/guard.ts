@@ -2,7 +2,7 @@
 // placeholder and sends its model calls here; SafeAgents checks them and forwards to the relay, which swaps in the real token. The guard
 // holds no secret, sits on the card network only (no route out: it reaches the relay and nothing else) and is removed with the run.
 import { chmod, mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import type { GuardMode, Severity } from "@hardness/contracts";
 
@@ -26,6 +26,9 @@ export async function guardImageProblem(image: string, label: (image: string, na
   return (await label(image, "dev.hardness.guard")) === null ? `image ${image} is not the stage guard (label dev.hardness.guard): build it with pnpm images` : null;
 }
 
+/** Where a run's guard finds its secret files: beside its journal folder, in the run's private folder. */
+export const guardSecretsDir = (journalDir: string): string => join(dirname(journalDir), "guard-secrets");
+
 export const guardName = (run: string): string => `hardness-guard-${run}`;
 
 /** The guard would not start or never listened: the stage must not run unguarded, so the card is escalated as env_broken. */
@@ -43,6 +46,8 @@ export interface GuardSpec {
   mode: Exclude<GuardMode, "off">;
   blockSeverity: Severity;
   journalDir: string;
+  /** The judge this run's guard asks (RFC 0012, B6): the machine's endpoint as the guard reaches it, and whether an error from it blocks. Absent, no judge flag. The run's key is a file in the guard's secrets folder, written by the caller before the guard starts. */
+  judge?: { url: string; failClosed: boolean };
 }
 
 export interface GuardOptions {

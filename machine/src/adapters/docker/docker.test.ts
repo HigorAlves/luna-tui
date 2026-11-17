@@ -575,7 +575,7 @@ describe("runSandbox and execInSandbox on a run's own network", () => {
       const asked = "guard" in over ? over.guard : { ...guard, journalDir: join(dir, "guard") };
       const base = run({ runDir: dir, egress: { allow: [], allowPrivate: [], proxyImage: "machine:dev" }, ...(asked ? { guard: asked } : {}) });
       const credential = over.relay === false ? base.credential : { env: { CLAUDE_CODE_OAUTH_TOKEN: relay.placeholder }, mounts: [], relay };
-      return { seen, checks, deps, run: { ...base, credential } as SandboxRun, dir, events: f.events };
+      return { seen, checks, deps, run: { ...base, credential } as SandboxRun, dir, events: f.events, calls: f.calls };
     };
 
     it("opens the card network with the guard's spec and image, checks the image first, and reports the journal", async () => {
@@ -594,6 +594,47 @@ describe("runSandbox and execInSandbox on a run's own network", () => {
         expect(g.seen[0]!.spec).not.toHaveProperty("guard");
         expect(result.guard).toBeUndefined();
       }
+    });
+
+    describe("with a judge", () => {
+      const token = "ab".repeat(32);
+      const judgeOf = (revoked: string[]) => ({ url: "http://host.docker.internal:4319/v1", failClosed: true, token, revoke: () => void revoked.push(token) });
+
+      it("writes the run's key as a read-only file of the guard's secrets folder before the network opens, passes the guard its URL only, and never puts the key in an argument", async () => {
+        const revoked: string[] = [];
+        const read: Array<{ mode: number; dirMode: number; parentMode: number; text: string }> = [];
+        const g = guarded({ guard: undefined });
+        const journalDir = join(g.dir, "guard");
+        const secrets = join(g.dir, "guard-secrets");
+        const open = g.deps.openCardNetwork;
+        const deps = {
+          ...g.deps,
+          openCardNetwork: async (name: string, spec: unknown, options: unknown) => {
+            const file = join(secrets, "SAFEAGENTS_JUDGE_API_KEY");
+            read.push({ mode: statSync(file).mode & 0o777, dirMode: statSync(secrets).mode & 0o777, parentMode: statSync(g.dir).mode & 0o777, text: readFileSync(file, "utf8") });
+            return open(name, spec as never, options as never);
+          },
+        } as RunDeps;
+        await runSandbox({ ...g.run, guard: { ...guard, journalDir, judge: judgeOf(revoked) } }, deps);
+        expect(read).toEqual([{ mode: 0o444, dirMode: 0o755, parentMode: 0o700, text: token }]);
+        expect((g.seen[0]!.spec as { guard: unknown }).guard).toEqual({ mode: "block", blockSeverity: "high", journalDir, judge: { url: "http://host.docker.internal:4319/v1", failClosed: true } });
+        expect(JSON.stringify([g.seen, g.calls])).not.toContain(token);
+        // The key is revoked with the network, and the file goes with the run.
+        expect(revoked).toEqual([token]);
+        expect(existsSync(secrets)).toBe(false);
+      });
+
+      it("revokes the key and removes the file when the run fails, and when the network cannot be opened", async () => {
+        for (const failure of ["run", "open"] as const) {
+          const revoked: string[] = [];
+          const g = guarded({ guard: undefined });
+          const secrets = join(g.dir, "guard-secrets");
+          const deps = (failure === "open" ? { ...g.deps, openCardNetwork: async () => Promise.reject(new GuardStartError("it exited")) } : { ...g.deps, execOrThrow: async () => Promise.reject(new Error("docker run failed")) }) as RunDeps;
+          await expect(runSandbox({ ...g.run, guard: { ...guard, journalDir: join(g.dir, "guard"), judge: judgeOf(revoked) } }, deps)).rejects.toThrow();
+          expect(revoked, failure).toEqual([token]);
+          expect(existsSync(secrets), failure).toBe(false);
+        }
+      });
     });
 
     it("throws GuardStartError and opens nothing when the image is missing: the stage never runs unguarded", async () => {

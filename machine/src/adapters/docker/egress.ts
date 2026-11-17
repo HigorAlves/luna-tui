@@ -9,7 +9,7 @@ import { z } from "zod";
 import type { EngineRelay } from "../credentials/credential.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { type ExecResult, exec as hostExec } from "../process/exec.ts";
-import { GuardStartError, type GuardSpec, guardName, startGuard } from "./guard.ts";
+import { GuardStartError, type GuardSpec, guardName, guardSecretsDir, startGuard } from "./guard.ts";
 
 /** Label on the card network and the proxy, the same as a stage container's, so leftovers are swept together. */
 const STAGE_LABEL = "dev.hardness.stage=1";
@@ -211,7 +211,7 @@ export async function openCardNetwork(runName: string, spec: { allow: readonly s
     let guard: RunningGuardInfo | undefined;
     if (spec.relay && spec.guard) {
       if (!options.guardImage) throw new GuardStartError("no guard image is configured (RUNNER_GUARD_IMAGE)");
-      const started = await startGuard({ run: runName, image: options.guardImage, network, dns: address, journalDir: spec.guard.journalDir, secretsDir: join(dirname(spec.guard.journalDir), "guard-secrets"), upstream: `http://${address}:${RELAY_PORT}`, mode: spec.guard.mode, blockSeverity: spec.guard.blockSeverity, user: options.guardUser, exec, ...(options.pollMs !== undefined ? { pollMs: options.pollMs } : {}), ...(options.readyTimeoutMs !== undefined ? { readyTimeoutMs: options.readyTimeoutMs } : {}) });
+      const started = await startGuard({ run: runName, image: options.guardImage, network, dns: address, journalDir: spec.guard.journalDir, secretsDir: guardSecretsDir(spec.guard.journalDir), upstream: `http://${address}:${RELAY_PORT}`, mode: spec.guard.mode, blockSeverity: spec.guard.blockSeverity, ...(spec.guard.judge ? { judge: spec.guard.judge, proxy: `http://${address}:${PROXY_PORT}` } : {}), user: options.guardUser, exec, ...(options.pollMs !== undefined ? { pollMs: options.pollMs } : {}), ...(options.readyTimeoutMs !== undefined ? { readyTimeoutMs: options.readyTimeoutMs } : {}) });
       guard = { address: started.address, port: started.port, journalPath: started.journalPath };
     }
 

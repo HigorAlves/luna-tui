@@ -173,6 +173,8 @@ export async function buildRealStages(
   jira?: Jira | null,
   /** What the review route links a PR to (the board's cards, the Jev fallback, where the links are kept); absent, only the keys a PR names are read. */
   reviewLinks?: PrReviewDeps["links"],
+  /** The stage guards' judge (RFC 0012, B6): bound late by main, once the listener is up; absent, no guard has a judge. */
+  guardJudge?: AgentDeps["guardJudge"],
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -336,6 +338,7 @@ export async function buildRealStages(
     image: config.runnerImage,
     // The stage guard runs only with the relay on (it forwards to the relay); a run asks for it from the policy, `runSandbox` checks the image.
     ...(config.egress.relay ? { guardImage: config.runnerGuardImage } : {}),
+    ...(config.egress.relay && guardJudge ? { guardJudge } : {}),
     ...(egress ? { egress } : {}),
     install,
     secrets,

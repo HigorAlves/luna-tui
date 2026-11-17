@@ -32,6 +32,7 @@ export const CONTEXT_OF = {
   ci_failure_class: { key: "check", schema: CheckContext },
   frame_privacy: { key: "check", schema: CheckContext },
   loop_judge: { key: "check", schema: CheckContext },
+  guard_judge: { key: "check", schema: CheckContext },
   loop_redirect: { key: "check", schema: CheckContext },
   fact_propose: { key: "propose", schema: ProposeContext },
   evidence_format: { key: "evidence", schema: EvidenceContext },

@@ -245,6 +245,25 @@ describe("the stage guard", () => {
     expect(opened.guard).toEqual({ address: "172.30.0.3", port: 8787, journalPath: expect.stringMatching(/guard\/calls\.jsonl$/) });
   });
 
+  it("hands the guard a judge through the proxy when the spec has one: the judge's flags, the proxy's address as its HTTP(S)_PROXY, and no judge flag otherwise", async () => {
+    const judge = { url: "http://host.docker.internal:4319/v1", failClosed: true };
+    const f = dockerFake();
+    const dir = mkdtempSync(join(tmpdir(), "egress-guard-"));
+    await openCardNetwork("r1", { allow: [], allowPrivate: ["host.docker.internal:4319"], relay, guard: { ...guard, journalDir: join(dir, "guard"), judge } }, { exec: f.exec, proxyImage: IMAGE, guardImage: "guard:dev", pollMs: 0 });
+    const run = f.calls.find((c) => c[1] === "run" && c.includes("hardness-guard-r1"))!;
+    expect(run.slice(run.indexOf("--judge-url"), run.indexOf("--judge-url") + 3)).toEqual(["--judge-url", "http://host.docker.internal:4319/v1", "--judge-fail-closed"]);
+    const env = envOf(run);
+    for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) expect(env[name]).toBe("http://172.30.0.2:3128");
+    expect(env.NO_PROXY).toBe("172.30.0.2");
+    // The proxy is told about the judge's entry (it adds host.docker.internal to its hosts).
+    expect(f.calls.find((c) => c[1] === "run" && c.includes("hardness-egress-r1"))).toContain("host.docker.internal:host-gateway");
+    const g = open();
+    await g.net();
+    const plain = g.calls.find((c) => c[1] === "run" && c.includes("hardness-guard-r1"))!;
+    expect(plain).not.toContain("--judge-url");
+    expect(envOf(plain)).not.toHaveProperty("HTTP_PROXY");
+  });
+
   it("starts no guard without a relay, or without a spec: the stage's base URL stays the relay's", async () => {
     const f = dockerFake();
     const noRelay = await openCardNetwork("r1", { allow: ["github.com:443"], allowPrivate: [], guard }, { exec: f.exec, proxyImage: IMAGE, guardImage: "guard:dev", pollMs: 0 });

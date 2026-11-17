@@ -58,8 +58,18 @@ export interface RecordedContext {
   redacted: number;
 }
 
+/** A guard check holds the call's arguments and the task's text: what a stage tried to run and what a stranger wrote. A year of retention would keep both, so the stored copy keeps the tool and the findings only. Each part dropped counts as one redaction. */
+function withoutGuardText(context: Record<string, unknown>): { context: Record<string, unknown>; dropped: number } {
+  const check = context.check as { kind?: unknown; guard?: Record<string, unknown> } | null | undefined;
+  if (check?.kind !== "guard" || check.guard === null || typeof check.guard !== "object") return { context, dropped: 0 };
+  const { task: _task, args: _args, ...kept } = check.guard;
+  const dropped = Number("task" in check.guard) + Number("args" in check.guard);
+  return { context: { ...context, check: { ...check, guard: kept } }, dropped };
+}
+
 /** The context to store and how many strings were redacted. `private` defaults to the conversation's own mark. */
-export function recordContext(context: Record<string, unknown>, options: { secrets: Readonly<Record<string, string>>; private?: boolean }): RecordedContext {
+export function recordContext(given: Record<string, unknown>, options: { secrets: Readonly<Record<string, string>>; private?: boolean }): RecordedContext {
+  const { context, dropped } = withoutGuardText(given);
   const secret = secretRedactor(options.secrets);
   // Counted inside the redactor, for every string and key it changes: nothing compares the two trees afterwards, so two keys that redact to the same string cannot throw.
   let count = 0;
@@ -69,7 +79,7 @@ export function recordContext(context: Record<string, unknown>, options: { secre
     return out;
   }) as Record<string, unknown>;
   const limited = bounded(clean);
-  const redacted = count + limited.cut;
+  const redacted = count + limited.cut + dropped;
   return finish(limited.context, redacted, options.private);
 }
 

@@ -187,6 +187,8 @@ export const PackId = z.enum([
   "ticket_validity",
   // A decision at the Ticket Machine: does the ticket's text try to instruct whoever reads it (run before anything else reads the ticket).
   "ticket_safety",
+  // A decision at the stage guard's judge endpoint (a check context, run on demand): would one suspicious tool call of a stage harm.
+  "guard_judge",
   // A decision at the Ticket Machine: the four typed answers of an assessment (urgency, complexity, blast radius, risk of doing against not doing).
   "ticket_assess",
   // A decision at the Conversation Machine (a conversation context, run on demand): the kind of a Slack thread, whether it needs a reply, three knock-outs and five scores.
@@ -1057,9 +1059,11 @@ export type PlanContext = z.infer<typeof PlanContext>;
 
 /** What the checks (red_check, scope_check, finding_classify, e2e_failure_cause) judge: a red slice's failing output, the facts of a change's scope, a review finding, or a failed browser run. */
 export const CheckContext = z.object({
-  kind: z.enum(["red", "scope", "finding", "e2e", "escalation", "ci", "frames", "loop"]),
+  kind: z.enum(["red", "scope", "finding", "e2e", "escalation", "ci", "frames", "loop", "guard"]),
   /** loop: the guard's digest of a run's recent actions (counters, tool names, base names, error hashes: never file contents), the pack and how many calls it made; `cause` is what the judge found, for the redirect writer. All data. */
   loop: z.object({ digest: z.string().max(6000), pack: z.string().max(60), calls: z.number().int().nonnegative(), cause: z.string().max(40).optional() }).optional(),
+  /** guard: one tool call the stage guard held, with the task's text and the scanner's findings, capped by the machine: all data for guard_judge, never instructions. */
+  guard: z.object({ task: z.string().max(4000), tool: z.string().max(100), args: z.string().max(4000), findings: z.array(z.object({ id: z.string().max(100), severity: z.string().max(20), title: z.string().max(300) })).max(10) }).optional(),
   /** frames: the distinct on-screen texts of a film or its screenshots, flattened and capped by the machine (40 texts of 1000 characters): data for frame_privacy. */
   frames: z.object({ texts: z.array(z.string().max(1000)).max(40) }).optional(),
   /** ci: the failing job and the tail of its log, flattened and capped by the machine: data for ci_failure_class. */

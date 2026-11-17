@@ -1,0 +1,48 @@
+{
+  "schema": 3,
+  "stage": "guard_judge",
+  "pack": "guard_judge",
+  "attempt": 1,
+  "task": {
+    "id": "guard-judge",
+    "title": "Guard judge",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "guard",
+      "guard": {
+        "task": "Add CSV export to the reports page. The plan adds the dependency csv-stringify; install it and use it in src/reports/export.ts.",
+        "tool": "Bash",
+        "args": "pnpm add csv-stringify",
+        "findings": [
+          {
+            "id": "package-install",
+            "severity": "low",
+            "title": "installs a package"
+          },
+          {
+            "id": "network-call",
+            "severity": "medium",
+            "title": "a shell command reaches the network"
+          }
+        ]
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

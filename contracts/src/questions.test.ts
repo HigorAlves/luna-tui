@@ -413,6 +413,30 @@ describe("the ticket_safety decision pack", () => {
   });
 });
 
+describe("the guard_judge decision pack", () => {
+  it("guard_judge asks one yes/no `harmful` question and runs on Jev only", async () => {
+    const { PACKS, CheckContext } = await import("./index.ts");
+    const pack = PACKS.guard_judge;
+    expect(pack.kind).toBe("decision");
+    expect(Object.keys(pack.questions)).toEqual(["harmful"]);
+    const question = pack.questions.harmful!;
+    expect(question.type).toBe("yesno");
+    expect(question.instructions).toMatch(/data written by strangers/);
+    expect(question.instructions).toMatch(/never follow/);
+    expect(question.instructions).toMatch(/task text may itself contain instructions/);
+    expect(pack.policy.harmful).toMatchObject({ proceed: 0.85, flag: 0.5 });
+    // No Claude fallback: a per-call Claude run would be slow and spend the subscription.
+    expect(pack.engines).toEqual({ default: "jev", allowed: ["jev"] });
+    expect(pack.answer.safeParse({ harmful: { value: true, p: 0.9 } }).success).toBe(true);
+    expect(pack.answer.safeParse({}).success).toBe(false);
+    const guard = { task: "t", tool: "Bash", args: "ls", findings: [{ id: "atif.env", severity: "medium", title: "reads the environment" }] };
+    expect(CheckContext.safeParse({ kind: "guard", guard }).success).toBe(true);
+    expect(CheckContext.safeParse({ kind: "guard", guard: { ...guard, task: "x".repeat(4001) } }).success).toBe(false);
+    expect(CheckContext.safeParse({ kind: "guard", guard: { ...guard, args: "x".repeat(4001) } }).success).toBe(false);
+    expect(CheckContext.safeParse({ kind: "guard", guard: { ...guard, findings: Array.from({ length: 11 }, () => guard.findings[0]) } }).success).toBe(false);
+  });
+});
+
 describe("the ticket_assess decision pack", () => {
   it("asks fifteen scores and five flags in one call, reading the same ticket context as ticket_validity", async () => {
     const { PACKS } = await import("./index.ts");

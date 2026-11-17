@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_DATABASE_URL,
   DEFAULT_MAX_CONCURRENT_TASKS,
+  DEFAULT_GUARD_JUDGE_PORT,
   DEFAULT_PORT,
   DEFAULT_RETENTION_DAYS,
   loadConfig,
@@ -29,6 +30,7 @@ describe("loadConfig", () => {
       runnerQaImage: "hardness-runner-qa:dev",
       runnerVideoImage: "hardness-runner-video:dev",
       runnerGuardImage: "hardness-runner-guard:dev",
+      guardJudgePort: DEFAULT_GUARD_JUDGE_PORT,
       worktreesDir: "/home/me/Developer/worktrees",
       stateDir: "/home/me/.local/state/hardness",
       githubPoll: { repos: [], intervalMs: 300_000, label: "ready-for-agent" },
@@ -267,6 +269,13 @@ describe("loadConfig", () => {
     for (const host of ["127.0.0.1", "localhost", "::1", "127.0.0.2"]) {
       expect(loadConfig({ HOME: "/h", MACHINE_HOST: host }).host).toBe(host);
     }
+  });
+
+  it("reads the guard judge's port: 4319 by default, a custom one, and refuses one that is not a port", () => {
+    expect(DEFAULT_GUARD_JUDGE_PORT).toBe(4319);
+    expect(loadConfig({ HOME: "/h", MACHINE_GUARD_JUDGE_PORT: "4400" }).guardJudgePort).toBe(4400);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_GUARD_JUDGE_PORT: "abc" })).toThrow(/MACHINE_GUARD_JUDGE_PORT/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_GUARD_JUDGE_PORT: "70000" })).toThrow(/MACHINE_GUARD_JUDGE_PORT/);
   });
 
   it("rejects a port that is not a number", () => {
