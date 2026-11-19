@@ -179,6 +179,7 @@ generates the tables below. A test fails when they drift from the registry.
 | `n` | new ticket, then edit it in place |
 | `x` | actions menu for the ticket |
 | `m` | ask the foreman about the open cards |
+| `t` | plan a ticket with Opus or Codex |
 | `:` | command palette |
 | `esc` | clear the filter and the marks |
 | `?` | keys |

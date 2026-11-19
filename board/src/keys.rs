@@ -1367,6 +1367,14 @@ const BOARD: &[Binding] = &[
         on,
         45,
     ),
+    b(
+        "t",
+        "plan a ticket with Opus or Codex",
+        Group::App,
+        Scope::Board,
+        on,
+        44,
+    ),
     b(":", "command palette", Group::App, Scope::Board, on, 30),
     b(
         "esc",

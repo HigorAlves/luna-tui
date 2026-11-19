@@ -673,12 +673,16 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Mode::Actions { cursor } => render_actions(frame, app, *cursor),
         Mode::RepoPicker {
             id,
+            chat,
             query,
             all,
             cursor,
         } => {
-            if let Some(task) = app.task(id) {
-                render_repo_picker(frame, task, query, all, *cursor);
+            if *chat {
+                render_repo_picker(frame, "repo to plan a ticket in", query, all, *cursor);
+            } else if let Some(task) = app.task(id) {
+                let title = format!("repo for #{} {}", task.short_id(), task.title);
+                render_repo_picker(frame, &title, query, all, *cursor);
             }
         }
         Mode::ConfirmMany { action, ids } => render_note(
@@ -4917,7 +4921,7 @@ fn render_completions(frame: &mut Frame, text: &str, pick: Option<usize>) {
     );
 }
 
-fn render_repo_picker(frame: &mut Frame, task: &Task, query: &str, all: &[String], cursor: usize) {
+fn render_repo_picker(frame: &mut Frame, title: &str, query: &str, all: &[String], cursor: usize) {
     const VISIBLE_ROWS: usize = 10;
     let area = centered(frame.area(), 90, VISIBLE_ROWS as u16 + 6);
     frame.render_widget(Clear, area);
@@ -4927,7 +4931,7 @@ fn render_repo_picker(frame: &mut Frame, task: &Task, query: &str, all: &[String
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(c(ACCENT)))
         .padding(Padding::horizontal(2))
-        .title(Line::from(format!(" repo for #{} {} ", task.short_id(), task.title)).bold());
+        .title(Line::from(format!(" {title} ")).bold());
 
     let mut lines = vec![
         Line::from(vec![
