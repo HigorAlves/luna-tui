@@ -196,6 +196,7 @@ Each pack has its own default engine. A repo picks from the pack's `allowed` lis
 - **`figma-desktop` reachability.** The app serves on the host's loopback. The compose machine reaches it through `host.docker.internal`, and only when it runs on the same computer as the app. Phase 1 states this in `pnpm mcp status`.
 - **Mobbin's terms.** Using Mobbin screens as references inside an automated pipeline must fit its terms of use. To check before phase 2 enables it by default.
 - **Computed-style capture.** Recording computed styles for each capture adds time to the browser run. Phase 3 measures it, and may cap it to the elements that the spec names.
+  - *Measured (slice 30, QA image, agent-browser 0.39.2, 1440x4000 on a 300-element page, 200 of them kept by the probe):* the median of ten `qa-capture` calls is 0.38 s (range 0.36 to 0.39 s), under the 2 s bar, so the cap stays at 300 elements. Two things the probe showed: `agent-browser eval` prints the value as pretty-printed multi-line JSON (the tool parses the whole stdout, not the last line); and a screenshot that follows a viewport change after an idle gap stalls about 10 s, so the tool settles with an in-page wait through the driver instead of a sleep. A first capture straight after `open` still took about 10 s in four of four runs, and none after 2 s of idle, so the e2e prompt tells the agent to capture only once the page has settled.
 - **Helper concurrency limits.** Phase 5 starts with one helper at a time per card. More than one in parallel waits for numbers.
 
 ## Rollout

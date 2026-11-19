@@ -33,6 +33,10 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/chromium-qa
 ENV QA_AXE_SCRIPT=/opt/luna/lib/node_modules/axe-core/axe.min.js
 COPY qa-fill.mjs /usr/local/bin/qa-fill
 COPY qa-axe.mjs /usr/local/bin/qa-axe
-RUN chmod 0755 /usr/local/bin/qa-fill /usr/local/bin/qa-axe
+# qa-capture takes a frame's viewport, state and computed styles (RFC 0013, phase 3); the CLI imports its library from /usr/local/lib.
+COPY qa-capture.mjs /usr/local/bin/qa-capture
+COPY qa-capture-lib.mjs /usr/local/lib/qa-capture.mjs
+RUN chmod 0755 /usr/local/bin/qa-fill /usr/local/bin/qa-axe /usr/local/bin/qa-capture \
+ && sed -i 's#\./qa-capture-lib\.mjs#/usr/local/lib/qa-capture.mjs#' /usr/local/bin/qa-capture
 
 USER node
