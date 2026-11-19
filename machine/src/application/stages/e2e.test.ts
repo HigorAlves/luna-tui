@@ -500,3 +500,146 @@ describe("the e2e stage and a preview", () => {
     expect(result.detail).toMatchObject({ preview: { kind: "deploy", url: "https://x.preview.example.com" } });
   });
 });
+
+describe("the accessibility audit after the browser run", () => {
+  const start = parseLunaConfig("verify:\n  e2e:\n    start:\n      command: npm start\n      port: 4000\n");
+  const browserPass: StageResult = { outcome: "pass", detail: { answer: { verdict: "pass", summary: "ok", criteria: [] } }, usage: { turns: 5, costUsd: 0.3 } };
+  const browserFail: StageResult = { outcome: "pass", detail: { answer: { verdict: "fail", summary: "pay broke", criteria: [{ text: "pay", result: "fail", evidence: [] }] } } };
+  const blocker = { criterion: "2.1.2", level: "A", source: "judged", rule: null, impact: null, page: "/checkout", state: "modal", selector: "div.modal", summary: "trap", evidence: ["trap.png"], fix: null, confidence: 0.9 };
+  const minor = { criterion: "1.4.3", level: "AA", source: "axe", rule: "color-contrast", impact: "minor", page: "/checkout", state: "default", selector: "p.note", summary: "low", evidence: [], fix: null, confidence: 1 };
+  const audit = (findings: unknown[]): StageResult => ({ outcome: "pass", detail: { answer: { summary: "audited", pages: [{ page: "/checkout", states: ["default"], axe: "ran" }], findings } }, usage: { turns: 9, costUsd: 0.4 } });
+  const budget = (spent: "tokens" | null) => ({ tokens: spent ? 1_000_001 : 10, tokensCounted: true, minutes: 1, spent, limits: { max_tokens: 1_000_000, max_minutes: 45 } });
+  type Settings = { off: boolean; cardOff: boolean; level: "AA" | "AAA"; mode: "gate" | "advisory" };
+  const on: Settings = { off: false, cardOff: false, level: "AA", mode: "gate" };
+
+  function harness(opts: { browser?: StageResult | StageResult[]; audit?: StageResult; settings?: Settings; budgets?: Array<ReturnType<typeof budget>>; decide?: unknown; afterBrowser?: unknown[] } = {}) {
+    const events: string[] = [];
+    const calls: Array<{ pack?: string; runId: string; extra?: Record<string, unknown> }> = [];
+    const reads = [...(opts.budgets ?? [])];
+    const browsers = Array.isArray(opts.browser) ? [...opts.browser] : null;
+    const runner = e2eRunner({
+      runPack: async (c: StageContext, extra?: Record<string, unknown>, pack?: string) => {
+        calls.push({ pack, runId: c.runId, extra });
+        if (pack === "a11y_audit") return events.push("a11y"), opts.audit ?? audit([]);
+        events.push("pack");
+        return browsers ? browsers.shift()! : ((opts.browser as StageResult | undefined) ?? browserPass);
+      },
+      detectWeb: async () => true,
+      changedFiles: async () => null,
+      policy: async () => start,
+      headCommit: async () => "c".repeat(40),
+      openApp: async (input: OpenAppInput) => (events.push(`open ${input.attempt}`), { ok: true as const, target: { name: "app" as const, baseUrl: "http://luna-app:4000" }, network: "net-app", aliases: ["luna-app"], close: async () => void events.push("close"), redactValues: { K: "v" } }),
+      design: { settings: async () => opts.settings ?? on, ...(opts.budgets ? { budget: async () => (reads.length > 1 ? reads.shift()! : reads[0]!) } : {}) },
+      ...(opts.decide ? { decide: opts.decide, overrides: async () => ({}) } : {}),
+      ...(opts.afterBrowser ? { afterBrowser: opts.afterBrowser } : {}),
+    } as never);
+    const context = { task: { id: "t1", repoPath: "/repo", worktreePath: dir, branch: "task/x" }, stage: "e2e", attempt: 1, runId: "r1", approvals: [], signal: new AbortController().signal, emit: async () => {} } as unknown as StageContext;
+    return { run: () => runner(context), events, calls };
+  }
+
+  it("audits after a passing browser run, while the app is still open, then closes it", async () => {
+    const h = harness({ audit: audit([minor]) });
+    const result = await h.run();
+    expect(h.events).toEqual(["open 10", "pack", "a11y", "close"]);
+    expect(result).toMatchObject({ outcome: "pass", detail: { a11y: { level: "AA", mode: "gate", findings: [expect.objectContaining({ severity: "should_fix", category: "accessibility" })] } } });
+    expect(result.usage?.turns).toBe(14);
+  });
+
+  it("runs the audit as <runId>-a11y on the same target, network and redaction as the browser run", async () => {
+    const h = harness();
+    await h.run();
+    const [browser, a11y] = h.calls;
+    expect(a11y!.runId).toBe("r1-a11y");
+    expect(a11y!.pack).toBe("a11y_audit");
+    expect(a11y!.extra).toMatchObject({ qaTarget: browser!.extra!.qaTarget, alsoJoin: ["net-app"], noProxy: ["luna-app"], redactValues: { K: "v" }, a11yLevel: "AA" });
+  });
+
+  it("hands the audit the repo's level", async () => {
+    const h = harness({ settings: { ...on, level: "AAA" } });
+    await h.run();
+    expect(h.calls[1]!.extra).toMatchObject({ a11yLevel: "AAA" });
+  });
+
+  it("fails the stage with the audit's blockers for Build", async () => {
+    const result = await harness({ audit: audit([blocker, minor]) }).run();
+    expect(result.outcome).toBe("fail");
+    expect(result.findings!.map((f) => [f.severity, f.title])).toEqual([["blocker", "WCAG 2.1.2 (A): div.modal on /checkout"], ["should_fix", "WCAG 1.4.3 (AA): p.note on /checkout"]]);
+  });
+
+  it("merges two rules on the same criterion, selector and page into one finding, on purpose, keeping the higher severity", async () => {
+    const second = { ...minor, rule: "color-contrast-enhanced", impact: "critical", state: "hover" };
+    const result = await harness({ audit: audit([minor, second]) }).run();
+    const found = (result.detail as { a11y: { findings: Array<{ severity: string; merged?: string[] }> } }).a11y.findings;
+    expect(found).toHaveLength(1);
+    expect(found[0]!.severity).toBe("blocker");
+    expect(result.outcome).toBe("fail");
+  });
+
+  it("keeps blockers as should_fix in advisory mode, and passes", async () => {
+    const result = await harness({ audit: audit([blocker]), settings: { ...on, mode: "advisory" } }).run();
+    expect(result.outcome).toBe("pass");
+  });
+
+  it("does not audit a failed browser run, nor when design is off for the repo or the card", async () => {
+    for (const h of [harness({ browser: browserFail }), harness({ settings: { ...on, off: true } }), harness({ settings: { ...on, cardOff: true } })]) {
+      await h.run();
+      expect(h.events).not.toContain("a11y");
+    }
+  });
+
+  it("does not audit when no design settings are wired", async () => {
+    const events: string[] = [];
+    const runner = e2eRunner({ runPack: async () => (events.push("pack"), browserPass), detectWeb: async () => true, changedFiles: async () => null, policy: async () => start, headCommit: async () => "c".repeat(40), openApp: async () => ({ ok: true, target: { name: "app", baseUrl: "http://x" }, network: "n", aliases: [], close: async () => {}, redactValues: {} }) } as never);
+    await runner({ task: { id: "t1", repoPath: "/repo", worktreePath: dir }, stage: "e2e", attempt: 1, runId: "r1", approvals: [], signal: new AbortController().signal } as unknown as StageContext);
+    expect(events).toEqual(["pack"]);
+  });
+
+  it("keeps the browser run's verdict, with a note, when the audit fails or answers off the schema", async () => {
+    for (const bad of [{ outcome: "fail", detail: { error: "browser crashed" } } as StageResult, { outcome: "pass", detail: { answer: { findings: "x" } } } as StageResult]) {
+      const result = await harness({ audit: bad }).run();
+      expect(result.outcome).toBe("pass");
+      expect((result.detail as { a11y: { notes: string[] } }).a11y.notes[0]).toMatch(/^the accessibility audit did not run: /);
+    }
+  });
+
+  it("escalates design_budget, and starts no audit, when the design budget is spent before it", async () => {
+    const h = harness({ budgets: [budget("tokens")] });
+    const result = await h.run();
+    expect(h.events).toEqual(["open 10", "pack", "close"]);
+    expect(result).toMatchObject({ outcome: "escalated", detail: { step: "e2e", escalation: "design_budget" } });
+  });
+
+  it("escalates design_budget instead of sending blockers back when the budget is spent after the audit", async () => {
+    const result = await harness({ audit: audit([blocker]), budgets: [budget(null), budget("tokens")] }).run();
+    expect(result).toMatchObject({ outcome: "escalated", detail: { step: "e2e", escalation: "design_budget" } });
+  });
+
+  it("audits once, after the re-run, when the first browser run was an env_flake", async () => {
+    const flake: StageResult = { outcome: "pass", detail: { answer: { verdict: "fail", summary: "x", criteria: [{ text: "a", result: "fail" }] } } };
+    const h = harness({ browser: [flake, browserPass], decide: async () => ({ cause: { choice: "env_flake", confidence: 0.9 } }), audit: audit([minor]) });
+    const result = await h.run();
+    expect(h.events).toEqual(["open 10", "pack", "close", "open 11", "pack", "a11y", "close"]);
+    expect(result).toMatchObject({ outcome: "pass", detail: { rerun: true, a11y: { findings: [expect.anything()] } } });
+  });
+
+  it("runs further afterBrowser steps, in order, in the same open app session, and merges their findings and usage", async () => {
+    const order: string[] = [];
+    const parity = {
+      key: "parity",
+      detail: { frames: 1 },
+      findings: [{ path: "/checkout", line: 0, severity: "blocker", title: "parity", body: "b", confidence: 0.9, category: "design", criterion_ref: null, suggested_fix: null }],
+      blocking: true,
+      usage: { turns: 2, costUsd: 0.1 },
+    };
+    const h = harness({
+      afterBrowser: [async () => (order.push("second"), h.events.push("parity"), parity)],
+    });
+    const result = await h.run();
+    expect(h.events).toEqual(["open 10", "pack", "a11y", "parity", "close"]);
+    expect(order).toEqual(["second"]);
+    expect(result.outcome).toBe("fail");
+    expect(result.detail).toMatchObject({ parity: { frames: 1 } });
+    expect(result.findings!.map((f) => f.title)).toEqual(["parity"]);
+    expect(result.usage?.turns).toBe(16);
+  });
+});

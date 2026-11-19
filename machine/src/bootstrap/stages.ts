@@ -558,7 +558,17 @@ export async function buildRealStages(
     // e2e skips repos with no web surface; without the QA image it passes with a note.
     e2e: qaImage
       ? e2eRunner({
-          runPack: (context, extra) => runAgent(deps, context, "e2e", extra ?? {}),
+          runPack: (context, extra, pack) => runAgent(deps, context, pack ?? "e2e", extra ?? {}),
+          // The accessibility audit after the browser run (RFC 0013): the repo's design settings, a person's "design off" for the card, and the design budget (late-bound).
+          design: {
+            settings: async (repoPath, taskId) => {
+              const s = designSettings((await policies.for(repoPath)).design);
+              return { off: s.off, cardOff: designDecisions?.cardOff ? await designDecisions.cardOff(taskId) : false, level: s.a11y.level, mode: s.a11y.mode };
+            },
+            get budget() {
+              return designDecisions?.budget;
+            },
+          },
           openApp: (input) => openApp(appDeps, input),
           openPreview: (input) => openPreview(appDeps, input),
           policy: (repoPath) => policies.for(repoPath),
