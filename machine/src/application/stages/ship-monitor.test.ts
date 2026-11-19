@@ -300,6 +300,8 @@ describe("the ship monitor", () => {
       stateDir,
       pollMs: 1,
       sleep: async () => {},
+      // The fixture's clock, as setup() gives: on the real one the fixture's head turns stale and the watch never ends.
+      now: () => START,
     })({ task: { id: "t2", repoPath: "/r", worktreePath: "/nonexistent" }, approvals: [], signal: new AbortController().signal } as unknown as StageContext, REF);
     expect(result).toMatchObject({ outcome: "pass", detail: { ready: { head: HEAD } } });
     expect(fileAtRef.mock.calls.map((c) => [c[1], c[2]])).toEqual([["main", ".github/CODEOWNERS"], ["main", "CODEOWNERS"]]);
