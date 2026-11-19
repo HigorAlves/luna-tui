@@ -7,7 +7,7 @@ import { ChangeExceptionKind, ComplianceRegime } from "./compliance.ts";
 import { EconomyInput, ProposeContext } from "./economy.ts";
 import { EngineBudgets, EngineId } from "./engines.ts";
 import { EffortId } from "./models.ts";
-import { EvidenceConfigV22, FactoryConfigInput, SecretNameSchema } from "./config-v22.ts";
+import { DesignConfig, EvidenceConfigV22, FactoryConfigInput, SecretNameSchema } from "./config-v22.ts";
 import { Scenario } from "./plan.ts";
 import { SizeContext, SplitContext } from "./split.ts";
 import { ConfidencePolicySchema } from "./questions.ts";
@@ -861,6 +861,8 @@ export const LunaConfig = z.object({
   budget: z.object({ engines: EngineBudgets.optional() }).optional(),
   /** How long the machine keeps a task's local Evidence Pack and media; 0 never sweeps it, absent defers to MACHINE_RETENTION_DAYS. */
   evidence: z.object({ retention_days: z.number().int().min(0).optional(), ...EvidenceConfigV22 }).optional(),
+  /** The designer agents in this repo (RFC 0013): `off`, or the machine's MCP servers narrowed by name. */
+  design: DesignConfig.optional(),
   /** Windows in which the machine merges nothing, whatever the policy says. */
   freeze: z
     .array(

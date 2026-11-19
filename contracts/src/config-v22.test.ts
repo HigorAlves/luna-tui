@@ -319,3 +319,14 @@ describe("the e2e app, its seed and its preview", () => {
     expect(ok({ checks: [{ name: "t", run: "x", secrets: Array.from({ length: 11 }, (_, i) => `SECRET_${i}`) }] }).success).toBe(false);
   });
 });
+
+describe("the design section", () => {
+  it("takes servers narrowed by tool, and off", () => {
+    expect(LunaConfig.parse({ design: { servers: { figma: { tools: ["get_design_context"] } } } }).design).toEqual({ servers: { figma: { tools: ["get_design_context"] } } });
+    expect(LunaConfig.parse({ design: "off" }).design).toBe("off");
+  });
+  it("refuses anything else", () => {
+    expect(LunaConfig.safeParse({ design: "on" }).success).toBe(false);
+    expect(LunaConfig.safeParse({ design: { servers: { figma: { tools: "all" } } } }).success).toBe(false);
+  });
+});

@@ -139,6 +139,10 @@ export const EvidenceConfigV22 = {
   storage: z.enum(["release_asset", "local"]).optional(),
 };
 
+/** The designer agents' section (RFC 0013). `off` turns them off for the repo. `servers` narrows the machine's MCP servers by name; it never adds one. Read by the stage runner, so it is not in `FactoryConfigInput`. */
+export const DesignConfig = z.union([z.literal("off"), z.object({ servers: z.record(z.string(), z.object({ tools: z.array(z.string()).optional() })).optional() })]);
+export type DesignConfig = z.infer<typeof DesignConfig>;
+
 export interface FactoryConfig {
   learning: { records: boolean; context: "full" | "answers"; truth: boolean; traces: "off" | "metadata" | "host" };
   tickets: { assignees: string[]; teams: string[]; debounce_seconds: number; auto: "off" | "on"; sla: { acknowledge_hours: number; resolve_days: { P0: number; P1: number; P2: number; P3: number }; stale_days: number; needs_info_reminder_days: number; needs_info_park_days: number } };
