@@ -105,6 +105,7 @@ import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
 import { CloneError, NoPullError, NotReadyError, type PullsPort } from "../../application/pulls.ts";
 import { tapOf } from "../../application/slack-send.ts";
+import { type McpApi, mountMcpCallback, mountMcpRoutes } from "./mcp.ts";
 import { AlreadyTaskError, BadRelationError, BuiltinWatchError, NoItemError, NoWatchError, SlackRefusedError, type SlackInboxPort } from "../../application/slack-inbox.ts";
 import { NoSlackTokenError } from "../../application/slack.ts";
 import { NoJiraTokenError } from "../../application/jira.ts";
@@ -155,6 +156,8 @@ export interface AppDeps {
   taskDiff?: (worktreePath: string, repoPath: string | null, file?: string) => Promise<TaskDiff>;
   /** The Slack inbox; without it the `/slack/*` routes are absent. */
   slack?: SlackInboxPort;
+  /** The MCP servers' status and login (RFC 0013); without it the `/mcp` routes are absent. */
+  mcp?: McpApi;
   /** Jira by hand (link, unlink, create, search, status); without it the `/jira/*` and `/tasks/:id/jira*` routes are absent. */
   jira?: JiraTasksPort;
   /** The ticket's SLA clocks, computed when a task is answered or published; without it every task shows `sla: null`. */
@@ -264,10 +267,13 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, compliance, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], chatRepos = async () => [], clock = () => new Date(), problems: problemsOf, sandboxPolicy }: AppDeps): Hono {
+export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, compliance, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], chatRepos = async () => [], clock = () => new Date(), problems: problemsOf, sandboxPolicy, mcp }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
+  // The OAuth callback is the one route a browser reaches with no token; it takes only a login this machine started.
+  if (mcp) mountMcpCallback(app, mcp);
   app.use(guard(access));
+  if (mcp) mountMcpRoutes(app, mcp);
   /** A task row as the board reads it, clocks included. */
   const serialize = async (row: TaskRow, usage: { spentUsd: number; workedMs: number } | null = null) =>
     toTask(row, usage, sla ? await sla(row) : null, await pipeline.glance(row.id));
