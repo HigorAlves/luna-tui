@@ -2374,7 +2374,9 @@ pub(crate) fn render_ticket_chat(
         state.phase,
         Phase::Draft | Phase::Creating | Phase::Created { .. }
     );
+    let mut draft_at = None;
     if let (true, Some(draft)) = (at_gate, &state.draft) {
+        draft_at = Some(body.len());
         body.push(Line::from(Span::from("Draft ticket").fg(c(GREEN)).bold()));
         body.push(Line::from(Span::from(plain(&draft.title)).bold()));
         for line in text::wrap(&plain(&draft.description), width, 2) {
@@ -2426,7 +2428,7 @@ pub(crate) fn render_ticket_chat(
             let secs = state.waiting_since.map_or(0, |t| t.elapsed().as_secs());
             Line::from(
                 Span::from(format!(
-                    "thinking… {}:{:02} (esc cancels)",
+                    "thinking… {}:{:02} (esc drops this turn)",
                     secs / 60,
                     secs % 60
                 ))
@@ -2463,9 +2465,20 @@ pub(crate) fn render_ticket_chat(
         Layout::vertical([Constraint::Min(0), Constraint::Length(foot_height)]).areas(inner);
     // Newest at the bottom; `scroll` lines up from there, held inside the talk.
     let rows = talk.height as usize;
-    let end = body
-        .len()
-        .saturating_sub(state.scroll.min(body.len().saturating_sub(rows)));
+    let max_scroll = body.len().saturating_sub(rows);
+    state.max_scroll.set(max_scroll);
+    let mut scroll = state.scroll;
+    // Arriving at the gate, a draft taller than the view starts at its heading, not at its tail.
+    if state.pin_draft.get()
+        && let Some(at) = draft_at
+        && body.len() - at > rows
+    {
+        scroll = body.len() - (at + rows);
+        state.pinned_scroll.set(scroll);
+    } else {
+        state.pin_draft.set(false);
+    }
+    let end = body.len().saturating_sub(scroll.min(max_scroll));
     let start = end.saturating_sub(rows);
     frame.render_widget(Paragraph::new(body[start..end].to_vec()), talk);
     frame.render_widget(Paragraph::new(foot), foot_area);

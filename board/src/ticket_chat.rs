@@ -4,6 +4,8 @@
 //! talk, its notes and its draft, and sends them back with each message. A reply carries a generation
 //! so that a reply the person gave up on (`esc` while waiting) is dropped when it lands.
 
+use std::cell::Cell;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -14,8 +16,15 @@ use crate::model::TicketText;
 pub const HISTORY_TURNS: usize = 30;
 /// The most choices a reply shows as `1`-`4` keys.
 pub const MAX_CHOICES: usize = 4;
-/// The longest message the machine takes (`TicketChatContext.message`), in characters.
+/// The longest message the machine takes (`TicketChatContext.message`), in UTF-16 units (what zod's `.max` counts).
 pub const MAX_MESSAGE_CHARS: usize = 4000;
+/// The next reply generation, counted across every talk so a reply of a dropped talk never matches a later one.
+static GENERATION: AtomicU64 = AtomicU64::new(1);
+
+fn next_generation() -> u64 {
+    GENERATION.fetch_add(1, Ordering::Relaxed)
+}
+
 /// The engines the pack allows; the first is the default.
 pub const ENGINES: [&str; 2] = ["claude:opus", "codex:sol"];
 
@@ -93,6 +102,12 @@ pub struct State {
     pub input: String,
     /// Lines scrolled up from the newest turn.
     pub scroll: usize,
+    /// The most the last render could scroll (set by the renderer; `scroll_by` holds to it).
+    pub max_scroll: Cell<usize>,
+    /// At the gate the draft's heading is held on the first row until the person scrolls; the render
+    /// leaves here the scroll that shows it.
+    pub pin_draft: Cell<bool>,
+    pub pinned_scroll: Cell<usize>,
     pub generation: u64,
     pub waiting_since: Option<Instant>,
     pub phase: Phase,
@@ -122,6 +137,9 @@ impl State {
             ready: false,
             input: String::new(),
             scroll: 0,
+            max_scroll: Cell::new(0),
+            pin_draft: Cell::new(false),
+            pinned_scroll: Cell::new(0),
             generation: 0,
             waiting_since: None,
             phase: Phase::PickEngine,
@@ -147,8 +165,10 @@ impl State {
             return None;
         }
         // The machine refuses a longer one with a bare 400; keep it in the input so the person can cut it.
-        if message.chars().count() > MAX_MESSAGE_CHARS {
-            self.error = Some(format!("a message is at most {MAX_MESSAGE_CHARS} characters"));
+        if message.encode_utf16().count() > MAX_MESSAGE_CHARS {
+            self.error = Some(format!(
+                "a message is at most {MAX_MESSAGE_CHARS} characters"
+            ));
             return None;
         }
         let from = self.turns.len().saturating_sub(HISTORY_TURNS);
@@ -161,7 +181,7 @@ impl State {
         self.choices.clear();
         self.error = None;
         self.scroll = 0;
-        self.generation += 1;
+        self.generation = next_generation();
         self.waiting_since = Some(Instant::now());
         self.phase = Phase::Waiting;
         Some(Request {
@@ -209,6 +229,7 @@ impl State {
                 self.choices = reply.choices.into_iter().take(MAX_CHOICES).collect();
                 self.ready = reply.ready;
                 self.phase = if self.ready && self.draft.is_some() {
+                    self.pin_draft.set(true);
                     Phase::Draft
                 } else {
                     Phase::Typing
@@ -225,7 +246,7 @@ impl State {
 
     /// `esc` while waiting: the reply is dropped when it lands and the message is back in the box.
     pub fn cancel_wait(&mut self) {
-        self.generation += 1;
+        self.generation = next_generation();
         self.waiting_since = None;
         self.take_back_message();
         self.phase = Phase::Typing;
@@ -246,6 +267,7 @@ impl State {
             return None;
         }
         let draft = self.draft.clone()?;
+        self.error = None;
         self.phase = Phase::Creating;
         Some(TicketText {
             title: draft.title,
@@ -256,6 +278,7 @@ impl State {
     }
 
     pub fn created(&mut self, id: String) {
+        self.error = None;
         self.phase = Phase::Created { id };
     }
 
@@ -271,7 +294,14 @@ impl State {
     }
 
     pub fn scroll_by(&mut self, lines: isize) {
-        self.scroll = self.scroll.saturating_add_signed(lines);
+        // A pinned draft scrolls from where the render left it.
+        if self.pin_draft.replace(false) {
+            self.scroll = self.pinned_scroll.get();
+        }
+        self.scroll = self
+            .scroll
+            .saturating_add_signed(lines)
+            .min(self.max_scroll.get());
     }
 }
 
@@ -434,6 +464,60 @@ mod tests {
         assert_eq!(request.notes, "n");
         assert_eq!(request.draft, Some(draft()));
         assert!(State::new("/x".into(), Some("gpt-5")).engine == "claude:opus");
+    }
+
+    #[test]
+    fn generations_never_repeat_across_talks() {
+        let mut a = state();
+        a.send("one").unwrap();
+        let old = a.generation;
+        a.cancel_wait();
+        drop(a);
+        let mut b = state();
+        b.send("two").unwrap();
+        assert_ne!(b.generation, old);
+        assert!(!b.answered(old, Ok(ready_reply())));
+        assert_eq!(b.phase, Phase::Waiting);
+    }
+
+    #[test]
+    fn the_limit_counts_utf16_units_like_the_machine() {
+        let mut s = state();
+        // 2001 emoji are 2001 chars but 4002 UTF-16 units: the machine would refuse them.
+        s.input = "😀".repeat(MAX_MESSAGE_CHARS / 2 + 1);
+        assert!(s.send_input().is_none());
+        assert!(s.error.is_some());
+        s.input = "😀".repeat(MAX_MESSAGE_CHARS / 2);
+        assert!(s.send_input().is_some());
+    }
+
+    #[test]
+    fn a_create_failure_is_cleared_by_the_next_create_and_by_success() {
+        let mut s = state();
+        s.send("a").unwrap();
+        s.answered(s.generation, Ok(ready_reply()));
+        s.begin_create().unwrap();
+        s.create_failed("no".into());
+        assert_eq!(s.phase, Phase::Draft);
+        assert!(s.error.is_some());
+        s.begin_create().unwrap();
+        assert!(s.error.is_none());
+        s.error = Some("x".into());
+        s.created("t".into());
+        assert!(s.error.is_none());
+    }
+
+    #[test]
+    fn scrolling_is_held_to_what_the_last_render_could_scroll() {
+        let mut s = state();
+        s.max_scroll.set(7);
+        s.scroll_by(5);
+        s.scroll_by(5);
+        assert_eq!(s.scroll, 7);
+        s.scroll_by(-5);
+        assert_eq!(s.scroll, 2);
+        s.scroll_by(-5);
+        assert_eq!(s.scroll, 0);
     }
 
     #[test]

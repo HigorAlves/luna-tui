@@ -6820,6 +6820,11 @@ impl App {
         if let Mode::TicketChat(state) = std::mem::replace(&mut self.mode, Mode::Normal) {
             let finished = matches!(state.phase, Phase::Created { .. });
             let empty = state.turns.is_empty() && state.draft.is_none();
+            let mut state = state;
+            // Nothing runs in `Creating` (the create is synchronous): a talk kept there waits at the gate.
+            if state.phase == Phase::Creating {
+                state.phase = Phase::Draft;
+            }
             if !discard && !finished && !empty {
                 self.ticket_talk = Some(state);
             }
@@ -6839,11 +6844,13 @@ impl App {
                 let id = task.id.clone();
                 self.upsert(task);
                 self.select(&id, true);
+                // A created talk is finished either way: it is never kept for `t`.
+                if let Mode::TicketChat(state) = &mut self.mode {
+                    state.created(id.clone());
+                }
                 if edit {
                     self.close_ticket_chat(false);
                     self.open_ticket_editor(&id);
-                } else if let Mode::TicketChat(state) = &mut self.mode {
-                    state.created(id);
                 }
             }
             Err(error) => {
@@ -6944,11 +6951,30 @@ impl App {
                     state.keep_talking();
                     Act::None
                 }
+                KeyCode::PageUp => {
+                    state.scroll_by(5);
+                    Act::None
+                }
+                KeyCode::PageDown => {
+                    state.scroll_by(-5);
+                    Act::None
+                }
                 KeyCode::Esc => Act::Close,
                 _ => Act::None,
             },
-            Phase::Creating => Act::None,
+            Phase::Creating => match key.code {
+                KeyCode::Esc => Act::Close,
+                _ => Act::None,
+            },
             Phase::Created { id } => match key.code {
+                KeyCode::PageUp => {
+                    state.scroll_by(5);
+                    Act::None
+                }
+                KeyCode::PageDown => {
+                    state.scroll_by(-5);
+                    Act::None
+                }
                 KeyCode::Char('y') => Act::Jira(id),
                 KeyCode::Char('n') | KeyCode::Esc => Act::Close,
                 _ => Act::None,
@@ -15823,7 +15849,7 @@ mod ticket_chat_tests {
         press(&mut app, KeyCode::Enter);
         let waiting = screen(&mut app);
         assert!(
-            waiting.contains("thinking… 0:00 (esc cancels)"),
+            waiting.contains("thinking… 0:00 (esc drops this turn)"),
             "{waiting}"
         );
         let generation = state(&app).generation;
@@ -15887,6 +15913,172 @@ mod ticket_chat_tests {
         let scrolled = screen(&mut app);
         assert!(!scrolled.contains("message number 19"), "{scrolled}");
         assert!(scrolled.contains("message number 1"));
+    }
+
+    /// A machine that answers every POST with one new card.
+    fn creating_machine() -> Machine {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = crate::testkit::task_json(
+            "bbbbbbbb",
+            "Export CSV",
+            "queued",
+            "Backlog",
+            serde_json::json!({}),
+        )
+        .to_string();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(v) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = v.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut raw = vec![0; length];
+                let _ = reader.read_exact(&mut raw);
+                let _ = reader.into_inner().write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{task}", task.len()).as_bytes());
+            }
+        });
+        Machine::at(&format!("http://{addr}"))
+    }
+
+    #[test]
+    fn e_at_the_gate_creates_and_does_not_keep_the_talk() {
+        let mut app = at_the_gate();
+        app.machine = creating_machine();
+        press(&mut app, KeyCode::Char('e'));
+        assert!(
+            matches!(app.mode, Mode::EditTicket { .. }),
+            "the editor opened on the created ticket"
+        );
+        assert!(app.ticket_talk.is_none(), "a created talk is not kept");
+        app.mode = Mode::Normal;
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(
+            state(&app).phase,
+            Phase::PickEngine,
+            "t starts a fresh talk"
+        );
+    }
+
+    #[test]
+    fn esc_closes_a_chat_stuck_in_creating() {
+        let mut app = at_the_gate();
+        let Mode::TicketChat(s) = &mut app.mode else {
+            panic!()
+        };
+        s.phase = Phase::Creating;
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(
+            state(&app).phase,
+            Phase::Draft,
+            "reopens at the gate, not stuck"
+        );
+    }
+
+    #[test]
+    fn after_esc_while_waiting_the_person_can_send_at_once_and_the_hint_says_the_turn_is_dropped() {
+        let mut app = chatting();
+        type_text(&mut app, "hello");
+        press(&mut app, KeyCode::Enter);
+        let waiting = screen(&mut app);
+        assert!(waiting.contains("esc drops this turn"), "{waiting}");
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(state(&app).phase, Phase::Waiting);
+        assert_eq!(state(&app).turns.len(), 1);
+    }
+
+    #[test]
+    fn a_coded_machine_error_shows_its_message_and_keeps_the_input() {
+        let mut app = chatting();
+        type_text(&mut app, "hello");
+        press(&mut app, KeyCode::Enter);
+        let generation = state(&app).generation;
+        app.take_ticket_chat(
+            generation,
+            Err("the claude login is busy; try again".into()),
+        );
+        assert_eq!(state(&app).input, "hello");
+        let screen = screen(&mut app);
+        assert!(screen.contains("the claude login is busy"), "{screen}");
+    }
+
+    #[test]
+    fn a_long_draft_at_the_gate_shows_its_title_and_pgdn_pgup_work_there() {
+        let mut app = chatting();
+        type_text(&mut app, "csv");
+        press(&mut app, KeyCode::Enter);
+        let generation = state(&app).generation;
+        let mut reply = ready();
+        reply.draft.as_mut().unwrap().description = (0..200)
+            .map(|i| format!("sentence {i} of a long description."))
+            .collect::<Vec<_>>()
+            .join(" ");
+        app.take_ticket_chat(generation, Ok(reply));
+        let gate = screen(&mut app);
+        assert!(
+            gate.contains("Draft ticket") && gate.contains("Export CSV"),
+            "{gate}"
+        );
+        press(&mut app, KeyCode::PageDown);
+        let down = screen(&mut app);
+        assert!(
+            !down.contains("Export CSV"),
+            "PgDn scrolled the draft\n{down}"
+        );
+        for _ in 0..20 {
+            press(&mut app, KeyCode::PageDown);
+            let _ = screen(&mut app);
+        }
+        let bottom = screen(&mut app);
+        assert!(bottom.contains("• escapes commas"), "{bottom}");
+        press(&mut app, KeyCode::PageUp);
+        let _ = screen(&mut app);
+        assert!(state(&app).scroll > 0);
+        // Created takes PgUp/PgDn too.
+        let id = app.tasks[0].id.clone();
+        let Mode::TicketChat(s) = &mut app.mode else {
+            panic!()
+        };
+        s.created(id);
+        s.scroll = 0;
+        let _ = screen(&mut app);
+        press(&mut app, KeyCode::PageUp);
+        assert!(state(&app).scroll > 0, "PgUp works once created");
+    }
+
+    #[test]
+    fn pgup_stops_at_the_top_and_one_pgdn_comes_back() {
+        let mut app = chatting();
+        for i in 0..20 {
+            let Mode::TicketChat(state) = &mut app.mode else {
+                panic!()
+            };
+            state.turns.push(crate::ticket_chat::Turn {
+                who: "person",
+                text: format!("message number {i}"),
+            });
+        }
+        for _ in 0..30 {
+            let _ = screen(&mut app);
+            press(&mut app, KeyCode::PageUp);
+        }
+        let _ = screen(&mut app);
+        let top = state(&app).scroll;
+        assert_eq!(top, state(&app).max_scroll.get());
+        assert!(top > 0);
+        press(&mut app, KeyCode::PageDown);
+        assert_eq!(state(&app).scroll, top - 5);
     }
 }
 
