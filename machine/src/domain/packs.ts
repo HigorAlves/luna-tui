@@ -76,6 +76,8 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   design_spec: [],
   // The accessibility auditor, a sub-run of the e2e stage and on demand (POST /design/audit); the e2e stage's own pack stays `e2e`.
   a11y_audit: [],
+  // The parity reviewer, a sub-run of the e2e stage after a passing browser run; never a stage of its own.
+  design_parity: [],
   // The ticket planner, run on demand by POST /ticket-chat.
   ticket_chat: [],
   // Change management's exception explainer, run on demand by the compliance job.

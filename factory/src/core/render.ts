@@ -149,6 +149,22 @@ const designText = (design: StageInput["context"]["design"]) => ({
     : NONE,
 });
 
+/** The captures the parity reviewer compares, one line each: the machine's own ids, paths and sizes, and the frame's name, which a Figma file wrote (so the block is quoted as data). Frames the plan could not capture are listed apart. */
+const parityText = (parity: StageInput["context"]["parity"]) => {
+  if (!parity) return { captures: NONE, uncited: NONE, spec: NONE };
+  const nameOf = (id: string) => parity.spec?.frames.find((f) => f.id === id)?.name;
+  const frame = (id: string) => `${id}${nameOf(id) ? ` (${nameOf(id)})` : ""}`;
+  const size = (c: { scenario: string; viewport: string; frame: string }) => {
+    const v = parity.plan.targets.find((t) => t.scenario === c.scenario && t.frame === c.frame && t.viewport.name === c.viewport)?.viewport;
+    return v ? ` ${v.width}x${v.height}` : "";
+  };
+  return {
+    captures: parity.captures.length > 0 ? parity.captures.map((c) => `${c.scenario} · frame ${frame(c.frame)} · ${c.viewport}${size(c)} · ${c.state} · image ${c.image} · styles ${c.styles ?? "none"} · ${c.elements} elements`).join("\n") : "(none: no capture was taken, so every frame is not_compared)",
+    uncited: parity.plan.uncited.length > 0 ? parity.plan.uncited.map(frame).join("\n") : NONE,
+    spec: designSpecText(parity.spec),
+  };
+};
+
 /** The board, as the foreman reads it: the question and turns as text, one line per card (all of it a person's or a model's, so quoted as data), and each pack's allowed engines (the machine's own). */
 const foremanText = (foreman: StageInput["context"]["foreman"]) => {
   if (!foreman) return { now: NONE, question: NONE, history: NONE, cards: NONE, truncated: NONE, pending: NONE, packs: NONE };
@@ -695,6 +711,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
   const chat = chatText(input.context.chat);
   const foreman = foremanText(input.context.foreman);
   const design = designText(input.context.design);
+  const parity = parityText(input.context.parity);
   const ticketChat = ticketChatText(input.context.ticketChat);
   const exceptions = exceptionsText(input.context.exceptions);
   const status = statusText(input.context.status);
@@ -820,6 +837,9 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.ticketChat.draft}}": ticketChat.draft,
     "{{context.design.refs}}": design.refs,
     "{{context.a11y.level}}": a11yLevelText(input.context.a11y),
+    "{{context.parityCaptures}}": parity.captures,
+    "{{context.parityUncited}}": parity.uncited,
+    "{{context.designSpec}}": parity.spec,
     "{{context.foreman.now}}": foreman.now,
     "{{context.foreman.question}}": foreman.question,
     "{{context.foreman.history}}": foreman.history,

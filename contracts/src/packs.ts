@@ -17,6 +17,7 @@ import { type Bands, type KnockOutFlags, type SubScores, type Weights, knockOut,
 import { AccessReviewAnswer, ChangeExceptionsAnswer, PostmortemAnswer, QuestionnaireAnswer, ReleaseNotesAnswer, StatusReportAnswer, VulnTriageAnswer } from "./compliance.ts";
 import { ComplianceReviewAnswer } from "./compliance-review.ts";
 import { A11yAuditAnswer } from "./a11y.ts";
+import { DesignParityAnswer } from "./design-parity.ts";
 import { DesignSpec } from "./design-spec.ts";
 import { DocsDriftAnswer } from "./docs-drift.ts";
 import { ForemanAnswer } from "./foreman.ts";
@@ -74,6 +75,7 @@ export const AgentRole = z.enum([
   "design-spec-writer",
   // Audits a rendered UI change for WCAG 2.2 with axe-core and judged checks, in the QA browser; read-only on the code.
   "a11y-auditor",
+  "parity-reviewer",
   // The foreman: answers a question about the board from a snapshot and suggests actions; no tools, no worktree.
   "foreman",
   // The ticket planner: talks a ticket through with a person over a read-only checkout and drafts it.
@@ -457,6 +459,9 @@ const FIGMA_READ = ["get_metadata", "get_design_context", "get_variable_defs", "
 const MOBBIN_READ = ["search_screens", "search_flows", "search_sections"];
 /** The design tools a designer pack may call (RFC 0013): Figma's reading tools on either server, Mobbin's searches. A golden test pins them. */
 const DESIGN_READ: Partial<Access> = { bridge: [{ server: "figma", tools: FIGMA_READ }, { server: "figma-desktop", tools: FIGMA_READ }, { server: "mobbin", tools: MOBBIN_READ }] };
+
+/** The parity reviewer reads frames and tokens only (RFC 0013, phase 3): no Code Connect, no Mobbin. A golden test pins the list. */
+const PARITY_READ = ["get_design_context", "get_metadata", "get_screenshot", "get_variable_defs"];
 
 /** council_security and council_second: a short summary and findings from the member's own lane. No findings means nothing to add. */
 export const CouncilAnswer = z.object({ summary: z.string().max(300), findings: z.array(Finding).max(8) });
@@ -1300,6 +1305,24 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     answer: A11yAuditAnswer,
     template: "a11y_audit.md",
     network: "full",
+  },
+  // The parity reviewer (RFC 0013, phase 3): a sub-run of the e2e stage after a passing browser run. Reads the captures mounted at /evidence/parity and the frames through the bridge; never edits.
+  design_parity: {
+    id: "design_parity",
+    kind: "agent",
+    agent: "parity-reviewer",
+    helpers: [],
+    skills: [],
+    access: access(READ_ONLY, { skills: false }, { bridge: [{ server: "figma", tools: PARITY_READ }, { server: "figma-desktop", tools: PARITY_READ }] }),
+    writable: false,
+    maxTurns: 40,
+    timeoutMs: 15 * MINUTE,
+    // Claude only until eve reads images (phase 4 adds vision gating); codex joins after a parity eval on codex matches the Claude baseline.
+    engines: { default: "claude:opus", allowed: ["claude:opus", "claude:sonnet"] },
+    effort: "high",
+    answer: DesignParityAnswer,
+    template: "design_parity.md",
+    network: "engine",
   },
   evidence: {
     id: "evidence",

@@ -504,6 +504,31 @@ describe("renderPrompt", () => {
     expect(renderPrompt({ pack: PACKS.design_spec, input, template: "{{context.design.refs}}" })).toContain("\n(none)");
   });
 
+  it("renders design_parity with the captures, the uncited frames, the spec as data and the rule on missing captures", () => {
+    const prompt = renderPrompt({
+      pack: PACKS.design_parity,
+      input: {
+        ...input,
+        pack: "design_parity",
+        context: {
+          projectContext: null,
+          parity: {
+            plan: { targets: [{ scenario: "S1", frame: "1:2", viewport: { name: "desktop", width: 1440, height: 900 }, state: "default" }], uncited: ["3:4"], notes: [] },
+            captures: [{ scenario: "S1", frame: "1:2", viewport: "desktop", state: "default", image: "/evidence/parity/S1/desktop-default.png", styles: "/evidence/parity/S1/desktop-default.styles.json", elements: 87 }],
+            spec: { frames: [{ id: "1:2", name: "Checkout / Desktop", viewport: { width: 1440, height: 900 }, states: [] }], tokens: { color: [], type: [], spacing: [], radius: [] }, components: [], a11yNotes: [], missing: [], confidence: 0.9 },
+          },
+        },
+      } as StageInput,
+      template: readFileSync(new URL("../../prompts/design_parity.md", import.meta.url), "utf8"),
+    });
+    expect(prompt).toContain("/evidence/parity/S1/desktop-default.png");
+    expect(prompt).toContain("/evidence/parity/S1/desktop-default.styles.json");
+    expect(prompt).toContain("3:4");
+    expect(prompt).toContain("1:2 Checkout / Desktop 1440x900");
+    expect(prompt).toMatch(/no capture.*not_compared/i);
+    expect(prompt).not.toContain("{{");
+  });
+
   it("renders the audit level for a11y_audit as the machine's own text, WCAG 2.2 AA when absent", () => {
     const render = (a11y?: { level: "AA" | "AAA" }) => renderPrompt({ pack: PACKS.a11y_audit, input: { ...input, pack: "a11y_audit", context: { projectContext: null, ...(a11y ? { a11y } : {}) } } as StageInput, template: "{{context.a11y.level}}" });
     expect(render({ level: "AAA" })).toContain("\nWCAG 2.2 AAA");

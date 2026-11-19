@@ -155,8 +155,8 @@ export function finish(outDir: string, pack: Pack, run: RunOutcome, state: RunRe
     summary: String(s.summary ?? run.text ?? run.error ?? "").slice(0, 2000),
     needsInput: asked ? questions : null,
     requested: Array.isArray(s.requested) ? (s.requested as StageOutput["requested"]) : [],
-    // An audit's findings are WCAG findings, not review findings: they stay in `answer`, and the machine turns them into review findings.
-    findings: pack.id !== "a11y_audit" && Array.isArray(s.findings) ? (s.findings as StageOutput["findings"]) : [],
+    // An audit's findings are WCAG findings and the parity reviewer's name a frame and a node, not a path and a line: neither is a review finding, so both stay in `answer`, and the machine turns them into review findings.
+    findings: pack.id !== "a11y_audit" && pack.id !== "design_parity" && Array.isArray(s.findings) ? (s.findings as StageOutput["findings"]) : [],
     artifacts: scanArtifacts(outDir),
     slices: {
       done: state.ledger.slices.filter((x) => x.status === "committed" || x.status === "green").length,

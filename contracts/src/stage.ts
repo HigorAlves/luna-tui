@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { ChangeExceptionKind, ComplianceRegime } from "./compliance.ts";
 import { A11yContext } from "./a11y.ts";
+import { CapturePlan, ParityCapture } from "./design-parity.ts";
 import { DesignContext } from "./design.ts";
 import { DesignSpec } from "./design-spec.ts";
 import { EconomyInput, ProposeContext } from "./economy.ts";
@@ -223,6 +224,8 @@ export const PackId = z.enum([
   "design_spec",
   // Audits the rendered change for WCAG 2.2 in the QA browser (RFC 0013): a sub-run of the e2e stage after a passing browser run, and on demand.
   "a11y_audit",
+  // Compares the captured build with its Figma frames (RFC 0013, phase 3): a sub-run of the e2e stage after a passing browser run, read-only.
+  "design_parity",
   "council_security",
   "council_second",
   // The question council (run in triage before the person is asked): settles open questions from the code and the card, or says it cannot.
@@ -1538,6 +1541,8 @@ export const StageInput = z.object({
     design: DesignContext.nullable().optional(),
     /** For a11y_audit: the WCAG level the repo audits at; the machine's own value. */
     a11y: A11yContext.nullable().optional(),
+    /** For design_parity: what the browser run captured for each cited frame, the plan it followed, and the approved spec. The machine's own composition. */
+    parity: z.object({ plan: CapturePlan, captures: z.array(ParityCapture), spec: DesignSpec.nullable() }).optional(),
     /** What the token economy hands this run (RFC 0007): the loop guard's settings, the facts learned in this repository, the approved tool mask. Absent with `MACHINE_ECONOMY=off`. */
     economy: EconomyInput.optional(),
     /** For fact_propose: the repository's name, the digests of its last runs and the texts of the facts it holds. */

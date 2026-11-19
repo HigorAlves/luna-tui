@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import { AGENT_PACKS } from "./packs.ts";
 
 const FIGMA = ["get_metadata", "get_design_context", "get_variable_defs", "get_code_connect_map", "get_screenshot"];
+// design_parity reads frames and tokens only: no Code Connect, no Mobbin.
+const PARITY = ["get_design_context", "get_metadata", "get_screenshot", "get_variable_defs"];
 const MOBBIN = ["search_screens", "search_flows", "search_sections"];
 const WRITES = /(^|_)(create|save|add|update|delete|write|post|set|upload|remove)(_|$)/;
 
@@ -12,6 +14,7 @@ describe("bridged tool grants", () => {
     const held = Object.fromEntries(AGENT_PACKS.filter((p) => p.access.bridge.length > 0).map((p) => [p.id, p.access.bridge]));
     expect(held).toEqual({
       a11y_audit: [{ server: "mobbin", tools: MOBBIN }],
+      design_parity: [{ server: "figma", tools: PARITY }, { server: "figma-desktop", tools: PARITY }],
       design_spec: [{ server: "figma", tools: FIGMA }, { server: "figma-desktop", tools: FIGMA }, { server: "mobbin", tools: MOBBIN }],
     });
   });

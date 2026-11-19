@@ -40,6 +40,12 @@ describe("context-only packs", () => {
     expect(isContextPack("docs_drift")).toBe(false);
   });
 
+  it("never include design_parity: it reads captures the browser run left, so a client has nothing to send it", () => {
+    expect(packStates("design_parity")).toEqual([]);
+    expect(NOT_ON_DEMAND).toContain("design_parity");
+    expect(isContextPack("design_parity")).toBe(false);
+  });
+
   it("take an object with the pack's own key and nothing else", () => {
     expect(contextSchema("chat_triage").safeParse({ chat }).success).toBe(true);
     for (const pack of ["risk_score", "coverage_check", "plan_check"] as const) {

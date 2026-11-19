@@ -54,7 +54,7 @@ function envelope(answer: any, packId?: string): Record<string, unknown> {
     needsInput: asked ? (answer.questions ?? []) : null,
     requested: answer.requested ?? [],
     // The factory keeps an audit's own findings in the answer (factory/src/core/output.ts).
-    findings: packId === "a11y_audit" ? [] : (answer.findings ?? []),
+    findings: packId === "a11y_audit" || packId === "design_parity" ? [] : (answer.findings ?? []),
     artifacts: [],
     slices: { done: 0, total: 0 },
     commit: answer.commit ?? null,
