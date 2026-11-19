@@ -241,11 +241,15 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
     let runs = 0;
     type Attempted = { done: StageResult } | { settled: StageResult; after: AfterBrowserOutput[] };
     /** The accessibility audit (RFC 0013): on the same target, at the repo's level, with the design budget read before and after. Its failure never changes the browser run's verdict. */
+    const e2eConfig = repoPolicy?.factory?.verify.e2e;
+    const e2eMode = repoPolicy && e2eConfig ? e2eModeOf({ qaTargets: repoPolicy.qaTargets ?? [], factory: { verify: { e2e: e2eConfig } } as never }) : "agent";
     const auditStep: AfterBrowserStep = async ({ extra, browserRun }) => {
       const settings = deps.design ? await deps.design.settings(context.task.repoPath ?? null, context.task.id) : null;
       if (!settings) return null;
       const steps = designSteps({ off: settings.off, cardOff: settings.cardOff, qa: repoPolicy?.qa ?? "web", touchesRendered: true, hasDesignRef: false, browserRun });
       if (!steps.includes("a11y_audit")) return null;
+      // Agent mode (no `verify.e2e.start`, no deploy): the browser run boots its own server, so there is no app URL to audit.
+      if (e2eMode === "agent") return { key: "a11y", detail: { skipped: "no app URL in agent mode" } };
       const { result, spentAfter } = await designRun(
         { ...(deps.design?.budget ? { budget: deps.design.budget } : {}) },
         context,
@@ -284,8 +288,7 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
       return { settled, after };
     };
     const attempt = async (): Promise<Attempted> => {
-      const e2e = repoPolicy?.factory?.verify.e2e;
-      const mode = repoPolicy && e2e ? e2eModeOf({ qaTargets: repoPolicy.qaTargets ?? [], factory: { verify: { e2e } } as never }) : "agent";
+      const mode = e2eMode;
       const repoPath = context.task.repoPath ?? null;
       if (mode === "deploy" && deps.openPreview && repoPath) {
         const preview = await deps.openPreview({

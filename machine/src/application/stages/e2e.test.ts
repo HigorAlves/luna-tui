@@ -512,7 +512,7 @@ describe("the accessibility audit after the browser run", () => {
   type Settings = { off: boolean; cardOff: boolean; level: "AA" | "AAA"; mode: "gate" | "advisory" };
   const on: Settings = { off: false, cardOff: false, level: "AA", mode: "gate" };
 
-  function harness(opts: { browser?: StageResult | StageResult[]; audit?: StageResult; settings?: Settings; budgets?: Array<ReturnType<typeof budget>>; decide?: unknown; afterBrowser?: unknown[] } = {}) {
+  function harness(opts: { browser?: StageResult | StageResult[]; audit?: StageResult; settings?: Settings; budgets?: Array<ReturnType<typeof budget>>; decide?: unknown; afterBrowser?: unknown[]; policy?: unknown } = {}) {
     const events: string[] = [];
     const calls: Array<{ pack?: string; runId: string; extra?: Record<string, unknown> }> = [];
     const reads = [...(opts.budgets ?? [])];
@@ -526,7 +526,7 @@ describe("the accessibility audit after the browser run", () => {
       },
       detectWeb: async () => true,
       changedFiles: async () => null,
-      policy: async () => start,
+      policy: async () => opts.policy ?? start,
       headCommit: async () => "c".repeat(40),
       openApp: async (input: OpenAppInput) => (events.push(`open ${input.attempt}`), { ok: true as const, target: { name: "app" as const, baseUrl: "http://luna-app:4000" }, network: "net-app", aliases: ["luna-app"], close: async () => void events.push("close"), redactValues: { K: "v" } }),
       design: { settings: async () => opts.settings ?? on, ...(opts.budgets ? { budget: async () => (reads.length > 1 ? reads.shift()! : reads[0]!) } : {}) },
@@ -536,6 +536,16 @@ describe("the accessibility audit after the browser run", () => {
     const context = { task: { id: "t1", repoPath: "/repo", worktreePath: dir, branch: "task/x" }, stage: "e2e", attempt: 1, runId: "r1", approvals: [], signal: new AbortController().signal, emit: async () => {} } as unknown as StageContext;
     return { run: () => runner(context), events, calls };
   }
+
+  it("skips the audit in agent mode, where there is no app URL, and says so without findings or budget spend", async () => {
+    const h = harness({ policy: parseLunaConfig(""), audit: audit([blocker]), budgets: [budget(null)] });
+    const result = await h.run();
+    expect(h.events).toEqual(["pack"]);
+    expect(result.outcome).toBe("pass");
+    expect(result.findings).toBeUndefined();
+    expect(result.detail).toMatchObject({ a11y: { skipped: "no app URL in agent mode" } });
+    expect(result.usage?.turns).toBe(5);
+  });
 
   it("audits after a passing browser run, while the app is still open, then closes it", async () => {
     const h = harness({ audit: audit([minor]) });
