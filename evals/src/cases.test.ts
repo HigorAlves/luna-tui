@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { readingProblems } from "./preflight.ts";
 import { TOKEN_SHAPE } from "./scrub.ts";
-import { baselinePath, caseInput, datasetCases, engineSlug, judgeInput, loadCases, parseEffort, parseTrials, prepareWorktree, verdictOf } from "./cases.ts";
+import { baselinePath, caseInput, datasetCases, engineSlug, judgeInput, loadCases, mcpServersOf, parseEffort, parseTrials, prepareWorktree, verdictOf } from "./cases.ts";
 
 /** Every `@host` whose host is not a reserved one: `.example`, `example.com|org|net` or `.invalid`. */
 const unsafeAddresses = (text: string): string[] => [...text.matchAll(/@([a-z0-9-]+(?:\.[a-z0-9-]+)+)/gi)].map((m) => m[1]!).filter((host) => !/(?:^|\.)example(?:\.(?:com|org|net))?$|\.invalid$|^example$/i.test(host));
@@ -202,5 +202,36 @@ describe("the readings of the hand-written cases", () => {
   it("hold for every pack in READ: the label is tied to the pack's own criterion text, the twin differs, a borderline case has two readings", () => {
     const problems = READ.flatMap((pack) => readingProblems(EVALS, pack as "worth_learning"));
     expect(problems).toEqual([]);
+  });
+});
+
+describe("a case's replayed design servers", () => {
+  const stageOf = (pack: string) => ({ ...input({ repoPath: "" }), stage: pack, pack });
+  const expectJson = { schema: 1, outcome: "pass", checks: [], rubric: "r".repeat(100) };
+  const write = (dir: string, stage: unknown) => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "stage.json"), JSON.stringify(stage));
+    writeFileSync(join(dir, "expect.json"), JSON.stringify(expectJson));
+  };
+
+  it("reads a case's mcp folder as the replayed design servers, and refuses one for a pack with no design tools", () => {
+    const root = mkdtempSync(join(tmpdir(), "evals-"));
+    const caseDir = join(root, "design_spec", "cases", "checkout");
+    write(caseDir, stageOf("design_spec"));
+    mkdirSync(join(caseDir, "mcp", "figma", "get_design_context"), { recursive: true });
+    writeFileSync(join(caseDir, "mcp", "figma", "tools.json"), JSON.stringify([{ server: "figma", tool: "get_design_context", description: "d", inputSchema: {} }]));
+    const [c] = loadCases(root, "design_spec");
+    expect(c!.id).toBe("checkout");
+    expect(c!.mcpDir).toBe(join(caseDir, "mcp"));
+    expect(mcpServersOf(c!.mcpDir!)).toEqual([expect.objectContaining({ name: "figma", transport: "http", credential: { kind: "none" }, tools: ["get_design_context"] })]);
+    write(join(root, "plan", "cases", "x"), stageOf("plan"));
+    mkdirSync(join(root, "plan", "cases", "x", "mcp"), { recursive: true });
+    expect(() => loadCases(root, "plan")).toThrow(/plan has no design tools: the mcp folder of case x cannot be replayed/);
+  });
+
+  it("leaves mcpDir unset for a case with no mcp folder", () => {
+    const root = mkdtempSync(join(tmpdir(), "evals-"));
+    write(join(root, "design_spec", "cases", "bare"), stageOf("design_spec"));
+    expect(loadCases(root, "design_spec")[0]!.mcpDir).toBeUndefined();
   });
 });

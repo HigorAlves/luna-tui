@@ -32,6 +32,7 @@ pnpm eval --pack triage --engine claude:opus --case task-price-decimals --no-jud
 | `--dataset <name>` | takes the cases from the Laminar dataset of that name instead of the folder |
 | `--save-baseline` | writes each scorecard to `baselines/<engine>/<pack>.json` (`claude:opus` is `claude-opus`). With `--effort`, the folder is `<engine>@<effort>` |
 | `--image <tag>` | the stage image (`RUNNER_IMAGE`, else `hardness-runner:dev`) |
+| `RUNNER_QA_IMAGE` | not a flag: the QA image a browser pack (`a11y_audit`, `e2e`) runs in, else `hardness-runner-qa:dev`. Build it with `pnpm --filter @hardness/machine runner-qa:build`; the runner refuses to start without it |
 
 On a laptop, keep it awake for the run (`caffeinate -s pnpm eval …` on macOS). A sleep freezes the container, and the grader counts the run as timed out.
 
@@ -135,6 +136,8 @@ You can set a Laminar key in `LMNR_PROJECT_API_KEY` or in `~/.config/hardness/lm
 A selector value cannot hold a `.`. Keep checks to what any good answer must contain. Put judgement calls in the rubric.
 
 An agent pack's case has no label and no reading. Its `expect.json` has an `outcome`, a few loose `checks` and a `rubric` for the judge. The `plan` and `decompose` cases are the first of this kind. Their inputs come from the `fixtures/` repos. A person reviews each rubric before any baseline of the pack counts.
+
+A design pack's case may carry an `mcp/` folder: the recorded answers of the design servers, in the layout the machine's record mode writes (`<server>/tools.json` and `<server>/<tool>/<sha256 of the args>.json`; see `machine/src/adapters/mcp/replay.ts`). The runner replays it as a trusted run and never connects, whatever `MCP_BRIDGE_MODE` says. A case with `mcp/` for a pack with no design tools is refused.
 
 ## What is scrubbed
 

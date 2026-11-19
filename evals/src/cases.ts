@@ -2,7 +2,7 @@
 // `evals/<pack>/cases/<id>/stage.json` (a StageInput) and `expect.json`; a case that needs a
 // repo names a fixture as its `task.repoPath` (`fixtures/golden-task`), copied fresh per run
 // without `.golden/`, which holds the reference fixes and hidden tests no model may see.
-import { type Effort, EffortId, type EngineId, EvalJudgeAnswer, PACK_LIMITS, type PackId, StageInput } from "@hardness/contracts";
+import { type Effort, EffortId, type BridgeGrant, type McpServerConfig, type EngineId, EvalJudgeAnswer, PACKS, PACK_LIMITS, type PackId, StageInput } from "@hardness/contracts";
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -18,6 +18,27 @@ export interface EvalCase {
   pack: PackId;
   input: StageInput;
   expect: Expect;
+  /** The case's `mcp/` folder: recorded design-server answers, replayed (never connected) when the case runs. */
+  mcpDir?: string;
+}
+
+/** The design tools a pack may be granted: none for a decision pack. */
+export const bridgeGrantsOf = (pack: PackId): readonly BridgeGrant[] => {
+  const spec = PACKS[pack];
+  return spec.kind === "agent" ? spec.access.bridge : [];
+};
+
+/** One server per folder of `mcp/`: a replay needs only its name and the tools its `tools.json` lists. */
+export function mcpServersOf(mcpDir: string): McpServerConfig[] {
+  return readdirSync(mcpDir, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)
+    .sort()
+    .map((name) => {
+      const listed = readJson(join(mcpDir, name, "tools.json"));
+      const tools = Array.isArray(listed) ? listed.map((t) => (t as { tool?: unknown }).tool).filter((t): t is string => typeof t === "string") : [];
+      return { name, transport: "http", url: "https://replay.invalid/mcp", credential: { kind: "none" }, tools };
+    });
 }
 
 /** The prefix a case's `task.repoPath` carries when it runs over a fixture repo. */
@@ -42,7 +63,10 @@ export function loadCases(evalsDir: string, pack: PackId, only: string[] = []): 
       if (input.data.pack !== pack) throw new Error(`${where}/stage.json: pack ${input.data.pack}, but the case is under ${pack}`);
       const expect = Expect.safeParse(readJson(join(where, "expect.json")));
       if (!expect.success) throw new Error(`${where}/expect.json: ${expect.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
-      return { id, pack, input: input.data, expect: expect.data };
+      const mcpDir = join(where, "mcp");
+      if (!existsSync(mcpDir)) return { id, pack, input: input.data, expect: expect.data };
+      if (bridgeGrantsOf(pack).length === 0) throw new Error(`${pack} has no design tools: the mcp folder of case ${id} cannot be replayed`);
+      return { id, pack, input: input.data, expect: expect.data, mcpDir };
     });
 }
 
