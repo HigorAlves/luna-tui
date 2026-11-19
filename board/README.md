@@ -678,6 +678,18 @@ What the ticket shows:
 
 On the Floor, `A` approves a waiting base image or a devcontainer Dockerfile for the repo in focus. A Dockerfile shows as "Dockerfile <path> sha256:<12>" and "builds with network access". Read the Dockerfile before you press `A`. An edit of the file asks for a new approval.
 
+## Plan a ticket in a chat
+
+`t` opens a planning chat. You talk a ticket through with a planner agent that reads the repo. The planner reads the checkout and never changes it. The popup handles its own keys, outside the key registry, so `pnpm board:keys` lists only `t`.
+
+- The chat uses the repo of the selected card, else the repo of this board, else a repo you pick from a list.
+- Pick the engine: `1` for Opus, `2` for Codex. The next chat starts on the engine you used last.
+- Type a message, then press `enter`. `pgup` and `pgdn` scroll the talk. `esc` cancels a wait.
+- When the planner offers choices, press `1` to `4` to pick one. The keys pick only while the box is empty.
+- When the draft is ready, the chat asks before it creates anything. `y` creates the ticket. `e` creates it and opens it in the ticket editor. `n` keeps talking.
+- After the ticket exists, the chat asks if you want a Jira issue too. `y` files it. `n` closes the chat.
+- `esc` with a talk on screen asks if you want to discard it. If you close the chat at the gate, press `t` to open it again.
+
 ## The foreman
 
 `m` opens the foreman's popup. The foreman is an agent that reads the open cards and answers one question. It only suggests. The board runs each action after you confirm it. The popup handles its own keys, outside the key registry, so `pnpm board:keys` does not list them.
