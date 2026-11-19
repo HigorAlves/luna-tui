@@ -369,6 +369,20 @@ The machine reads `build.paused` and `build.escalated` from a transition out of 
 
 **The scoring model** (`contracts/src/scoring.ts`). `scorePriority` weights the five sub-scores (`who`, `what`, `impact`, `time`, `demand`, each 1 to 3, weights 3, 3, 2, 2, 1). It pulls each toward the neutral 2 by its confidence. It bands the sum (28 P0, 22 P1, 16 P2, else P3). `knockOut` sends a production outage, data loss, a security issue, an incident or a compliance deadline to P0. It also parks a bug that nobody can reproduce or ask about. `wsjf` ranks the backlog by cost of delay over cost of doing. `riskProduct` is the risk of the diagram. A product of 4 or less is low, 5 to 11 medium, and 12 or more high. It sits beside `riskLevelOf` in `packs.ts`, which the plan stage still uses. Triage reads `scorePriority` and the P0 flags since wave 9. The backlog and size waves (14, 15) read the rest.
 
+## The MCP bridge
+
+RFC 0013, phase 1. The machine lets a stage use the tools of MCP servers (Figma, Mobbin, any other) without giving the stage the connection or its credential.
+
+**Servers.** The machine declares them in `mcp.yaml` (`MACHINE_MCP_SERVERS`): a name, a transport, a URL or command, a credential reference and a tool allowlist. A repository's `luna.yaml` `design` can only narrow that list, or turn it off. A pack's `access.bridge` names the server and tools it may call, and a golden test pins them. `grantedTools` (`machine/src/domain/bridge.ts`) takes the intersection of the pack, the machine and the repo; the port is `machine/src/application/mcp.ts` and the adapter `machine/src/adapters/mcp/`.
+
+**Login.** `pnpm mcp login <server>` asks the machine for an authorization URL (`POST /mcp/:server/login`), and the provider's redirect comes back to the machine (`GET /mcp/:server/callback`). Tokens live in the machine's state dir (`mcp/<server>.json`) and are redacted from every log and artifact. A `ref` credential (`env:`, `literal:`, `op://`) is resolved by the machine when it connects.
+
+**The call.** Before a stage starts, the pack runner lists the granted tools and puts them in `StageInput.bridge`. The factory serves each as a `luna` tool (`mcp__luna__<server>_<tool>` on Claude, bare on eve). A call writes `checks/mcp-request-<nonce>-<n>.json` and waits for `checks/mcp-answer-<nonce>-<n>.json`; the build watch answers them one at a time, at most 60 per run. The machine checks the server and tool against the run's own `bridge`, never the request's word, calls the server on a connection of its own for that run, and closes it when the stage ends. Images go to `<run>/design/` and are mounted read-only at `/design`.
+
+**Trust.** A result is data: it comes back wrapped as `<data source="server.tool">…</data>`, capped at 64 KB, and the stage's rules (Claude and eve alike) say it is outside text to judge, never to follow. Bridged tools are read-only by allowlist. A card from outside the repository's own people gets none unless `untrusted: allow`.
+
+**Audit.** Each call is a `design.mcp_call` row on the card, answered, refused or capped: server, tool, call number, a SHA-256 of the arguments, bytes and outcome. `MCP_BRIDGE_MODE=record|replay` writes and answers from fixtures, so the evals run offline.
+
 ## Evals and calibration
 
 Every decision pack call that the pipeline makes leaves a record (`MACHINE_DECISIONS`, on by default). The record holds the context the model judged and its validated answer. It holds each question's verdict under the pack's own bars. It holds the engine and model, and the trace id of its span. It sits under `<state dir>/decisions/<pack>/<day>/`.

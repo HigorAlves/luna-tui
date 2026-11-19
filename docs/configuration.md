@@ -59,7 +59,10 @@ See `machine/.env.example`. The defaults match `compose.yaml`. You need a `.env`
 | `MACHINE_SHIP_POLL_INTERVAL` | unset: the repository's `ship.poll_minutes` (5 minutes) | seconds between the ship monitor's polls of a watched PR; when set it overrides `ship.poll_minutes` for every repository. It was 60 before wave 13 |
 | `MACHINE_REPO_MAP` | unset | `owner/name=/abs/path` pairs: the checkout an imported issue's task works in. Without a match, the checkouts up to two folders under `MACHINE_REPOS_DIR` (`~/Developer/orc` and `~/Developer/projects/orc`) are matched by their `origin` remote. A folder you pick in the board's clone prompt that already is a checkout is linked instead of cloned, and the link is kept in `<state dir>/repo-links.json`, so a renamed remote needs no setting |
 | `MACHINE_REPOS_DIR` | `~/Developer` | where `MACHINE_REPO_MAP`'s fallback scan looks |
-| `MACHINE_PUBLIC_URL` | unset | the board's public address (http or https). The only address the machine puts in a line it posts outward, and only to a reporter who could already see the card it links (a merged duplicate's notice); unset, such lines carry the card's short id and no link |
+| `MACHINE_PUBLIC_URL` | unset | the board's public address (http or https). The only address the machine puts in a line it posts outward, and only to a reporter who could already see the card it links (a merged duplicate's notice); unset, such lines carry the card's short id and no link The OAuth login of an MCP server redirects here too (`<address>/mcp/<server>/callback`); unset, it redirects to `http://localhost:<port>` |
+| `MACHINE_MCP_SERVERS` | unset: `~/.config/hardness/mcp.yaml` | the file that declares the MCP servers the machine bridges into stages (RFC 0013, see [MCP servers](#mcp-servers-mcpyaml-and-pnpm-mcp)). A missing file means no server; an unreadable or invalid one stops the machine at start, naming the file and the key |
+| `MCP_BRIDGE_MODE` | `live` | `record` calls the servers and writes each tool list and each call under `MCP_FIXTURES`; `replay` answers from those files and never connects, so a design stage runs offline (the evals use it). Any other value stops the machine at start |
+| `MCP_FIXTURES` | unset | the folder of recorded MCP answers, `<server>/tools.json` and `<server>/<tool>/<sha256 of the arguments>.json`; required by `record` and `replay`. Results are stored as the server returned them, images in base64 |
 | `MACHINE_THREAD_REPLIES` | on | set to `off` to stop the machine replying in the thread a task came from (a comment on its GitHub issue; a Slack thread when the pair below is set) when it is picked up, needs you, escalates, pauses, gets its PR and closes |
 | `MACHINE_GRAPH_INTERVAL` | `600` | seconds between checks of each known repo's default branch; when it moved, the machine rebuilds that repo's code graph (Graphify, in the runner image) under `<MACHINE_STATE_DIR>/graphs/<repo>/<commit>/`, and builds one for a repo that has none. `off` stops the watch. Beside the graphs, `graphs/<repo>/misses.jsonl` records the files Build changed outside the code map (one JSON line per accepted scope check); a rebuild counts it into the stamp's `misses` |
 | `MACHINE_DECISIONS` | on | set to `off` to stop the machine keeping a record of every decision pack call the pipeline makes (the context it judged, the validated answer, each question's verdict under the pack's own bars, the engine and model, the span's trace id) as `<MACHINE_STATE_DIR>/decisions/<pack>/<day>/<id>.json` (mode 0600). When a later fact settles what the right answer was (a flake re-run's result, the format a pack finally shipped with, your plan or retro decision, a resolved review thread) the machine writes it onto the record as `truth`. `pnpm eval harvest` turns records into eval cases; see [evals/README.md](../evals/README.md) and [runbooks/calibrate-decisions.md](runbooks/calibrate-decisions.md) |
@@ -188,6 +191,7 @@ engines:                                  # the engine a pack runs on in this re
 effort:                                   # the effort a pack runs at in this repo, over its default: low, medium or high
   triage: medium                          # not for a decision pack; the engine that runs must support it
 compliance: [soc2, gdpr]                  # the regimes this repo answers to: soc2, hipaa, gdpr, lgpd, us_privacy; each makes the compliance review run that regime's reviewer
+design: { servers: { figma: { tools: [get_design_context] } } }   # the designer agents (RFC 0013): "off" turns bridged design tools off for this repo; servers narrows the machine's MCP servers by name and their tools, and never adds one
 budget:
   engines: { openai:sol: 10, codex: 0 }   # monthly caps in USD on this repo's stage runs, by engine or credential (never Claude)
 evidence:
@@ -305,6 +309,34 @@ A repository can turn a mechanism off, or tune a number inside its bounds. A tun
 - Change the fixed rules: the gate and stuck numbers, the 90th percentile and its margin of 1.25, and the fact lifecycle.
 - Add a tool or widen a pack's access. A mask only removes.
 - Approve a mask, drop a fact or restore a tool. A person does that through the routes in [api.md](api.md).
+
+## MCP servers: `mcp.yaml` and `pnpm mcp`
+
+The machine bridges the tools of MCP servers into the stages whose pack names them (RFC 0013). Only the machine declares a server; a repository's `luna.yaml` `design` narrows. The file is `~/.config/hardness/mcp.yaml`, or the one `MACHINE_MCP_SERVERS` names:
+
+```yaml
+untrusted: deny            # allow: a card from outside the repository's own people may also be given bridged tools (default deny)
+servers:
+  - name: figma-desktop    # lowercase letters, digits and dashes; a stage sees it as figma_desktop_<tool>
+    transport: http        # http (needs url) or stdio (needs command)
+    url: http://host.docker.internal:3845/mcp
+    credential: { kind: none }          # none, oauth, or ref: { kind: ref, ref: "env:NAME" | "literal:<value>" | "op://vault/item/field" }
+    tools: [get_design_context, get_screenshot]   # the most the machine bridges; a pack and a repo can only narrow it
+  - name: figma
+    transport: http
+    url: https://mcp.figma.com/mcp
+    credential: { kind: oauth, scopes: [mcp:connect] }
+    tools: [get_design_context]
+```
+
+`op://` references need the 1Password CLI installed and signed in inside the machine's image; `env:` works without it. A `ref` token reaches a stdio server as `MCP_TOKEN` in its environment and an http server as a bearer header; it never reaches a stage container.
+
+| Command | What it does |
+|---|---|
+| `pnpm mcp status` | lists the declared servers: transport, whether a token is saved, whether the server answers, its tools |
+| `pnpm mcp login <server>` | asks the machine for the authorization URL, opens it in the host's browser, and waits for the redirect (`MACHINE_PUBLIC_URL`, else the machine's port). The tokens are kept in `<MACHINE_STATE_DIR>/mcp/<server>.json` |
+
+`pnpm mcp` talks to the machine API at `MACHINE_URL` (default `http://localhost:4317`) with `MACHINE_API_TOKEN`, else `~/.config/hardness/machine-api-token`. A server that refuses dynamic client registration (Figma's remote server) needs a client registered by hand, saved as `<MACHINE_STATE_DIR>/mcp/<server>.client.json`, which the login reads.
 
 ## Machine sandbox policy
 

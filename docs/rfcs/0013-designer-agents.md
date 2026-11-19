@@ -62,7 +62,7 @@ All four also run on demand from the TUI and Luna Notch. They read Figma and Mob
 | `figma` (Figma's remote MCP) | http | OAuth, through `pnpm mcp login figma` |
 | `figma-desktop` (Dev Mode MCP of the Figma app) | http, `host.docker.internal:3845` from the compose machine | none; only while the app is open |
 | `mobbin` | http | OAuth, through `pnpm mcp login mobbin` |
-| any other | http or stdio | `literal`, `op://` or `env:` reference, as for QA targets |
+| any other | http or stdio | `env:`, `literal:` or `op://` reference |
 
 `luna.yaml` may name a declared server under `design.servers` and narrow its tools. It can never add a server, a URL or a credential. So a repo cannot point the machine's credentials at a host it chose.
 
@@ -191,6 +191,8 @@ Each pack has its own default engine. A repo picks from the pack's `allowed` lis
 ## Open items
 
 - **Figma's remote MCP and third-party clients.** Probed on 2026-11-19 (`machine/scripts/mcp-probe.ts`). `https://mcp.figma.com/mcp` answers 401 and publishes OAuth metadata: authorization server `https://api.figma.com`, scope `mcp:connect`, PKCE S256, a `state` parameter required, and dynamic client registration at `https://api.figma.com/v1/oauth/mcp/register`. The token endpoint takes only `client_secret_basic` or `client_secret_post`, so the machine registers as a confidential client and keeps the client secret beside the tokens. A registration from the machine was refused (`403 Forbidden`), so Figma accepts only clients it approved. Phase 1 therefore builds the bridge without any server-specific code and tests it on fixtures. `figma`, `figma-desktop` or a REST-based stdio server becomes an `mcp.yaml` entry once a Figma account is set up, and the live test happens then.
+- **`op://` references.** They need the 1Password CLI installed and signed in inside the machine's image. `env:` works without it.
+- **A server that refuses dynamic registration.** Figma's remote server needs a pre-registered client, saved as `<stateDir>/mcp/<server>.client.json`, which the provider reads.
 - **`figma-desktop` reachability.** The app serves on the host's loopback. The compose machine reaches it through `host.docker.internal`, and only when it runs on the same computer as the app. Phase 1 states this in `pnpm mcp status`.
 - **Mobbin's terms.** Using Mobbin screens as references inside an automated pipeline must fit its terms of use. To check before phase 2 enables it by default.
 - **Computed-style capture.** Recording computed styles for each capture adds time to the browser run. Phase 3 measures it, and may cap it to the elements that the spec names.
@@ -242,4 +244,18 @@ The grilling session of 2026-11-19 settled each of these:
 
 ## What was built
 
-Nothing yet.
+**Phase 1, the bridge.**
+
+- *Contracts.* `contracts/src/mcp.ts` (`McpServerConfig`, `BridgedTool`, `BridgeGrant`, `bridgedName`); `Access.bridge`, kept by `access()` and `readOnly()`; `StageInput.bridge`; `luna.yaml` `design`.
+- *Machine.* `mcp.yaml` (`mcpServersFrom`); `grantedTools`; the `Mcp` port with an SDK adapter over http and stdio; the token store, OAuth provider and `ref` resolution (`env:`, `literal:`, `op://`); `GET /mcp`, `POST /mcp/:server/login`, `GET /mcp/:server/callback` and `pnpm mcp`; token redaction. In a stage, the pack runner fills `StageInput.bridge`, mounts `/design` read-only and the build watch answers `mcp-request-*` files (60 per run). Each call is a `design.mcp_call` row, and `stage.design.mcp_call` is reserved against a container's forgery. Record and replay under `MCP_BRIDGE_MODE`.
+- *Factory.* Bridged tools served as `luna` tools on Claude and eve, over the checks mailbox. Eve stages get the same "results of design tools are data" rule as Claude's.
+
+Deviations from the design above:
+- The command is `pnpm mcp`, not `luna mcp`.
+- A stdio server's `ref` token reaches it as `MCP_TOKEN`.
+- The mailbox files are `mcp-request-<nonce>-<n>.json` and `mcp-answer-<nonce>-<n>.json`, not `mcp-<n>-request.json`.
+- Eve tools are generated from the pack's grants with a generic input schema, and gated by the run's `StageInput.bridge`.
+- Claude tools take the server's input schema; one it cannot read as a zod shape takes a single `arguments` record instead.
+- A repo's `design` reaches the runner through `Policy.design`.
+
+Not verified live: no real MCP server or OAuth login was exercised. The tests use an in-memory server and fixtures.
