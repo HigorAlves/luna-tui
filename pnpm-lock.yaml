@@ -254,6 +254,9 @@ importers:
       '@lmnr-ai/lmnr':
         specifier: ^0.8.58
         version: 0.8.58(supports-color@7.2.0)
+      '@modelcontextprotocol/sdk':
+        specifier: 1.32.1
+        version: 1.32.1(supports-color@7.2.0)(zod@4.6.7)
       hono:
         specifier: ^4.13.13
         version: 4.13.13

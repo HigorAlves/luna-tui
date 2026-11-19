@@ -47,6 +47,7 @@
     "@hardness/contracts": "workspace:*",
     "@hono/node-server": "^2.1.6",
     "@lmnr-ai/lmnr": "^0.8.58",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "hono": "^4.13.13",
     "octokit": "^5.0.5",
     "pg": "^8.23.1",
