@@ -9,6 +9,7 @@ import {
   ChatTriageContext,
   CloneInput,
   EscalationReason,
+  Finding,
   EvidenceContext,
   PrReplyAnswer,
   ShipContext,
@@ -782,4 +783,15 @@ describe("the question council pack", () => {
     expect(QuestionsContext.safeParse({ ...questions, questions: [] }).success).toBe(false);
     expect(QuestionsContext.safeParse({ ...questions, questions: Array(7).fill(q) }).success).toBe(false);
   });
+});
+
+it("knows the design budget as an escalation reason and accessibility as a finding category", () => {
+  expect(EscalationReason.parse("design_budget")).toBe("design_budget");
+  expect(Finding.parse({ path: "/checkout", line: 0, severity: "blocker", title: "t", body: "b", confidence: 0.9, category: "accessibility" }).category).toBe("accessibility");
+});
+
+it("carries the design reference and the audit level in a stage input's context", () => {
+  const ctx = StageInput.shape.context.parse({ projectContext: null, design: { refs: [{ fileKey: "AbCdEf0123456789", nodeIds: ["12:34"], page: null, from: "issue" }] }, a11y: { level: "AAA" } });
+  expect(ctx.design?.refs[0]?.fileKey).toBe("AbCdEf0123456789");
+  expect(ctx.a11y).toEqual({ level: "AAA" });
 });

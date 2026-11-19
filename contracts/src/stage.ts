@@ -4,6 +4,7 @@
 import { z } from "zod";
 
 import { ChangeExceptionKind, ComplianceRegime } from "./compliance.ts";
+import { DesignContext } from "./design.ts";
 import { EconomyInput, ProposeContext } from "./economy.ts";
 import { EngineBudgets, EngineId } from "./engines.ts";
 import { EffortId } from "./models.ts";
@@ -106,7 +107,7 @@ export const Finding = z.object({
   confidence: z.number().min(0).max(1),
   // v2.2, all optional: a finding written before the wave has none of them (see finding.ts).
   id: z.string().optional(),
-  category: z.enum(["correctness", "missing_criterion", "security", "error_handling", "convention", "performance", "env", "tests", "size"]).optional(),
+  category: z.enum(["correctness", "missing_criterion", "security", "error_handling", "convention", "performance", "env", "tests", "size", "accessibility"]).optional(),
   criterion_ref: z.string().nullable().optional(),
   suggested_fix: z.string().nullable().optional(),
   description: z.string().optional(),
@@ -928,8 +929,8 @@ export type ArchiveReason = z.infer<typeof ArchiveReason>;
 /** Why a stage stopped on purpose: `plan_wrong` the plan cannot be built as written (the planner runs again with the evidence),
  *  `env_broken` the sandbox or toolchain is, `flaky_tests` the tests do not hold still, `too_complex`
  *  the work is bigger than one stage, `undeclared_scope` it needs files or packages the plan did not name, `head_moved` the PR head moved after
- *  the evidence pack was made (Evidence runs again). */
-export const EscalationReason = z.enum(["plan_wrong", "env_broken", "flaky_tests", "too_complex", "undeclared_scope", "head_moved", "other"]);
+ *  the evidence pack was made (Evidence runs again), `design_budget` the card's design budget is spent. */
+export const EscalationReason = z.enum(["plan_wrong", "env_broken", "flaky_tests", "too_complex", "undeclared_scope", "head_moved", "design_budget", "other"]);
 export type EscalationReason = z.infer<typeof EscalationReason>;
 
 /** How risky a change or a ticket reads: on one scale for the triage record and the evidence pack. */
@@ -1521,6 +1522,10 @@ export const StageInput = z.object({
   priorFindings: z.array(Finding),
   context: z.object({
     projectContext: z.string().nullable(),
+    /** For design_spec: the card's design reference, composed by the machine (RFC 0013). */
+    design: DesignContext.nullable().optional(),
+    /** For a11y_audit: the WCAG level the repo audits at; the machine's own value. */
+    a11y: z.object({ level: z.enum(["AA", "AAA"]) }).nullable().optional(),
     /** What the token economy hands this run (RFC 0007): the loop guard's settings, the facts learned in this repository, the approved tool mask. Absent with `MACHINE_ECONOMY=off`. */
     economy: EconomyInput.optional(),
     /** For fact_propose: the repository's name, the digests of its last runs and the texts of the facts it holds. */
