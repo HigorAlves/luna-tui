@@ -8,12 +8,14 @@ FROM ${BASE}
 # image smaller than the three-browser default.
 ARG PLAYWRIGHT_VERSION=1.63.0
 ARG AGENT_BROWSER_VERSION=0.39.2
+# axe-core is the accessibility audit's rule engine (RFC 0013), pinned to the release the lockfile already holds.
+ARG AXE_CORE_VERSION=4.14.0
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 USER root
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg \
- && npm install -g --no-audit --no-fund "playwright@${PLAYWRIGHT_VERSION}" "agent-browser@${AGENT_BROWSER_VERSION}" \
+ && npm install -g --no-audit --no-fund "playwright@${PLAYWRIGHT_VERSION}" "agent-browser@${AGENT_BROWSER_VERSION}" "axe-core@${AXE_CORE_VERSION}" \
  && playwright install --with-deps chromium \
  && chmod -R a+rX /ms-playwright \
  && rm -rf /var/lib/apt/lists/*
@@ -27,7 +29,10 @@ RUN real="$(find /ms-playwright -maxdepth 3 -type f -name chrome -path '*chromiu
  && chmod 0755 /usr/local/bin/chromium-qa
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/chromium-qa
 
+# qa-axe runs axe-core on a page and writes the violations as JSON under /out/files/a11y/; QA_AXE_SCRIPT is where `qa-axe --inject` points a script.
+ENV QA_AXE_SCRIPT=/opt/luna/lib/node_modules/axe-core/axe.min.js
 COPY qa-fill.mjs /usr/local/bin/qa-fill
-RUN chmod 0755 /usr/local/bin/qa-fill
+COPY qa-axe.mjs /usr/local/bin/qa-axe
+RUN chmod 0755 /usr/local/bin/qa-fill /usr/local/bin/qa-axe
 
 USER node
