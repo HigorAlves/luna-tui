@@ -163,6 +163,8 @@ export function buildStageInput(opts: {
   qaTargets?: QaTarget[];
   /** For implementing and verifying: the repo's checks from luna.yaml. */
   checks?: CheckSpec[] | null;
+  /** For design_spec: the card's design reference, composed by the machine. */
+  design?: DesignContext | null;
   /** The MCP tools the machine bridged for this run (RFC 0013); none by default. */
   bridge?: BridgedTool[];
   /** For reviewing_memory: the last implementing ledger and every earlier run of the task. */
@@ -194,7 +196,7 @@ export function buildStageInput(opts: {
   const pack = opts.pack ?? (stage as PackId);
   // The test designer designs from the criteria and the goal: it is never shown the plan's steps, brief or assumptions.
   const designer = pack === "test_design" || pack === "test_design_fast";
-  const designed: PlanContext | null = designer && opts.plan ? { ...(opts.plan.docsOnly ? { docsOnly: true } : {}), record: opts.plan.record, brief: "", criteria: opts.plan.criteria, assumptions: [], slices: [], ...(opts.plan.cases ? { cases: opts.plan.cases } : {}), ...(opts.plan.gaps ? { gaps: opts.plan.gaps } : {}), ...(opts.plan.coverage_notes ? { coverage_notes: opts.plan.coverage_notes } : {}), ...(opts.plan.round !== undefined ? { round: opts.plan.round } : {}) } : null;
+  const designed: PlanContext | null = designer && opts.plan ? { ...(opts.plan.docsOnly ? { docsOnly: true } : {}), record: opts.plan.record, brief: "", criteria: opts.plan.criteria, assumptions: [], slices: [], ...(opts.plan.cases ? { cases: opts.plan.cases } : {}), ...(opts.plan.gaps ? { gaps: opts.plan.gaps } : {}), ...(opts.plan.coverage_notes ? { coverage_notes: opts.plan.coverage_notes } : {}), ...(opts.plan.round !== undefined ? { round: opts.plan.round } : {}), ...(opts.plan.frames ? { frames: opts.plan.frames } : {}) } : null;
   const reviewed = designed ?? opts.plan;
   const underReview = reviewed
     ? { brief: reviewed.brief, criteria: reviewed.criteria, assumptions: reviewed.assumptions, ...(designer ? {} : { slices: reviewed.slices }), ...(reviewed.rollback !== undefined ? { rollback: reviewed.rollback } : {}) }
@@ -260,6 +262,7 @@ export function buildStageInput(opts: {
       ci: opts.ci ?? null,
       graph: opts.graph ?? null,
       ...(opts.plan ? { plan: reviewed ?? opts.plan } : {}),
+      ...(pack === "design_spec" && opts.design ? { design: opts.design } : {}),
       ...(pack === "question_council" && opts.questions ? { questions: opts.questions } : {}),
       ...(pack === "verifying" && opts.blastRadius?.length ? { blastRadius: opts.blastRadius } : {}),
       ...(pack === "verifying" && opts.coverage ? { coverage: opts.coverage } : {}),

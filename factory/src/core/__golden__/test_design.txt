@@ -20,6 +20,11 @@ What coverage found wrong with the last scenarios (a criterion with no scenario,
 If this lists criteria, an earlier round of scenarios missed them: write scenarios for each, keeping the ones that already hold. These were the earlier scenarios:
 (none)
 
+## The design's frames
+(none)
+
+A browser scenario that checks a frame sets `frame_ref` to its id.
+
 ## Decisions so far
 (none)
 

@@ -68,10 +68,11 @@ interface Call { pack: string; runId: string; context: StageContext; plan?: Plan
 const fastTask = { ...task, record: { ...record, decision: "fast_lane", risk: "low" } } as unknown as TaskRow;
 const needsFull: StageResult = { outcome: "pass", detail: { summary: "a second component appears", needsFullPlan: true }, events: [{ at: "t", kind: "stage.note", payload: { from: "fast" } }] };
 
-function setup(script: { plan?: StageResult[]; test_design?: StageResult[]; plan_fast?: StageResult[]; test_design_fast?: StageResult[]; code_map?: StageResult[]; council_security?: StageResult[]; council_second?: StageResult[]; answers?: Partial<Record<"risk_score" | "coverage_check" | "plan_check", Array<Record<string, unknown> | Error>>> } = {}, over: Partial<PlanDeps> = {}) {
+function setup(script: { design_spec?: StageResult[]; plan?: StageResult[]; test_design?: StageResult[]; plan_fast?: StageResult[]; test_design_fast?: StageResult[]; code_map?: StageResult[]; council_security?: StageResult[]; council_second?: StageResult[]; answers?: Partial<Record<"risk_score" | "coverage_check" | "plan_check", Array<Record<string, unknown> | Error>>> } = {}, over: Partial<PlanDeps> = {}) {
   const calls: Call[] = [];
   const decided: Array<{ pack: string; plan: PlanContext; repo: string | null }> = [];
   const queues = {
+    design_spec: [...(script.design_spec ?? [specced()])],
     plan: [...(script.plan ?? [planned()])],
     test_design: [...(script.test_design ?? [cased("no panic", "stays selected")])],
     plan_fast: [...(script.plan_fast ?? [planned()])],
@@ -1248,5 +1249,70 @@ describe("planStage's council-settled answers", () => {
     const { run } = setup();
     const result = await run(context({ task: withQa([{ question: "Which file?", answer: "keys.rs", by: "person" }, { question: "Old?", answer: "yes" }]) }));
     expect(result.detail?.flagged).not.toContain("triage.council");
+  });
+});
+
+const spec = { frames: [{ id: "1:2", name: "Checkout", viewport: { width: 1440, height: 900 }, states: [{ state: "default", nodeId: "1:2", suggestion: null }, { state: "error", nodeId: null, suggestion: null }] }], tokens: { color: [], type: [], spacing: [], radius: [] }, components: [], a11yNotes: [], missing: [], confidence: 0.8 };
+function specced(answer: unknown = spec): StageResult {
+  return { outcome: "pass", detail: { summary: "spec", answer }, usage: { turns: 4, costUsd: 0.2 } };
+}
+const ref = { refs: [{ fileKey: "AbCdEf0123456789", nodeIds: ["1:2"], page: null, from: "issue" as const }] };
+const frontend = { ...task, record: { ...record, typeOfWork: "frontend" } } as unknown as TaskRow;
+const backend = { ...task, record: { ...record, typeOfWork: "backend" } } as unknown as TaskRow;
+const designOn = (over: Partial<NonNullable<PlanDeps["design"]>> = {}): Partial<PlanDeps> => ({ design: { context: async (t) => ({ off: false, cardOff: false, ref: t.description.includes("figma.com") ? ref : null }), ...over } });
+
+describe("planStage's design spec", () => {
+  it("runs design_spec before the planner on a frontend card and hands the spec to the planner and the frames to the test designer", async () => {
+    const { run, calls } = setup({}, designOn());
+    const result = await run(context({ task: frontend }));
+    expect(calls.map((c) => [c.pack, c.runId])).toEqual([["design_spec", "r1-design"], ["plan", "r1-plan"], ["test_design", "r1-tests-1"]]);
+    expect(calls[1]!.plan).toMatchObject({ designSpec: spec });
+    expect(calls[2]!.plan?.frames).toEqual([{ id: "1:2", name: "Checkout", viewport: "1440x900", states: ["default", "error"] }]);
+    expect(calls[2]!.plan).not.toHaveProperty("designSpec");
+    expect(result.detail).toMatchObject({ design: { ref: null, spec } });
+  });
+
+  it("runs no spec on a backend card with no design reference, and one when its text links a Figma frame", async () => {
+    const plain = setup({}, designOn());
+    await plain.run(context({ task: backend }));
+    expect(plain.calls.map((c) => c.pack)).not.toContain("design_spec");
+    const linked = setup({}, designOn());
+    await linked.run(context({ task: { ...backend, description: "see https://www.figma.com/design/AbCdEf0123456789/x?node-id=1-2" } as TaskRow }));
+    expect(linked.calls[0]).toMatchObject({ pack: "design_spec" });
+  });
+
+  it("runs none when the repo or a person turned design off", async () => {
+    for (const over of [{ context: async () => ({ off: true, cardOff: false, ref }) }, { context: async () => ({ off: false, cardOff: true, ref }) }]) {
+      const { run, calls } = setup({}, designOn(over));
+      await run(context({ task: frontend }));
+      expect(calls.map((c) => c.pack)).not.toContain("design_spec");
+    }
+  });
+
+  it("plans without a spec, with a note, when the spec writer fails or answers off the schema", async () => {
+    for (const bad of [{ outcome: "fail", detail: { error: "boom" } } as StageResult, specced({ frames: "x" })]) {
+      const { run, calls } = setup({ design_spec: [bad] }, designOn());
+      const result = await run(context({ task: frontend }));
+      expect(result.outcome).toBe("pass");
+      expect(calls[1]!.plan).not.toHaveProperty("designSpec");
+      expect(result.detail).toMatchObject({ design: { spec: null, note: expect.stringContaining("planned without a design spec") } });
+    }
+  });
+
+  it("escalates design_budget, before the spec writer runs, when the design budget is spent", async () => {
+    const spent = { tokens: 1_000_001, tokensCounted: true, minutes: 3, spent: "tokens" as const, limits: { max_tokens: 1_000_000, max_minutes: 45 } };
+    const { run, calls } = setup({}, designOn({ budget: async () => spent }));
+    const result = await run(context({ task: frontend }));
+    expect(calls).toHaveLength(0);
+    expect(result).toMatchObject({ outcome: "escalated", detail: { escalation: "design_budget" } });
+  });
+
+  it("drops a scenario's frame_ref the spec does not name, and flags it at the gate", async () => {
+    const withFrames = { outcome: "pass", detail: { summary: "designed", cases: [{ id: "S1", title: "s1", criterion: null, criterion_ref: "C1", type: "happy", approach: "a", frame_ref: "1:2" }, { id: "S2", title: "s2", criterion: null, criterion_ref: "C2", type: "happy", approach: "a", frame_ref: "9:9" }] } } as StageResult;
+    const { run } = setup({ test_design: [withFrames] }, designOn());
+    const result = await run(context({ task: frontend }));
+    const cases = (result.detail as { cases: Array<{ id: string; frame_ref?: string | null }> }).cases;
+    expect(cases.map((c) => [c.id, c.frame_ref ?? null])).toEqual([["S1", "1:2"], ["S2", null]]);
+    expect((result.detail as { flagged: string[] }).flagged).toContain("design.frame_ref: S2 cites 9:9, which the spec does not name");
   });
 });

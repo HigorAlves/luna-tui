@@ -511,3 +511,26 @@ describe("buildStageInput's economy", () => {
     expect("economy" in build({ economy: undefined }).context).toBe(false);
   });
 });
+
+describe("buildStageInput's design spec", () => {
+  const design = { refs: [{ fileKey: "AbCdEf0123456789", nodeIds: ["1:2"], page: null, from: "issue" as const }] };
+  const build = (pack: "design_spec" | "plan", extra: object) => buildStageInput({ task, stage: "test_design", pack, attempt: 1, approvals: [], priorFindings: [], ...extra });
+
+  it("hands design_spec the card's design reference as context.design, and no other pack", () => {
+    const input = build("design_spec", { design });
+    expect(StageInput.parse(input)).toEqual(input);
+    expect(input.context.design).toEqual(design);
+    expect(build("plan", { design }).context.design).toBeUndefined();
+    expect(build("design_spec", {}).context.design).toBeUndefined();
+  });
+
+  it("keeps the spec in the planner's context and only the frames in the test designer's", () => {
+    const spec = { frames: [], tokens: { color: [], type: [], spacing: [], radius: [] }, components: [], a11yNotes: [], missing: [], confidence: 0.5 };
+    const frames = [{ id: "1:2", name: "Checkout", viewport: "1440x900", states: ["default"] }];
+    const plan = { record: null, brief: "", criteria: ["c1"], assumptions: [], slices: [], designSpec: spec, frames };
+    expect(buildStageInput({ task, stage: "test_design", pack: "plan", attempt: 1, approvals: [], priorFindings: [], plan }).context.plan).toMatchObject({ designSpec: spec });
+    const designer = buildStageInput({ task, stage: "test_design", pack: "test_design", attempt: 1, approvals: [], priorFindings: [], plan });
+    expect(designer.context.plan).toMatchObject({ frames });
+    expect(designer.context.plan).not.toHaveProperty("designSpec");
+  });
+});

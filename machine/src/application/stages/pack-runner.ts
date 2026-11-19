@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { AnswerScenario, AnswerStep, type CiContext, type ComplianceReviewContext, type CoverageSummary, type DocsDriftContext, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
+import { AnswerScenario, AnswerStep, type CiContext, type ComplianceReviewContext, type CoverageSummary, type DesignContext, type DocsDriftContext, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -175,6 +175,8 @@ export interface AgentExtra {
   checkout?: boolean;
   /** The plan stage's packs: the plan under review (the test designer reads it as its plan; a second round carries the gaps or the review). */
   plan?: PlanContext;
+  /** design_spec: the card's design reference, composed by the machine. */
+  design?: DesignContext;
   /** question_council: the open triage questions, the card and the answers so far. */
   questions?: QuestionsContext;
   /** verifying: the files the code graph says depend on what the change touched. */
@@ -451,6 +453,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     pack,
     ...(extra.plan ? { plan: extra.plan } : {}),
     ...(extra.questions ? { questions: extra.questions } : {}),
+    ...(extra.design ? { design: extra.design } : {}),
     engine: choice.engine,
     ...(effortChoice.source === "config" ? { effort: effortChoice.effort } : {}),
     attempt: context.attempt,

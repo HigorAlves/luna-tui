@@ -1,7 +1,9 @@
 // Wires up which StageRunner serves which TaskState: the real agent packs (when a
 // credential and the runner image are available), the host-only runners that always run
 // for real, and the stub fallback.
-import { FACTORY_DEFAULTS } from "@hardness/contracts";
+import { FACTORY_DEFAULTS, designSettings } from "@hardness/contracts";
+import { cardOf } from "../domain/card-fields.ts";
+import { designRefOf } from "../domain/design-ref.ts";
 import type { EvidencePack, QuestionsContext, ShipContext, TaskRoute, TaskState } from "@hardness/contracts";
 
 import type { CoverageSummary, Ledger, RunSummary } from "@hardness/contracts";
@@ -495,7 +497,18 @@ export async function buildRealStages(
     ...(triageSignals && agents.triage ? { triage: withTriageSignals(agents.triage, Object.assign(triageSignals, { council: triageSignals.council ?? ((subContext: StageContext, questions: QuestionsContext) => runAgent(deps, subContext, "question_council", { questions })) })) } : {}),
     // The plan stage runs in test_design: the planner, the test designer, then three decisions, each pack a sub-run.
     test_design: planStage({
-      runPack: (pack, subContext, extra) => runAgent(deps, subContext, pack, extra.plan ? { plan: extra.plan } : {}),
+      runPack: (pack, subContext, extra) => runAgent(deps, subContext, pack, { ...(extra.plan ? { plan: extra.plan } : {}), ...(extra.design ? { design: extra.design } : {}) }),
+      // The designer agents (RFC 0013): the card's design reference and its budget, read at call time (the budget is bound late).
+      design: {
+        context: async (task) => {
+          const policy = await policies.for(task.repoPath);
+          const settings = designSettings(policy.design);
+          return { off: settings.off, cardOff: designDecisions?.cardOff ? await designDecisions.cardOff(task.id) : false, ref: designRefOf({ text: `${task.title}\n${task.description}`, attachments: cardOf(task).attachments, settings }) };
+        },
+        get budget() {
+          return designDecisions?.budget;
+        },
+      },
       get decide() {
         return planDecisions?.decide ?? null;
       },

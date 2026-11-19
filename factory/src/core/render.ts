@@ -472,6 +472,30 @@ function mapText(map: NonNullable<StageInput["context"]["plan"]>["map"]): string
   ].join("\n");
 }
 
+/** The design spec the planner reads: frames with their states, tokens by kind, components with Code Connect, the a11y notes and what was missing. Every value came from a Figma file, so the block is quoted as data. */
+function designSpecText(spec: NonNullable<StageInput["context"]["plan"]>["designSpec"]): string {
+  if (!spec) return NONE;
+  const state = (s: { state: string; nodeId: string | null; suggestion: { source: string; note: string } | null }) =>
+    s.nodeId ? `${s.state} (${s.nodeId})` : s.suggestion ? `${s.state} (no frame; suggestion from ${s.suggestion.source}: ${s.suggestion.note})` : `${s.state} (no frame)`;
+  const token = (t: { name: string; value: string; variable: string | null; nodeId: string | null }) => `- ${t.name} ${t.value} (${t.variable ? `variable ${t.variable}` : t.nodeId ? `node ${t.nodeId}` : "no source"})`;
+  const kinds = (["color", "type", "spacing", "radius"] as const).flatMap((kind) => (spec.tokens[kind].length > 0 ? [`Tokens, ${kind}:`, ...spec.tokens[kind].map(token)] : []));
+  return [
+    "Frames:",
+    ...(spec.frames.length > 0 ? spec.frames.flatMap((f) => [`- ${f.id} ${f.name}${f.viewport ? ` ${f.viewport.width}x${f.viewport.height}` : ""}`, ...f.states.map((s) => `    - ${state(s)}`)]) : ["- (none)"]),
+    ...(kinds.length > 0 ? kinds : ["Tokens: (none)"]),
+    "Components:",
+    ...(spec.components.length > 0 ? spec.components.map((c) => `- ${c.name} ${c.nodeId}${c.codeConnect ? ` (Code Connect: ${c.codeConnect.path})` : ""}`) : ["- (none)"]),
+    "Accessibility notes:",
+    ...(spec.a11yNotes.length > 0 ? spec.a11yNotes.map((n) => `- ${n.frame}: ${n.note}`) : ["- (none)"]),
+    ...(spec.missing.length > 0 ? ["Missing:", ...spec.missing.map((m) => `- ${m}`)] : []),
+    `Overall confidence ${spec.confidence}`,
+  ].join("\n");
+}
+
+/** The test designer's view of the design: one line per frame, no tokens and no notes. */
+const framesText = (frames: NonNullable<StageInput["context"]["plan"]>["frames"]): string =>
+  frames && frames.length > 0 ? frames.map((f) => `${f.id} ${f.name}${f.viewport ? ` ${f.viewport}` : ""}: ${f.states.join(", ") || "(no states)"}`).join("\n") : NONE;
+
 /** The council packs' view: the plan under review, its criteria, the round and the transcript so far. */
 function councilText(council: NonNullable<StageInput["context"]["plan"]>["council"]): string {
   if (!council) return NONE;
@@ -697,6 +721,8 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.factCandidates}}": candidatesText(input.context.factCandidates),
     ...(input.context.conversation ? conversationText(input.context.conversation) : Object.fromEntries(Object.keys(CONVERSATION_VARIABLES).map((name) => [`{{context.conversation.${name}}}`, NONE]))),
     "{{context.plan.council}}": councilText(input.context.plan?.council),
+    "{{context.plan.designSpec}}": designSpecText(input.context.plan?.designSpec),
+    "{{context.plan.frames}}": framesText(input.context.plan?.frames),
     "{{context.questions.list}}": questions.list,
     "{{context.questions.card}}": questions.card,
     "{{context.questions.answers}}": questions.answers,

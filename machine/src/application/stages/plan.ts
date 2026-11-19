@@ -15,6 +15,8 @@ import { isDocsOnly } from "../../domain/docs-only.ts";
 import {
   CodeMapAnswer,
   type CouncilTurn,
+  type DesignContext,
+  DesignSpec,
   type DecisionOverrides,
   FACTORY_DEFAULTS,
   Finding,
@@ -44,7 +46,10 @@ import {
 
 import { cardOf } from "../../domain/card-fields.ts";
 import type { RequiredOwners } from "../../domain/codeowners.ts";
+import type { DesignBudget } from "../../domain/design-budget.ts";
+import { designSpecDue } from "../../domain/design-routing.ts";
 import { decompositionLoop } from "./decompose.ts";
+import { designRun } from "./design-run.ts";
 import { type SizeDecision, sizeAssessment, sizeContextOf, sizeDecisionOf } from "../size-estimate.ts";
 import type { GraphLocation } from "../graph.ts";
 import { type GraphReadiness, graphEscalation, graphSkipped } from "../graph-ready.ts";
@@ -77,7 +82,7 @@ type Member = (typeof MEMBERS)[number];
 
 export interface PlanDeps {
   /** Runs one pack as a sub-run of this stage: `context` already carries the derived run id. `extra.plan` reaches the pack as `context.plan`. */
-  runPack: (pack: "plan" | "plan_fast" | "test_design" | "test_design_fast" | "code_map" | "council_security" | "council_second", context: StageContext, extra: { plan?: PlanContext }) => Promise<StageResult>;
+  runPack: (pack: "plan" | "plan_fast" | "test_design" | "test_design_fast" | "code_map" | "council_security" | "council_second" | "design_spec", context: StageContext, extra: { plan?: PlanContext; design?: DesignContext }) => Promise<StageResult>;
   /** Runs a decision pack on a plan context and answers its answer; null when no decision can run (agents off, no runtime). Read at call time: main.ts binds it late. */
   decide: ((pack: DecisionPackName, plan: PlanContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
   /** The size_estimate decision (full lane only, after risk_score and before the planner): null or absent skips it. `similar` lists the repository's nearest closed cards with a counted diff. */
@@ -108,6 +113,11 @@ export interface PlanDeps {
   };
   /** Waits for the repository's code graph (building it when it has none or a stale one); absent, no stage waits. */
   graphReady?: (input: { repoPath: string; signal: AbortSignal; skip: boolean; note?: (text: string) => Promise<void> }) => Promise<GraphReadiness>;
+  /** The designer agents (RFC 0013): the card's design reference, whether the repo or a person turned design off, and the design budget. Absent, no spec is asked for. */
+  design?: {
+    context(task: StageContext["task"]): Promise<{ off: boolean; cardOff: boolean; ref: DesignContext | null }>;
+    budget?: (taskId: string) => Promise<DesignBudget>;
+  };
   log?: (line: string) => void;
 }
 
@@ -338,6 +348,8 @@ export function planStage(deps: PlanDeps): StageRunner {
     const sentBackNote = lastGate && lastGate.decision === "sent_back" && (lastGate.requested.outcome === "split" || lastGate.requested.outcome === "split_failed") && lastGate.reason ? flatNote(lastGate.reason) : undefined;
     const sizeRecords = (extra: Record<string, string | undefined> = {}) =>
       Object.fromEntries(Object.entries({ risk_score: riskJudged.recordId, size_estimate: sizeRecordId, ...extra }).filter((e): e is [string, string] => typeof e[1] === "string"));
+    /** What the design spec step found, for the gate and for phase 3: the reference, the spec (null when planned without one) and why. */
+    let designPart: { ref: DesignContext | null; spec: DesignSpec | null; note?: string } | undefined;
     /** The stage ends here: the change is over the hard limit, so the gate gets a split to read (or the reason there is none), and no plan. Nothing is made. */
     const splitExit = async (size: ReturnType<typeof sizeAssessment>["size"], flags: string[]): Promise<StageResult> => {
       const split = deps.split!;
@@ -378,6 +390,7 @@ export function planStage(deps: PlanDeps): StageRunner {
         ...(map ? { map } : {}),
         ...(mapNote ? { mapNote } : {}),
         decisions: sizeRecords({ split_check: looked?.ok ? looked.recordId : undefined }),
+        ...(designPart ? { design: designPart } : {}),
         flagged: flags,
         lane,
         rounds: { tests: testRuns, plan: planRuns },
@@ -389,6 +402,22 @@ export function planStage(deps: PlanDeps): StageRunner {
     // Over the hard limit by the estimate alone: the planner never runs.
     const earlySize = sizeAssessment({ decision: sizeDecision, planned: null, limits: sizeLimit });
     if (deps.split && !keptWhole && earlySize.size.verdict === "over") return splitExit(earlySize.size, earlySize.flags);
+    // The design spec (RFC 0013): before the planner, on a UI card or a card with a design reference. Advice: a failed run plans without it.
+    let designSpec: DesignSpec | null = null;
+    if (deps.design) {
+      const { off, cardOff, ref } = await deps.design.context(task);
+      const due = designSpecDue({ off, cardOff, typeOfWork: task.record?.typeOfWork, ref, lane });
+      if (due.due) {
+        const { result } = await designRun({ ...(deps.design.budget ? { budget: deps.design.budget } : {}) }, context, "design_spec", () => deps.runPack("design_spec", sub("design"), { ...(ref ? { design: ref } : {}) }));
+        if (result.outcome === "escalated" && result.detail?.escalation === "design_budget") return ended(result);
+        results.push(result);
+        const parsed = DesignSpec.safeParse(result.detail?.answer);
+        designSpec = result.outcome === "pass" && parsed.success ? parsed.data : null;
+        designPart = { ref, spec: designSpec, ...(designSpec ? {} : { note: `planned without a design spec: ${result.outcome === "pass" ? "its answer did not parse" : String(result.detail?.error ?? result.outcome)}` }) };
+      }
+    }
+    const specPart = designSpec ? { designSpec } : {};
+    const framesPart = designSpec ? { frames: designSpec.frames.map((f) => ({ id: f.id, name: f.name, viewport: f.viewport ? `${f.viewport.width}x${f.viewport.height}` : null, states: f.states.map((st) => st.state) })) } : {};
     /** Planner runs on the current lane: the re-run cap counts from the last switch. */
     let planRunsOnLane = 0;
     /** Why the fast plan's owners could not be checked, when they could not; stays on the gate. */
@@ -459,8 +488,8 @@ export function planStage(deps: PlanDeps): StageRunner {
       planRunsOnLane += 1;
       const planned = await deps.runPack(lane === "fast" ? "plan_fast" : "plan", sub(planRuns === 1 ? "plan" : `plan-${planRuns}`), {
         ...(plan
-          ? { plan: { record: task.record ?? null, ...plan, cases, round: planRuns, ...(review ? { review } : {}), ...mapPart(), ...riskPart, ...replanPart } }
-          : { plan: { record: task.record ?? null, brief: "", criteria: task.criteria, assumptions: [], slices: [], ...mapPart(), ...riskPart, ...replanPart } }),
+          ? { plan: { record: task.record ?? null, ...plan, cases, round: planRuns, ...(review ? { review } : {}), ...mapPart(), ...riskPart, ...replanPart, ...specPart } }
+          : { plan: { record: task.record ?? null, brief: "", criteria: task.criteria, assumptions: [], slices: [], ...mapPart(), ...riskPart, ...replanPart, ...specPart } }),
       });
       if (planned.outcome !== "pass") return ended(planned);
       results.push(planned);
@@ -510,11 +539,19 @@ export function planStage(deps: PlanDeps): StageRunner {
         testRuns += 1;
         const designed = await deps.runPack(lane === "fast" ? "test_design_fast" : "test_design", sub(`tests-${testRuns}`), {
           // The designer reads the criteria and the goal only: no steps, brief, assumptions, map or risk.
-          plan: { ...(isDocsOnly(plan.slices.flatMap((s) => s.touchpoints ?? [])) ? { docsOnly: true } : {}), record: task.record ?? null, brief: "", criteria: plan.criteria, assumptions: [], slices: [], ...(cases.length ? { cases } : {}), ...(gaps.length ? { gaps } : {}), ...(notes.length ? { coverage_notes: notes } : {}), round: roundsOnThisPlan },
+          plan: { ...(isDocsOnly(plan.slices.flatMap((s) => s.touchpoints ?? [])) ? { docsOnly: true } : {}), record: task.record ?? null, brief: "", criteria: plan.criteria, assumptions: [], slices: [], ...(cases.length ? { cases } : {}), ...(gaps.length ? { gaps } : {}), ...(notes.length ? { coverage_notes: notes } : {}), round: roundsOnThisPlan, ...framesPart },
         });
         if (designed.outcome !== "pass") return ended(designed);
         results.push(designed);
         cases = ((designed.detail?.cases as TestCase[] | undefined) ?? []).filter((c) => c && typeof c === "object");
+        // A scenario may cite a frame by id; one the spec does not name is dropped, and a person sees that at the gate.
+        cases = cases.map((c) => {
+          const cited = (c as { frame_ref?: string | null }).frame_ref;
+          if (!cited || designSpec?.frames.some((f) => f.id === cited)) return c;
+          flagged.add(`design.frame_ref: ${(c as { id?: string }).id ?? c.title} cites ${cited}, which the spec does not name`);
+          const { frame_ref: _dropped, ...kept } = c as TestCase & { frame_ref?: string | null };
+          return kept as TestCase;
+        });
         report = coverageOf(criteria, cases);
         gaps = textOf(report.gaps);
         notes = [];
@@ -598,7 +635,7 @@ export function planStage(deps: PlanDeps): StageRunner {
         // Findings, and another round to follow: the planner revises with them as its review, and plan_check reads the revision once.
         planRuns += 1;
         review = [...open.entries()].flatMap(([who, list]) => list.map((f) => `council ${who}: ${f.title}: ${f.body}`));
-        const revised = await deps.runPack("plan", sub(`plan-${planRuns}`), { plan: { record: task.record ?? null, ...plan, cases, round: planRuns, review, ...mapPart(), ...riskPart, ...replanPart } });
+        const revised = await deps.runPack("plan", sub(`plan-${planRuns}`), { plan: { record: task.record ?? null, ...plan, cases, round: planRuns, review, ...mapPart(), ...riskPart, ...replanPart, ...specPart } });
         results.push(revised);
         // A question or a usage limit from the revision is the stage's own result: the planner is not done, so the council cannot be.
         if (revised.outcome === "needs_input" || revised.rateLimited) return ended(revised);
@@ -698,6 +735,7 @@ export function planStage(deps: PlanDeps): StageRunner {
         size,
         // The decisions' records, so the gate's outcome can be written onto them (decision-truth.ts).
         decisions: Object.fromEntries(([["coverage_check", coverage], ["plan_check", planCheck], ["risk_score", riskJudged]] as const).flatMap(([pack, judged]) => (judged.recordId ? [[pack, judged.recordId]] : [])).concat(sizeRecordId ? [["size_estimate", sizeRecordId]] : [])),
+        ...(designPart ? { design: designPart } : {}),
         rounds: { tests: testRuns, plan: planRuns, ...(council ? { council: council.rounds } : {}) },
         ...(council ? { council } : {}),
         flagged: [...flagged],

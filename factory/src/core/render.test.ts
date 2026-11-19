@@ -511,6 +511,26 @@ describe("renderPrompt", () => {
     expect(render({ level: "AAA" })).not.toContain("<<<data");
   });
 
+  it("renders the design spec for the planner as a quoted block, and the frames for the test designer one line each", () => {
+    const spec = {
+      frames: [{ id: "1:2", name: "Checkout", viewport: { width: 1440, height: 900 }, states: [{ state: "default", nodeId: "1:2", suggestion: null }, { state: "error", nodeId: null, suggestion: { source: "mobbin", ref: "m/9", note: "inline error" } }] }],
+      tokens: { color: [{ name: "brand", value: "#1A73E8", variable: "color/brand", nodeId: null }], type: [], spacing: [{ name: "gap", value: "8", variable: null, nodeId: "3:4" }], radius: [] },
+      components: [{ name: "PayButton", nodeId: "5:6", codeConnect: { path: "src/PayButton.tsx", name: "PayButton" } }],
+      a11yNotes: [{ frame: "1:2", note: "focus order: card, pay" }],
+      missing: ["no mobile frame"],
+      confidence: 0.8,
+    };
+    const frames = [{ id: "1:2", name: "Checkout", viewport: "1440x900", states: ["default", "error"] }];
+    const withPlan = (plan: object) => ({ ...input, pack: "plan", context: { projectContext: null, plan: { record: null, brief: "", criteria: [], assumptions: [], slices: [], ...plan } } }) as StageInput;
+    const quoted = renderQuoted({ pack: PACKS.plan, input: withPlan({ designSpec: spec }), template: "{{context.plan.designSpec}}" });
+    expect(quoted).toContain("<<<data:context.plan.designSpec>>>");
+    const text = renderPrompt({ pack: PACKS.plan, input: withPlan({ designSpec: spec }), template: "{{context.plan.designSpec}}" });
+    for (const part of ["1:2 Checkout 1440x900", "default (1:2)", "error (no frame; suggestion from mobbin: inline error)", "brand #1A73E8 (variable color/brand)", "gap 8 (node 3:4)", "PayButton 5:6 (Code Connect: src/PayButton.tsx)", "focus order: card, pay", "no mobile frame", "confidence 0.8"]) expect(text).toContain(part);
+    expect(renderPrompt({ pack: PACKS.plan, input: withPlan({}), template: "{{context.plan.designSpec}}" })).toContain("(none)");
+    expect(renderPrompt({ pack: PACKS.test_design, input: withPlan({ frames }), template: "{{context.plan.frames}}" })).toContain("1:2 Checkout 1440x900: default, error");
+    expect(renderPrompt({ pack: PACKS.test_design, input: withPlan({}), template: "{{context.plan.frames}}" })).toContain("(none)");
+  });
+
   it("renders the board for foreman: the question, the turns and one line per card, all quoted data, and the packs as the machine's own text", () => {
     const template = "now {{context.foreman.now}}\nquestion:\n{{context.foreman.question}}\nhistory:\n{{context.foreman.history}}\ncards:\n{{context.foreman.cards}}\npacks:\n{{context.foreman.packs}}";
     const foreman = {
