@@ -6811,7 +6811,6 @@ impl App {
 
     fn start_ticket_chat(&mut self, repo: String) {
         let state = crate::ticket_chat::State::new(repo, self.ticket_engine.as_deref());
-        self.notify(format!("planning a ticket in {}", state.repo_name), false);
         self.mode = Mode::TicketChat(state);
     }
 
@@ -15768,6 +15767,126 @@ mod ticket_chat_tests {
         );
         press(&mut app, KeyCode::Char('t'));
         assert_eq!(state(&app).engine, "codex:sol");
+    }
+
+    fn screen(app: &mut App) -> String {
+        crate::testkit::render(app, 110, 30)
+    }
+
+    /// A talk of one question and one ready answer, at the create gate.
+    fn at_the_gate() -> App {
+        let mut app = chatting();
+        type_text(&mut app, "csv export please");
+        press(&mut app, KeyCode::Enter);
+        let generation = state(&app).generation;
+        app.take_ticket_chat(generation, Ok(ready()));
+        app
+    }
+
+    #[test]
+    fn the_gate_shows_the_draft_and_asks_before_creating() {
+        let mut app = at_the_gate();
+        let screen = screen(&mut app);
+        for needle in [
+            "Plan a ticket · app · claude:opus",
+            "csv export please",
+            "Here it is.",
+            "Draft ticket",
+            "Export CSV",
+            "• escapes commas",
+            "Create this ticket in app? y create · e edit · n keep talking",
+            "create, then edit",
+        ] {
+            assert!(screen.contains(needle), "{needle} missing in\n{screen}");
+        }
+    }
+
+    #[test]
+    fn the_jira_offer_names_the_new_ticket() {
+        let mut app = at_the_gate();
+        let id = app.tasks[0].id.clone();
+        let Mode::TicketChat(state) = &mut app.mode else {
+            panic!()
+        };
+        state.created(id);
+        let screen = screen(&mut app);
+        assert!(
+            screen.contains("Created aaaaaaaa. File it in Jira too? y/n"),
+            "{screen}"
+        );
+    }
+
+    #[test]
+    fn esc_with_turns_asks_to_discard_and_a_wait_shows_its_timer() {
+        let mut app = chatting();
+        type_text(&mut app, "hello");
+        press(&mut app, KeyCode::Enter);
+        let waiting = screen(&mut app);
+        assert!(
+            waiting.contains("thinking… 0:00 (esc cancels)"),
+            "{waiting}"
+        );
+        let generation = state(&app).generation;
+        app.take_ticket_chat(
+            generation,
+            Ok(Reply {
+                reply: "Which one?".into(),
+                choices: vec!["csv".into(), "xlsx".into()],
+                ..Reply::default()
+            }),
+        );
+        let choosing = screen(&mut app);
+        assert!(choosing.contains(" 1  csv") && choosing.contains(" 2  xlsx"));
+        press(&mut app, KeyCode::Esc);
+        let asking = screen(&mut app);
+        assert!(asking.contains("Discard this talk? y/n"), "{asking}");
+    }
+
+    #[test]
+    fn model_text_is_drawn_plain_and_a_failure_shows_in_red_text() {
+        let mut app = chatting();
+        type_text(&mut app, "hi");
+        press(&mut app, KeyCode::Enter);
+        let generation = state(&app).generation;
+        app.take_ticket_chat(
+            generation,
+            Ok(Reply {
+                reply: "ok\u{1b}[31m red\u{202E}".into(),
+                ..Reply::default()
+            }),
+        );
+        type_text(&mut app, "more");
+        press(&mut app, KeyCode::Enter);
+        let generation = state(&app).generation;
+        app.take_ticket_chat(generation, Err("the planner failed".into()));
+        let screen = screen(&mut app);
+        assert!(!screen.contains('\u{1b}') && !screen.contains('\u{202E}'));
+        assert!(screen.contains("the planner failed"), "{screen}");
+    }
+
+    #[test]
+    fn the_scrollback_keeps_the_newest_turn_at_the_bottom_and_pgup_scrolls_up() {
+        let mut app = chatting();
+        for i in 0..20 {
+            let Mode::TicketChat(state) = &mut app.mode else {
+                panic!()
+            };
+            state.turns.push(crate::ticket_chat::Turn {
+                who: "person",
+                text: format!("message number {i}"),
+            });
+        }
+        let screen_now = screen(&mut app);
+        assert!(screen_now.contains("message number 19"));
+        assert!(
+            !screen_now.contains("message number 0\n") && !screen_now.contains("message number 0 ")
+        );
+        for _ in 0..4 {
+            press(&mut app, KeyCode::PageUp);
+        }
+        let scrolled = screen(&mut app);
+        assert!(!scrolled.contains("message number 19"), "{scrolled}");
+        assert!(scrolled.contains("message number 1"));
     }
 }
 

@@ -489,6 +489,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             }
         }
         Mode::Foreman(state) => render_foreman(frame, app, state),
+        Mode::TicketChat(state) => render_ticket_chat(frame, app, body, state),
         Mode::ConfirmApprove(held) => {
             if let Some(task) = app.task(&held.id) {
                 render_approve(frame, &held.question, task);
@@ -972,6 +973,36 @@ fn footer_line(app: &App, width: u16) -> Line<'static> {
                 ("esc", "close"),
             ]),
         },
+        Mode::TicketChat(state) => {
+            use crate::ticket_chat::Phase;
+            match &state.phase {
+                Phase::PickEngine => hint(&[
+                    ("1/2", "pick"),
+                    ("tab", "switch"),
+                    ("enter", "start"),
+                    ("esc", "cancel"),
+                ]),
+                Phase::Typing if state.choices.is_empty() => {
+                    hint(&[("enter", "send"), ("pgup/pgdn", "scroll"), ("esc", "back")])
+                }
+                Phase::Typing => hint(&[
+                    ("enter", "send"),
+                    ("1-4", "pick (empty box)"),
+                    ("pgup/pgdn", "scroll"),
+                    ("esc", "back"),
+                ]),
+                Phase::Waiting => hint(&[("esc", "cancel the wait")]),
+                Phase::Draft => hint(&[
+                    ("y", "create"),
+                    ("e", "create, then edit"),
+                    ("n", "keep talking"),
+                    ("esc", "close"),
+                ]),
+                Phase::Creating => hint(&[]),
+                Phase::Created { .. } => hint(&[("y", "file in Jira"), ("n", "close")]),
+                Phase::ConfirmDiscard => hint(&[("y", "discard"), ("n", "keep")]),
+            }
+        }
         Mode::ConfirmApprove(_) => hint(&[("y/enter", "approve"), ("n/esc", "cancel")]),
         Mode::CoveragePicker(_) => hint(&[
             ("space", "tick"),
@@ -2275,6 +2306,169 @@ fn render_prompt(
                 .right_aligned(),
         );
     frame.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
+}
+
+/// The planning chat: the talk, newest at the bottom, with the draft under it at the gate. `area` is the board's body,
+/// so the footer's hints stay visible. Every string in it comes from a model or a person: `detail::plain` first.
+pub(crate) fn render_ticket_chat(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    state: &crate::ticket_chat::State,
+) {
+    use crate::ticket_chat::Phase;
+    let plain = detail::plain;
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(
+            Line::from(format!(
+                " Plan a ticket · {} · {} ",
+                plain(&state.repo_name),
+                plain(&state.engine)
+            ))
+            .fg(c(ACCENT))
+            .bold(),
+        );
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let width = inner.width as usize;
+
+    if state.phase == Phase::PickEngine {
+        let mut lines = vec![
+            Line::from(Span::from(format!("Plan a ticket in {}", plain(&state.repo_path))).bold()),
+            Line::default(),
+            Line::from(Span::from("Which engine plans it?").fg(c(SUBTEXT0))),
+            Line::default(),
+        ];
+        for (at, engine) in crate::ticket_chat::ENGINES.iter().enumerate() {
+            let on = *engine == state.engine;
+            let line = Line::from(vec![
+                Span::from(if on { "▶ " } else { "  " }),
+                Span::from(format!("{} ", at + 1)).fg(c(ACCENT)),
+                Span::from(*engine),
+            ]);
+            lines.push(if on { line.bold() } else { line });
+        }
+        frame.render_widget(Paragraph::new(lines), inner);
+        return;
+    }
+
+    // The scrollback, then the draft when there is a gate.
+    let mut body: Vec<Line> = Vec::new();
+    for turn in &state.turns {
+        let (label, color) = if turn.who == "person" {
+            ("you", ACCENT)
+        } else {
+            ("planner", LAVENDER)
+        };
+        body.push(Line::from(Span::from(label).fg(c(color)).bold()));
+        for line in text::wrap(&plain(&turn.text), width, 2) {
+            body.push(Line::from(Span::from(line)));
+        }
+        body.push(Line::default());
+    }
+    let at_gate = matches!(
+        state.phase,
+        Phase::Draft | Phase::Creating | Phase::Created { .. }
+    );
+    if let (true, Some(draft)) = (at_gate, &state.draft) {
+        body.push(Line::from(Span::from("Draft ticket").fg(c(GREEN)).bold()));
+        body.push(Line::from(Span::from(plain(&draft.title)).bold()));
+        for line in text::wrap(&plain(&draft.description), width, 2) {
+            body.push(Line::from(Span::from(line)));
+        }
+        if !draft.criteria.is_empty() {
+            body.push(Line::from(Span::from("Criteria").fg(c(SUBTEXT0))));
+        }
+        for criterion in &draft.criteria {
+            for (at, line) in text::wrap(&plain(criterion), width.saturating_sub(2), 0)
+                .into_iter()
+                .enumerate()
+            {
+                body.push(Line::from(Span::from(if at == 0 {
+                    format!("• {line}")
+                } else {
+                    format!("  {line}")
+                })));
+            }
+        }
+    }
+
+    // The foot: the error, the choices, then the prompt line.
+    let mut foot: Vec<Line> = Vec::new();
+    if let Some(error) = &state.error {
+        foot.push(Line::from(
+            Span::from(truncate(&plain(error), width)).fg(c(RED)),
+        ));
+    }
+    if state.phase == Phase::Typing && !state.choices.is_empty() {
+        let mut spans = Vec::new();
+        for (at, choice) in state.choices.iter().enumerate() {
+            spans.push(
+                Span::from(format!(" {} ", at + 1))
+                    .fg(c(BASE))
+                    .bg(c(ACCENT)),
+            );
+            spans.push(Span::from(format!(" {}  ", plain(choice))).fg(c(SUBTEXT0)));
+        }
+        foot.push(Line::from(spans));
+    }
+    let repo = plain(&state.repo_name);
+    foot.push(match &state.phase {
+        Phase::Typing => Line::from(vec![
+            Span::from("> ").fg(c(ACCENT)).bold(),
+            Span::from(format!("{}▏", plain(&state.input))),
+        ]),
+        Phase::Waiting => {
+            let secs = state.waiting_since.map_or(0, |t| t.elapsed().as_secs());
+            Line::from(
+                Span::from(format!(
+                    "thinking… {}:{:02} (esc cancels)",
+                    secs / 60,
+                    secs % 60
+                ))
+                .fg(c(SUBTEXT0)),
+            )
+        }
+        Phase::Draft => Line::from(
+            Span::from(format!(
+                "Create this ticket in {repo}? y create · e edit · n keep talking"
+            ))
+            .fg(c(GREEN))
+            .bold(),
+        ),
+        Phase::Creating => Line::from(Span::from("Creating…").fg(c(SUBTEXT0))),
+        Phase::Created { id } => {
+            let short = app
+                .task(id)
+                .map(|t| t.short_id().to_string())
+                .unwrap_or_else(|| plain(&id.chars().take(8).collect::<String>()));
+            Line::from(
+                Span::from(format!("Created {short}. File it in Jira too? y/n"))
+                    .fg(c(GREEN))
+                    .bold(),
+            )
+        }
+        Phase::ConfirmDiscard => {
+            Line::from(Span::from("Discard this talk? y/n").fg(c(YELLOW)).bold())
+        }
+        Phase::PickEngine => Line::default(),
+    });
+
+    let foot_height = (foot.len() as u16).min(inner.height);
+    let [talk, foot_area] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(foot_height)]).areas(inner);
+    // Newest at the bottom; `scroll` lines up from there, held inside the talk.
+    let rows = talk.height as usize;
+    let end = body
+        .len()
+        .saturating_sub(state.scroll.min(body.len().saturating_sub(rows)));
+    let start = end.saturating_sub(rows);
+    frame.render_widget(Paragraph::new(body[start..end].to_vec()), talk);
+    frame.render_widget(Paragraph::new(foot), foot_area);
 }
 
 /// The foreman's popup: the talk's last reply, then one row per suggested action with where it stands.
