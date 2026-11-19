@@ -27,6 +27,7 @@ export * from "./packs.ts";
 export * from "./models.ts";
 export * from "./engines.ts";
 export * from "./access.ts";
+export * from "./mcp.ts";
 export * from "./economy.ts";
 export * from "./economy-vocabulary.ts";
 export * from "./questions.ts";
