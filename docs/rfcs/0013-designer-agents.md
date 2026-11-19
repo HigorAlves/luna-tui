@@ -55,18 +55,18 @@ All four also run on demand from the TUI and Luna Notch. They read Figma and Mob
 
 ### The MCP bridge (phase 1)
 
-**Servers.** The machine config declares each server: a name, a transport (`http` or `stdio`), a URL or command, a credential reference and a tool allowlist. v1 ships four entries:
+**Servers.** The machine config declares each server in `~/.config/hardness/mcp.yaml` (`MACHINE_MCP_SERVERS` names another file), read as the sandbox policy is: a name, a transport (`http` or `stdio`), a URL or command, a credential reference and a tool allowlist. v1 ships four entries:
 
 | Server | Transport | Credential |
 |---|---|---|
-| `figma` (Figma's remote MCP) | http | OAuth, through `luna mcp login figma` |
-| `figma-desktop` (Dev Mode MCP of the Figma app) | http on the host's loopback | none; only while the app is open |
-| `mobbin` | http | OAuth, through `luna mcp login mobbin` |
+| `figma` (Figma's remote MCP) | http | OAuth, through `pnpm mcp login figma` |
+| `figma-desktop` (Dev Mode MCP of the Figma app) | http, `host.docker.internal:3845` from the compose machine | none; only while the app is open |
+| `mobbin` | http | OAuth, through `pnpm mcp login mobbin` |
 | any other | http or stdio | `literal`, `op://` or `env:` reference, as for QA targets |
 
 `luna.yaml` may name a declared server under `design.servers` and narrow its tools. It can never add a server, a URL or a credential. So a repo cannot point the machine's credentials at a host it chose.
 
-**Login.** `luna mcp login <server>` runs the OAuth browser flow on the host once. It keeps the refresh token in the machine's credential store (`machine/src/adapters/credentials/`). `luna mcp status` lists each server, its login state and its tools. A server with no credential gets a `noToken` fallback: its tools are not offered to any pack, and a stage that needs them says so in a note.
+**Login.** `pnpm mcp login <server>` asks the machine for the authorization URL (`POST /mcp/:server/login`) and opens it in the host's browser. The provider redirects to the machine's published port (`GET /mcp/:server/callback`). The machine keeps the tokens in `$MACHINE_STATE_DIR/mcp/<server>.json` (mode 0600), because `~/.config/hardness` is mounted read-only. The machine's secret redactor learns each token. `pnpm mcp status` (`GET /mcp`) lists each server, its login state and its tools. A server with no credential gets a `noToken` fallback: its tools are not offered to any pack, and a stage that needs them says so in a note.
 
 **Port and adapter.** The port is `machine/src/application/mcp.ts`: `listTools(server)` and `callTool(server, tool, args)`. The adapter is `machine/src/adapters/mcp/`, an MCP client over HTTP and stdio. The machine connects when a stage that needs a server starts, and closes the connection when the stage ends.
 
@@ -191,7 +191,7 @@ Each pack has its own default engine. A repo picks from the pack's `allowed` lis
 ## Open items
 
 - **Figma's remote MCP and third-party clients.** Figma may accept only clients it knows, or need a registered OAuth client. Phase 1 must confirm that the machine can connect as an MCP client. If it cannot, `figma` falls back to `figma-desktop` and a REST adapter behind the same port.
-- **`figma-desktop` reachability.** The app serves on the host's loopback. The machine reaches it only when the machine runs on the same host. Phase 1 states this in `luna mcp status`.
+- **`figma-desktop` reachability.** The app serves on the host's loopback. The compose machine reaches it through `host.docker.internal`, and only when it runs on the same computer as the app. Phase 1 states this in `pnpm mcp status`.
 - **Mobbin's terms.** Using Mobbin screens as references inside an automated pipeline must fit its terms of use. To check before phase 2 enables it by default.
 - **Computed-style capture.** Recording computed styles for each capture adds time to the browser run. Phase 3 measures it, and may cap it to the elements that the spec names.
 - **Helper concurrency limits.** Phase 5 starts with one helper at a time per card. More than one in parallel waits for numbers.
@@ -199,7 +199,7 @@ Each pack has its own default engine. A repo picks from the pack's `allowed` lis
 ## Rollout
 
 Five stacked PRs, in risk order. Each one is usable alone.
-1. **Bridge.** Port, adapter, `luna mcp login | status`, machine server config, `Access.bridge`, the mailbox call, record and replay, and the CLAUDE.md amendment below.
+1. **Bridge.** Port, adapter, `pnpm mcp login | status`, machine server config, `Access.bridge`, the mailbox call, record and replay, and the CLAUDE.md amendment below.
 2. **Spec and audit.** `design_spec`, `a11y_audit`, the design reference, `design.budget`, routing in Plan and Verify, and on-demand reports with make-card.
 3. **Parity.** Capture, `design_parity`, the PR section and `awaiting_design`.
 4. **Eve vision.** Image input on eve, `vision` in the catalog, and the parity eval on codex.
@@ -229,7 +229,7 @@ The grilling session of 2026-11-19 settled each of these:
 - They run in the pipeline and on demand. An on-demand run produces a report with make-card.
 - MCP access goes through a machine bridge served as `luna` tools. Servers: Figma remote, Figma desktop, Mobbin and a generic list. The machine declares servers, and a repo only narrows them.
 - Bridged tools are read-only and allowlisted per pack. Results are untrusted, capped and audited.
-- Login is `luna mcp login`, with OAuth on the host. Other servers use credential references.
+- Login is `pnpm mcp login`, with OAuth through the machine's API. Other servers use credential references.
 - Routing: triage plus the diff signals, with `design: off` to opt out.
 - Accessibility: WCAG 2.2 AA by default, configurable.
 - The reviewers are read-only. The ui-designer is a writable helper. It commits its own slice in a parallel worktree, the machine cherry-picks the commits, and planned files are locked.
