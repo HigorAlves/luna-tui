@@ -202,6 +202,9 @@ generates the tables below. A test fails when they drift from the registry.
 | `:whole` | keep a split card whole (recorded) |
 | `:dismiss <finding id> [reason]` | dismiss a finding Verify reported |
 | `:finding <blocker\|should_fix\|nit> <title>` | add a finding Verify missed |
+| `:spec <figma link>` | read a design into a spec |
+| `:audit <qa target>` | audit a QA target (WCAG) |
+| `:report` | reopen a waiting design report |
 | `:slots <n>` | resize the pool |
 | `:drain` | take no new work |
 | `:resume` | carry on taking new work |
@@ -672,6 +675,30 @@ What the ticket shows:
 |---|---|
 | `R` | refresh the numbers |
 | `A` | approve a waiting base image |
+| `?` | keys |
+
+<!-- keys:end -->
+
+The design report (`:spec <figma link>`, `:audit <qa target>`) opens a popup. It is a model run, so it waits up to thirty minutes; `:report` reopens one that landed while another box was open.
+
+<!-- keys:start design -->
+**Ticket**
+
+| Key | Does |
+|---|---|
+| `c` | card: make a ticket from the report |
+
+**Move**
+
+| Key | Does |
+|---|---|
+| `j / k` | scroll |
+| `esc / q` | close |
+
+**App**
+
+| Key | Does |
+|---|---|
 | `?` | keys |
 
 <!-- keys:end -->

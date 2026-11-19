@@ -1044,6 +1044,7 @@ pub(crate) fn escalation_words(reason: &str) -> String {
         "too_complex" => "too complex for this engine".to_string(),
         "undeclared_scope" => "it changed files outside its scope".to_string(),
         "head_moved" => "the branch moved under it".to_string(),
+        "design_budget" => "the design budget is spent".to_string(),
         "other" => "it needs a person".to_string(),
         unknown => plain(unknown).replace('_', " "),
     }

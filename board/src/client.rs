@@ -34,6 +34,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_TIMEOUT: Duration = Duration::from_secs(120);
 /// A planning-chat turn is one model run that reads the repo: up to nine minutes.
 const CHAT_TIMEOUT: Duration = Duration::from_secs(9 * 60);
+/// A design spec waits on up to ten minutes of model run, an audit on up to twenty and the app's start: nothing is kept on the machine, so the call waits.
+const DESIGN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Where `pnpm dev` runs the machine, on the host.
@@ -76,6 +78,8 @@ pub enum Incoming {
     PrsAllPolled(Result<PrSnapshot, ListError>),
     /// The answer to `R` in Slack, polled off the UI thread.
     SlackPolled(Result<SlackSnapshot, String>),
+    /// A design route's answer (the repo it was asked on beside it), fetched off the UI thread.
+    Design(Result<(crate::design::DesignReport, Option<String>), String>),
     /// The foreman's answer to a question, fetched off the UI thread.
     Foreman(Result<crate::foreman::Reply, String>),
     /// The planner's answer to one chat turn; `generation` is the talk's when the turn left.
@@ -95,6 +99,8 @@ pub struct Machine {
     slow: Agent,
     /// For the planning chat, whose turns wait on a model run.
     chat: Agent,
+    /// For the design routes (`DESIGN_TIMEOUT`).
+    design: Agent,
     /// The machine's API token, sent on every call; see `api_token`.
     token: Option<String>,
 }
@@ -155,12 +161,18 @@ impl Machine {
             .timeout_global(Some(CHAT_TIMEOUT))
             .build()
             .into();
+        let design = builder(&token)
+            .http_status_as_error(false)
+            .timeout_global(Some(DESIGN_TIMEOUT))
+            .build()
+            .into();
         Self {
             base: Arc::new(RwLock::new(base)),
             candidates,
             agent,
             slow,
             chat,
+            design,
             token,
         }
     }
@@ -534,6 +546,41 @@ impl Machine {
         request: &crate::ticket_chat::Request,
     ) -> Result<crate::ticket_chat::Reply, String> {
         Self::typed(self.chat.post(self.url("/ticket-chat")).send_json(request))
+    }
+
+    /// A design spec from a Figma link, on a repo the machine knows. It waits on a model run, so it uses the thirty-minute agent.
+    pub fn design_spec(
+        &self,
+        repo: &str,
+        link: &str,
+    ) -> Result<crate::design::DesignReport, String> {
+        let mut report: crate::design::DesignReport = Self::typed(
+            self.design
+                .post(self.url("/design/spec"))
+                .send_json(json!({ "repo": repo, "link": link })),
+        )?;
+        report.with_link(link);
+        Ok(report)
+    }
+
+    /// An accessibility audit of one of the repo's QA targets, by name.
+    pub fn design_audit(
+        &self,
+        repo: &str,
+        target: &str,
+    ) -> Result<crate::design::DesignReport, String> {
+        Self::typed(
+            self.design
+                .post(self.url("/design/audit"))
+                .send_json(json!({ "repo": repo, "target": target })),
+        )
+    }
+
+    /// Approves an escalation with the design turned off for the card (`design: "off"`), after the question about the spent design budget.
+    pub fn decide_design_off(&self, id: &str, reason: Option<&str>) -> Result<Task, String> {
+        let mut body = decision_body(true, reason, approver().as_deref());
+        body["design"] = json!("off");
+        self.post(&format!("/tasks/{id}/decision"), body)
     }
 
     /// Says whether the card's Evidence Pack was useful (`y` / `n`), with a short note for a no. The machine keeps it as ground truth; it labels no decision.

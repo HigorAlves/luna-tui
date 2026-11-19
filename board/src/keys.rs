@@ -46,12 +46,13 @@ pub enum Scope {
     Inbox,
     Digest,
     Floor,
+    Design,
     Editor,
     Help,
 }
 
 impl Scope {
-    pub const ALL: [Scope; 14] = [
+    pub const ALL: [Scope; 15] = [
         Scope::Board,
         Scope::Detail,
         Scope::Pulls,
@@ -64,6 +65,7 @@ impl Scope {
         Scope::Inbox,
         Scope::Digest,
         Scope::Floor,
+        Scope::Design,
         Scope::Editor,
         Scope::Help,
     ];
@@ -83,6 +85,7 @@ impl Scope {
             Scope::Inbox => "Inbox",
             Scope::Digest => "Digest",
             Scope::Floor => "Floor",
+            Scope::Design => "Design report",
             Scope::Editor => "Editor",
             Scope::Help => "Keys",
         }
@@ -103,6 +106,7 @@ impl Scope {
             Scope::Inbox => "inbox",
             Scope::Digest => "digest",
             Scope::Floor => "floor",
+            Scope::Design => "design",
             Scope::Editor => "editor",
             Scope::Help => "help",
         }
@@ -1522,6 +1526,39 @@ const BOARD: &[Binding] = &[
     ),
     cmd(
         b(
+            ":spec <figma link>",
+            "read a design into a spec",
+            Group::Commands,
+            Scope::Board,
+            on,
+            0,
+        ),
+        "spec",
+    ),
+    cmd(
+        b(
+            ":audit <qa target>",
+            "audit a QA target (WCAG)",
+            Group::Commands,
+            Scope::Board,
+            on,
+            0,
+        ),
+        "audit",
+    ),
+    cmd(
+        b(
+            ":report",
+            "reopen a waiting design report",
+            Group::Commands,
+            Scope::Board,
+            on,
+            0,
+        ),
+        "report",
+    ),
+    cmd(
+        b(
             ":slots <n>",
             "resize the pool",
             Group::Commands,
@@ -2697,6 +2734,20 @@ const FLOOR: &[Binding] = &[
     cmd(b("?", "keys", Group::App, Scope::Floor, on, 100), "help"),
 ];
 
+const DESIGN: &[Binding] = &[
+    b(
+        "c",
+        "card: make a ticket from the report",
+        Group::Ticket,
+        Scope::Design,
+        on,
+        90,
+    ),
+    b("j / k", "scroll", Group::Move, Scope::Design, on, 30),
+    b("esc / q", "close", Group::Move, Scope::Design, on, 20),
+    cmd(b("?", "keys", Group::App, Scope::Design, on, 100), "help"),
+];
+
 const EDITOR: &[Binding] = &[
     b("i a o", "insert", Group::App, Scope::Editor, in_normal, 90),
     b("dd x", "delete", Group::App, Scope::Editor, in_normal, 80),
@@ -2765,6 +2816,7 @@ const TOTAL: usize = BOARD.len()
     + WATCHES.len()
     + DIGEST.len()
     + FLOOR.len()
+    + DESIGN.len()
     + EDITOR.len()
     + HELP.len();
 
@@ -2839,6 +2891,7 @@ const fn build() -> [Binding; TOTAL] {
     copy_into(WATCHES, Scope::Watches, "", &mut out, &mut at);
     copy_into(DIGEST, Scope::Digest, "", &mut out, &mut at);
     copy_into(FLOOR, Scope::Floor, "", &mut out, &mut at);
+    copy_into(DESIGN, Scope::Design, "", &mut out, &mut at);
     copy_into(EDITOR, Scope::Editor, "", &mut out, &mut at);
     copy_into(HELP, Scope::Help, "", &mut out, &mut at);
     out
@@ -2861,6 +2914,7 @@ pub fn active_scope(app: &App) -> Scope {
         | Mode::Answer { .. }
         | Mode::SlackReply { .. } => return Scope::Editor,
         Mode::Detail(_) => return Scope::Detail,
+        Mode::DesignReport { .. } => return Scope::Design,
         _ => {}
     }
     if app.slack.as_ref().is_some_and(|s| s.watches.is_some()) {
@@ -4149,6 +4203,7 @@ mod tests {
         parity(Scope::Watches, handled::WATCHES);
         parity(Scope::Digest, handled::DIGEST);
         parity(Scope::Floor, handled::FLOOR);
+        parity(Scope::Design, handled::DESIGN);
         parity(Scope::Help, handled::HELP);
         // The board's menu chords are handled by the menu, not the board.
         let chords: Vec<char> = BINDINGS

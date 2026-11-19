@@ -722,8 +722,8 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
   /** Approves or sends back whatever the task is waiting on, including an escalation. */
   app.post("/tasks/:id/decision", async (c) => {
     const id = taskId(c);
-    const { decision, reason, comment, applyRules, approver, keepWhole, untestable } = await body(c, DecisionInput);
-    const response = applyRules === undefined && keepWhole === undefined && untestable === undefined ? undefined : { ...(applyRules === undefined ? {} : { applyRules }), ...(keepWhole === undefined ? {} : { keepWhole }), ...(untestable === undefined ? {} : { untestable }) };
+    const { decision, reason, comment, applyRules, approver, keepWhole, untestable, design } = await body(c, DecisionInput);
+    const response = applyRules === undefined && keepWhole === undefined && untestable === undefined && design === undefined ? undefined : { ...(applyRules === undefined ? {} : { applyRules }), ...(keepWhole === undefined ? {} : { keepWhole }), ...(untestable === undefined ? {} : { untestable }), ...(design === undefined ? {} : { design }) };
     return c.json(await serialize(await pipeline.decide(id, decision, reason ?? comment ?? undefined, response, approver ? { approver } : {})));
   });
 

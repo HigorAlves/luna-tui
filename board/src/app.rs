@@ -482,6 +482,17 @@ pub enum Mode {
         field: usize,
         picks: [usize; 5],
     },
+    /// A design report (`:spec`, `:audit`): scroll with `j`/`k`, `c` makes a card, `esc` closes.
+    DesignReport {
+        report: Box<crate::design::DesignReport>,
+        repo: Option<String>,
+        scroll: usize,
+    },
+    /// Approving an escalation whose design budget is spent: fresh budget (`y`) or design off for the card (`o`).
+    DesignBudget {
+        id: String,
+        guidance: Option<String>,
+    },
     /// `m`: ask the foreman, then walk the actions it suggests. Each runs on its own `y`.
     Foreman(crate::foreman::State),
     /// `t`: talk a ticket through with a planner that reads the repo, then create it.
@@ -805,6 +816,10 @@ pub struct App {
     pub home_repo: Option<String>,
     /// The planning chat closed with `esc`: `t` reopens it until its ticket is created or it is discarded.
     pub ticket_talk: Option<crate::ticket_chat::State>,
+    /// `:spec` / `:audit` waiting for a repo from the picker.
+    design_ask: Option<crate::design::Ask>,
+    /// A report that landed while another box was open; `:report` opens it.
+    design_kept: Option<(crate::design::DesignReport, Option<String>)>,
     /// The engine the last planning chat used this session; the next one starts on it.
     pub ticket_engine: Option<String>,
     /// Column rectangles from the last frame, for mouse clicks.
@@ -938,6 +953,8 @@ impl App {
             last_seen_secs: store::last_seen_secs_at(&store::state_path()),
             home_repo: herdr::workspace_repo(),
             ticket_talk: None,
+            design_ask: None,
+            design_kept: None,
             ticket_engine: None,
             column_rects: RefCell::new(Vec::new()),
             list_offsets: RefCell::new(Vec::new()),
@@ -1252,6 +1269,7 @@ impl App {
                     self.slack_catalog = Some((groups, channels));
                     self.slack_catalog_pending = false;
                 }
+                Incoming::Design(result) => self.take_design(result),
                 Incoming::Foreman(result) => self.take_foreman(result),
                 Incoming::TicketChat { generation, result } => {
                     self.take_ticket_chat(generation, result)
@@ -3065,6 +3083,8 @@ impl App {
             Mode::Reject { .. } => self.handle_reject(key),
             Mode::EvidenceNote { .. } => self.handle_evidence_note(key),
             Mode::Foreman(_) => self.handle_foreman(key),
+            Mode::DesignReport { .. } => self.handle_design_report(key),
+            Mode::DesignBudget { .. } => self.handle_design_budget(key),
             Mode::TicketChat(_) => self.handle_ticket_chat(key),
             Mode::ConfirmApprove(_) => self.handle_confirm_approve(key),
             Mode::ConfirmDelete(id) | Mode::ConfirmAbort(id) | Mode::ConfirmWorktree(id) => {
@@ -3327,6 +3347,10 @@ impl App {
     pub fn is_new(&self, task: &Task) -> bool {
         digest::is_new(task, self.last_seen_secs)
     }
+
+    /// The keys `handle_design_report` matches.
+    #[cfg(test)]
+    pub(crate) const HANDLED_DESIGN: &[&str] = &["c", "j", "k", "esc", "q", "?"];
 
     /// The keys `handle_digest` matches.
     #[cfg(test)]
@@ -4533,7 +4557,10 @@ impl App {
                 }
             }
             KeyCode::Up => *cursor = cursor.saturating_sub(1),
-            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Esc => {
+                self.design_ask = None;
+                self.mode = Mode::Normal;
+            }
             KeyCode::Enter => {
                 let matches = Self::matching_repos(all, query);
                 let Some(folder) = matches.get(*cursor).map(|f| f.to_string()) else {
@@ -6502,6 +6529,9 @@ impl App {
         "slack",
         "jira",
         "help",
+        "spec",
+        "audit",
+        "report",
     ];
 
     /// Runs one palette command: `name` and whatever follows it.
@@ -6648,6 +6678,20 @@ impl App {
                 None => self.notify("no ticket selected", true),
             },
             "help" | "?" => self.open_help(),
+            "spec" if rest.is_empty() => self.notify(
+                "spec takes a Figma link, e.g. :spec https://www.figma.com/design/...",
+                true,
+            ),
+            "spec" => self.ask_design(crate::design::Ask::Spec(rest.to_string())),
+            "audit" if rest.is_empty() => self.notify(
+                "audit takes the name of a QA target, e.g. :audit staging",
+                true,
+            ),
+            "audit" => self.ask_design(crate::design::Ask::Audit(rest.to_string())),
+            "report" => match self.design_kept.take() {
+                Some((report, repo)) => self.open_design_report(report, repo),
+                None => self.notify("no design report is waiting", false),
+            },
             other => self.notify(format!("unknown command: {other} (try :help)"), true),
         }
         self.clamp_selection();
@@ -6675,8 +6719,20 @@ impl App {
                     self.notify(MOVED_ON_UNSENT, true);
                     return Outcome::Continue;
                 }
-                self.mode = Mode::Normal;
                 let reason = (!reason.is_empty()).then_some(reason);
+                // A spent design budget asks once: a fresh budget, or design off for this card.
+                if approve
+                    && self.detail.as_ref().is_some_and(|d| d.task.id == id)
+                    && crate::detail::escalation_reason(self.detail.as_ref())
+                        == Some("design_budget")
+                {
+                    self.mode = Mode::DesignBudget {
+                        id,
+                        guidance: reason,
+                    };
+                    return Outcome::Continue;
+                }
+                self.mode = Mode::Normal;
                 let done = if approve {
                     "continuing with your guidance"
                 } else {
@@ -7026,6 +7082,126 @@ impl App {
         if let Mode::TicketChat(state) = &mut self.mode {
             state.answered(generation, result);
         }
+    }
+
+    /// `:spec` / `:audit`: on the card's repo, else this board's, else the one picked from the list.
+    fn ask_design(&mut self, ask: crate::design::Ask) {
+        let repo = self
+            .selected_task()
+            .and_then(|t| t.repo_path.clone())
+            .or_else(|| self.home_repo.clone());
+        match repo {
+            Some(repo) => self.start_design(ask, repo),
+            None => {
+                self.design_ask = None;
+                self.pick_repo("", false);
+                if matches!(self.mode, Mode::RepoPicker { .. }) {
+                    self.design_ask = Some(ask);
+                }
+            }
+        }
+    }
+
+    /// Calls the route on a background thread; the answer arrives as `Incoming::Design`.
+    fn start_design(&mut self, ask: crate::design::Ask, repo: String) {
+        let machine = self.machine.clone();
+        let tx = self.tx.clone();
+        let words = match &ask {
+            crate::design::Ask::Spec(_) => "reading the design (a few minutes)…",
+            crate::design::Ask::Audit(_) => "auditing (up to twenty minutes)…",
+        };
+        self.notify(words, false);
+        thread::spawn(move || {
+            let result = match &ask {
+                crate::design::Ask::Spec(link) => machine.design_spec(&repo, link),
+                crate::design::Ask::Audit(target) => machine.design_audit(&repo, target),
+            };
+            let _ = tx.send(Incoming::Design(result.map(|r| (r, Some(repo)))));
+        });
+    }
+
+    fn open_design_report(&mut self, report: crate::design::DesignReport, repo: Option<String>) {
+        self.mode = Mode::DesignReport {
+            report: Box::new(report),
+            repo,
+            scroll: 0,
+        };
+    }
+
+    /// A design route answered: the report opens, unless another box is open (then `:report` does), or the call failed (a notice).
+    fn take_design(
+        &mut self,
+        result: Result<(crate::design::DesignReport, Option<String>), String>,
+    ) {
+        match result {
+            Err(error) => self.notify(error, true),
+            Ok((report, repo)) if matches!(self.mode, Mode::Normal) => {
+                self.open_design_report(report, repo)
+            }
+            Ok(kept) => {
+                self.design_kept = Some(kept);
+                self.notify("a design report is ready: :report opens it", false);
+            }
+        }
+    }
+
+    fn handle_design_report(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::DesignReport {
+            report,
+            repo,
+            scroll,
+        } = &mut self.mode
+        else {
+            return Outcome::Continue;
+        };
+        let last = crate::design::report_lines(report).len().saturating_sub(1);
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => *scroll = (*scroll + 1).min(last),
+            KeyCode::Char('k') | KeyCode::Up => *scroll = scroll.saturating_sub(1),
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            KeyCode::Char('?') => self.open_help(),
+            KeyCode::Char('c') => {
+                let text = crate::design::card_text(report, repo.as_deref());
+                match self.machine.create(&text) {
+                    Ok(task) => {
+                        let id = task.id.clone();
+                        self.upsert(task);
+                        self.select(&id, true);
+                        self.mode = Mode::Normal;
+                        self.notify("made a card", false);
+                    }
+                    Err(error) => self.notify(error, true),
+                }
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    fn handle_design_budget(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::DesignBudget { id, guidance } = &self.mode else {
+            return Outcome::Continue;
+        };
+        let (id, guidance) = (id.clone(), guidance.clone());
+        match key.code {
+            KeyCode::Char('y') => {
+                self.mode = Mode::Normal;
+                self.act(
+                    |m| m.decide(&id, true, guidance.as_deref()),
+                    "continuing with a fresh design budget",
+                );
+            }
+            KeyCode::Char('o') => {
+                self.mode = Mode::Normal;
+                self.act(
+                    |m| m.decide_design_off(&id, guidance.as_deref()),
+                    "continuing with design off for this card",
+                );
+            }
+            KeyCode::Esc | KeyCode::Char('n') => self.mode = Mode::Normal,
+            _ => {}
+        }
+        Outcome::Continue
     }
 
     /// The foreman answered: its reply and actions show, unless the popup was closed meanwhile.
@@ -7547,7 +7723,9 @@ impl App {
                 };
                 let (id, chat) = (id.clone(), *chat);
                 self.mode = Mode::Normal;
-                if chat {
+                if let Some(ask) = self.design_ask.take() {
+                    self.start_design(ask, repo);
+                } else if chat {
                     self.start_ticket_chat(repo);
                 } else {
                     self.set_repo(&id, repo);
@@ -7733,6 +7911,7 @@ pub(crate) mod handled {
     pub(crate) const DIGEST: &[&str] = App::HANDLED_DIGEST;
     pub(crate) const FLOOR: &[&str] = App::HANDLED_FLOOR;
     pub(crate) const HELP: &[&str] = App::HANDLED_HELP;
+    pub(crate) const DESIGN: &[&str] = App::HANDLED_DESIGN;
     pub(crate) const ACTIONS: &[&str] = App::HANDLED_ACTIONS;
     pub(crate) const COMMANDS: &[&str] = App::HANDLED_COMMANDS;
 }
@@ -15914,13 +16093,18 @@ mod ticket_chat_tests {
             generation,
             Ok(Reply {
                 reply: "which?".into(),
-                choices: (1..=4).map(|n| format!("choice{n} {}", "w".repeat(200))).collect(),
+                choices: (1..=4)
+                    .map(|n| format!("choice{n} {}", "w".repeat(200)))
+                    .collect(),
                 ..Reply::default()
             }),
         );
         let screen = screen(&mut app);
         for n in 1..=4 {
-            assert!(screen.contains(&format!(" {n} ")) && screen.contains(&format!("choice{n}")), "{screen}");
+            assert!(
+                screen.contains(&format!(" {n} ")) && screen.contains(&format!("choice{n}")),
+                "{screen}"
+            );
         }
     }
 
@@ -16348,5 +16532,167 @@ mod foreman_tests {
             dropped: vec![],
         }));
         assert!(matches!(app.mode, Mode::Normal));
+    }
+}
+
+#[cfg(test)]
+mod design_tests {
+    use super::confirm_tests::body_recording_machine;
+    use super::*;
+    use crate::design::DesignReport;
+    use crate::testkit::escalated_app;
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    fn audit() -> DesignReport {
+        serde_json::from_value(serde_json::json!({
+            "kind": "audit", "target": "staging", "level": "AA", "mode": "gate", "pages": [], "notes": [],
+            "findings": [{ "path": "/checkout", "line": 0, "severity": "blocker", "title": "WCAG 2.1.2 (A): div.modal on /checkout", "body": "trap", "confidence": 0.9, "category": "accessibility" }]
+        }))
+        .unwrap()
+    }
+
+    /// The paths POSTed so far, once at least `count` have arrived (the call runs on its own thread).
+    fn posted(
+        seen: &super::confirm_tests::PostBodies,
+        count: usize,
+    ) -> Vec<(String, serde_json::Value)> {
+        for _ in 0..200 {
+            if seen.lock().unwrap().len() >= count {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        seen.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn audit_asks_the_machine_on_the_boards_repo_and_the_answer_opens_the_report() {
+        let (machine, seen) = body_recording_machine();
+        let mut app = App::new(machine);
+        app.home_repo = Some("/r/shop".into());
+        app.run_command("audit staging");
+        let calls = posted(&seen, 1);
+        assert_eq!(calls[0].0, "/design/audit");
+        assert_eq!(
+            calls[0].1,
+            serde_json::json!({ "repo": "/r/shop", "target": "staging" })
+        );
+        app.take_design(Ok((audit(), Some("/r/shop".into()))));
+        assert!(matches!(&app.mode, Mode::DesignReport { .. }));
+    }
+
+    #[test]
+    fn spec_asks_with_the_link_and_a_failed_call_is_a_notice() {
+        let (machine, seen) = body_recording_machine();
+        let mut app = App::new(machine);
+        app.home_repo = Some("/r/shop".into());
+        app.run_command("spec https://www.figma.com/design/AbCdEf0123456789/Shop?node-id=12-34");
+        let calls = posted(&seen, 1);
+        assert_eq!(calls[0].0, "/design/spec");
+        assert_eq!(
+            calls[0].1["link"],
+            "https://www.figma.com/design/AbCdEf0123456789/Shop?node-id=12-34"
+        );
+        app.take_design(Err("no Figma reference".into()));
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(
+            app.toast
+                .as_ref()
+                .is_some_and(|t| t.error && t.text.contains("no Figma reference"))
+        );
+    }
+
+    #[test]
+    fn j_and_k_scroll_esc_closes_and_c_makes_one_card_from_the_report() {
+        let (machine, seen) = body_recording_machine();
+        let mut app = App::new(machine);
+        app.take_design(Ok((audit(), Some("/r/shop".into()))));
+        press(&mut app, KeyCode::Char('j'));
+        assert!(matches!(app.mode, Mode::DesignReport { scroll: 1, .. }));
+        press(&mut app, KeyCode::Char('k'));
+        press(&mut app, KeyCode::Char('k'));
+        assert!(matches!(app.mode, Mode::DesignReport { scroll: 0, .. }));
+        press(&mut app, KeyCode::Char('c'));
+        let calls = posted(&seen, 1);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "/tasks");
+        assert_eq!(calls[0].1["title"], "Fix accessibility of staging");
+        assert_eq!(calls[0].1["repoPath"], "/r/shop");
+        assert!(
+            calls[0].1["description"]
+                .as_str()
+                .unwrap()
+                .contains("- [blocker] WCAG 2.1.2 (A): div.modal on /checkout")
+        );
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn a_report_that_lands_while_something_else_is_open_waits_for_the_report_command() {
+        let mut app = App::new(crate::testkit::dead_machine());
+        app.mode = Mode::Adding("half a title".into());
+        app.take_design(Ok((audit(), None)));
+        assert!(matches!(&app.mode, Mode::Adding(text) if text == "half a title"));
+        app.mode = Mode::Normal;
+        app.run_command("report");
+        assert!(matches!(&app.mode, Mode::DesignReport { .. }));
+    }
+
+    #[test]
+    fn approving_a_spent_design_budget_asks_once_and_design_off_is_sent_with_the_decision() {
+        let (machine, seen) = body_recording_machine();
+        let mut app = escalated_app();
+        app.machine = machine;
+        let id = app.tasks[0].id.clone();
+        app.detail.as_mut().unwrap().approvals[0].requested["escalationDecision"]["reason"] =
+            "design_budget".into();
+        app.mode = Mode::Reason {
+            id: id.clone(),
+            approve: true,
+            text: String::new(),
+        };
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(&app.mode, Mode::DesignBudget { id: asked, .. } if *asked == id));
+        press(&mut app, KeyCode::Char('o'));
+        let calls = posted(&seen, 1);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, format!("/tasks/{id}/decision"));
+        assert_eq!(calls[0].1["decision"], "approved");
+        assert_eq!(calls[0].1["design"], "off");
+    }
+
+    #[test]
+    fn a_fresh_design_budget_sends_the_plain_approval_and_any_other_escalation_asks_nothing() {
+        let (machine, seen) = body_recording_machine();
+        let mut app = escalated_app();
+        app.machine = machine;
+        let id = app.tasks[0].id.clone();
+        app.detail.as_mut().unwrap().approvals[0].requested["escalationDecision"]["reason"] =
+            "design_budget".into();
+        app.mode = Mode::Reason {
+            id: id.clone(),
+            approve: true,
+            text: "carry on".into(),
+        };
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('y'));
+        let calls = posted(&seen, 1);
+        assert_eq!(calls[0].1["decision"], "approved");
+        assert!(calls[0].1.get("design").is_none());
+        assert_eq!(calls[0].1["reason"], "carry on");
+
+        let mut other = escalated_app();
+        let id = other.tasks[0].id.clone();
+        other.mode = Mode::Reason {
+            id,
+            approve: true,
+            text: String::new(),
+        };
+        press(&mut other, KeyCode::Enter);
+        assert!(matches!(other.mode, Mode::Normal));
     }
 }

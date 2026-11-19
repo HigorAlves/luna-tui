@@ -274,6 +274,8 @@ export const DecisionInput = z.object({
   keepWhole: z.boolean().optional(),
   /** At the plan gate: criterion ids with no scenario that the approver excuses as untestable. An approval with any other open gap is refused (`409 coverage_gaps`). */
   untestable: z.array(z.string().max(40)).max(100).optional(),
+  /** At a `design_budget` escalation: `off` approves and turns the designer agents off for this card (RFC 0013, D10). Dropped anywhere else. */
+  design: z.literal("off").optional(),
   /** Who is deciding, by name. A plan of High risk needs two distinct names; any decision keeps its own. */
   approver: z
     .string()
