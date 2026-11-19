@@ -72,6 +72,8 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   chat_triage: [],
   // The foreman, run on demand by POST /foreman.
   foreman: [],
+  // The design-spec writer, a sub-run of the plan stage and on demand (POST /design/spec); never a stage of its own.
+  design_spec: [],
   // The ticket planner, run on demand by POST /ticket-chat.
   ticket_chat: [],
   // Change management's exception explainer, run on demand by the compliance job.

@@ -8,7 +8,7 @@ import { AGENT_PACKS, NO_ACCESS, PACKS, PACK_LIMITS, PackId, StageOutput, answer
 
 /** A minimal instance of a JSON schema: every required property, the first enum value,
  *  one item per array (so item shapes such as findings get exercised). */
-const PATTERN_SAMPLES: Record<string, string> = { "^C\\d{1,3}$": "C1", "^\\d{4}-\\d{2}-\\d{2}$": "2026-01-01" };
+const PATTERN_SAMPLES: Record<string, string> = { "^C\\d{1,3}$": "C1", "^\\d{4}-\\d{2}-\\d{2}$": "2026-01-01", "^\\d{1,10}:\\d{1,10}$": "1:2" };
 
 function instance(schema: any): unknown {
   if (schema.const !== undefined) return schema.const;
@@ -33,7 +33,7 @@ function instance(schema: any): unknown {
       return "x";
     case "integer":
     case "number":
-      return schema.minimum ?? 0;
+      return schema.minimum ?? (schema.exclusiveMinimum !== undefined ? schema.exclusiveMinimum + 1 : 0);
     case "boolean":
       return false;
     default:
@@ -115,6 +115,8 @@ describe("factory contract", () => {
       for (const key of ["findings", "results", "cases", "questions", "requested", "slices", "criteria"]) {
         if (schema.properties?.[key] && answer[key] === undefined) answer[key] = instance(schema.properties[key]);
       }
+      // A refinement the JSON Schema cannot say: a designed state carries no suggestion, so the sample draws no states.
+      if (pack.id === "design_spec") for (const frame of answer.frames as { states: unknown[] }[]) frame.states = [];
       expect(pack.answer.safeParse(answer).error, `${pack.id} kind=${String(kind)} answer`).toBeUndefined();
       const parsed = StageOutput.safeParse(envelope(answer));
       expect(parsed.error, `${pack.id} kind=${String(kind)}: ${JSON.stringify(parsed.error?.issues)}`).toBeUndefined();

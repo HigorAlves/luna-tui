@@ -16,6 +16,7 @@ import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from 
 import { type Bands, type KnockOutFlags, type SubScores, type Weights, knockOut, riskProduct, scorePriority } from "./scoring.ts";
 import { AccessReviewAnswer, ChangeExceptionsAnswer, PostmortemAnswer, QuestionnaireAnswer, ReleaseNotesAnswer, StatusReportAnswer, VulnTriageAnswer } from "./compliance.ts";
 import { ComplianceReviewAnswer } from "./compliance-review.ts";
+import { DesignSpec } from "./design-spec.ts";
 import { DocsDriftAnswer } from "./docs-drift.ts";
 import { ForemanAnswer } from "./foreman.ts";
 import { TicketChatAnswer } from "./ticket-chat.ts";
@@ -68,6 +69,8 @@ export const AgentRole = z.enum([
   "thread-writer",
   "code-fixer",
   "second-opinion",
+  // Reads a card's Figma design through the bridge and writes the spec the planner reads; read-only.
+  "design-spec-writer",
   // The foreman: answers a question about the board from a snapshot and suggests actions; no tools, no worktree.
   "foreman",
   // The ticket planner: talks a ticket through with a person over a read-only checkout and drafts it.
@@ -446,6 +449,11 @@ export type LoopRedirectAnswer = z.infer<typeof LoopRedirectAnswer>;
 /** conversation_reply: the draft reply to a Slack thread. A draft only: a person decides whether it is posted. */
 export const ConversationReplyAnswer = z.object({ reply: z.string().max(1500), confidence: z.number().min(0).max(1) });
 export type ConversationReplyAnswer = z.infer<typeof ConversationReplyAnswer>;
+
+const FIGMA_READ = ["get_metadata", "get_design_context", "get_variable_defs", "get_code_connect_map", "get_screenshot"];
+const MOBBIN_READ = ["search_screens", "search_flows", "search_sections"];
+/** The design tools a designer pack may call (RFC 0013): Figma's reading tools on either server, Mobbin's searches. A golden test pins them. */
+const DESIGN_READ: Partial<Access> = { bridge: [{ server: "figma", tools: FIGMA_READ }, { server: "figma-desktop", tools: FIGMA_READ }, { server: "mobbin", tools: MOBBIN_READ }] };
 
 /** council_security and council_second: a short summary and findings from the member's own lane. No findings means nothing to add. */
 export const CouncilAnswer = z.object({ summary: z.string().max(300), findings: z.array(Finding).max(8) });
@@ -1129,6 +1137,24 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: CouncilAnswer,
     template: "council_second.md",
+    network: "engine",
+  },
+  // The design-spec writer (RFC 0013): runs in Plan before the planner on a UI card, and on demand (POST /design/spec). Read-only; design tools through the bridge.
+  design_spec: {
+    id: "design_spec",
+    kind: "agent",
+    agent: "design-spec-writer",
+    helpers: [],
+    skills: [],
+    access: access(READ_ONLY, { skills: false }, DESIGN_READ),
+    writable: false,
+    maxTurns: 30,
+    timeoutMs: 10 * MINUTE,
+    // Claude only until eve reads images (phase 4).
+    engines: { default: "claude:sonnet", allowed: ["claude:sonnet", "claude:opus"] },
+    effort: "medium",
+    answer: DesignSpec,
+    template: "design_spec.md",
     network: "engine",
   },
   // Triage's question council: settles open questions from the code before a person is asked. Read-only, no web, no gh.

@@ -216,6 +216,8 @@ export const PackId = z.enum([
   // Plans a ticket with a person over a read-only checkout; it only drafts, the board creates it (on demand).
   "ticket_chat",
   // The plan council (run in test_design after plan_check): a security review and an independent second opinion on a High-risk or large plan.
+  // Reads the card's Figma design through the bridge and writes the spec the planner reads (RFC 0013): a sub-run of the plan stage, and on demand.
+  "design_spec",
   "council_security",
   "council_second",
   // The question council (run in triage before the person is asked): settles open questions from the code and the card, or says it cannot.

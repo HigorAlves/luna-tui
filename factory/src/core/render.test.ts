@@ -496,6 +496,14 @@ describe("renderPrompt", () => {
     expect(renderPrompt({ pack: PACKS.chat_triage, input, template })).toContain("from (none)\nme (none)\nrules:\n(none)\nitems:\n(none)");
   });
 
+  it("renders the design reference for design_spec as the machine's own text, one line per reference", () => {
+    const design = { refs: [{ fileKey: "AbCdEf0123456789", nodeIds: ["12:34", "5:6"], page: null, from: "issue" as const }, { fileKey: "ZyXwVu9876543210", nodeIds: [], page: "Checkout", from: "luna.yaml" as const }] };
+    const prompt = renderPrompt({ pack: PACKS.design_spec, input: { ...input, pack: "design_spec", context: { projectContext: null, design } } as StageInput, template: "{{context.design.refs}}" });
+    expect(prompt).toContain("\nfile AbCdEf0123456789 · nodes 12:34, 5:6 · from issue\nfile ZyXwVu9876543210 · page Checkout · from luna.yaml");
+    expect(prompt).not.toContain("<<<data");
+    expect(renderPrompt({ pack: PACKS.design_spec, input, template: "{{context.design.refs}}" })).toContain("\n(none)");
+  });
+
   it("renders the board for foreman: the question, the turns and one line per card, all quoted data, and the packs as the machine's own text", () => {
     const template = "now {{context.foreman.now}}\nquestion:\n{{context.foreman.question}}\nhistory:\n{{context.foreman.history}}\ncards:\n{{context.foreman.cards}}\npacks:\n{{context.foreman.packs}}";
     const foreman = {

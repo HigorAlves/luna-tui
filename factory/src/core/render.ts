@@ -139,6 +139,13 @@ const ticketChatText = (chat: StageInput["context"]["ticketChat"]) => {
   };
 };
 
+/** The card's design reference (the machine's own text, pattern-checked by `DesignRef`): one line per reference. */
+const designText = (design: StageInput["context"]["design"]) => ({
+  refs: design?.refs.length
+    ? design.refs.map((r) => `file ${r.fileKey}${r.nodeIds.length > 0 ? ` · nodes ${r.nodeIds.join(", ")}` : ""}${r.page ? ` · page ${r.page}` : ""} · from ${r.from}`).join("\n")
+    : NONE,
+});
+
 /** The board, as the foreman reads it: the question and turns as text, one line per card (all of it a person's or a model's, so quoted as data), and each pack's allowed engines (the machine's own). */
 const foremanText = (foreman: StageInput["context"]["foreman"]) => {
   if (!foreman) return { now: NONE, question: NONE, history: NONE, cards: NONE, truncated: NONE, pending: NONE, packs: NONE };
@@ -660,6 +667,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
   const judged = evalText(input.context.eval);
   const chat = chatText(input.context.chat);
   const foreman = foremanText(input.context.foreman);
+  const design = designText(input.context.design);
   const ticketChat = ticketChatText(input.context.ticketChat);
   const exceptions = exceptionsText(input.context.exceptions);
   const status = statusText(input.context.status);
@@ -781,6 +789,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.ticketChat.history}}": ticketChat.history,
     "{{context.ticketChat.notes}}": ticketChat.notes,
     "{{context.ticketChat.draft}}": ticketChat.draft,
+    "{{context.design.refs}}": design.refs,
     "{{context.foreman.now}}": foreman.now,
     "{{context.foreman.question}}": foreman.question,
     "{{context.foreman.history}}": foreman.history,
