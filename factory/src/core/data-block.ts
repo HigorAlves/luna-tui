@@ -54,7 +54,7 @@ export type VariableKind = "machine" | "line" | "block";
 // Only what the machine alone writes (a constant, a count, an enum, a hash, a path it chose). Traced one by one: the checks and QA targets
 // are the repository's own text, the scenario tests and the video's narration and sheets carry names a model or a tool wrote, the coverage
 // report lists paths from a report the container wrote, and a classification holds labels a model answered: all foreign.
-const machine = ["agent", "attempt", "skills", "plan.risk", "context.plan.risk", "context.baseCommit", "context.testsCommit", "context.docsOnly", "context.unlockedTests.note", "context.browserScenarios", "context.plan.docsOnly", "context.graph", "context.chat.source", "context.jira.repoPath", "plan.fallback", "context.video.budgetS", "context.conversation.relation", "context.conversation.note", "context.foreman.now", "context.foreman.truncated", "context.foreman.packs", "context.exceptions.repo", "context.exceptions.period", "context.status.week", "context.status.from", "context.status.to", "context.status.metrics", "context.status.capacity", "context.vulns.repo", "context.vulns.today", "context.release.repo", "context.release.tag", "context.release.since", "context.compliance.repo", "context.questionnaire.repo", "context.compliance.regimes", "context.access.org", "context.access.period", "context.postmortem.breach", "context.docsDrift.repo", "context.questionnaire.source"];
+const machine = ["agent", "attempt", "skills", "plan.risk", "context.plan.risk", "context.baseCommit", "context.testsCommit", "context.docsOnly", "context.unlockedTests.note", "context.browserScenarios", "context.plan.docsOnly", "context.graph", "context.chat.source", "context.jira.repoPath", "plan.fallback", "context.video.budgetS", "context.conversation.relation", "context.conversation.note", "context.foreman.now", "context.ticketChat.repo", "context.foreman.truncated", "context.foreman.packs", "context.exceptions.repo", "context.exceptions.period", "context.status.week", "context.status.from", "context.status.to", "context.status.metrics", "context.status.capacity", "context.vulns.repo", "context.vulns.today", "context.release.repo", "context.release.tag", "context.release.since", "context.compliance.repo", "context.questionnaire.repo", "context.compliance.regimes", "context.access.org", "context.access.period", "context.postmortem.breach", "context.docsDrift.repo", "context.questionnaire.source"];
 const line = ["task.title", "task.branch", "task.goal", "task.classification", "context.jira.classification", "context.slack.me", "context.chat.me", "context.questionnaire.requester", "context.questionnaire.name", "context.eval.pack", "context.eval.case"];
 const block = [
   "task.description", "task.criteria", "task.record", "task.evidence", "plan.brief", "plan.criteria", "plan.criteria.ids", "plan.assumptions", "plan.slices",
@@ -63,6 +63,7 @@ const block = [
   "context.sweepFailures", "context.blastRadius", "context.checks", "context.scenarioTests", "context.testsCommit.files", "context.unlockedTests", "context.coverage", "context.qaTargets", "context.video.narration", "context.video.sheets", "decisions", "priorFindings", "context.projectContext", "context.testCases", "context.ci", "context.review", "context.threads", "context.ship", "context.retro",
   "context.video.scenarios", "context.video.steps", "context.video.chapters", "context.video.target", "context.video.timeline", "context.video.report", "context.video.transcript", "context.video.fixCards",
   "context.slack.watches", "context.slack.rules", "context.slack.items", "context.chat.rules", "context.chat.items",
+  "context.ticketChat.message", "context.ticketChat.history", "context.ticketChat.notes", "context.ticketChat.draft",
   "context.foreman.question", "context.foreman.history", "context.foreman.cards", "context.foreman.pending",
   "context.exceptions.controls", "context.exceptions.items", "context.vulns.alert", "context.vulns.policy", "context.release.prs", "context.status.shipped", "context.status.inFlight", "context.status.blocked", "context.status.merged", "context.status.compliance", "context.compliance.controls", "context.access.flags", "context.access.removed",
   "context.postmortem.incident",
@@ -143,6 +144,11 @@ export const CAPS: Readonly<Record<string, number>> = {
   "context.slack.items": 120_000,
   "context.chat.rules": 32_000,
   "context.chat.items": 120_000,
+  // The ticket planner reads the person's message, the turns (thirty of 4,000 characters at most), its own notes and the draft (about 14,000 characters at most) whole.
+  "context.ticketChat.message": 4_000,
+  "context.ticketChat.history": 125_000,
+  "context.ticketChat.notes": 6_000,
+  "context.ticketChat.draft": 15_000,
   // The foreman reads the question and the turns whole (2,000 characters each, at most ten turns) and up to sixty cards of about 300 characters.
   "context.foreman.question": 2_000,
   "context.foreman.history": 24_000,

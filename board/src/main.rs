@@ -30,6 +30,7 @@ mod store;
 mod testkit;
 mod text;
 mod theme;
+mod ticket_chat;
 mod tickets;
 mod ui;
 mod vim;

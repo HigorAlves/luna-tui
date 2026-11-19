@@ -126,6 +126,19 @@ const chatText = (chat: StageInput["context"]["chat"]) => {
   };
 };
 
+/** The ticket chat, as the planner reads it: the repo name is the machine's; the message, the turns, the notes and the draft are a person's or a model's, so quoted as data. */
+const ticketChatText = (chat: StageInput["context"]["ticketChat"]) => {
+  if (!chat) return { repo: NONE, message: NONE, history: NONE, notes: NONE, draft: NONE };
+  const { draft } = chat;
+  return {
+    repo: chat.repo.name,
+    message: chat.message,
+    history: chat.history.length > 0 ? chat.history.map((turn) => `${turn.who}: ${turn.text}`).join("\n") : NONE,
+    notes: chat.notes.trim() || NONE,
+    draft: draft ? `${draft.title}\n\n${draft.description}\n\nAcceptance criteria:\n${draft.criteria.length > 0 ? draft.criteria.map((c) => `- ${c}`).join("\n") : NONE}` : NONE,
+  };
+};
+
 /** The board, as the foreman reads it: the question and turns as text, one line per card (all of it a person's or a model's, so quoted as data), and each pack's allowed engines (the machine's own). */
 const foremanText = (foreman: StageInput["context"]["foreman"]) => {
   if (!foreman) return { now: NONE, question: NONE, history: NONE, cards: NONE, truncated: NONE, pending: NONE, packs: NONE };
@@ -643,6 +656,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
   const judged = evalText(input.context.eval);
   const chat = chatText(input.context.chat);
   const foreman = foremanText(input.context.foreman);
+  const ticketChat = ticketChatText(input.context.ticketChat);
   const exceptions = exceptionsText(input.context.exceptions);
   const status = statusText(input.context.status);
   const vulns = vulnsText(input.context.vulns);
@@ -758,6 +772,11 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.chat.me}}": chat.me,
     "{{context.chat.rules}}": chat.rules,
     "{{context.chat.items}}": chat.items,
+    "{{context.ticketChat.repo}}": ticketChat.repo,
+    "{{context.ticketChat.message}}": ticketChat.message,
+    "{{context.ticketChat.history}}": ticketChat.history,
+    "{{context.ticketChat.notes}}": ticketChat.notes,
+    "{{context.ticketChat.draft}}": ticketChat.draft,
     "{{context.foreman.now}}": foreman.now,
     "{{context.foreman.question}}": foreman.question,
     "{{context.foreman.history}}": foreman.history,

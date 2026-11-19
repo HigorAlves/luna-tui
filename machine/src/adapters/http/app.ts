@@ -59,8 +59,9 @@ import {
 } from "@hardness/contracts";
 import type { MachinePolicy } from "@hardness/contracts";
 import { EconomyApproveInput, type EconomyConfig, EconomyRepoInput, EconomyRestoreInput } from "@hardness/contracts";
-import { ForemanAnswer, type ForemanSuggestion, ForemanContext, foremanActionProblem, isTerminal } from "@hardness/contracts";
+import { TicketChatAnswer, TicketChatContext, ForemanAnswer, type ForemanSuggestion, ForemanContext, foremanActionProblem, isTerminal } from "@hardness/contracts";
 import { buildForemanBoard } from "../../domain/foreman.ts";
+import { realpath } from "node:fs/promises";
 import { basename, isAbsolute, resolve as resolvePath } from "node:path";
 import { type Context, Hono } from "hono";
 import type { Economy } from "../../application/economy.ts";
@@ -110,7 +111,7 @@ import { NoJiraTokenError } from "../../application/jira.ts";
 import { AlreadyLinkedElsewhereError, AlreadyLinkedError, HasWorktreeError, type JiraTasksPort, NoIssueError, NoProjectError, NotchTaskError } from "../../application/jira-tasks.ts";
 import type { StubStages } from "../../application/stages/stubs.ts";
 import { type ApiAccess, guard } from "./access.ts";
-import { EngineNotAllowedError, NotOnDemandError, type PackRunsPort, QueueFullError, RunAbortedError, RunEngineBudgetError, RunEngineDisabledError, RunFailedError, RunNoCredentialError, RunOverBudgetError, RunRateLimitedError } from "../../application/pack-runs.ts";
+import { EngineNotAllowedError, NotOnDemandError, type PackRunsPort, QueueFullError, RunAbortedError, RunCredentialBusyError, RunEngineBudgetError, RunEngineDisabledError, RunFailedError, RunNoCredentialError, RunOverBudgetError, RunRateLimitedError } from "../../application/pack-runs.ts";
 import type { Bus } from "./bus.ts";
 import { InvalidSince, parseSince } from "./metrics.ts";
 import { ReplayFeed } from "./replay.ts";
@@ -176,6 +177,8 @@ export interface AppDeps {
   repoSignals?: RepoSignals;
   /** Every checkout the machine knows, for `POST /repos/proposals`; without it no repo is known and the route answers 404 `unknown_repo`. */
   knownRepos?: () => Promise<string[]>;
+  /** The repos `POST /ticket-chat` may let the planner read: the repo map, the links made through `POST /github/clone` and the GitHub checkouts, never a task's `repoPath`. Anyone who can call the API can add a link, so this is not a privilege boundary. Without it the route answers 404 `unknown_repo` for every repo. */
+  chatRepos?: () => Promise<string[]>;
   /** What time it is for `POST /repos/proposals` (its signal, decline and evidence windows); tests inject one. Defaults to the system clock. */
   clock?: () => Date;
   /** What keeps the machine from doing its job (`readinessProblems`), read on each `GET /health`; absent, `/health` is always ok. */
@@ -186,6 +189,22 @@ export interface AppDeps {
 
 /** `POST /foreman`: the question and the last turns of the talk. */
 const ForemanInput = z.object({ question: ForemanContext.shape.question, history: ForemanContext.shape.history.optional() });
+
+/** Packs only their own route may run: `POST /runs` refuses them, since the route sets what the run reads and what its trusted prompt header says. */
+const ROUTE_ONLY_PACKS: readonly string[] = ["ticket_chat"];
+
+/** The real path of `path`, or null when it cannot be resolved. */
+const realOrNull = (path: string): Promise<string | null> => realpath(path).catch(() => null);
+
+/** `POST /ticket-chat`: the repo (an absolute path the machine knows), the engine (the pack's default when left out), the message and the talk so far. */
+const TicketChatInput = z.object({
+  repo: z.string().min(1),
+  engine: EngineId.optional(),
+  message: TicketChatContext.shape.message,
+  history: TicketChatContext.shape.history.default([]),
+  notes: TicketChatContext.shape.notes.default(""),
+  draft: TicketChatContext.shape.draft.default(null),
+});
 
 class BadRequest extends Error {}
 
@@ -245,7 +264,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, compliance, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], clock = () => new Date(), problems: problemsOf, sandboxPolicy }: AppDeps): Hono {
+export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, compliance, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], chatRepos = async () => [], clock = () => new Date(), problems: problemsOf, sandboxPolicy }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -356,6 +375,7 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
   /** One context-only pack on data the client sends: its validated answer and what it cost. */
   app.post("/runs", async (c) => {
     const input = await body(c, RunInput);
+    if (ROUTE_ONLY_PACKS.includes(input.pack)) throw new BadRequest(`${input.pack} is not run through POST /runs: use POST /ticket-chat`);
     const client = c.req.header("x-luna-client") ?? null;
     if (client !== null && !CLIENT_NAME.test(client)) throw new BadRequest("X-Luna-Client must be 1 to 64 letters, digits, dots, dashes or underscores");
     if (!runs) return fail(c, 503, "agents_off", "this machine runs no packs: agents are off (MACHINE_AGENTS=off)");
@@ -404,6 +424,28 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
       actions.push({ ...action, approvalId });
     }
     return c.json({ reply: answer.reply, actions, dropped });
+  });
+
+  /** The ticket planner: one turn of a talk about a ticket, reading a throwaway copy of the repo's tracked files. It only drafts; the board creates the card. */
+  app.post("/ticket-chat", async (c) => {
+    const { repo: given, engine, message, history, notes, draft } = await body(c, TicketChatInput);
+    if (!isAbsolute(given)) throw new BadRequest("repo must be an absolute path");
+    // The planner reads a copy of this folder: it must be, by real path, a repo of the map or one remembered, so a symlink or a `..` leads nowhere else.
+    const repo = await realOrNull(given);
+    const listed = repo === null ? [] : (await Promise.all((await chatRepos()).map(realOrNull))).filter((known) => known === repo);
+    if (repo === null || listed.length === 0) return fail(c, 404, "unknown_repo", "the machine does not know that repository");
+    // The name goes into the prompt's header, so it keeps only the characters a header may carry; it only labels the repo.
+    const name = basename(repo).replace(/[^\w.-]/g, "-").slice(0, 100) || "repo";
+    if (!runs) return fail(c, 503, "agents_off", "this machine runs no packs: agents are off (MACHINE_AGENTS=off)");
+    try {
+      const result = await runs.run({ pack: "ticket_chat", ...(engine ? { engine } : {}), context: { ticketChat: { repo: { name, path: repo }, message, history, notes, draft } } }, "board", c.req.raw.signal, { readRepo: repo });
+      return c.json(TicketChatAnswer.parse(result.answer));
+    } catch (error) {
+      if (error instanceof RunCredentialBusyError) return fail(c, 409, "engine_busy", "that engine's login is busy with another run: try the other engine, or again in a minute");
+      if (error instanceof RunFailedError) return fail(c, 502, "ticket_chat_failed", error.message);
+      if (error instanceof ZodError) return fail(c, 502, "ticket_chat_failed", "the planner gave no valid answer");
+      throw error;
+    }
   });
 
   // "Stop picking up work" / "carry on" / "run N at once": the knobs for leaving and for debugging.

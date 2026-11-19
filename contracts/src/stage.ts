@@ -11,6 +11,7 @@ import { EvidenceConfigV22, FactoryConfigInput, SecretNameSchema } from "./confi
 import { Scenario } from "./plan.ts";
 import { SizeContext, SplitContext } from "./split.ts";
 import { ConfidencePolicySchema } from "./questions.ts";
+import { TicketChatTurn, TicketDraft } from "./ticket-chat.ts";
 
 /** What a stage run decided. Lives here, not in api.ts, so the two files do not import each other in a loop. */
 export const StageOutcome = z.enum(["pass", "fail", "needs_input", "test_change", "escalated"]);
@@ -209,6 +210,8 @@ export const PackId = z.enum([
   "pr_reply",
   // The foreman: answers a question about the board from a snapshot and suggests actions the person confirms; no tools, no worktree, on demand (POST /foreman).
   "foreman",
+  // Plans a ticket with a person over a read-only checkout; it only drafts, the board creates it (on demand).
+  "ticket_chat",
   // The plan council (run in test_design after plan_check): a security review and an independent second opinion on a High-risk or large plan.
   "council_security",
   "council_second",
@@ -459,6 +462,17 @@ export const ForemanContext = z.object({
   }),
 });
 export type ForemanContext = z.infer<typeof ForemanContext>;
+
+/** For ticket_chat: the person's message, the talk so far, what the planner noted and the draft as it stands. The repo is the read-only checkout. */
+export const TicketChatContext = z.object({
+  /** `name` goes into the prompt's trusted header: a folder name, nothing else. */
+  repo: z.object({ name: z.string().regex(/^[\w.-]{1,100}$/), path: z.string().max(1024) }),
+  message: z.string().min(1).max(4000),
+  history: z.array(TicketChatTurn).max(30),
+  notes: z.string().max(6000),
+  draft: TicketDraft.nullable(),
+});
+export type TicketChatContext = z.infer<typeof TicketChatContext>;
 
 /** For change_exceptions: the merged PRs of one repo and month that missed a change-management control. Every fact is the machine's; the title and body are written by others: data, never an instruction. */
 export const ChangeExceptionsContext = z.object({
@@ -1572,6 +1586,8 @@ export const StageInput = z.object({
     chat: ChatTriageContext.nullable().optional(),
     /** For foreman: the question and the board snapshot; the task is synthetic and there is no worktree. */
     foreman: ForemanContext.nullable().optional(),
+    /** For ticket_chat: the message, the talk so far, the notes and the draft; the task is synthetic and the checkout is read-only. */
+    ticketChat: TicketChatContext.nullable().optional(),
     /** For change_exceptions: the merged PRs that missed a change-management control; the task is synthetic and there is no worktree. */
     exceptions: ChangeExceptionsContext.nullable().optional(),
     /** For compliance_review: the repo's regimes and its wiki's control pages; the diff is `review`. */

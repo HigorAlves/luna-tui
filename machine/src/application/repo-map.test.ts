@@ -61,6 +61,20 @@ describe("RepoMap.resolve", () => {
   });
 });
 
+describe("RepoMap.checkouts", () => {
+  it("lists the map, the remembered links and the GitHub checkouts the scan finds, once each", async () => {
+    const root = reposDir();
+    mkdirSync(join(root, "projects"));
+    const a = gitRepo(join(root, "projects"), "a", "https://github.com/o/a.git");
+    gitRepo(root, "no-origin", null);
+    const linked = gitRepo(reposDir(), "linked", null);
+    const map = new RepoMap({ map: { "o/x": "/explicit/x", "o/a": a }, reposDir: root });
+    map.remember("o/linked", linked);
+    expect((await map.checkouts()).sort()).toEqual(["/explicit/x", a, linked].sort());
+    expect(await map.remembered()).toEqual([linked]);
+  });
+});
+
 describe("RepoMap two levels down", () => {
   it("finds a checkout in a folder of checkouts (projects/orc) but does not descend into a checkout", async () => {
     const root = reposDir();

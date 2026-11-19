@@ -484,6 +484,8 @@ pub enum Mode {
     },
     /// `m`: ask the foreman, then walk the actions it suggests. Each runs on its own `y`.
     Foreman(crate::foreman::State),
+    /// `t`: talk a ticket through with a planner that reads the repo, then create it.
+    TicketChat(crate::ticket_chat::State),
     ConfirmDelete(String),
     ConfirmAbort(String),
     ConfirmWorktree(String),
@@ -532,6 +534,8 @@ pub enum Mode {
     /// under the repos root, `cursor` indexes into whichever of those match `query`.
     RepoPicker {
         id: String,
+        /// Picking the repo for a planning chat (`t`), not for the ticket `id`.
+        chat: bool,
         query: String,
         all: Vec<String>,
         cursor: usize,
@@ -799,6 +803,10 @@ pub struct App {
     /// The repo this board defaults new tickets to, for the `@` filter. `None` if it
     /// isn't inside one.
     pub home_repo: Option<String>,
+    /// The planning chat closed with `esc`: `t` reopens it until its ticket is created or it is discarded.
+    pub ticket_talk: Option<crate::ticket_chat::State>,
+    /// The engine the last planning chat used this session; the next one starts on it.
+    pub ticket_engine: Option<String>,
     /// Column rectangles from the last frame, for mouse clicks.
     pub column_rects: RefCell<Vec<(usize, Rect)>>,
     /// The first list item each column showed in the last frame (its scroll), for mouse clicks.
@@ -929,6 +937,8 @@ impl App {
             prefix_at: None,
             last_seen_secs: store::last_seen_secs_at(&store::state_path()),
             home_repo: herdr::workspace_repo(),
+            ticket_talk: None,
+            ticket_engine: None,
             column_rects: RefCell::new(Vec::new()),
             list_offsets: RefCell::new(Vec::new()),
             evidence_hits: RefCell::new(Vec::new()),
@@ -1243,6 +1253,9 @@ impl App {
                     self.slack_catalog_pending = false;
                 }
                 Incoming::Foreman(result) => self.take_foreman(result),
+                Incoming::TicketChat { generation, result } => {
+                    self.take_ticket_chat(generation, result)
+                }
             }
         }
     }
@@ -2431,6 +2444,10 @@ impl App {
 
     /// Opens the repo search for `id`: type to filter, enter to set it on the ticket.
     fn open_repo_picker(&mut self, id: &str) {
+        self.pick_repo(id, false);
+    }
+
+    fn pick_repo(&mut self, id: &str, chat: bool) {
         let all = repos_root()
             .map(|root| discover_repos(&root))
             .unwrap_or_default();
@@ -2443,6 +2460,7 @@ impl App {
         }
         self.mode = Mode::RepoPicker {
             id: id.to_string(),
+            chat,
             query: String::new(),
             all,
             cursor: 0,
@@ -3000,6 +3018,9 @@ impl App {
             Mode::Foreman(state) if state.phase == crate::foreman::Phase::Typing => {
                 state.input.push_str(&flat())
             }
+            Mode::TicketChat(state) if state.phase == crate::ticket_chat::Phase::Typing => {
+                state.input.push_str(&flat())
+            }
             _ => {}
         }
     }
@@ -3044,6 +3065,7 @@ impl App {
             Mode::Reject { .. } => self.handle_reject(key),
             Mode::EvidenceNote { .. } => self.handle_evidence_note(key),
             Mode::Foreman(_) => self.handle_foreman(key),
+            Mode::TicketChat(_) => self.handle_ticket_chat(key),
             Mode::ConfirmApprove(_) => self.handle_confirm_approve(key),
             Mode::ConfirmDelete(id) | Mode::ConfirmAbort(id) | Mode::ConfirmWorktree(id) => {
                 let id = id.clone();
@@ -5379,6 +5401,7 @@ impl App {
         "V",
         "?",
         "m",
+        "t",
         ":",
         "esc",
         "enter",
@@ -5494,6 +5517,7 @@ impl App {
             }
             KeyCode::Char('?') => self.open_help(),
             KeyCode::Char('m') => self.open_foreman(),
+            KeyCode::Char('t') => self.open_ticket_chat(),
             KeyCode::Char(':') => {
                 self.mode = Mode::Command {
                     text: String::new(),
@@ -6769,6 +6793,241 @@ impl App {
         Outcome::Continue
     }
 
+    /// `t`: reopen the kept talk, or start one on the selected card's repo, else this board's, else a repo picked from the list.
+    fn open_ticket_chat(&mut self) {
+        if let Some(talk) = self.ticket_talk.take() {
+            self.mode = Mode::TicketChat(talk);
+            return;
+        }
+        let repo = self
+            .selected_task()
+            .and_then(|t| t.repo_path.clone())
+            .or_else(|| self.home_repo.clone());
+        match repo {
+            Some(repo) => self.start_ticket_chat(repo),
+            None => self.pick_repo("", true),
+        }
+    }
+
+    fn start_ticket_chat(&mut self, repo: String) {
+        let state = crate::ticket_chat::State::new(repo, self.ticket_engine.as_deref());
+        self.mode = Mode::TicketChat(state);
+    }
+
+    /// Leaves the chat. The talk stays on the app for `t` unless its ticket was created or `discard` drops it.
+    fn close_ticket_chat(&mut self, discard: bool) {
+        use crate::ticket_chat::Phase;
+        if let Mode::TicketChat(state) = std::mem::replace(&mut self.mode, Mode::Normal) {
+            let finished = matches!(state.phase, Phase::Created { .. });
+            let empty = state.turns.is_empty() && state.draft.is_none();
+            let mut state = state;
+            // Nothing runs in `Creating` (the create is synchronous): a talk kept there waits at the gate.
+            if state.phase == Phase::Creating {
+                state.phase = Phase::Draft;
+            }
+            if !discard && !finished && !empty {
+                self.ticket_talk = Some(state);
+            }
+        }
+    }
+
+    /// Creates the ticket from the draft. With `edit`, the ticket editor opens on it: the draft is created first.
+    fn create_from_draft(&mut self, edit: bool) {
+        let Mode::TicketChat(state) = &mut self.mode else {
+            return;
+        };
+        let Some(text) = state.begin_create() else {
+            return;
+        };
+        match self.machine.create(&text) {
+            Ok(task) => {
+                let id = task.id.clone();
+                self.upsert(task);
+                self.select(&id, true);
+                // A created talk is finished either way: it is never kept for `t`.
+                if let Mode::TicketChat(state) = &mut self.mode {
+                    state.created(id.clone());
+                }
+                if edit {
+                    self.close_ticket_chat(false);
+                    self.open_ticket_editor(&id);
+                }
+            }
+            Err(error) => {
+                if let Mode::TicketChat(state) = &mut self.mode {
+                    state.create_failed(error);
+                }
+            }
+        }
+    }
+
+    /// The planning chat's keys, by phase.
+    fn handle_ticket_chat(&mut self, key: KeyEvent) -> Outcome {
+        use crate::ticket_chat::{ENGINES, Phase};
+        enum Act {
+            None,
+            Close,
+            Discard,
+            Send(crate::ticket_chat::Request, u64),
+            Create(bool),
+            Jira(String),
+        }
+        let Mode::TicketChat(state) = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let mut engine_chosen = false;
+        let act = match state.phase.clone() {
+            Phase::PickEngine => {
+                match key.code {
+                    KeyCode::Char(c @ '1'..='2') => {
+                        state.engine = ENGINES[c as usize - '1' as usize].to_string();
+                        state.start();
+                        engine_chosen = true;
+                    }
+                    KeyCode::Enter => {
+                        state.start();
+                        engine_chosen = true;
+                    }
+                    KeyCode::Tab | KeyCode::Up | KeyCode::Down | KeyCode::Char('j' | 'k') => {
+                        state.toggle_engine()
+                    }
+                    KeyCode::Esc => {
+                        self.mode = Mode::Normal;
+                    }
+                    _ => {}
+                }
+                Act::None
+            }
+            Phase::Typing => match key.code {
+                KeyCode::Char(c @ '1'..='4')
+                    if state.input.is_empty()
+                        && state.choices.len() >= c as usize - '0' as usize =>
+                {
+                    match state.pick_choice(c as usize - '0' as usize) {
+                        Some(request) => Act::Send(request, state.generation),
+                        None => Act::None,
+                    }
+                }
+                KeyCode::Char(c) => {
+                    state.input.push(c);
+                    Act::None
+                }
+                KeyCode::Backspace => {
+                    state.input.pop();
+                    Act::None
+                }
+                KeyCode::PageUp => {
+                    state.scroll_by(5);
+                    Act::None
+                }
+                KeyCode::PageDown => {
+                    state.scroll_by(-5);
+                    Act::None
+                }
+                KeyCode::Enter => match state.send_input() {
+                    Some(request) => Act::Send(request, state.generation),
+                    None => Act::None,
+                },
+                KeyCode::Esc if state.turns.is_empty() => Act::Discard,
+                KeyCode::Esc => {
+                    state.phase = Phase::ConfirmDiscard;
+                    Act::None
+                }
+                _ => Act::None,
+            },
+            Phase::Waiting => {
+                match key.code {
+                    KeyCode::Esc => state.cancel_wait(),
+                    KeyCode::PageUp => state.scroll_by(5),
+                    KeyCode::PageDown => state.scroll_by(-5),
+                    _ => {}
+                }
+                Act::None
+            }
+            Phase::Draft => match key.code {
+                KeyCode::Char('y') => Act::Create(false),
+                KeyCode::Char('e') => Act::Create(true),
+                KeyCode::Char('n') => {
+                    state.keep_talking();
+                    Act::None
+                }
+                KeyCode::PageUp => {
+                    state.scroll_by(5);
+                    Act::None
+                }
+                KeyCode::PageDown => {
+                    state.scroll_by(-5);
+                    Act::None
+                }
+                KeyCode::Esc => Act::Close,
+                _ => Act::None,
+            },
+            Phase::Creating => match key.code {
+                KeyCode::Esc => Act::Close,
+                _ => Act::None,
+            },
+            Phase::Created { id } => match key.code {
+                KeyCode::PageUp => {
+                    state.scroll_by(5);
+                    Act::None
+                }
+                KeyCode::PageDown => {
+                    state.scroll_by(-5);
+                    Act::None
+                }
+                KeyCode::Char('y') => Act::Jira(id),
+                KeyCode::Char('n') | KeyCode::Esc => Act::Close,
+                _ => Act::None,
+            },
+            Phase::ConfirmDiscard => match key.code {
+                KeyCode::Char('y') => Act::Discard,
+                KeyCode::Char('n') | KeyCode::Esc => {
+                    state.phase = Phase::Typing;
+                    Act::None
+                }
+                _ => Act::None,
+            },
+        };
+        if engine_chosen && let Mode::TicketChat(state) = &self.mode {
+            self.ticket_engine = Some(state.engine.clone());
+        }
+        match act {
+            Act::None => {}
+            Act::Close => self.close_ticket_chat(false),
+            Act::Discard => self.close_ticket_chat(true),
+            Act::Send(request, generation) => {
+                let machine = self.machine.clone();
+                let tx = self.tx.clone();
+                thread::spawn(move || {
+                    let result = machine.ticket_chat(&request);
+                    let _ = tx.send(Incoming::TicketChat { generation, result });
+                });
+            }
+            Act::Create(edit) => self.create_from_draft(edit),
+            Act::Jira(id) => match self.machine.create_jira(&id, None) {
+                Ok(task) => {
+                    self.upsert(task);
+                    self.detail_stale = true;
+                    self.notify("filed in Jira", false);
+                    self.close_ticket_chat(false);
+                }
+                Err(error) => self.notify(error, true),
+            },
+        }
+        Outcome::Continue
+    }
+
+    /// The planner answered: it shows unless the wait was cancelled or the chat closed meanwhile.
+    fn take_ticket_chat(
+        &mut self,
+        generation: u64,
+        result: Result<crate::ticket_chat::Reply, String>,
+    ) {
+        if let Mode::TicketChat(state) = &mut self.mode {
+            state.answered(generation, result);
+        }
+    }
+
     /// The foreman answered: its reply and actions show, unless the popup was closed meanwhile.
     fn take_foreman(&mut self, result: Result<crate::foreman::Reply, String>) {
         let Mode::Foreman(state) = &mut self.mode else {
@@ -7256,6 +7515,7 @@ impl App {
     fn handle_repo_picker(&mut self, key: KeyEvent) -> Outcome {
         let Mode::RepoPicker {
             id,
+            chat,
             query,
             all,
             cursor,
@@ -7285,9 +7545,13 @@ impl App {
                 let Some(repo) = matches.get(*cursor).map(|r| r.to_string()) else {
                     return Outcome::Continue;
                 };
-                let id = id.clone();
+                let (id, chat) = (id.clone(), *chat);
                 self.mode = Mode::Normal;
-                self.set_repo(&id, repo);
+                if chat {
+                    self.start_ticket_chat(repo);
+                } else {
+                    self.set_repo(&id, repo);
+                }
             }
             _ => {}
         }
@@ -15351,6 +15615,504 @@ mod coverage_picker_tests {
         };
         assert_eq!(choice.chosen(), vec!["C4".to_string()]);
         assert_eq!(choice.gaps.len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod ticket_chat_tests {
+    use super::confirm_tests::body_recording_machine;
+    use super::*;
+    use crate::ticket_chat::{Draft, Phase, Reply};
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for c in text.chars() {
+            press(app, KeyCode::Char(c));
+        }
+    }
+
+    /// The board with one card (repo `/work/app`) and the chat open past the engine choice.
+    fn chatting() -> App {
+        let mut app = board();
+        press(&mut app, KeyCode::Char('t'));
+        press(&mut app, KeyCode::Enter);
+        app
+    }
+
+    /// The board on the card whose repo is `/work/app`.
+    fn board() -> App {
+        let mut app = crate::testkit::plan_gate_app();
+        app.mode = Mode::Normal;
+        let id = app.tasks[0].id.clone();
+        app.select(&id, true);
+        app
+    }
+
+    fn state(app: &App) -> &crate::ticket_chat::State {
+        let Mode::TicketChat(state) = &app.mode else {
+            panic!("the chat is not open")
+        };
+        state
+    }
+
+    fn ready() -> Reply {
+        Reply {
+            reply: "Here it is.".into(),
+            draft: Some(Draft {
+                title: "Export CSV".into(),
+                description: "A file.".into(),
+                criteria: vec!["escapes commas".into()],
+            }),
+            ready: true,
+            ..Reply::default()
+        }
+    }
+
+    #[test]
+    fn t_opens_on_the_selected_cards_repo_and_the_engine_choice_defaults_to_opus() {
+        let mut app = board();
+        press(&mut app, KeyCode::Char('t'));
+        let s = state(&app);
+        assert_eq!(s.repo_path, "/work/app");
+        assert_eq!(s.phase, Phase::PickEngine);
+        assert_eq!(s.engine, "claude:opus");
+        press(&mut app, KeyCode::Char('2'));
+        assert_eq!(state(&app).engine, "codex:sol");
+        assert_eq!(state(&app).phase, Phase::Typing);
+    }
+
+    #[test]
+    fn y_at_the_gate_posts_the_drafts_text_with_the_repo() {
+        let (machine, seen) = body_recording_machine();
+        let mut app = chatting();
+        app.machine = machine;
+        type_text(&mut app, "csv export");
+        press(&mut app, KeyCode::Enter);
+        let generation = state(&app).generation;
+        app.take_ticket_chat(generation, Ok(ready()));
+        assert_eq!(state(&app).phase, Phase::Draft);
+        press(&mut app, KeyCode::Char('y'));
+        let posted = seen.lock().unwrap().clone();
+        let (_, body) = posted
+            .iter()
+            .find(|(path, _)| path == "/tasks")
+            .expect("a POST /tasks was made");
+        assert_eq!(body["title"], "Export CSV");
+        assert_eq!(body["description"], "A file.");
+        assert_eq!(body["criteria"][0], "escapes commas");
+        assert_eq!(body["repoPath"], "/work/app");
+    }
+
+    #[test]
+    fn esc_cancels_a_wait_and_the_late_answer_is_dropped() {
+        let mut app = chatting();
+        type_text(&mut app, "hello");
+        press(&mut app, KeyCode::Enter);
+        let generation = state(&app).generation;
+        assert_eq!(state(&app).phase, Phase::Waiting);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(state(&app).phase, Phase::Typing);
+        app.take_ticket_chat(generation, Ok(ready()));
+        assert_eq!(state(&app).phase, Phase::Typing);
+        assert!(state(&app).turns.is_empty());
+    }
+
+    #[test]
+    fn esc_asks_before_dropping_a_talk_and_n_closing_keeps_it_for_t() {
+        let mut app = chatting();
+        type_text(&mut app, "hello");
+        press(&mut app, KeyCode::Enter);
+        let generation = state(&app).generation;
+        app.take_ticket_chat(
+            generation,
+            Ok(Reply {
+                reply: "Which?".into(),
+                ..Reply::default()
+            }),
+        );
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(state(&app).phase, Phase::ConfirmDiscard);
+        press(&mut app, KeyCode::Char('n'));
+        assert_eq!(state(&app).phase, Phase::Typing);
+        // The gate's esc closes and keeps; `t` brings it back.
+        app.mode = Mode::TicketChat({
+            let mut kept = state(&app).clone();
+            kept.phase = Phase::Draft;
+            kept
+        });
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(app.ticket_talk.is_some());
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(state(&app).turns.len(), 2);
+        assert!(app.ticket_talk.is_none());
+        press(&mut app, KeyCode::Char('n'));
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(state(&app).phase, Phase::ConfirmDiscard);
+        press(&mut app, KeyCode::Char('y'));
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(app.ticket_talk.is_none(), "y drops the talk");
+    }
+
+    #[test]
+    fn digits_pick_a_choice_only_while_the_input_is_empty() {
+        let mut app = chatting();
+        type_text(&mut app, "x");
+        press(&mut app, KeyCode::Enter);
+        let generation = state(&app).generation;
+        app.take_ticket_chat(
+            generation,
+            Ok(Reply {
+                reply: "Which?".into(),
+                choices: vec!["csv".into(), "xlsx".into()],
+                ..Reply::default()
+            }),
+        );
+        type_text(&mut app, "a1");
+        assert_eq!(state(&app).input, "a1", "a digit after text is text");
+        assert_eq!(state(&app).phase, Phase::Typing);
+        press(&mut app, KeyCode::Backspace);
+        press(&mut app, KeyCode::Backspace);
+        press(&mut app, KeyCode::Char('2'));
+        assert_eq!(state(&app).phase, Phase::Waiting);
+        assert_eq!(state(&app).turns.last().unwrap().text, "xlsx");
+    }
+
+    #[test]
+    fn the_engine_of_one_talk_starts_the_next() {
+        let mut app = board();
+        press(&mut app, KeyCode::Char('t'));
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Esc);
+        assert!(
+            matches!(app.mode, Mode::Normal),
+            "an empty talk is not kept"
+        );
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(state(&app).engine, "codex:sol");
+    }
+
+    fn screen(app: &mut App) -> String {
+        crate::testkit::render(app, 110, 30)
+    }
+
+    /// A talk of one question and one ready answer, at the create gate.
+    fn at_the_gate() -> App {
+        let mut app = chatting();
+        type_text(&mut app, "csv export please");
+        press(&mut app, KeyCode::Enter);
+        let generation = state(&app).generation;
+        app.take_ticket_chat(generation, Ok(ready()));
+        app
+    }
+
+    #[test]
+    fn the_gate_shows_the_draft_and_asks_before_creating() {
+        let mut app = at_the_gate();
+        let screen = screen(&mut app);
+        for needle in [
+            "Plan a ticket · app · claude:opus",
+            "csv export please",
+            "Here it is.",
+            "Draft ticket",
+            "Export CSV",
+            "• escapes commas",
+            "Create this ticket in app? y create · e edit · n keep talking",
+            "create, then edit",
+        ] {
+            assert!(screen.contains(needle), "{needle} missing in\n{screen}");
+        }
+    }
+
+    #[test]
+    fn the_jira_offer_names_the_new_ticket() {
+        let mut app = at_the_gate();
+        let id = app.tasks[0].id.clone();
+        let Mode::TicketChat(state) = &mut app.mode else {
+            panic!()
+        };
+        state.created(id);
+        let screen = screen(&mut app);
+        assert!(
+            screen.contains("Created aaaaaaaa. File it in Jira too? y/n"),
+            "{screen}"
+        );
+    }
+
+    #[test]
+    fn esc_with_turns_asks_to_discard_and_a_wait_shows_its_timer() {
+        let mut app = chatting();
+        type_text(&mut app, "hello");
+        press(&mut app, KeyCode::Enter);
+        let waiting = screen(&mut app);
+        assert!(
+            waiting.contains("thinking… 0:00 (esc drops this turn)"),
+            "{waiting}"
+        );
+        let generation = state(&app).generation;
+        app.take_ticket_chat(
+            generation,
+            Ok(Reply {
+                reply: "Which one?".into(),
+                choices: vec!["csv".into(), "xlsx".into()],
+                ..Reply::default()
+            }),
+        );
+        let choosing = screen(&mut app);
+        assert!(choosing.contains(" 1  csv") && choosing.contains(" 2  xlsx"));
+        press(&mut app, KeyCode::Esc);
+        let asking = screen(&mut app);
+        assert!(asking.contains("Discard this talk? y/n"), "{asking}");
+    }
+
+    #[test]
+    fn model_text_is_drawn_plain_and_a_failure_shows_in_red_text() {
+        let mut app = chatting();
+        type_text(&mut app, "hi");
+        press(&mut app, KeyCode::Enter);
+        let generation = state(&app).generation;
+        app.take_ticket_chat(
+            generation,
+            Ok(Reply {
+                reply: "ok\u{1b}[31m red\u{202E}".into(),
+                ..Reply::default()
+            }),
+        );
+        type_text(&mut app, "more");
+        press(&mut app, KeyCode::Enter);
+        let generation = state(&app).generation;
+        app.take_ticket_chat(generation, Err("the planner failed".into()));
+        let screen = screen(&mut app);
+        assert!(!screen.contains('\u{1b}') && !screen.contains('\u{202E}'));
+        assert!(screen.contains("the planner failed"), "{screen}");
+    }
+
+    #[test]
+    fn a_long_input_keeps_its_tail_and_the_cursor_on_the_prompt_row() {
+        let mut app = chatting();
+        let long = format!("{}TAILEND", "a".repeat(300));
+        type_text(&mut app, &long);
+        let screen = screen(&mut app);
+        let prompt = screen
+            .lines()
+            .find(|line| line.contains("> "))
+            .expect("a prompt row");
+        assert!(prompt.contains("TAILEND▏"), "{prompt}");
+        assert!(prompt.contains('…'), "{prompt}");
+    }
+
+    #[test]
+    fn long_choices_all_keep_their_number_labels() {
+        let mut app = chatting();
+        type_text(&mut app, "hi");
+        press(&mut app, KeyCode::Enter);
+        let generation = state(&app).generation;
+        app.take_ticket_chat(
+            generation,
+            Ok(Reply {
+                reply: "which?".into(),
+                choices: (1..=4).map(|n| format!("choice{n} {}", "w".repeat(200))).collect(),
+                ..Reply::default()
+            }),
+        );
+        let screen = screen(&mut app);
+        for n in 1..=4 {
+            assert!(screen.contains(&format!(" {n} ")) && screen.contains(&format!("choice{n}")), "{screen}");
+        }
+    }
+
+    #[test]
+    fn the_scrollback_keeps_the_newest_turn_at_the_bottom_and_pgup_scrolls_up() {
+        let mut app = chatting();
+        for i in 0..20 {
+            let Mode::TicketChat(state) = &mut app.mode else {
+                panic!()
+            };
+            state.turns.push(crate::ticket_chat::Turn {
+                who: "person",
+                text: format!("message number {i}"),
+            });
+        }
+        let screen_now = screen(&mut app);
+        assert!(screen_now.contains("message number 19"));
+        assert!(
+            !screen_now.contains("message number 0\n") && !screen_now.contains("message number 0 ")
+        );
+        for _ in 0..4 {
+            press(&mut app, KeyCode::PageUp);
+        }
+        let scrolled = screen(&mut app);
+        assert!(!scrolled.contains("message number 19"), "{scrolled}");
+        assert!(scrolled.contains("message number 1"));
+    }
+
+    /// A machine that answers every POST with one new card.
+    fn creating_machine() -> Machine {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = crate::testkit::task_json(
+            "bbbbbbbb",
+            "Export CSV",
+            "queued",
+            "Backlog",
+            serde_json::json!({}),
+        )
+        .to_string();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(v) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = v.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut raw = vec![0; length];
+                let _ = reader.read_exact(&mut raw);
+                let _ = reader.into_inner().write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{task}", task.len()).as_bytes());
+            }
+        });
+        Machine::at(&format!("http://{addr}"))
+    }
+
+    #[test]
+    fn e_at_the_gate_creates_and_does_not_keep_the_talk() {
+        let mut app = at_the_gate();
+        app.machine = creating_machine();
+        press(&mut app, KeyCode::Char('e'));
+        assert!(
+            matches!(app.mode, Mode::EditTicket { .. }),
+            "the editor opened on the created ticket"
+        );
+        assert!(app.ticket_talk.is_none(), "a created talk is not kept");
+        app.mode = Mode::Normal;
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(
+            state(&app).phase,
+            Phase::PickEngine,
+            "t starts a fresh talk"
+        );
+    }
+
+    #[test]
+    fn esc_closes_a_chat_stuck_in_creating() {
+        let mut app = at_the_gate();
+        let Mode::TicketChat(s) = &mut app.mode else {
+            panic!()
+        };
+        s.phase = Phase::Creating;
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(
+            state(&app).phase,
+            Phase::Draft,
+            "reopens at the gate, not stuck"
+        );
+    }
+
+    #[test]
+    fn after_esc_while_waiting_the_person_can_send_at_once_and_the_hint_says_the_turn_is_dropped() {
+        let mut app = chatting();
+        type_text(&mut app, "hello");
+        press(&mut app, KeyCode::Enter);
+        let waiting = screen(&mut app);
+        assert!(waiting.contains("esc drops this turn"), "{waiting}");
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(state(&app).phase, Phase::Waiting);
+        assert_eq!(state(&app).turns.len(), 1);
+    }
+
+    #[test]
+    fn a_coded_machine_error_shows_its_message_and_keeps_the_input() {
+        let mut app = chatting();
+        type_text(&mut app, "hello");
+        press(&mut app, KeyCode::Enter);
+        let generation = state(&app).generation;
+        app.take_ticket_chat(
+            generation,
+            Err("the claude login is busy; try again".into()),
+        );
+        assert_eq!(state(&app).input, "hello");
+        let screen = screen(&mut app);
+        assert!(screen.contains("the claude login is busy"), "{screen}");
+    }
+
+    #[test]
+    fn a_long_draft_at_the_gate_shows_its_title_and_pgdn_pgup_work_there() {
+        let mut app = chatting();
+        type_text(&mut app, "csv");
+        press(&mut app, KeyCode::Enter);
+        let generation = state(&app).generation;
+        let mut reply = ready();
+        reply.draft.as_mut().unwrap().description = (0..200)
+            .map(|i| format!("sentence {i} of a long description."))
+            .collect::<Vec<_>>()
+            .join(" ");
+        app.take_ticket_chat(generation, Ok(reply));
+        let gate = screen(&mut app);
+        assert!(
+            gate.contains("Draft ticket") && gate.contains("Export CSV"),
+            "{gate}"
+        );
+        press(&mut app, KeyCode::PageDown);
+        let down = screen(&mut app);
+        assert!(
+            !down.contains("Export CSV"),
+            "PgDn scrolled the draft\n{down}"
+        );
+        for _ in 0..20 {
+            press(&mut app, KeyCode::PageDown);
+            let _ = screen(&mut app);
+        }
+        let bottom = screen(&mut app);
+        assert!(bottom.contains("• escapes commas"), "{bottom}");
+        press(&mut app, KeyCode::PageUp);
+        let _ = screen(&mut app);
+        assert!(state(&app).scroll > 0);
+        // Created takes PgUp/PgDn too.
+        let id = app.tasks[0].id.clone();
+        let Mode::TicketChat(s) = &mut app.mode else {
+            panic!()
+        };
+        s.created(id);
+        s.scroll = 0;
+        let _ = screen(&mut app);
+        press(&mut app, KeyCode::PageUp);
+        assert!(state(&app).scroll > 0, "PgUp works once created");
+    }
+
+    #[test]
+    fn pgup_stops_at_the_top_and_one_pgdn_comes_back() {
+        let mut app = chatting();
+        for i in 0..20 {
+            let Mode::TicketChat(state) = &mut app.mode else {
+                panic!()
+            };
+            state.turns.push(crate::ticket_chat::Turn {
+                who: "person",
+                text: format!("message number {i}"),
+            });
+        }
+        for _ in 0..30 {
+            let _ = screen(&mut app);
+            press(&mut app, KeyCode::PageUp);
+        }
+        let _ = screen(&mut app);
+        let top = state(&app).scroll;
+        assert_eq!(top, state(&app).max_scroll.get());
+        assert!(top > 0);
+        press(&mut app, KeyCode::PageDown);
+        assert_eq!(state(&app).scroll, top - 5);
     }
 }
 

@@ -72,6 +72,8 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   chat_triage: [],
   // The foreman, run on demand by POST /foreman.
   foreman: [],
+  // The ticket planner, run on demand by POST /ticket-chat.
+  ticket_chat: [],
   // Change management's exception explainer, run on demand by the compliance job.
   change_exceptions: [],
   // The compliance lead, run by the PR review and by Verify as a sub-run when the repo declares a regime; never a stage of its own.

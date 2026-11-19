@@ -70,7 +70,7 @@ function run(input: unknown, env: Record<string, string> = {}, files: Record<str
 }
 
 // slack_triage, chat_triage, foreman and eval_judge have no worktree and read no project context; their dry runs are below. council_second defaults to an eve engine: its dry run is below.
-const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "foreman" && p.id !== "change_exceptions" && p.id !== "access_review" && p.id !== "postmortem" && p.id !== "questionnaire" && p.id !== "vuln_triage" && p.id !== "release_notes" && p.id !== "status_report" && p.id !== "eval_judge" && p.id !== "council_second").map((p) => p.id);
+const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "foreman" && p.id !== "ticket_chat" && p.id !== "change_exceptions" && p.id !== "access_review" && p.id !== "postmortem" && p.id !== "questionnaire" && p.id !== "vuln_triage" && p.id !== "release_notes" && p.id !== "status_report" && p.id !== "eval_judge" && p.id !== "council_second").map((p) => p.id);
 
 describe("factory main (dry run)", () => {
   it.each(agentPacks)("%s: renders the prompt, prints the options and leaves a valid result", (pack) => {
@@ -164,6 +164,22 @@ describe("factory main (dry run)", () => {
     expect(prompt).toContain("| t1 · o/a · awaiting_approval · plan · gate plan (approve the plan) · Fix login");
     const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
     expect(options).toMatchObject({ agent: "foreman", agents: ["foreman"], model: "claude-haiku-5-5", effort: "low", tools: [], allowedTools: [] });
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+    expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
+  });
+
+  it("ticket_chat: runs read-only over the checkout, renders the talk as data and leaves a valid result", () => {
+    const task = { id: "ticket-chat", title: "Ticket chat for luna-tui", description: "", criteria: [], repoPath: "", branch: "", source: null };
+    const ticketChat = { repo: { name: "luna-tui", path: "/work" }, message: "add csv export", history: [{ who: "person", text: "hi" }], notes: "", draft: null };
+    const { code, stdout, out, result } = run(stageInput("ticket_chat", { task, plan: null, context: { projectContext: null, ticketChat } }), {}, {}, { emptyWork: true });
+    expect(code).toBe(0);
+    const prompt = readFileSync(join(out, "prompt.md"), "utf8");
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("`ticket-planner` role running the `ticket_chat` stage");
+    expect(prompt).toContain("| add csv export");
+    expect(prompt).toContain("| person: hi");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: "ticket-planner", agents: ["ticket-planner"] });
     expect(StageOutput.safeParse(result).error).toBeUndefined();
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });

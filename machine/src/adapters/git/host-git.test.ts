@@ -38,6 +38,7 @@ describe("host-side git on a workspace", () => {
     ["adapters/git/worktree.ts", "originSlugOf"], // pinned for a workspace, fails closed under the workspaces directory, else a repository's own path
     ["adapters/git/clone.ts", "seedMachineRepo"],
     ["adapters/git/clone.ts", "refreshScratch"],
+    ["adapters/git/clone.ts", "readCopy"], // clones the user's repository (a path the machine lists) into a new folder of its own, then runs only there
     ["adapters/git/clone.ts", "moveToClone"],
     ["adapters/git/clone.ts", "copiedSettings"],
   ];

@@ -32,6 +32,8 @@ const RECONNECT_EVERY: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// A poll asks GitHub or Slack about every item, so it may take far longer than a click.
 const POLL_TIMEOUT: Duration = Duration::from_secs(120);
+/// A planning-chat turn is one model run that reads the repo: up to nine minutes.
+const CHAT_TIMEOUT: Duration = Duration::from_secs(9 * 60);
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Where `pnpm dev` runs the machine, on the host.
@@ -76,6 +78,11 @@ pub enum Incoming {
     SlackPolled(Result<SlackSnapshot, String>),
     /// The foreman's answer to a question, fetched off the UI thread.
     Foreman(Result<crate::foreman::Reply, String>),
+    /// The planner's answer to one chat turn; `generation` is the talk's when the turn left.
+    TicketChat {
+        generation: u64,
+        result: Result<crate::ticket_chat::Reply, String>,
+    },
 }
 
 #[derive(Clone)]
@@ -86,6 +93,8 @@ pub struct Machine {
     agent: Agent,
     /// For the calls that wait on a poll of GitHub or Slack.
     slow: Agent,
+    /// For the planning chat, whose turns wait on a model run.
+    chat: Agent,
     /// The machine's API token, sent on every call; see `api_token`.
     token: Option<String>,
 }
@@ -141,11 +150,17 @@ impl Machine {
             .timeout_global(Some(POLL_TIMEOUT))
             .build()
             .into();
+        let chat = builder(&token)
+            .http_status_as_error(false)
+            .timeout_global(Some(CHAT_TIMEOUT))
+            .build()
+            .into();
         Self {
             base: Arc::new(RwLock::new(base)),
             candidates,
             agent,
             slow,
+            chat,
             token,
         }
     }
@@ -511,6 +526,14 @@ impl Machine {
                 .post(self.url("/foreman"))
                 .send_json(json!({ "question": question, "history": history })),
         )
+    }
+
+    /// One turn of the planning chat. It waits for a model run over the repo, so it uses the nine-minute agent.
+    pub fn ticket_chat(
+        &self,
+        request: &crate::ticket_chat::Request,
+    ) -> Result<crate::ticket_chat::Reply, String> {
+        Self::typed(self.chat.post(self.url("/ticket-chat")).send_json(request))
     }
 
     /// Says whether the card's Evidence Pack was useful (`y` / `n`), with a short note for a no. The machine keeps it as ground truth; it labels no decision.
