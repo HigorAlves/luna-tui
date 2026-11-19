@@ -38,6 +38,10 @@ export const A11yFinding = z
   .refine((f) => (f.source === "axe" ? f.rule !== null && f.impact !== null : f.rule === null && f.impact === null), { message: "an axe finding names its rule and impact; a judged one names neither" });
 export type A11yFinding = z.infer<typeof A11yFinding>;
 
+/** What the machine hands the audit: the WCAG 2.2 level the repo audits at. */
+export const A11yContext = z.object({ level: z.enum(["AA", "AAA"]) });
+export type A11yContext = z.infer<typeof A11yContext>;
+
 export const A11yAuditAnswer = z.object({
   summary: z.string().max(600),
   pages: z.array(z.object({ page: z.string().max(300), states: z.array(z.string().max(80)).max(10), axe: z.enum(["ran", "failed"]) })).max(20),

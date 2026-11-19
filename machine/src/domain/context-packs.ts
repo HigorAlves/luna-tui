@@ -1,7 +1,7 @@
 // The context-only packs: those that run in no task state (packStates), so a client may run one
 // on data it sends (`POST /runs`). Each reads one key of the stage input's context, with that
 // key's schema. A context-only pack that is not for clients is on NOT_ON_DEMAND instead. Pure.
-import { DesignContext, AccessReviewContext, ReleaseNotesContext, PostmortemContext, BreachAssessContext, CapacityContext, StatusReportContext, QuestionnaireContext, VulnTriageContext, ChangeExceptionsContext, ChatTriageContext, CheckContext, ConversationContext, DedupContext, ForemanContext, TicketChatContext, TicketContext, IssueContext, JiraIntakeContext, EvidenceContext, type PackId, PlanContext, PrLinkContext, ProposeContext, ShipContext, SizeContext, SlackTriageContext, SplitContext } from "@hardness/contracts";
+import { A11yContext, DesignContext, AccessReviewContext, ReleaseNotesContext, PostmortemContext, BreachAssessContext, CapacityContext, StatusReportContext, QuestionnaireContext, VulnTriageContext, ChangeExceptionsContext, ChatTriageContext, CheckContext, ConversationContext, DedupContext, ForemanContext, TicketChatContext, TicketContext, IssueContext, JiraIntakeContext, EvidenceContext, type PackId, PlanContext, PrLinkContext, ProposeContext, ShipContext, SizeContext, SlackTriageContext, SplitContext } from "@hardness/contracts";
 import { z } from "zod";
 
 import { packStates } from "./packs.ts";
@@ -13,6 +13,7 @@ export const CONTEXT_OF = {
   chat_triage: { key: "chat", schema: ChatTriageContext },
   foreman: { key: "foreman", schema: ForemanContext },
   design_spec: { key: "design", schema: DesignContext },
+  a11y_audit: { key: "a11y", schema: A11yContext },
   ticket_chat: { key: "ticketChat", schema: TicketChatContext },
   change_exceptions: { key: "exceptions", schema: ChangeExceptionsContext },
   access_review: { key: "access", schema: AccessReviewContext },
@@ -69,6 +70,7 @@ export type PackContext =
   | { chat: ChatTriageContext }
   | { foreman: ForemanContext }
   | { design: DesignContext }
+  | { a11y: A11yContext }
   | { ticketChat: TicketChatContext }
   | { exceptions: ChangeExceptionsContext }
   | { access: AccessReviewContext }

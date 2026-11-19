@@ -8,7 +8,7 @@ import { AGENT_PACKS, NO_ACCESS, PACKS, PACK_LIMITS, PackId, StageOutput, answer
 
 /** A minimal instance of a JSON schema: every required property, the first enum value,
  *  one item per array (so item shapes such as findings get exercised). */
-const PATTERN_SAMPLES: Record<string, string> = { "^C\\d{1,3}$": "C1", "^\\d{4}-\\d{2}-\\d{2}$": "2026-01-01", "^\\d{1,10}:\\d{1,10}$": "1:2" };
+const PATTERN_SAMPLES: Record<string, string> = { "^C\\d{1,3}$": "C1", "^\\d{4}-\\d{2}-\\d{2}$": "2026-01-01", "^\\d{1,10}:\\d{1,10}$": "1:2", "^[1-4]\\.\\d{1,2}\\.\\d{1,2}$": "1.4.3" };
 
 function instance(schema: any): unknown {
   if (schema.const !== undefined) return schema.const;
@@ -42,7 +42,7 @@ function instance(schema: any): unknown {
 }
 
 /** The envelope the runner writes around a pack's structured answer, with its outcome rule. */
-function envelope(answer: any): Record<string, unknown> {
+function envelope(answer: any, packId?: string): Record<string, unknown> {
   const asked = answer.kind === "questions" || (Array.isArray(answer.questions) && answer.questions.length > 0);
   const outcome = asked ? "needs_input" : answer.kind === "test_change" ? "test_change" : answer.kind === "escalated" ? "escalated" : "pass";
   return {
@@ -53,7 +53,8 @@ function envelope(answer: any): Record<string, unknown> {
     answer,
     needsInput: asked ? (answer.questions ?? []) : null,
     requested: answer.requested ?? [],
-    findings: answer.findings ?? [],
+    // The factory keeps an audit's own findings in the answer (factory/src/core/output.ts).
+    findings: packId === "a11y_audit" ? [] : (answer.findings ?? []),
     artifacts: [],
     slices: { done: 0, total: 0 },
     commit: answer.commit ?? null,
@@ -118,7 +119,7 @@ describe("factory contract", () => {
       // A refinement the JSON Schema cannot say: a designed state carries no suggestion, so the sample draws no states.
       if (pack.id === "design_spec") for (const frame of answer.frames as { states: unknown[] }[]) frame.states = [];
       expect(pack.answer.safeParse(answer).error, `${pack.id} kind=${String(kind)} answer`).toBeUndefined();
-      const parsed = StageOutput.safeParse(envelope(answer));
+      const parsed = StageOutput.safeParse(envelope(answer, pack.id));
       expect(parsed.error, `${pack.id} kind=${String(kind)}: ${JSON.stringify(parsed.error?.issues)}`).toBeUndefined();
     }
   });

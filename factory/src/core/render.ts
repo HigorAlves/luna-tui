@@ -139,6 +139,9 @@ const ticketChatText = (chat: StageInput["context"]["ticketChat"]) => {
   };
 };
 
+/** The audit's level as the machine's own text; WCAG 2.2 AA when the run carries none. */
+const a11yLevelText = (a11y: StageInput["context"]["a11y"]) => `WCAG 2.2 ${a11y?.level ?? "AA"}`;
+
 /** The card's design reference (the machine's own text, pattern-checked by `DesignRef`): one line per reference. */
 const designText = (design: StageInput["context"]["design"]) => ({
   refs: design?.refs.length
@@ -790,6 +793,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.ticketChat.notes}}": ticketChat.notes,
     "{{context.ticketChat.draft}}": ticketChat.draft,
     "{{context.design.refs}}": design.refs,
+    "{{context.a11y.level}}": a11yLevelText(input.context.a11y),
     "{{context.foreman.now}}": foreman.now,
     "{{context.foreman.question}}": foreman.question,
     "{{context.foreman.history}}": foreman.history,
@@ -869,7 +873,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     }),
   );
   // A data block always starts and ends on a line of its own, so its opening marker is never part of a line the machine wrote.
-  const body = template.replace(/\{\{[A-Za-z.]+\}\}/g, (key, offset: number, whole: string) => {
+  const body = template.replace(/\{\{[A-Za-z0-9.]+\}\}/g, (key, offset: number, whole: string) => {
     const value = quoted[key] ?? key;
     if (!value.startsWith("<<<data:")) return value;
     return `${offset > 0 && whole[offset - 1] !== "\n" ? "\n" : ""}${value}${whole[offset + key.length] !== undefined && whole[offset + key.length] !== "\n" ? "\n" : ""}`;

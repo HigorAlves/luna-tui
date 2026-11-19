@@ -11,6 +11,7 @@ describe("bridged tool grants", () => {
   it("pins which packs hold which bridged tools", () => {
     const held = Object.fromEntries(AGENT_PACKS.filter((p) => p.access.bridge.length > 0).map((p) => [p.id, p.access.bridge]));
     expect(held).toEqual({
+      a11y_audit: [{ server: "mobbin", tools: MOBBIN }],
       design_spec: [{ server: "figma", tools: FIGMA }, { server: "figma-desktop", tools: FIGMA }, { server: "mobbin", tools: MOBBIN }],
     });
   });

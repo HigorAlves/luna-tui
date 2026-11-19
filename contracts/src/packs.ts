@@ -16,6 +16,7 @@ import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from 
 import { type Bands, type KnockOutFlags, type SubScores, type Weights, knockOut, riskProduct, scorePriority } from "./scoring.ts";
 import { AccessReviewAnswer, ChangeExceptionsAnswer, PostmortemAnswer, QuestionnaireAnswer, ReleaseNotesAnswer, StatusReportAnswer, VulnTriageAnswer } from "./compliance.ts";
 import { ComplianceReviewAnswer } from "./compliance-review.ts";
+import { A11yAuditAnswer } from "./a11y.ts";
 import { DesignSpec } from "./design-spec.ts";
 import { DocsDriftAnswer } from "./docs-drift.ts";
 import { ForemanAnswer } from "./foreman.ts";
@@ -71,6 +72,8 @@ export const AgentRole = z.enum([
   "second-opinion",
   // Reads a card's Figma design through the bridge and writes the spec the planner reads; read-only.
   "design-spec-writer",
+  // Audits a rendered UI change for WCAG 2.2 with axe-core and judged checks, in the QA browser; read-only on the code.
+  "a11y-auditor",
   // The foreman: answers a question about the board from a snapshot and suggests actions; no tools, no worktree.
   "foreman",
   // The ticket planner: talks a ticket through with a person over a read-only checkout and drafts it.
@@ -1278,6 +1281,24 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: E2eAnswer,
     template: "e2e.md",
+    network: "full",
+  },
+  // The accessibility auditor (RFC 0013): a sub-run of the e2e stage after a passing browser run, against the app the machine started; and on demand (POST /design/audit).
+  a11y_audit: {
+    id: "a11y_audit",
+    kind: "agent",
+    agent: "a11y-auditor",
+    helpers: [],
+    skills: ["browser-qa", "playwright-qa", "agent-browser", "qa-targets"],
+    access: access(READ_ONLY, { write: true, commands: ["curl", "node", "npm", "pnpm", "npx", "agent-browser", "npx agent-browser", "command -v", "qa-axe"] }, { bridge: [{ server: "mobbin", tools: MOBBIN_READ }] }),
+    writable: true,
+    maxTurns: 60,
+    timeoutMs: 20 * MINUTE,
+    // codex joins after an a11y eval on codex:sol matches the Claude baseline (RFC 0013, phase 4's parity rule).
+    engines: { default: "claude:sonnet", allowed: ["claude:sonnet", "claude:opus"] },
+    effort: "medium",
+    answer: A11yAuditAnswer,
+    template: "a11y_audit.md",
     network: "full",
   },
   evidence: {

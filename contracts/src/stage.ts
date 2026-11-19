@@ -4,6 +4,7 @@
 import { z } from "zod";
 
 import { ChangeExceptionKind, ComplianceRegime } from "./compliance.ts";
+import { A11yContext } from "./a11y.ts";
 import { DesignContext } from "./design.ts";
 import { DesignSpec } from "./design-spec.ts";
 import { EconomyInput, ProposeContext } from "./economy.ts";
@@ -218,6 +219,8 @@ export const PackId = z.enum([
   // The plan council (run in test_design after plan_check): a security review and an independent second opinion on a High-risk or large plan.
   // Reads the card's Figma design through the bridge and writes the spec the planner reads (RFC 0013): a sub-run of the plan stage, and on demand.
   "design_spec",
+  // Audits the rendered change for WCAG 2.2 in the QA browser (RFC 0013): a sub-run of the e2e stage after a passing browser run, and on demand.
+  "a11y_audit",
   "council_security",
   "council_second",
   // The question council (run in triage before the person is asked): settles open questions from the code and the card, or says it cannot.
@@ -1532,7 +1535,7 @@ export const StageInput = z.object({
     /** For design_spec: the card's design reference, composed by the machine (RFC 0013). */
     design: DesignContext.nullable().optional(),
     /** For a11y_audit: the WCAG level the repo audits at; the machine's own value. */
-    a11y: z.object({ level: z.enum(["AA", "AAA"]) }).nullable().optional(),
+    a11y: A11yContext.nullable().optional(),
     /** What the token economy hands this run (RFC 0007): the loop guard's settings, the facts learned in this repository, the approved tool mask. Absent with `MACHINE_ECONOMY=off`. */
     economy: EconomyInput.optional(),
     /** For fact_propose: the repository's name, the digests of its last runs and the texts of the facts it holds. */

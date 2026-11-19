@@ -504,6 +504,13 @@ describe("renderPrompt", () => {
     expect(renderPrompt({ pack: PACKS.design_spec, input, template: "{{context.design.refs}}" })).toContain("\n(none)");
   });
 
+  it("renders the audit level for a11y_audit as the machine's own text, WCAG 2.2 AA when absent", () => {
+    const render = (a11y?: { level: "AA" | "AAA" }) => renderPrompt({ pack: PACKS.a11y_audit, input: { ...input, pack: "a11y_audit", context: { projectContext: null, ...(a11y ? { a11y } : {}) } } as StageInput, template: "{{context.a11y.level}}" });
+    expect(render({ level: "AAA" })).toContain("\nWCAG 2.2 AAA");
+    expect(render()).toContain("\nWCAG 2.2 AA");
+    expect(render({ level: "AAA" })).not.toContain("<<<data");
+  });
+
   it("renders the board for foreman: the question, the turns and one line per card, all quoted data, and the packs as the machine's own text", () => {
     const template = "now {{context.foreman.now}}\nquestion:\n{{context.foreman.question}}\nhistory:\n{{context.foreman.history}}\ncards:\n{{context.foreman.cards}}\npacks:\n{{context.foreman.packs}}";
     const foreman = {

@@ -168,6 +168,22 @@ describe("factory main (dry run)", () => {
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });
 
+  it("a11y_audit: drives the browser with qa-axe, renders the level, scenarios and targets, and leaves a valid result", () => {
+    const task = { id: "t1", title: "Checkout page", description: "d", criteria: ["pay works"], repoPath: "/r/a", branch: "task/t1", source: null };
+    const testCases = [{ id: "S1", title: "pay", criterion: null, criterion_ref: "C1", approach: "a", given: "a cart", when: "I pay", then: "I see the receipt", layer: "e2e" }];
+    const qaTargets = [{ name: "app", baseUrl: "http://luna-app:4000", credential: null }];
+    const { code, stdout, out, result } = run(stageInput("a11y_audit", { task, plan: null, context: { projectContext: null, a11y: { level: "AA" }, testCases, qaTargets } }));
+    expect(code).toBe(0);
+    const prompt = readFileSync(join(out, "prompt.md"), "utf8");
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("WCAG 2.2 AA");
+    expect(prompt).toContain("app: http://luna-app:4000");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: "a11y-auditor", effort: "medium" });
+    expect(options.allowedTools).toContain("Bash(qa-axe:*)");
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+  });
+
   it("design_spec: reads the repo read-only with the bridged tools of its grants, renders the design reference and leaves a valid result", () => {
     const task = { id: "t1", title: "Checkout page", description: "Build the checkout from https://www.figma.com/design/AbCdEf0123456789/Shop?node-id=12-34", criteria: ["the pay button matches the design"], repoPath: "/r/a", branch: "task/t1", source: null };
     const design = { refs: [{ fileKey: "AbCdEf0123456789", nodeIds: ["12:34"], page: null, from: "issue" }] };
