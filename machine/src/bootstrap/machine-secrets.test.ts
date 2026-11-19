@@ -26,4 +26,13 @@ describe("machineSecrets", () => {
     expect(Object.values(secrets).sort()).toEqual(["claude-env-token-1234", "claude-file-token-1234", "codex-access-1234", "codex-refresh-1234", "p@ss-word-1234", "slack-app-1234", "slack-user-1234"].sort());
     expect(Object.keys(secrets)).toContain("DATABASE_PASSWORD");
   });
+
+  it("names every stored MCP access, refresh and client secret", () => {
+    const state = mkdtempSync(join(tmpdir(), "secrets-"));
+    mkdirSync(join(state, "mcp"), { recursive: true });
+    writeFileSync(join(state, "mcp", "figma.json"), JSON.stringify({ access_token: "tok-aaaaaaaaaaaa", refresh_token: "ref-bbbbbbbbbbbb" }));
+    writeFileSync(join(state, "mcp", "figma.client.json"), JSON.stringify({ client_id: "cid", client_secret: "sec-cccccccccccc" }));
+    const secrets = machineSecrets({ githubToken: null, apiToken: null, slack: null, jira: null, traces: { mode: "off" }, stateDir: state } as never, {}, mkdtempSync(join(tmpdir(), "secrets-")));
+    expect(Object.values(secrets).sort()).toEqual(["ref-bbbbbbbbbbbb", "sec-cccccccccccc", "tok-aaaaaaaaaaaa"]);
+  });
 });

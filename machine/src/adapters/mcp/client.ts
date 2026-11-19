@@ -1,6 +1,7 @@
 // The MCP adapter: one SDK client per declared server, connected on first use and kept until
 // close(). Tokens come from `token(server)` (adapters/mcp/tokens.ts); a server error is a result.
 import type { McpServerConfig } from "@hardness/contracts";
+import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -13,11 +14,20 @@ export interface McpDeps {
   token: (server: McpServerConfig) => Promise<string | null>;
   /** Tests pass an in-memory transport. */
   transportFor?: (server: McpServerConfig, token: string | null) => Transport;
+  /** The OAuth provider for an `oauth` http server: the SDK then attaches and refreshes the token itself. */
+  authProvider?: (server: McpServerConfig) => OAuthClientProvider | undefined;
 }
 
-/** A stdio server gets an empty environment on purpose: it must not inherit the machine's tokens. */
-function defaultTransport(server: McpServerConfig, token: string | null): Transport {
-  if (server.transport === "stdio") return new StdioClientTransport({ command: server.command![0]!, args: server.command!.slice(1), env: {} });
+/** The variable a stdio server's `ref` token reaches its child under. */
+export const STDIO_TOKEN_ENV = "MCP_TOKEN";
+
+/** A stdio server gets an empty environment on purpose: it must not inherit the machine's tokens. Only its own `ref` token goes in, as MCP_TOKEN. */
+export function defaultTransport(server: McpServerConfig, token: string | null, authProvider?: OAuthClientProvider): Transport {
+  if (server.transport === "stdio") {
+    const env: Record<string, string> = server.credential.kind === "ref" && token ? { [STDIO_TOKEN_ENV]: token } : {};
+    return new StdioClientTransport({ command: server.command![0]!, args: server.command!.slice(1), env });
+  }
+  if (authProvider) return new StreamableHTTPClientTransport(new URL(server.url!), { authProvider });
   return new StreamableHTTPClientTransport(new URL(server.url!), token ? { requestInit: { headers: { authorization: `Bearer ${token}` } } } : {});
 }
 
@@ -34,7 +44,7 @@ export function createMcp(servers: readonly McpServerConfig[], deps: McpDeps): M
       const server = declared(name);
       c = (async () => {
         const client = new Client({ name: "luna-machine", version: "1.0.0" });
-        await client.connect((deps.transportFor ?? defaultTransport)(server, await deps.token(server)));
+        await client.connect((deps.transportFor ?? ((sv, t) => defaultTransport(sv, t, deps.authProvider?.(sv))))(server, await deps.token(server)));
         return client;
       })();
       c.catch(() => clients.delete(name));

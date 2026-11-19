@@ -7,7 +7,7 @@ const NAME = /^[a-z][a-z0-9-]{0,30}$/;
 export const McpCredential = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("none") }),
   z.object({ kind: z.literal("oauth"), scopes: z.array(z.string()).optional() }),
-  /** `literal:<v>`, `op://…` or `env:<NAME>`, as QA targets take them. */
+  /** `env:NAME`, `literal:<v>` or `op://…`, resolved by the machine (RFC 0013). */
   z.object({ kind: z.literal("ref"), ref: z.string().min(1) }),
 ]);
 export type McpCredential = z.infer<typeof McpCredential>;

@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { createMcp } from "./client.ts";
+import { createMcp, defaultTransport } from "./client.ts";
 
 function fixtureServer() {
   const server = new McpServer({ name: "fixture", version: "1.0.0" });
@@ -47,5 +47,15 @@ describe("createMcp", () => {
   });
   it("refuses a tool the machine does not declare", async () => {
     expect(await (await connected()).callTool("fixture", "hidden", {})).toEqual({ ok: false, error: "fixture: hidden is not bridged" });
+  });
+});
+
+describe("defaultTransport", () => {
+  const stdio = (credential: unknown) => ({ name: "s", transport: "stdio", command: ["node", "x.js"], credential, tools: [] }) as never;
+  const envOf = (t: unknown) => (t as { _serverParams: { env: Record<string, string> } })._serverParams.env;
+  it("hands a ref token only to that stdio child, as MCP_TOKEN", () => {
+    expect(envOf(defaultTransport(stdio({ kind: "ref", ref: "env:X" }), "tok-1"))).toEqual({ MCP_TOKEN: "tok-1" });
+    expect(envOf(defaultTransport(stdio({ kind: "none" }), null))).toEqual({});
+    expect(envOf(defaultTransport(stdio({ kind: "oauth" }), "tok-1"))).toEqual({});
   });
 });
