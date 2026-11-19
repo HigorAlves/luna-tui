@@ -69,6 +69,15 @@ export class RepoMap {
     return [...new Set(this.found.values())];
   }
 
+  /** Every checkout the machine itself knows: the map, the remembered links and the GitHub checkouts under the repos dir.
+   *  A task's repoPath is never one of them, so a caller cannot add a folder here. */
+  async checkouts(): Promise<string[]> {
+    await this.load();
+    // The scan is not remembered: `remembered()` feeds the graph watch, which must not start watching every checkout.
+    const scanned = (await this.scan()).map(([, path]) => path);
+    return [...new Set([...Object.values(this.options.map), ...this.found.values(), ...scanned])];
+  }
+
   /** Resolves once the links written so far are on disk. */
   saved(): Promise<void> {
     return this.writing;

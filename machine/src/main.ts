@@ -1007,7 +1007,7 @@ const approveBase = async (repo: string, base: string): Promise<{ ok: true } | {
 const app = createApp({
   knownRepos,
   // The ticket chat's planner reads only the repo map and the remembered repos: a task's repoPath is a client's word.
-  chatRepos: async () => [...Object.values(config.repoMap), ...(await repoMap.remembered())],
+  chatRepos: () => repoMap.checkouts(),
   // The identity is read on each call, so a machine fixed in place turns healthy without a restart; the token and the stub reason are fixed at boot.
   sandboxPolicy: config.sandboxPolicy,
   problems: async () => readinessProblems({ githubToken: config.githubToken, identity: await gitIdentity(process.cwd()), stubReason }),
