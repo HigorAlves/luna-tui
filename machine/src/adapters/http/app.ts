@@ -106,6 +106,8 @@ import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../appli
 import { CloneError, NoPullError, NotReadyError, type PullsPort } from "../../application/pulls.ts";
 import { tapOf } from "../../application/slack-send.ts";
 import { type McpApi, mountMcpCallback, mountMcpRoutes } from "./mcp.ts";
+import { mountDesignRoutes } from "./design.ts";
+import type { PolicyStore } from "../../application/policy.ts";
 import { AlreadyTaskError, BadRelationError, BuiltinWatchError, NoItemError, NoWatchError, SlackRefusedError, type SlackInboxPort } from "../../application/slack-inbox.ts";
 import { NoSlackTokenError } from "../../application/slack.ts";
 import { NoJiraTokenError } from "../../application/jira.ts";
@@ -158,6 +160,9 @@ export interface AppDeps {
   slack?: SlackInboxPort;
   /** The MCP servers' status and login (RFC 0013); without it the `/mcp` routes are absent. */
   mcp?: McpApi;
+  /** The design routes (RFC 0013): each repo's policy (its `design` section and QA targets), and whether the QA image is built. Without `policies` no repo has a design section or QA target. */
+  policies?: Pick<PolicyStore, "for">;
+  qaImage?: boolean;
   /** Jira by hand (link, unlink, create, search, status); without it the `/jira/*` and `/tasks/:id/jira*` routes are absent. */
   jira?: JiraTasksPort;
   /** The ticket's SLA clocks, computed when a task is answered or published; without it every task shows `sla: null`. */
@@ -194,7 +199,9 @@ export interface AppDeps {
 const ForemanInput = z.object({ question: ForemanContext.shape.question, history: ForemanContext.shape.history.optional() });
 
 /** Packs only their own route may run: `POST /runs` refuses them, since the route sets what the run reads and what its trusted prompt header says. */
-const ROUTE_ONLY_PACKS: readonly string[] = ["ticket_chat"];
+const ROUTE_ONLY_PACKS: readonly string[] = ["ticket_chat", "design_spec", "a11y_audit"];
+/** The route that runs each of them. */
+const ROUTE_OF: Readonly<Record<string, string>> = { ticket_chat: "POST /ticket-chat", design_spec: "POST /design/spec", a11y_audit: "POST /design/audit" };
 
 /** The real path of `path`, or null when it cannot be resolved. */
 const realOrNull = (path: string): Promise<string | null> => realpath(path).catch(() => null);
@@ -267,7 +274,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, compliance, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], chatRepos = async () => [], clock = () => new Date(), problems: problemsOf, sandboxPolicy, mcp }: AppDeps): Hono {
+export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, compliance, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], chatRepos = async () => [], clock = () => new Date(), problems: problemsOf, sandboxPolicy, mcp, policies, qaImage = false }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   // The OAuth callback is the one route a browser reaches with no token; it takes only a login this machine started.
@@ -381,7 +388,7 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
   /** One context-only pack on data the client sends: its validated answer and what it cost. */
   app.post("/runs", async (c) => {
     const input = await body(c, RunInput);
-    if (ROUTE_ONLY_PACKS.includes(input.pack)) throw new BadRequest(`${input.pack} is not run through POST /runs: use POST /ticket-chat`);
+    if (ROUTE_ONLY_PACKS.includes(input.pack)) throw new BadRequest(`${input.pack} is not run through POST /runs: use ${ROUTE_OF[input.pack]}`);
     const client = c.req.header("x-luna-client") ?? null;
     if (client !== null && !CLIENT_NAME.test(client)) throw new BadRequest("X-Luna-Client must be 1 to 64 letters, digits, dots, dashes or underscores");
     if (!runs) return fail(c, 503, "agents_off", "this machine runs no packs: agents are off (MACHINE_AGENTS=off)");
@@ -453,6 +460,8 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
       throw error;
     }
   });
+
+  mountDesignRoutes(app, { runs, chatRepos, policies, qaImage }, { body, fail: (c, status, error, message) => fail(c, status, error, message) });
 
   // "Stop picking up work" / "carry on" / "run N at once": the knobs for leaving and for debugging.
   app.post("/drain", (c) => c.json(pipeline.drain()));

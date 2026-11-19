@@ -220,7 +220,7 @@ export interface AgentExtra {
 }
 
 /** `host:port` of each QA target's URL, for the browser run's list (an address or a private name is dropped later, by the list's own rules). */
-function targetHosts(targets: ReadonlyArray<{ baseUrl: string }>): string[] {
+export function targetHosts(targets: ReadonlyArray<{ baseUrl: string }>): string[] {
   return targets.flatMap((target) => {
     try {
       const url = new URL(target.baseUrl);

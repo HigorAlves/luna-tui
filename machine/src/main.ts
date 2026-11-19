@@ -93,7 +93,9 @@ import { sharedWiki } from "./adapters/git/wiki.ts";
 import { questionnaireWriters } from "./application/compliance-writers.ts";
 import { Questionnaires } from "./application/questionnaires.ts";
 import { graphifyGraph } from "./adapters/graph/graphify.ts";
-import { imageId, imageLabel, runSandbox } from "./adapters/docker/docker.ts";
+import { imageExists, imageId, imageLabel, runSandbox } from "./adapters/docker/docker.ts";
+import { repoSecrets } from "./adapters/credentials/repo-secrets.ts";
+import { homedir } from "node:os";
 import { removeRunNetwork } from "./adapters/docker/egress.ts";
 import { sweepRunSecrets } from "./adapters/docker/leftover-secrets.ts";
 import { LOCKFILES, type EnvRecord, envOf } from "./domain/env-hash.ts";
@@ -743,8 +745,16 @@ async function learningOf(taskId: string | undefined): Promise<{ repo: string | 
 }
 /** Packs on demand (`POST /runs`): the stage image, each call with its own engine's credential;
  *  off only with MACHINE_AGENTS=off. Their cost counts toward the day's ceiling, which they obey. */
+/** The QA image: the design routes' audit runs in it; without it they answer 503 and the audit's runs fail. */
+const qaImageReady = await imageExists(config.runnerQaImage);
+const mcpClients = mcpFactory(config);
 const packRuns = buildPackRuns(config, {
   policies,
+  // The design routes (RFC 0013): bridged design tools through the machine's MCP servers, and the QA image with the target's own credential.
+  mcpFor: mcpClients.mcpFor,
+  mcpUntrusted: config.mcp.untrusted,
+  ...(qaImageReady ? { qaImage: config.runnerQaImage } : {}),
+  qaSecrets: repoSecrets({ home: homedir() }),
   ...(config.egress.enabled && agentDeps?.egress ? { egress: agentDeps.egress } : {}),
   credentials,
   // A run that reads a repo (ticket_chat) gets a throwaway copy of its tracked files, never the checkout.
@@ -1012,8 +1022,10 @@ const approveBase = async (repo: string, base: string): Promise<{ ok: true } | {
   return approveRepoBase({ knownRepos, policyOf: (r) => policies.for(r), sourceOf: (r) => deps.imageSource.for(r), approvals: deps.approvals, approved: (r) => deps.repoImages.approved(r) }, repo, base);
 };
 /** The MCP servers (RFC 0013): tokens in the state dir, the OAuth redirect at the board's address (`MACHINE_PUBLIC_URL`, else this machine's own port). */
-const { store: mcpStore, redirect: mcpRedirect, mcpFor } = mcpFactory(config);
+const { store: mcpStore, redirect: mcpRedirect, mcpFor } = mcpClients;
 const app = createApp({
+  policies,
+  qaImage: qaImageReady,
   mcp: createMcpApi({ mcp: mcpFor(), store: mcpStore, redirectUrl: mcpRedirect }),
   knownRepos,
   // The ticket chat's planner reads only the repo map and the remembered repos: a task's repoPath is a client's word.
