@@ -1648,7 +1648,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     // Plans a ticket with a person over a read-only checkout (one turn per call). It only drafts: the board creates the card.
     agent: "ticket-planner",
     helpers: [],
-    skills: [],
+    skills: ["code-discovery"],
     access: access(READ_ONLY, {}),
     writable: false,
     maxTurns: 25,
