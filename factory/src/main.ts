@@ -23,6 +23,7 @@ import { runInfo } from "./core/fingerprint.ts";
 import { lunaHandlers } from "./core/luna-tools.ts";
 import { EMPTY_RUN, type RunOutcome, finish, settle } from "./core/output.ts";
 import { cutReason } from "./core/data-block.ts";
+import { IMAGE_ROOTS } from "./core/roots.ts";
 import { renderPromptReport } from "./core/render.ts";
 import { factoryTelemetry } from "./core/telemetry.ts";
 import { readJson, readStageInput } from "./core/stage-io.ts";
@@ -128,7 +129,7 @@ async function runStage(): Promise<RunOutcome> {
   const problem = input!.effort ? effortProblem(pack.id, engine.id, input!.effort) : null;
   if (problem) return { ...EMPTY_RUN, error: `invalid stage input: ${problem}` };
   info = runInfo(runtime, engine, pack, template, FACTORY_ROOT, input!.context.economy?.mask, effort);
-  const paths = { factoryRoot: FACTORY_ROOT, work: WORK, out: OUT, input: dirname(IN), scratch };
+  const paths = { factoryRoot: FACTORY_ROOT, work: WORK, out: OUT, input: dirname(IN), scratch, images: IMAGE_ROOTS.filter((root) => existsSync(root)) };
   // A helper the runtime does not run itself is a child run through `delegate`; the parent's turns
   // so far are its calls so far, which is never fewer.
   const turnsUsed = () => events.filter((e) => e.kind === "tool_call").length;

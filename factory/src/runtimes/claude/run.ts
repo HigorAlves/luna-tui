@@ -82,7 +82,7 @@ export function guardPolicy({ pack, input, paths }: Pick<RunContext, "pack" | "i
     branchPrefix: branchPrefixFor(input.task),
     workRoot: paths.work,
     outRoot: paths.out,
-    roots: { scratch: paths.scratch, read: [paths.input, join(paths.factoryRoot, "plugin"), GRAPH_ROOT, ...sessionResults()] },
+    roots: { scratch: paths.scratch, read: [paths.input, join(paths.factoryRoot, "plugin"), GRAPH_ROOT, ...sessionResults(), ...(paths.images ?? [])] },
     web: pack.kind === "agent" && pack.access.web,
     // e2e signs in with the credentials its targets name (`env:QA_PASSWORD`), inline as "$QA_PASSWORD".
     expandable: (input.context.qaTargets ?? []).flatMap((t) => (t.credential?.startsWith("env:") ? [t.credential.slice(4)] : [])),
@@ -118,7 +118,7 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
   const options = {
     cwd: paths.work,
     // The folders a stage reads or writes beside /work: without them the SDK refuses a shell read of /in/stage.json that the guard's roots allow.
-    additionalDirectories: [paths.input, paths.out, paths.scratch],
+    additionalDirectories: [paths.input, paths.out, paths.scratch, ...(paths.images ?? [])],
     agent: pack.agent,
     agents: agentDefinitions(pack, join(paths.factoryRoot, "roles"), engine.modelId, ctx.effort ?? pack.effort),
     systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: [FACTORY_RULES, ...bridgeRule(bridgeNames(input.bridge)), ...commandsLine(pack.access.commands)].join("\n") },
