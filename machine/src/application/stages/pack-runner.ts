@@ -158,6 +158,9 @@ const isFile = (path: string): boolean => {
   }
 };
 
+/** The packs that drive the QA target in the browser (RFC 0013): they run in the QA image, hold the one target's credential and may reach its hosts. */
+const BROWSER_PACKS: ReadonlySet<PackId> = new Set<PackId>(["e2e", "a11y_audit"]);
+
 export interface AgentExtra {
   /** ci_watch: what the host fetched about the PR's CI, since the sandbox has no GitHub credential. */
   ci?: CiContext | null;
@@ -177,6 +180,8 @@ export interface AgentExtra {
   plan?: PlanContext;
   /** design_spec: the card's design reference, composed by the machine. */
   design?: DesignContext;
+  /** a11y_audit: the WCAG level the repo asks for; absent, AA. */
+  a11yLevel?: "AA" | "AAA";
   /** question_council: the open triage questions, the card and the answers so far. */
   questions?: QuestionsContext;
   /** verifying: the files the code graph says depend on what the change touched. */
@@ -439,7 +444,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       : null;
 
   // The browser run drives ONE target, chosen here, and holds only that target's credential.
-  const e2eTarget = pack === "e2e" ? (extra.qaTarget !== undefined ? extra.qaTarget : (policy.qaTargets[0] ?? null)) : null;
+  const e2eTarget = BROWSER_PACKS.has(pack) ? (extra.qaTarget !== undefined ? extra.qaTarget : (policy.qaTargets[0] ?? null)) : null;
   // Verify is told which files the machine's own tests commit added, so a "which files change" criterion is judged without them.
   const testsRead = pack === "verifying" && context.testsCommit ? await readCommitDiff(workspace.path, context.testsCommit).catch(() => null) : null;
   const testsCommit = testsRead
@@ -454,6 +459,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     ...(extra.plan ? { plan: extra.plan } : {}),
     ...(extra.questions ? { questions: extra.questions } : {}),
     ...(extra.design ? { design: extra.design } : {}),
+    ...(extra.a11yLevel ? { a11yLevel: extra.a11yLevel } : {}),
     engine: choice.engine,
     ...(effortChoice.source === "config" ? { effort: effortChoice.effort } : {}),
     attempt: context.attempt,
@@ -476,7 +482,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     ...(extra.scenarioTests?.length ? { scenarioTests: extra.scenarioTests } : {}),
     ...(extra.sweepFailures?.length ? { sweepFailures: extra.sweepFailures } : {}),
     // The recorder drives the one target the film is recorded against; the e2e pack picks from the repo's list.
-    qaTargets: pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : pack === "e2e" ? (e2eTarget ? [e2eTarget] : []) : policy.qaTargets,
+    qaTargets: pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : BROWSER_PACKS.has(pack) ? (e2eTarget ? [e2eTarget] : []) : policy.qaTargets,
     ...(extra.video ? { video: extra.video } : {}),
     checks: policy.checks,
     ...(economyInput ? { economy: economyInput } : {}),
@@ -664,7 +670,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   // prompt and by value only in the container's environment. Implementing and the rest get none, whatever a check declares.
   let secretValues: Record<string, string> | undefined;
   let qaCredentialNames: string[] = [];
-  if (deps.secrets && (pack === "e2e" || pack === "recording")) {
+  if (deps.secrets && (BROWSER_PACKS.has(pack) || pack === "recording")) {
     const names = [...new Set((pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : e2eTarget ? [e2eTarget] : []).flatMap((t) => (t.credential?.startsWith("env:") ? [t.credential.slice(4)] : [])))];
     if (names.length > 0) {
       const loaded = await guard(() => deps.secrets!.load(task.repoPath!, names));
@@ -680,7 +686,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const found = PACKS[pack];
   const owners = [credentialOwner(choice.engine), ...(found.kind === "decision" ? [] : helpersOn(found, resolveEngine(choice.engine).runtime).map((h) => credentialOwner(h.engine)))];
   const egress = deps.egress
-    ? await guard(() => deps.egress!.for({ repoPath: task.repoPath, kind: egressKindOf(found), owners: [...new Set(owners)], ...(credential.relay ? { relayed: ["claude" as const] } : {}), targets: found.kind !== "decision" && found.network === "full" && (pack === "e2e" || pack === "recording") ? targetHosts(input.context.qaTargets ?? []) : [] }))
+    ? await guard(() => deps.egress!.for({ repoPath: task.repoPath, kind: egressKindOf(found), owners: [...new Set(owners)], ...(credential.relay ? { relayed: ["claude" as const] } : {}), targets: found.kind !== "decision" && found.network === "full" && (BROWSER_PACKS.has(pack) || pack === "recording") ? targetHosts(input.context.qaTargets ?? []) : [] }))
     : undefined;
   const identity = limits.writable ? await guard(() => gitIdentity(task.repoPath!)) : null;
   // The bridged design tools (RFC 0013): only for a pack that names some, in a repo that has not turned them off, with a client of this run's own.
@@ -716,7 +722,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     // The verifier never sees the card's shared agent session: it reviews from the plan, the scenarios and the Build Report, not the implementer's trail.
     ...(pack === "verifying" ? {} : { sessionMount }),
     cacheVolume: cacheVolumeFor(task.repoPath, size.cacheTrust),
-    image: pack === "e2e" ? deps.qaImage : pack === "recording" ? (deps.videoImage ?? deps.qaImage) : stageImage,
+    image: BROWSER_PACKS.has(pack) ? deps.qaImage : pack === "recording" ? (deps.videoImage ?? deps.qaImage) : stageImage,
     runDir,
     worktree: workspace.path,
     writable: limits.writable,

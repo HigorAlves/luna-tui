@@ -165,6 +165,8 @@ export function buildStageInput(opts: {
   checks?: CheckSpec[] | null;
   /** For design_spec: the card's design reference, composed by the machine. */
   design?: DesignContext | null;
+  /** For a11y_audit: the WCAG level to audit against; AA when absent. */
+  a11yLevel?: "AA" | "AAA";
   /** The MCP tools the machine bridged for this run (RFC 0013); none by default. */
   bridge?: BridgedTool[];
   /** For reviewing_memory: the last implementing ledger and every earlier run of the task. */
@@ -241,7 +243,7 @@ export function buildStageInput(opts: {
     context: {
       projectContext: opts.projectContext ?? null,
       testCases:
-        pack === "e2e"
+        pack === "e2e" || pack === "a11y_audit"
           ? browserCases(approvedCases(approvals))
           : pack === "verifying"
           ? withoutBrowserCases(approvedCases(approvals))
@@ -262,11 +264,12 @@ export function buildStageInput(opts: {
       ci: opts.ci ?? null,
       graph: opts.graph ?? null,
       ...(opts.plan ? { plan: reviewed ?? opts.plan } : {}),
+      ...(pack === "a11y_audit" ? { a11y: { level: opts.a11yLevel ?? "AA" } } : {}),
       ...(pack === "design_spec" && opts.design ? { design: opts.design } : {}),
       ...(pack === "question_council" && opts.questions ? { questions: opts.questions } : {}),
       ...(pack === "verifying" && opts.blastRadius?.length ? { blastRadius: opts.blastRadius } : {}),
       ...(pack === "verifying" && opts.coverage ? { coverage: opts.coverage } : {}),
-      ...((pack === "e2e" || pack === "recording") && opts.qaTargets ? { qaTargets: opts.qaTargets } : {}),
+      ...((pack === "e2e" || pack === "a11y_audit" || pack === "recording") && opts.qaTargets ? { qaTargets: opts.qaTargets } : {}),
       ...(VIDEO_PACKS.has(pack) && opts.video ? { video: opts.video } : {}),
       ...((pack === "implementing" || pack === "verifying") && opts.checks ? { checks: opts.checks } : {}),
       ...((pack === "reviewing" || pack === "compliance_review") && opts.review ? { review: opts.review } : {}),

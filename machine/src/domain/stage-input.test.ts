@@ -534,3 +534,26 @@ describe("buildStageInput's design spec", () => {
     expect(designer.context.plan).not.toHaveProperty("designSpec");
   });
 });
+
+describe("buildStageInput's accessibility audit", () => {
+  const cases = [{ title: "pay", criterion: null, approach: "x", layer: "e2e" }, { title: "unit", criterion: null, approach: "y", layer: "unit" }];
+  const approvals = [approval({ kind: "awaiting_test_check", requested: { cases } })];
+  const targets = [{ name: "app", baseUrl: "http://luna-app:4000", credential: null }];
+  const build = (pack: "a11y_audit" | "e2e" | "verifying", extra: object = {}) => buildStageInput({ task, stage: "e2e", pack, attempt: 1, approvals, priorFindings: [], qaTargets: targets, ...extra });
+
+  it("gives a11y_audit the browser scenarios, the one target and the WCAG level", () => {
+    const input = build("a11y_audit", { a11yLevel: "AAA" });
+    expect(StageInput.parse(input)).toEqual(input);
+    expect(input.pack).toBe("a11y_audit");
+    expect(input.context.testCases!.map((c) => (c as { title: string }).title)).toEqual(["pay"]);
+    expect(input.context.qaTargets).toEqual(targets);
+    expect(input.context.a11y).toEqual({ level: "AAA" });
+  });
+
+  it("defaults the level to AA, and gives no other pack an a11y context", () => {
+    expect(build("a11y_audit").context.a11y).toEqual({ level: "AA" });
+    expect(build("e2e", { a11yLevel: "AAA" }).context.a11y).toBeUndefined();
+    expect(build("verifying", { a11yLevel: "AAA" }).context.a11y).toBeUndefined();
+    expect(build("verifying").context.qaTargets).toBeUndefined();
+  });
+});

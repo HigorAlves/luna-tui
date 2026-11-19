@@ -1778,6 +1778,32 @@ describe("the browser run's one target", () => {
     expect(JSON.stringify(seen?.input)).not.toContain("OTHER_PW");
   });
 
+  it.each(["e2e", "a11y_audit"] as const)("%s runs in the QA image, on the one target given: its host on the list, its credential loaded and passed, and no other target in the input", async (pack) => {
+    two();
+    const s = store();
+    const requests: Array<{ targets?: string[] }> = [];
+    const d: AgentDeps = { ...deps(fakeSandbox(output())), secrets: s, egress: { for: async (r) => (requests.push(r as never), { allow: [], allowPrivate: [], proxyImage: "img" }) } };
+    await runAgent(d, context("e2e"), pack, { qaTarget: { name: "prod-like", baseUrl: "https://other.example.com", credential: "env:OTHER_PW" } });
+    expect(seen?.image).toBe("qa-img");
+    expect(requests[0]!.targets).toEqual(["other.example.com:443"]);
+    expect(s.loads).toEqual([["OTHER_PW"]]);
+    expect(seen?.secrets).toEqual({ OTHER_PW: `${secret}-OTHER_PW` });
+    expect((seen?.input as { context: { qaTargets: Array<{ name: string }> } }).context.qaTargets.map((t) => t.name)).toEqual(["prod-like"]);
+  });
+
+  it("gives a11y_audit the repo's first target when none is named, as the browser run has it", async () => {
+    two();
+    const s = store();
+    await runAgent({ ...deps(fakeSandbox(output())), secrets: s }, context("e2e"), "a11y_audit");
+    expect(s.loads).toEqual([["STAGING_PW"]]);
+    expect((seen?.input as { context: { qaTargets: Array<{ name: string }> } }).context.qaTargets.map((t) => t.name)).toEqual(["staging"]);
+  });
+
+  it("keeps every other pack out of the QA image: a decision-free stage pack still runs in the stage image", async () => {
+    await runAgent(deps(fakeSandbox(output())), context("verifying"), "verifying");
+    expect(seen?.image).not.toBe("qa-img");
+  });
+
   it("is the app the machine started when it is given one: no credential, the app's network joined, and the aliases kept off the proxy", async () => {
     two();
     const s = store();
