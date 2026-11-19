@@ -4,6 +4,8 @@
   "type": "module",
   "exports": {
     "./run-once": "./src/application/stages/run-once.ts",
+    "./design-bridge": "./src/application/stages/design-bridge.ts",
+    "./mcp-replay": "./src/adapters/mcp/replay.ts",
     "./credentials": "./src/adapters/credentials/index.ts",
     "./docker": "./src/adapters/docker/docker.ts",
     "./telemetry": "./src/bootstrap/telemetry.ts",

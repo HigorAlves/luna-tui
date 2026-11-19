@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { MachinePolicySchema, type StageInput } from "@hardness/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { CredentialWaitError, NoCredentialError, type PrepareWait } from "../../adapters/credentials/index.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
@@ -153,5 +153,75 @@ describe("runPackOnce for an eval", () => {
     const credentials = { prepare: async () => ({ env: {}, mounts: [], release: async () => {} }) };
     await runPackOnce({ name: "c", image: "img", runDir, worktree: join(runDir, "work"), input, engine: "claude:haiku", labels: {}, egressKind: "agent" }, { credentials, sandbox, egress: { for: async (r) => (asked.push(r), { allow: [], allowPrivate: [], proxyImage: "img" }) } });
     expect(asked).toEqual([{ repoPath: null, kind: "agent", owners: ["claude"] }]);
+  });
+});
+
+describe("runPackOnce with bridged tools, a QA image and a QA target (RFC 0013)", () => {
+  const credentials = { prepare: async () => ({ env: {}, mounts: [], release: async () => {} }) };
+  const tools = [{ server: "figma", tool: "get_design_context", name: "figma_get_design_context", description: "d", inputSchema: {} }];
+  const waitFor = async (ok: () => boolean) => {
+    for (let i = 0; i < 100 && !ok(); i++) await new Promise((r) => setTimeout(r, 20));
+    if (!ok()) throw new Error("timed out waiting");
+  };
+
+  it("serves the bridged tools of the run through the mailbox, mounts /design and closes the client", async () => {
+    const runDir = mkdtempSync(join(tmpdir(), "once-"));
+    const closed = vi.fn(async () => {});
+    const callTool = vi.fn(async () => ({ ok: true as const, text: "frame", images: [], truncated: false }));
+    const mcp = { servers: () => [], listTools: async () => [], callTool, close: closed };
+    const rows: unknown[] = [];
+    let seen: SandboxRun | undefined;
+    const sandbox = async (run: SandboxRun): Promise<SandboxResult> => {
+      seen = run;
+      // the container's side: one bridged call, then the result
+      mkdirSync(join(runDir, "out", "checks"), { recursive: true });
+      writeFileSync(join(runDir, "out", "checks", "mcp-request-abcd1234-1.json"), JSON.stringify({ n: 1, server: "figma", tool: "get_design_context", args: { nodeId: "1:2" } }));
+      await waitFor(() => existsSync(join(runDir, "out", "checks", "mcp-answer-abcd1234-1.json")));
+      writeFileSync(join(runDir, "out", "result.json"), JSON.stringify(result));
+      return { exitCode: 0, timedOut: false, aborted: false, transcriptPath: "" };
+    };
+    const out = await runPackOnce(
+      { name: "c", image: "img", runDir, worktree: runDir, input: { ...input }, engine: "claude:haiku", labels: {}, bridge: { tools, mcp, designDir: join(runDir, "design"), log: (r) => void rows.push(r) } },
+      { credentials, sandbox },
+    );
+    expect(out.error).toBeNull();
+    expect((seen!.input as { bridge: unknown[] }).bridge).toEqual(tools);
+    expect(seen!.mounts).toContainEqual({ host: join(runDir, "design"), container: "/design", readOnly: true });
+    expect(callTool).toHaveBeenCalledWith("figma", "get_design_context", { nodeId: "1:2" });
+    expect(JSON.parse(readFileSync(join(runDir, "out", "checks", "mcp-answer-abcd1234-1.json"), "utf8"))).toMatchObject({ ok: true, text: expect.stringContaining("frame") });
+    expect(rows).toEqual([expect.objectContaining({ server: "figma", tool: "get_design_context", outcome: "ok" })]);
+    expect(closed).toHaveBeenCalledOnce();
+  });
+
+  it("closes the client when the sandbox throws", async () => {
+    const runDir = mkdtempSync(join(tmpdir(), "once-"));
+    const closed = vi.fn(async () => {});
+    const mcp = { servers: () => [], listTools: async () => [], callTool: async () => ({ ok: false as const, error: "x" }), close: closed };
+    await expect(
+      runPackOnce({ name: "c", image: "img", runDir, worktree: runDir, input, engine: "claude:haiku", labels: {}, bridge: { tools, mcp, designDir: join(runDir, "design"), log: () => {} } }, { credentials, sandbox: async () => { throw new Error("docker down"); } }),
+    ).rejects.toThrow("docker down");
+    expect(closed).toHaveBeenCalledOnce();
+  });
+
+  it("runs in the image it is given, with the QA target's hosts, the secret values and the networks it is handed", async () => {
+    const runDir = mkdtempSync(join(tmpdir(), "once-"));
+    const asked: unknown[] = [];
+    let seen: SandboxRun | undefined;
+    const sandbox = async (run: SandboxRun): Promise<SandboxResult> => ((seen = run), { exitCode: 0, timedOut: false, aborted: false, transcriptPath: "" });
+    await runPackOnce(
+      { name: "c", image: "hardness-runner-qa:dev", runDir, worktree: runDir, input, engine: "claude:haiku", labels: {}, egressKind: "agent", egressTargets: ["staging.example.com"], secrets: { QA_PASSWORD: "pw" }, alsoJoin: ["net-app"], noProxy: ["luna-app"], redactValues: { K: "v" } },
+      { credentials, sandbox, egress: { for: async (r) => (asked.push(r), { allow: [], allowPrivate: [], proxyImage: "img" }) } },
+    );
+    expect(seen!.image).toBe("hardness-runner-qa:dev");
+    expect(asked).toEqual([{ repoPath: null, kind: "agent", owners: ["claude"], targets: ["staging.example.com"] }]);
+    expect(seen).toMatchObject({ secrets: { QA_PASSWORD: "pw" }, alsoJoin: ["net-app"], noProxy: ["luna-app"], redactValues: { K: "v" } });
+  });
+
+  it("passes none of these to the sandbox when it is given none", async () => {
+    let seen: SandboxRun | undefined;
+    const runDir = mkdtempSync(join(tmpdir(), "once-"));
+    await runPackOnce({ name: "c", image: "img", runDir, worktree: runDir, input, engine: "claude:haiku", labels: {} }, { credentials, sandbox: async (r) => ((seen = r), { exitCode: 0, timedOut: false, aborted: false, transcriptPath: "" }) });
+    for (const key of ["mounts", "secrets", "alsoJoin", "noProxy", "redactValues"]) expect(seen).not.toHaveProperty(key);
+    expect((seen!.input as { bridge: unknown[] }).bridge).toEqual([]);
   });
 });
