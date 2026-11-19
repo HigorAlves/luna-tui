@@ -10,7 +10,7 @@ import { type Credentials, CredentialWaitError, NoCredentialError } from "../ada
 import type { SandboxResult, SandboxRun } from "../adapters/docker/docker.ts";
 import { withTask } from "./task-scope.ts";
 import { type RunEnd, type RunStart, type Telemetry, noTelemetry } from "./telemetry.ts";
-import { EngineNotAllowedError, LOGIN_BUSY_WAIT_MS, NotOnDemandError, PACK_RUNS_DIR, type PackRunRecord, PackRuns, QueueFullError, ownCalls, RunAbortedError, RunFailedError, RunNoCredentialError, RunOverBudgetError, RunRateLimitedError } from "./pack-runs.ts";
+import { EngineNotAllowedError, LOGIN_BUSY_WAIT_MS, NotOnDemandError, PACK_RUNS_DIR, type PackRunRecord, PackRuns, QueueFullError, ownCalls, RunAbortedError, RunCredentialBusyError, RunFailedError, RunNoCredentialError, RunOverBudgetError, RunRateLimitedError } from "./pack-runs.ts";
 
 const NOW = new Date("2026-11-02T12:00:00.000Z");
 const chat = {
@@ -145,16 +145,123 @@ describe("PackRuns", () => {
     expect(existsSync(join(stateDir, "runs"))).toBe(false);
   });
 
-  it("mounts the repo a caller names (readRepo) as the worktree of a pack that may read, and refuses a pack that may not", async () => {
-    const ticketChat = { repo: { name: "luna-tui", path: "/work/luna-tui" }, message: "plan it", history: [], notes: "", draft: null };
-    await runs(fakeSandbox(output({ answer: { reply: "r", choices: [], notes: "", draft: null, ready: false } }))).run({ pack: "ticket_chat", context: { ticketChat } }, "board", undefined, { readRepo: "/work/luna-tui" });
-    expect(seen[0]!.worktree).toBe("/work/luna-tui");
+  const ticketChat = { repo: { name: "luna-tui", path: "/work/luna-tui" }, message: "plan it", history: [], notes: "", draft: null };
+  const chatAnswer = { reply: "r", choices: [], notes: "", draft: null, ready: false };
+
+  it("mounts a throwaway copy of the repo a caller names (readRepo), under the run folder and never the repo itself, for a pack that may read; refuses a pack that may not", async () => {
+    const copies: Array<[string, string]> = [];
+    const copyRepo = async (repo: string, dest: string) => {
+      copies.push([repo, dest]);
+      mkdirSync(dest, { recursive: true });
+    };
+    await runs(fakeSandbox(output({ answer: chatAnswer })), { copyRepo }).run({ pack: "ticket_chat", context: { ticketChat } }, "board", undefined, { readRepo: "/work/luna-tui" });
+    expect(copies).toEqual([["/work/luna-tui", join(seen[0]!.runDir, "work")]]);
+    expect(seen[0]!.worktree).toBe(join(seen[0]!.runDir, "work"));
+    expect(seen[0]!.worktree).not.toBe("/work/luna-tui");
     expect(seen[0]!.writable).toBe(false);
     expect(existsSync(seen[0]!.runDir)).toBe(false);
     seen.length = 0;
     const foreman = { question: "q", history: [], board: { now: "2026-11-16T12:00:00.000Z", cards: [], packs: [] } };
-    await expect(runs(fakeSandbox(output())).run({ pack: "foreman", context: { foreman } }, "board", undefined, { readRepo: "/work/luna-tui" })).rejects.toThrow(/read/);
+    await expect(runs(fakeSandbox(output()), { copyRepo }).run({ pack: "foreman", context: { foreman } }, "board", undefined, { readRepo: "/work/luna-tui" })).rejects.toThrow(/read/);
     expect(seen).toEqual([]);
+  });
+
+  it("never falls back to the live repo: no copyRepo, or a copy that fails, runs nothing", async () => {
+    await expect(runs(fakeSandbox(output({ answer: chatAnswer }))).run({ pack: "ticket_chat", context: { ticketChat } }, "board", undefined, { readRepo: "/work/luna-tui" })).rejects.toThrow(RunFailedError);
+    const copyRepo = async () => {
+      throw new Error("git clone failed: fatal: not a repository");
+    };
+    await expect(runs(fakeSandbox(output({ answer: chatAnswer })), { copyRepo }).run({ pack: "ticket_chat", context: { ticketChat } }, "board", undefined, { readRepo: "/work/luna-tui" })).rejects.toThrow(/not a repository/);
+    expect(seen).toEqual([]);
+  });
+
+  describe("ticket_chat has its own lane of one run, outside the shared places, and the newest call wins", () => {
+    const copyRepo = async (_repo: string, dest: string) => void mkdirSync(dest, { recursive: true });
+    const byPack = (pack: string) => (pack === "ticket_chat" ? output({ answer: chatAnswer }) : output());
+    const chatCall = (r: PackRuns, signal?: AbortSignal) => r.run({ pack: "ticket_chat", context: { ticketChat } }, "board", signal, { readRepo: "/work/luna-tui" });
+
+    it("takes no shared place: two shared calls running and a chat call still runs", async () => {
+      const { gates, sandbox } = gated(byPack);
+      const r = runs(sandbox, { max: 2, queue: 0, copyRepo });
+      const shared = [1, 2].map(() => r.run({ pack: "chat_triage", context: { chat } }, null));
+      await expect.poll(() => gates.length).toBe(2);
+      const chatRun = chatCall(r);
+      await expect.poll(() => gates.length).toBe(3);
+      while (gates.length > 0) gates.shift()!();
+      await expect.poll(() => seen.length).toBe(3);
+      await Promise.all([...shared, chatRun]);
+    });
+
+    it("does not hold a shared place either: a chat call running leaves both places to the others", async () => {
+      const { gates, sandbox } = gated(byPack);
+      const r = runs(sandbox, { max: 2, queue: 0, copyRepo });
+      const chatRun = chatCall(r);
+      await expect.poll(() => gates.length).toBe(1);
+      const shared = [1, 2].map(() => r.run({ pack: "chat_triage", context: { chat } }, null));
+      await expect.poll(() => gates.length).toBe(3);
+      while (gates.length > 0) gates.shift()!();
+      await Promise.all([chatRun, ...shared]);
+    });
+
+    it("a second chat call stops the first (RunAbortedError) and runs in its place", async () => {
+      const started: string[] = [];
+      let live = 0;
+      let most = 0;
+      const sandbox = async (run: SandboxRun): Promise<SandboxResult> => {
+        started.push(run.runDir);
+        live++;
+        most = Math.max(most, live);
+        try {
+          if (started.length === 1) {
+            await new Promise<void>((resolve) => run.signal!.addEventListener("abort", () => resolve(), { once: true }));
+            return { exitCode: 137, timedOut: false, aborted: true, transcriptPath: join(run.runDir, "t.log") };
+          }
+          return await fakeSandbox(output({ answer: chatAnswer }))(run);
+        } finally {
+          live--;
+        }
+      };
+      const r = runs(sandbox, { copyRepo });
+      const first = chatCall(r);
+      const firstOutcome = first.then(() => null, (error: unknown) => error);
+      await expect.poll(() => started.length).toBe(1);
+      const second = await chatCall(r);
+      expect(second.answer).toEqual(chatAnswer);
+      expect(await firstOutcome).toBeInstanceOf(RunAbortedError);
+      expect(most).toBe(1);
+    });
+
+    it("a chat call waiting its turn is dropped when a newer one arrives", async () => {
+      const { gates, sandbox } = gated(byPack);
+      const r = runs(sandbox, { copyRepo });
+      const first = chatCall(r).then(() => "done", (error: unknown) => error);
+      await expect.poll(() => gates.length).toBe(1);
+      const second = chatCall(r).then(() => "done", (error: unknown) => error);
+      const third = chatCall(r);
+      // The first finishes when its container ends (here: the gate), the second never starts.
+      gates.shift()!();
+      await expect.poll(() => gates.length).toBe(1);
+      gates.shift()!();
+      await third;
+      expect(await second).toBeInstanceOf(RunAbortedError);
+      // The first was stopped too; this gate ignores the stop, as a container that has already finished would.
+      await first;
+      expect(seen).toHaveLength(2);
+    });
+  });
+
+  it("waits at most a minute for the engine's login on ticket_chat (the run's own timeout is longer than the board's request)", async () => {
+    const waits: Array<number | undefined> = [];
+    const credentials: Credentials = {
+      check: async () => ({ available: true }),
+      prepare: async (_engine, _runDir, wait) => {
+        waits.push(wait?.timeoutMs);
+        throw new CredentialWaitError("held");
+      },
+    };
+    const copyRepo = async (_repo: string, dest: string) => void mkdirSync(dest, { recursive: true });
+    await expect(runs(fakeSandbox(output()), { credentials, copyRepo }).run({ pack: "ticket_chat", engine: "codex:sol", context: { ticketChat } }, "board", undefined, { readRepo: "/work/luna-tui" })).rejects.toBeInstanceOf(RunCredentialBusyError);
+    expect(waits).toEqual([60_000]);
   });
 
   it("records each run without its context or answer: pack, engine, model, client, outcome, turns, duration, cost and times", async () => {
@@ -349,11 +456,11 @@ describe("PackRuns", () => {
   });
 
   /** A sandbox that holds each run until its gate opens. */
-  function gated() {
+  function gated(answerFor: (pack: string) => StageOutput = () => output()) {
     const gates: Array<() => void> = [];
     const sandbox = async (run: SandboxRun): Promise<SandboxResult> => {
       await new Promise<void>((resolve) => gates.push(resolve));
-      return fakeSandbox(output())(run);
+      return fakeSandbox(answerFor((run.input as { pack: string }).pack))(run);
     };
     return { gates, sandbox };
   }

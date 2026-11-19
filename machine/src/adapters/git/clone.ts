@@ -195,6 +195,19 @@ export async function refreshScratch(path: string, branch: string): Promise<void
   rmSync(staging, { recursive: true, force: true });
 }
 
+/**
+ * A throwaway copy of the tracked files of the user's repository at `repoPath`, in the new folder `dest`: what a model that only reads the
+ * code is shown. A shallow clone (depth 50, nothing shared) of the branch the repository has checked out, so the history is there and the
+ * copy is the commit, never the checkout: no untracked or ignored file (`.env`, keys), no edit not committed, and `origin` removed so no
+ * remote URL with a token is left in its config. A failure throws with git's message. The caller removes `dest`.
+ */
+export async function readCopy(repoPath: string, dest: string): Promise<void> {
+  const cloned = await exec("git", [...HOST_GIT, "clone", "--quiet", "--depth=50", "--no-hardlinks", "--single-branch", "--", `file://${repoPath}`, dest], { timeoutMs: CLONE_TIMEOUT_MS });
+  if (cloned.code !== 0) throw new Error(`git clone failed: ${(cloned.stderr || cloned.stdout).trim() || `exit code ${cloned.code}`}`);
+  // The folder is the machine's own and brand new: git may run in it.
+  await execOrThrow("git", [...HOST_GIT, "-C", dest, "remote", "remove", "origin"]); // read copy
+}
+
 /** Where the card's repository records the commit it last showed in the user's repository for a branch: a later rewrite may replace that commit and no other. */
 const publishedRef = (branch: string): string => `refs/luna/published/${branch}`;
 

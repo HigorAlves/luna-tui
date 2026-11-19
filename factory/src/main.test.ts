@@ -169,8 +169,8 @@ describe("factory main (dry run)", () => {
   });
 
   it("ticket_chat: runs read-only over the checkout, renders the talk as data and leaves a valid result", () => {
-    const task = { id: "ticket-chat", title: "Ticket chat for o/a", description: "", criteria: [], repoPath: "", branch: "", source: null };
-    const ticketChat = { repo: { name: "o/a", path: "/work" }, message: "add csv export", history: [{ who: "person", text: "hi" }], notes: "", draft: null };
+    const task = { id: "ticket-chat", title: "Ticket chat for luna-tui", description: "", criteria: [], repoPath: "", branch: "", source: null };
+    const ticketChat = { repo: { name: "luna-tui", path: "/work" }, message: "add csv export", history: [{ who: "person", text: "hi" }], notes: "", draft: null };
     const { code, stdout, out, result } = run(stageInput("ticket_chat", { task, plan: null, context: { projectContext: null, ticketChat } }), {}, {}, { emptyWork: true });
     expect(code).toBe(0);
     const prompt = readFileSync(join(out, "prompt.md"), "utf8");

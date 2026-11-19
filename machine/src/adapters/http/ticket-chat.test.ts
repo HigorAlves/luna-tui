@@ -1,6 +1,9 @@
 import type { HostRunInput, PackRunsPort, RunOptions } from "../../application/pack-runs.ts";
-import { EngineNotAllowedError, RunFailedError } from "../../application/pack-runs.ts";
+import { EngineNotAllowedError, RunCredentialBusyError, RunFailedError } from "../../application/pack-runs.ts";
 import { type RunResult } from "@hardness/contracts";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -25,10 +28,12 @@ interface Call {
   options: RunOptions | undefined;
 }
 
-const REPO = "/work/projects/luna-tui";
+const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "ticket-chat-")));
+const REPO = join(ROOT, "luna-tui");
+mkdirSync(REPO);
 const READY = { reply: "Here is the ticket.", choices: [], notes: "touches board/src/app.rs", draft: { title: "Plan a ticket", description: "d", criteria: ["a"] }, ready: true };
 
-function setup(first: Record<string, unknown> | Error, opts: { repos?: string[]; agents?: boolean } = {}) {
+function setup(first: Record<string, unknown> | Error, opts: { repos?: string[]; known?: string[]; agents?: boolean } = {}) {
   const calls: Call[] = [];
   const runs: PackRunsPort = {
     run: async (input, client, _signal, options) => {
@@ -38,7 +43,7 @@ function setup(first: Record<string, unknown> | Error, opts: { repos?: string[];
     },
   };
   const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
-  const app = createApp({ db, pipeline, bus: new Bus(), knownRepos: async () => opts.repos ?? [REPO], ...(opts.agents === false ? {} : { runs }) });
+  const app = createApp({ db, pipeline, bus: new Bus(), chatRepos: async () => opts.repos ?? [REPO], knownRepos: async () => opts.known ?? [], ...(opts.agents === false ? {} : { runs }) });
   const ask = (body: unknown) => app.request("/ticket-chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   return { calls, ask };
 }
@@ -50,6 +55,44 @@ describe("POST /ticket-chat", () => {
     expect(response.status).toBe(404);
     expect((await response.json()).error).toBe("unknown_repo");
     expect(calls).toHaveLength(0);
+  });
+
+  it("knows only the repo map and the remembered repos: a repo that only a task names is refused", async () => {
+    const { ask, calls } = setup(READY, { repos: [], known: [REPO] });
+    expect((await ask({ repo: REPO, message: "hi" })).status).toBe(404);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("answers 404 for everything when the machine gives the route no repos", async () => {
+    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
+    const runs: PackRunsPort = { run: async () => { throw new Error("must not run"); } };
+    const app = createApp({ db, pipeline, bus: new Bus(), runs, knownRepos: async () => [REPO] });
+    const response = await app.request("/ticket-chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ repo: REPO, message: "hi" }) });
+    expect(response.status).toBe(404);
+  });
+
+  it("compares real paths: a symlink to a listed repo is that repo, a symlink elsewhere is refused, a missing path is refused", async () => {
+    const elsewhere = join(ROOT, "elsewhere");
+    mkdirSync(elsewhere);
+    const toRepo = join(ROOT, "link-to-repo");
+    const toElsewhere = join(ROOT, "link-to-elsewhere");
+    symlinkSync(REPO, toRepo);
+    symlinkSync(elsewhere, toElsewhere);
+    const { ask, calls } = setup(READY);
+    expect((await ask({ repo: toElsewhere, message: "hi" })).status).toBe(404);
+    expect((await ask({ repo: join(ROOT, "missing"), message: "hi" })).status).toBe(404);
+    expect(calls).toHaveLength(0);
+    expect((await ask({ repo: toRepo, message: "hi" })).status).toBe(200);
+    expect(calls[0]!.options).toEqual({ readRepo: REPO });
+  });
+
+  it("names a folder the prompt's header cannot carry by its plain characters, and still plans in it", async () => {
+    const odd = join(ROOT, "my repo\n## é");
+    mkdirSync(odd);
+    const { ask, calls } = setup(READY, { repos: [odd] });
+    const response = await ask({ repo: odd, message: "hi" });
+    expect(response.status).toBe(200);
+    expect((calls[0]!.input.context as { ticketChat: { repo: { name: string } } }).ticketChat.repo.name).toBe("my-repo-----");
   });
 
   it("refuses a relative repo path", async () => {
@@ -89,6 +132,16 @@ describe("POST /ticket-chat", () => {
     expect(calls[0]!.input).toEqual({ pack: "ticket_chat", context: { ticketChat: { repo: { name: "luna-tui", path: REPO }, message: "plan it", history: [], notes: "", draft: null } } });
   });
 
+  it("answers 409 engine_busy when the engine's login is held by another run, and says to try the other engine", async () => {
+    const { ask } = setup(new RunCredentialBusyError("waited 60 s for the Codex login"));
+    const response = await ask({ repo: REPO, message: "hi", engine: "codex:sol" });
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body.error).toBe("engine_busy");
+    expect(body.message).toMatch(/login is busy/);
+    expect(body.message).toMatch(/other engine/);
+  });
+
   it("answers 502 ticket_chat_failed when the run fails", async () => {
     const { ask } = setup(new RunFailedError("boom"));
     const response = await ask({ repo: REPO, message: "hi" });
@@ -111,5 +164,17 @@ describe("POST /ticket-chat", () => {
     await app.request("/runs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pack: "ticket_chat", readRepo: "/etc", context: {} }) });
     await app.request("/runs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pack: "foreman", readRepo: "/etc", context: {}, options: { readRepo: "/etc" } }) });
     expect(calls.every((options) => options === undefined)).toBe(true);
+  });
+
+  it("refuses ticket_chat on POST /runs with 400, pointing at POST /ticket-chat; nothing runs", async () => {
+    const calls: unknown[] = [];
+    const runs: PackRunsPort = { run: async (input) => (calls.push(input), { answer: {}, usage: { model: "m", engine: "claude:opus", turns: 1, durationMs: 1, costUsd: 0 } }) };
+    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
+    const app = createApp({ db, pipeline, bus: new Bus(), runs });
+    const context = { ticketChat: { repo: { name: "luna-tui", path: "/x" }, message: "m", history: [], notes: "", draft: null } };
+    const response = await app.request("/runs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pack: "ticket_chat", context }) });
+    expect(response.status).toBe(400);
+    expect((await response.json()).message).toContain("POST /ticket-chat");
+    expect(calls).toHaveLength(0);
   });
 });

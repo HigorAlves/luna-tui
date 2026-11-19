@@ -465,7 +465,8 @@ export type ForemanContext = z.infer<typeof ForemanContext>;
 
 /** For ticket_chat: the person's message, the talk so far, what the planner noted and the draft as it stands. The repo is the read-only checkout. */
 export const TicketChatContext = z.object({
-  repo: z.object({ name: z.string(), path: z.string() }),
+  /** `name` goes into the prompt's trusted header: a folder name, nothing else. */
+  repo: z.object({ name: z.string().regex(/^[\w.-]{1,100}$/), path: z.string().max(1024) }),
   message: z.string().min(1).max(4000),
   history: z.array(TicketChatTurn).max(30),
   notes: z.string().max(6000),

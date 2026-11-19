@@ -6,11 +6,11 @@ import { z } from "zod";
 export const TicketChatTurn = z.object({ who: z.enum(["person", "planner"]), text: z.string().max(4000) });
 export type TicketChatTurn = z.infer<typeof TicketChatTurn>;
 
-/** The ticket as it stands. The planner only drafts it: the board creates the card, after the person confirms. */
+/** The ticket as it stands. The planner only drafts it: the board creates the card, after the person confirms. Title and criteria match `NewTaskInput`, so a confirmed draft never fails to post. */
 export const TicketDraft = z.object({
-  title: z.string().min(1).max(200),
+  title: z.string().trim().min(1).max(200),
   description: z.string().max(8000),
-  criteria: z.array(z.string().max(500)).max(12),
+  criteria: z.array(z.string().trim().min(1).max(500)).max(12),
 });
 export type TicketDraft = z.infer<typeof TicketDraft>;
 

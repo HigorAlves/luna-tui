@@ -17,6 +17,11 @@
 // to PACK_RUNS_QUEUE of them; past that a call is refused at once. A call whose client leaves is
 // dropped while it waits, and its container stopped while it runs.
 //
+// Lanes: a pack in LANE_PACKS (ticket_chat) has a place of its own, outside that cap, and the newest call wins: a call that
+// arrives while one of its pack runs or waits stops it (RunAbortedError) and takes over once its container is gone. A person
+// types the next turn without waiting for the last, and a client that gave up cannot stop its request, so an old turn
+// would otherwise hold one of the shared places for its whole run.
+//
 // Usage limits: a call that hits one runs again at once on the pack's next fallback engine
 // (`engines.fallback`) whose credential is here and whose window neither it nor the pipeline
 // holds, in the same place; each run is its own pack_runs row, and the answer names the engine
@@ -55,6 +60,11 @@ export const PACK_RUNS_MAX = 2;
 export const PACK_RUNS_QUEUE = 8;
 /** How long a decision pack with a fallback waits for a login another run holds before it moves to the fallback. */
 export const LOGIN_BUSY_WAIT_MS = 10_000;
+/** Packs that run in a lane of one place instead of the shared places; the newest call stops the one before it. */
+const LANE_PACKS: ReadonlySet<PackId> = new Set<PackId>(["ticket_chat"]);
+/** How long a call to a pack waits for a login another run holds, when it may not wait for the pack's whole timeout:
+ *  the board's request ends before ticket_chat's own 8 minutes. */
+const LOGIN_WAIT_MS: Partial<Record<PackId, number>> = { ticket_chat: 60_000 };
 /** Where the run folders live under the state dir while a call runs: their own folder, never the
  *  stage runs' `runs/`, so clearing it at start-up touches nothing a stage left. */
 export const PACK_RUNS_DIR = "pack-runs";
@@ -118,7 +128,7 @@ export type HostRunInput = RunInput & { taskId?: string; stage?: string };
  *  so a decision record is the machine's own (`origin: "machine"`) whatever an `X-Luna-Client` header says. */
 export interface RunOptions {
   own?: boolean;
-  /** A repository folder the run reads, mounted read-only in place of the empty /work. Only the machine's own routes set it (`POST /ticket-chat`, after checking the repo is one it knows); `POST /runs` cannot, and the pack must be an agent pack that may read. */
+  /** A repository the run reads: a throwaway copy of its tracked files (`PackRunsDeps.copyRepo`) is mounted read-only in place of the empty /work, never the folder itself. Only the machine's own routes set it (`POST /ticket-chat`, after checking the repo is one it knows); `POST /runs` cannot, and the pack must be an agent pack that may read. */
   readRepo?: string;
 }
 
@@ -147,6 +157,8 @@ export interface PackRunsDeps {
   /** The machine's sandbox policy: each call's container is sized by it, as an untrusted input. */
   policies?: Pick<PolicyStore, "for">;
   now?: () => Date;
+  /** Makes `dest` a copy of the tracked files of the repository `repo`, for a run's `readRepo`; absent, such a run fails (the live folder is never mounted). */
+  copyRepo?: (repo: string, dest: string) => Promise<void>;
   /** Calls at once; defaults to PACK_RUNS_MAX. */
   max?: number;
   /** Calls that may wait; defaults to PACK_RUNS_QUEUE. */
@@ -201,6 +213,8 @@ function sooner(a: RunRateLimitedError | null, b: RunRateLimitedError): RunRateL
 
 export class PackRuns implements PackRunsPort {
   private active = 0;
+  /** The latest call of each laned pack: its stop, and when it has ended. */
+  private readonly lanes = new Map<PackId, { stop: AbortController; done: Promise<void> }>();
   private readonly waiting: Array<{ grant: () => void }> = [];
   private readonly now: () => Date;
   private readonly log: (line: string) => void;
@@ -238,8 +252,7 @@ export class PackRuns implements PackRunsPort {
     }
     await this.checkBudget();
 
-    const waited = await this.acquire(signal);
-    try {
+    const attempt = async (stop: AbortSignal | undefined, waited: boolean): Promise<RunResult> => {
       // Calls ahead in the queue may have spent the day's ceiling meanwhile.
       if (waited) await this.checkBudget();
       // A usage limit moves the call to the pack's next fallback engine, in the same place; the
@@ -251,12 +264,13 @@ export class PackRuns implements PackRunsPort {
         // A decision pack whose engine the caller left to it does not sit out a long agent run that holds the login (Codex: one run
         // at a time): it waits a little, then moves to its fallback like after a usage limit, instead of failing as skipped.
         const mayMove = request.engine === undefined && PACKS[pack].kind === "decision" && fallbackCandidates(PACKS[pack], [...tried, engine]).length > 0;
+        const loginWaitMs = mayMove ? LOGIN_BUSY_WAIT_MS : LOGIN_WAIT_MS[pack];
         try {
-          return await this.once(pack, context, engine, client, signal, movedFrom, { taskId: request.taskId, stage: request.stage, own: options.own === true, ...(options.readRepo !== undefined ? { readRepo: options.readRepo } : {}), ...(mayMove ? { credentialWaitMs: LOGIN_BUSY_WAIT_MS } : {}) });
+          return await this.once(pack, context, engine, client, stop, movedFrom, { taskId: request.taskId, stage: request.stage, own: options.own === true, ...(options.readRepo !== undefined ? { readRepo: options.readRepo } : {}), ...(loginWaitMs !== undefined ? { credentialWaitMs: loginWaitMs } : {}) });
         } catch (thrown) {
           if (thrown instanceof RunCredentialBusyError && mayMove) {
             tried.push(engine);
-            const next = signal?.aborted ? null : await this.fallback(pack, tried);
+            const next = stop?.aborted ? null : await this.fallback(pack, tried);
             if (!next) throw thrown;
             this.log(`run: ${pack} moves to ${next}: ${engine}'s login is held by another run`);
             movedFrom = engine;
@@ -266,15 +280,41 @@ export class PackRuns implements PackRunsPort {
           if (!(thrown instanceof RunRateLimitedError)) throw thrown;
           tried.push(engine);
           limit = sooner(limit, thrown);
-          const next = signal?.aborted ? null : await this.fallback(pack, tried);
+          const next = stop?.aborted ? null : await this.fallback(pack, tried);
           if (!next) throw limit;
           this.log(`run: ${pack} moves to ${next} after ${engine} rate limit`);
           movedFrom = engine;
           engine = next;
         }
       }
+    };
+
+    if (LANE_PACKS.has(pack)) return this.inLane(pack, signal, (stop) => attempt(stop, false));
+    const waited = await this.acquire(signal);
+    try {
+      return await attempt(signal, waited);
     } finally {
       this.release();
+    }
+  }
+
+  /** Runs `work` as the only call of `pack`'s lane: the call before it, running or waiting, is stopped, and `work` starts once that call has ended
+   *  (its container gone). `work` gets the caller's signal joined with the lane's own. */
+  private async inLane<T>(pack: PackId, signal: AbortSignal | undefined, work: (stop: AbortSignal) => Promise<T>): Promise<T> {
+    const before = this.lanes.get(pack);
+    before?.stop.abort();
+    const stop = new AbortController();
+    let end!: () => void;
+    const done = new Promise<void>((resolve) => (end = resolve));
+    this.lanes.set(pack, { stop, done });
+    try {
+      await before?.done;
+      const joined = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal;
+      if (joined.aborted) throw new RunAbortedError(signal?.aborted ? "the client left before the run started" : `a newer ${pack} call replaced this one`);
+      return await work(joined);
+    } finally {
+      end();
+      if (this.lanes.get(pack)?.stop === stop) this.lanes.delete(pack);
     }
   }
 
@@ -326,10 +366,15 @@ export class PackRuns implements PackRunsPort {
     let info: RunInfo | null = null;
     let decided: ReturnType<typeof applyPolicy> | null = null;
     try {
-      await mkdir(work, { recursive: true });
+      if (origin.readRepo === undefined) await mkdir(work, { recursive: true });
+      else {
+        // The model reads a throwaway copy of the tracked files (no .env, keys or remote URLs from the checkout), never the folder itself.
+        if (!this.deps.copyRepo) throw new Error("this machine cannot copy a repository for a run to read");
+        await this.deps.copyRepo(origin.readRepo, work);
+      }
       const input = buildContextPackInput(pack, context, engine);
       const run = await runPackOnce(
-        { name: `hardness-run-${pack.replace(/_/g, "-")}-${runDir.slice(-12)}`, image: this.deps.image, runDir, worktree: origin.readRepo ?? work, input, engine, labels: { luna: "run" }, extraEnv: mode === "full" ? span.childEnv() : {}, ...(origin.credentialWaitMs !== undefined ? { credentialWaitMs: origin.credentialWaitMs } : {}), signal },
+        { name: `hardness-run-${pack.replace(/_/g, "-")}-${runDir.slice(-12)}`, image: this.deps.image, runDir, worktree: work, input, engine, labels: { luna: "run" }, extraEnv: mode === "full" ? span.childEnv() : {}, ...(origin.credentialWaitMs !== undefined ? { credentialWaitMs: origin.credentialWaitMs } : {}), signal },
         { credentials: this.deps.credentials, sandbox: this.deps.sandbox, ...(this.deps.policies ? { policies: this.deps.policies } : {}), ...(this.deps.egress ? { egress: this.deps.egress } : {}) },
       );
       if (run.error !== null) failure = signal?.aborted ? new RunAbortedError("the client left: the run was stopped") : run.credentialBusy ? new RunCredentialBusyError(run.error) : new RunFailedError(run.error);

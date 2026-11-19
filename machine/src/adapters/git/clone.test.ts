@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { bringBack, copiedSettings, hostBaselineWorkspace, removeLeftovers, ensureClone, ensurePrClone, freshClone, isClone, isFreshWorkspace, moveToClone, publishBranch, removeClone, unpushedCommits } from "./clone.ts";
+import { bringBack, copiedSettings, hostBaselineWorkspace, removeLeftovers, ensureClone, ensurePrClone, freshClone, isClone, isFreshWorkspace, moveToClone, publishBranch, readCopy, removeClone, unpushedCommits } from "./clone.ts";
 import { configureMachineRepos, machineGitDir, machineRepoRoot } from "./machine-repo.ts";
 import { branchBase, changedPaths, commitAll, ensureWorktree, nestedLockfilesAt, removeWorktree, scopeStartOf, workspaceFor } from "./worktree.ts";
 
@@ -534,5 +534,42 @@ describe("scopeStartOf", () => {
     git(repo, "commit", "-q", "-m", "main moves");
     expect(await scopeStartOf(workspace.path, repo, start)).toBe(start);
     expect(await scopeStartOf(workspace.path, repo, "HEAD~1")).toBe("HEAD~1");
+  });
+});
+
+describe("a throwaway copy of a repository's tracked files, for a model to read", () => {
+  it("has the tracked files and history of the current branch, and nothing the checkout holds untracked, ignored or in its config", async () => {
+    const { repo, root } = repository("readcopy-");
+    writeFileSync(join(repo, ".gitignore"), ".env\n");
+    git(repo, "add", ".gitignore");
+    git(repo, "commit", "-q", "-m", "ignore");
+    git(repo, "remote", "add", "origin", "https://user:token@example.com/o/r.git");
+    writeFileSync(join(repo, ".env"), "SECRET=1\n");
+    writeFileSync(join(repo, "untracked.txt"), "u\n");
+    writeFileSync(join(repo, "a.txt"), "edited, not committed\n");
+    const dest = join(root, "copy");
+    await readCopy(repo, dest);
+    expect(readFileSync(join(dest, "a.txt"), "utf8")).toBe("a\n");
+    expect(existsSync(join(dest, ".env"))).toBe(false);
+    expect(existsSync(join(dest, "untracked.txt"))).toBe(false);
+    expect(git(dest, "remote")).toBe("");
+    expect(readFileSync(join(dest, ".git", "config"), "utf8")).not.toContain("token");
+    expect(git(dest, "log", "--format=%s")).toBe("ignore\ninit");
+  });
+
+  it("follows the branch the repository has checked out", async () => {
+    const { repo, root } = repository("readcopy-branch-");
+    git(repo, "checkout", "-q", "-b", "feature");
+    writeFileSync(join(repo, "b.txt"), "b\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "b");
+    const dest = join(root, "copy");
+    await readCopy(repo, dest);
+    expect(readFileSync(join(dest, "b.txt"), "utf8")).toBe("b\n");
+  });
+
+  it("fails with git's message when the path is no repository", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "readcopy-none-")));
+    await expect(readCopy(join(root, "nothing"), join(root, "copy"))).rejects.toThrow(/git clone failed/);
   });
 });

@@ -1,7 +1,7 @@
 // Entry point for `pnpm dev`: migrates the database, recovers tasks a previous run left
 // mid-stage, then serves the API on localhost.
 import { expireKept, keepFolder } from "./application/kept-sandboxes.ts";
-import { hostBaselineWorkspace, hostFreshWorkspace, removeLeftovers } from "./adapters/git/clone.ts";
+import { hostBaselineWorkspace, hostFreshWorkspace, readCopy, removeLeftovers } from "./adapters/git/clone.ts";
 import { type BudgetAlert, type EvidenceContext, FACTORY_DEFAULTS, Ledger, PrAction, type PullRequest, RUN_OR_GATE, type TicketContext, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
@@ -742,6 +742,8 @@ const packRuns = buildPackRuns(config, {
   policies,
   ...(config.egress.enabled && agentDeps?.egress ? { egress: agentDeps.egress } : {}),
   credentials,
+  // A run that reads a repo (ticket_chat) gets a throwaway copy of its tracked files, never the checkout.
+  copyRepo: readCopy,
   store: new PgPackRunStore(db),
   budget: { dailyUsd: pipeline.budget.dailyUsd, spentTodayUsd: () => pipeline.spentTodayUsd() },
   engineBudgets,
@@ -1004,6 +1006,8 @@ const approveBase = async (repo: string, base: string): Promise<{ ok: true } | {
 };
 const app = createApp({
   knownRepos,
+  // The ticket chat's planner reads only the repo map and the remembered repos: a task's repoPath is a client's word.
+  chatRepos: async () => [...Object.values(config.repoMap), ...(await repoMap.remembered())],
   // The identity is read on each call, so a machine fixed in place turns healthy without a restart; the token and the stub reason are fixed at boot.
   sandboxPolicy: config.sandboxPolicy,
   problems: async () => readinessProblems({ githubToken: config.githubToken, identity: await gitIdentity(process.cwd()), stubReason }),
