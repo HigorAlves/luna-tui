@@ -2191,10 +2191,7 @@ mod approver_tests {
         ] {
             assert!(screen.contains(needle), "{needle}: {screen}");
         }
-        assert!(
-            screen.contains("answered by the council, not a person"),
-            "{screen}"
-        );
+        assert!(screen.contains("answered by the council, not a person"), "{screen}");
         assert!(!screen.contains("triage council flagged"), "{screen}");
     }
 

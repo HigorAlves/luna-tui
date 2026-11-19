@@ -14,6 +14,8 @@ use crate::model::TicketText;
 pub const HISTORY_TURNS: usize = 30;
 /// The most choices a reply shows as `1`-`4` keys.
 pub const MAX_CHOICES: usize = 4;
+/// The longest message the machine takes (`TicketChatContext.message`), in characters.
+pub const MAX_MESSAGE_CHARS: usize = 4000;
 /// The engines the pack allows; the first is the default.
 pub const ENGINES: [&str; 2] = ["claude:opus", "codex:sol"];
 
@@ -142,6 +144,11 @@ impl State {
     pub fn send(&mut self, message: &str) -> Option<Request> {
         let message = message.trim().to_string();
         if message.is_empty() {
+            return None;
+        }
+        // The machine refuses a longer one with a bare 400; keep it in the input so the person can cut it.
+        if message.chars().count() > MAX_MESSAGE_CHARS {
+            self.error = Some(format!("a message is at most {MAX_MESSAGE_CHARS} characters"));
             return None;
         }
         let from = self.turns.len().saturating_sub(HISTORY_TURNS);
@@ -400,6 +407,19 @@ mod tests {
         assert_eq!(s.input, "hello");
         assert_eq!(s.error.as_deref(), Some("the planner failed"));
         assert!(s.turns.is_empty());
+    }
+
+    #[test]
+    fn a_message_over_the_machines_limit_stays_in_the_input_with_an_error() {
+        let mut s = state();
+        s.input = "x".repeat(MAX_MESSAGE_CHARS + 1);
+        assert!(s.send_input().is_none());
+        assert_eq!(s.phase, Phase::Typing);
+        assert_eq!(s.input.chars().count(), MAX_MESSAGE_CHARS + 1);
+        assert!(s.error.as_deref().unwrap_or("").contains("4000"));
+        assert!(s.turns.is_empty());
+        s.input = "é".repeat(MAX_MESSAGE_CHARS);
+        assert!(s.send_input().is_some());
     }
 
     #[test]
