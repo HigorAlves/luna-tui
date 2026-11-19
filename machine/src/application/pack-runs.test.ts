@@ -145,6 +145,18 @@ describe("PackRuns", () => {
     expect(existsSync(join(stateDir, "runs"))).toBe(false);
   });
 
+  it("mounts the repo a caller names (readRepo) as the worktree of a pack that may read, and refuses a pack that may not", async () => {
+    const ticketChat = { repo: { name: "luna-tui", path: "/work/luna-tui" }, message: "plan it", history: [], notes: "", draft: null };
+    await runs(fakeSandbox(output({ answer: { reply: "r", choices: [], notes: "", draft: null, ready: false } }))).run({ pack: "ticket_chat", context: { ticketChat } }, "board", undefined, { readRepo: "/work/luna-tui" });
+    expect(seen[0]!.worktree).toBe("/work/luna-tui");
+    expect(seen[0]!.writable).toBe(false);
+    expect(existsSync(seen[0]!.runDir)).toBe(false);
+    seen.length = 0;
+    const foreman = { question: "q", history: [], board: { now: "2026-11-16T12:00:00.000Z", cards: [], packs: [] } };
+    await expect(runs(fakeSandbox(output())).run({ pack: "foreman", context: { foreman } }, "board", undefined, { readRepo: "/work/luna-tui" })).rejects.toThrow(/read/);
+    expect(seen).toEqual([]);
+  });
+
   it("records each run without its context or answer: pack, engine, model, client, outcome, turns, duration, cost and times", async () => {
     await runs(fakeSandbox(output())).run({ pack: "chat_triage", engine: "codex:luna", context: { chat } }, "notch");
     expect(records).toEqual([{ pack: "chat_triage", engine: "codex:luna", model: "gpt-6-luna", client: "notch", ok: true, error: null, turns: 1, durationMs: 4200, costUsd: 0.0031, startedAt: NOW.toISOString(), endedAt: NOW.toISOString() }]);

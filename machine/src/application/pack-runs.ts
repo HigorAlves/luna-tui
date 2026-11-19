@@ -118,6 +118,8 @@ export type HostRunInput = RunInput & { taskId?: string; stage?: string };
  *  so a decision record is the machine's own (`origin: "machine"`) whatever an `X-Luna-Client` header says. */
 export interface RunOptions {
   own?: boolean;
+  /** A repository folder the run reads, mounted read-only in place of the empty /work. Only the machine's own routes set it (`POST /ticket-chat`, after checking the repo is one it knows); `POST /runs` cannot, and the pack must be an agent pack that may read. */
+  readRepo?: string;
 }
 
 export interface PackRunsPort {
@@ -221,6 +223,8 @@ export class PackRuns implements PackRunsPort {
     let engine = request.engine ?? PACKS[pack].engines.default;
     const problem = engineProblem(pack, engine);
     if (problem) throw new EngineNotAllowedError(problem);
+    // A programming error, not a client's: the route that sets `readRepo` names a pack that reads.
+    if (options.readRepo !== undefined && !(PACKS[pack].kind === "agent" && PACKS[pack].access.read === true)) throw new Error(`${pack} has no read access: it cannot be given a repository to read`);
     // A context that does not fit the pack is a ZodError: the route's 400.
     const context = contextSchema(pack).parse(request.context);
     // A decision pack's default engine that cannot run (no credential, runtime off) gives way to
@@ -248,7 +252,7 @@ export class PackRuns implements PackRunsPort {
         // at a time): it waits a little, then moves to its fallback like after a usage limit, instead of failing as skipped.
         const mayMove = request.engine === undefined && PACKS[pack].kind === "decision" && fallbackCandidates(PACKS[pack], [...tried, engine]).length > 0;
         try {
-          return await this.once(pack, context, engine, client, signal, movedFrom, { taskId: request.taskId, stage: request.stage, own: options.own === true, ...(mayMove ? { credentialWaitMs: LOGIN_BUSY_WAIT_MS } : {}) });
+          return await this.once(pack, context, engine, client, signal, movedFrom, { taskId: request.taskId, stage: request.stage, own: options.own === true, ...(options.readRepo !== undefined ? { readRepo: options.readRepo } : {}), ...(mayMove ? { credentialWaitMs: LOGIN_BUSY_WAIT_MS } : {}) });
         } catch (thrown) {
           if (thrown instanceof RunCredentialBusyError && mayMove) {
             tried.push(engine);
@@ -303,7 +307,7 @@ export class PackRuns implements PackRunsPort {
   }
 
   /** One run of the pack on one engine, in a place already taken: its answer, or the error that ended it. */
-  private async once(pack: ContextPackId, context: PackContext, engine: EngineId, client: string | null, signal?: AbortSignal, movedFrom: EngineId | null = null, origin: { taskId?: string; stage?: string; own?: boolean; credentialWaitMs?: number } = {}): Promise<RunResult> {
+  private async once(pack: ContextPackId, context: PackContext, engine: EngineId, client: string | null, signal?: AbortSignal, movedFrom: EngineId | null = null, origin: { taskId?: string; stage?: string; own?: boolean; readRepo?: string; credentialWaitMs?: number } = {}): Promise<RunResult> {
     const startedAt = this.now();
     const t0 = Date.now();
     const policy = await this.learningOf(origin.taskId);
@@ -325,7 +329,7 @@ export class PackRuns implements PackRunsPort {
       await mkdir(work, { recursive: true });
       const input = buildContextPackInput(pack, context, engine);
       const run = await runPackOnce(
-        { name: `hardness-run-${pack.replace(/_/g, "-")}-${runDir.slice(-12)}`, image: this.deps.image, runDir, worktree: work, input, engine, labels: { luna: "run" }, extraEnv: mode === "full" ? span.childEnv() : {}, ...(origin.credentialWaitMs !== undefined ? { credentialWaitMs: origin.credentialWaitMs } : {}), signal },
+        { name: `hardness-run-${pack.replace(/_/g, "-")}-${runDir.slice(-12)}`, image: this.deps.image, runDir, worktree: origin.readRepo ?? work, input, engine, labels: { luna: "run" }, extraEnv: mode === "full" ? span.childEnv() : {}, ...(origin.credentialWaitMs !== undefined ? { credentialWaitMs: origin.credentialWaitMs } : {}), signal },
         { credentials: this.deps.credentials, sandbox: this.deps.sandbox, ...(this.deps.policies ? { policies: this.deps.policies } : {}), ...(this.deps.egress ? { egress: this.deps.egress } : {}) },
       );
       if (run.error !== null) failure = signal?.aborted ? new RunAbortedError("the client left: the run was stopped") : run.credentialBusy ? new RunCredentialBusyError(run.error) : new RunFailedError(run.error);

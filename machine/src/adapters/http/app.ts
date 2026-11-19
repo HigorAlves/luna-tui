@@ -59,7 +59,7 @@ import {
 } from "@hardness/contracts";
 import type { MachinePolicy } from "@hardness/contracts";
 import { EconomyApproveInput, type EconomyConfig, EconomyRepoInput, EconomyRestoreInput } from "@hardness/contracts";
-import { ForemanAnswer, type ForemanSuggestion, ForemanContext, foremanActionProblem, isTerminal } from "@hardness/contracts";
+import { TicketChatAnswer, TicketChatContext, ForemanAnswer, type ForemanSuggestion, ForemanContext, foremanActionProblem, isTerminal } from "@hardness/contracts";
 import { buildForemanBoard } from "../../domain/foreman.ts";
 import { basename, isAbsolute, resolve as resolvePath } from "node:path";
 import { type Context, Hono } from "hono";
@@ -186,6 +186,16 @@ export interface AppDeps {
 
 /** `POST /foreman`: the question and the last turns of the talk. */
 const ForemanInput = z.object({ question: ForemanContext.shape.question, history: ForemanContext.shape.history.optional() });
+
+/** `POST /ticket-chat`: the repo (an absolute path the machine knows), the engine (the pack's default when left out), the message and the talk so far. */
+const TicketChatInput = z.object({
+  repo: z.string().min(1),
+  engine: EngineId.optional(),
+  message: TicketChatContext.shape.message,
+  history: TicketChatContext.shape.history.default([]),
+  notes: TicketChatContext.shape.notes.default(""),
+  draft: TicketChatContext.shape.draft.default(null),
+});
 
 class BadRequest extends Error {}
 
@@ -404,6 +414,23 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
       actions.push({ ...action, approvalId });
     }
     return c.json({ reply: answer.reply, actions, dropped });
+  });
+
+  /** The ticket planner: one turn of a talk about a ticket, with the repo mounted read-only so it can look at the code. It only drafts; the board creates the card. */
+  app.post("/ticket-chat", async (c) => {
+    const { repo: given, engine, message, history, notes, draft } = await body(c, TicketChatInput);
+    if (!isAbsolute(given)) throw new BadRequest("repo must be an absolute path");
+    const repo = resolvePath(given);
+    if (!(await knownRepos()).some((known) => resolvePath(known) === repo)) return fail(c, 404, "unknown_repo", "the machine does not know that repository");
+    if (!runs) return fail(c, 503, "agents_off", "this machine runs no packs: agents are off (MACHINE_AGENTS=off)");
+    try {
+      const result = await runs.run({ pack: "ticket_chat", ...(engine ? { engine } : {}), context: { ticketChat: { repo: { name: basename(repo), path: repo }, message, history, notes, draft } } }, "board", c.req.raw.signal, { readRepo: repo });
+      return c.json(TicketChatAnswer.parse(result.answer));
+    } catch (error) {
+      if (error instanceof RunFailedError) return fail(c, 502, "ticket_chat_failed", error.message);
+      if (error instanceof ZodError) return fail(c, 502, "ticket_chat_failed", "the planner gave no valid answer");
+      throw error;
+    }
   });
 
   // "Stop picking up work" / "carry on" / "run N at once": the knobs for leaving and for debugging.
