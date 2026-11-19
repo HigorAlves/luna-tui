@@ -259,3 +259,25 @@ Deviations from the design above:
 - A repo's `design` reaches the runner through `Policy.design`.
 
 Not verified live: no real MCP server or OAuth login was exercised. The tests use an in-memory server and fixtures.
+
+**Phase 2, the design spec and the accessibility audit.**
+
+- *Contracts.* `DesignRef` and `DesignContext` (`design.ts`), `DesignSpec`, `A11yAuditAnswer` and `A11yContext` with `WCAG_LEVEL_OF`, the `accessibility` finding category, the `design_budget` escalation reason, `Scenario.frame_ref`, `luna.yaml` `design.figma`, `design.budget` and `design.a11y`, and the `DesignSpecRunInput`, `A11yRunInput` and `DesignReport` shapes of the routes.
+- *Packs.* `design_spec` (role `design-spec-writer`) and `a11y_audit` (role `a11y-auditor`), with prompts, goldens and the bridged tool lists pinned by a golden test.
+- *Machine.* The design reference (`design-ref.ts`), the routing (`design-routing.ts`, `verify-order.ts`), the audit's findings at the repo's level (`a11y-findings.ts`), the design budget (`design-budget.ts`, `design-run.ts`, `design.run` rows, `design.budget_reset`, `design.card_off`), the spec before the planner in Plan, the audit as an `afterBrowser` step in e2e, `BROWSER_PACKS` in the pack runner, bridged tools, mounts and a QA target in `runPackOnce`, and `POST /design/spec` and `POST /design/audit`.
+- *QA image.* axe-core 4.14.0 (the version the lockfile already held) and the `qa-axe` helper.
+- *Board.* `:spec <link>`, `:audit <target>`, the report popup, `c` to make a card from a report, and the `design_budget` label.
+- *Evals.* The runner replays a case's `mcp/` folder and runs a browser pack in the QA image. Three `design_spec` cases on replayed fixtures and three `a11y_audit` cases on seeded pages.
+
+Deviations from the design above:
+- The audit runs inside the `e2e` stage, as a step after a passing browser run. There is no new task state and no `design_review` column.
+- An a11y blocker follows `verify.e2e_rounds`, not `verify.build_rounds`, because it rides the e2e loop. The same blocker sent back after `build_rounds` does not escalate by itself. Phase 3 may extend the blocker set to e2e.
+- `a11y_audit` is Claude-only (`claude:sonnet`, `claude:opus`) until an a11y eval on `codex:sol` matches the Claude baseline. The RFC table also lists codex. `design_spec` stays Claude-only until phase 4.
+- The on-demand runs are two routes, `POST /design/spec` and `POST /design/audit`, over `PackRuns`, not `POST /runs`. A client of `POST /runs` would have to send a target URL and its credential, which the machine could not check. Both packs are route-only.
+- An on-demand run counts as trusted for bridged-tool grants only. The caller holds the machine token, so it is the operator. The sandbox and the prompts still treat every input and tool result as untrusted data.
+- In agent mode, with no `verify.e2e.start` and no deploy, there is no app URL, so the audit is skipped and `detail.a11y` says so. It does not run against an unrelated QA target.
+- An a11y finding's id leaves out the axe rule and the state. Two rules or two states on the same criterion, selector and page merge into one finding, and the higher severity wins. This is on purpose, and a test pins it.
+- The decision route now carries `design: "off"`: a person's answer to a `design_budget` escalation can turn design off for the card.
+- The board gets `:spec` and `:audit`, a report popup (`:report` reopens it) and `c` to make a card. The report is held by the board; the machine keeps nothing of it.
+
+Not verified live: no Figma server was reached, so the Figma tool names are the documented ones and the eval fixtures are written by hand. The QA image was built locally once, by an implementer, and has not run an audit against a real app. No `pnpm eval` run on a model has happened, so no baseline exists for either pack.

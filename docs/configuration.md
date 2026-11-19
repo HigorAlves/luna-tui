@@ -104,6 +104,7 @@ See `machine/.env.example`. The defaults match `compose.yaml`. You need a `.env`
 | `MACHINE_SLA_GATE` | `2d` (was `1h` before wave 9) | how long a task may wait on you at a gate (plan, test check, answers, ship, memory review, escalated) before its clock turns red, where the repo's `luna.yaml` `sla.gate` says nothing. `30m`, `4h`, `3d` or `off`. A Jira priority of Highest or High halves it, Lowest doubles it |
 | `MACHINE_SLA_CYCLE` | unset | created-to-closed target for every ticket, where the repo's `sla.cycle` says nothing; same durations |
 | `RUNNER_IMAGE` | `hardness-runner:dev` | the stage container image |
+| `RUNNER_QA_IMAGE` | `hardness-runner-qa:dev` | the QA image: the browser stages (`e2e`, `a11y_audit`) run in it. `pnpm runner-qa:build` makes it. Without it, e2e is skipped and `POST /design/audit` answers `503 qa_image_missing`. The evals use it too |
 | `RUNNER_QA_IMAGE` | `hardness-runner-qa:dev` | the QA stage image; without it e2e is skipped |
 | `RUNNER_VIDEO_IMAGE` | `hardness-runner-video:dev` | the video image (narration, cards, compose, measure); without it Evidence's video format degrades to captures |
 | `WORKTREES_DIR` | `~/Developer/worktrees` | where task worktrees are created, as `<worktreesDir>/<repo>/<branch>` |
@@ -191,7 +192,11 @@ engines:                                  # the engine a pack runs on in this re
 effort:                                   # the effort a pack runs at in this repo, over its default: low, medium or high
   triage: medium                          # not for a decision pack; the engine that runs must support it
 compliance: [soc2, gdpr]                  # the regimes this repo answers to: soc2, hipaa, gdpr, lgpd, us_privacy; each makes the compliance review run that regime's reviewer
-design: { servers: { figma: { tools: [get_design_context] } } }   # the designer agents (RFC 0013): "off" turns bridged design tools off for this repo; servers narrows the machine's MCP servers by name and their tools, and never adds one
+design:                                   # the designer agents (RFC 0013); `design: off` turns them off for this repo (see "Designer agents" below)
+  servers: { figma: { tools: [get_design_context] } }   # narrows the machine's MCP servers by name and their tools, and never adds one
+  figma: { file: Qx7LmP2vR9sTa, page: Checkout }        # the fallback design reference when a card names no Figma link
+  a11y: { level: AA, mode: gate }                        # WCAG 2.2 level (AA or AAA); gate blocks, advisory only advises
+  budget: { max_tokens: 1000000, max_minutes: 45 }       # the designer agents' tokens and minutes for one card
 budget:
   engines: { openai:sol: 10, codex: 0 }   # monthly caps in USD on this repo's stage runs, by engine or credential (never Claude)
 evidence:
@@ -337,6 +342,56 @@ servers:
 | `pnpm mcp login <server>` | asks the machine for the authorization URL, opens it in the host's browser, and waits for the redirect (`MACHINE_PUBLIC_URL`, else the machine's port). The tokens are kept in `<MACHINE_STATE_DIR>/mcp/<server>.json` |
 
 `pnpm mcp` talks to the machine API at `MACHINE_URL` (default `http://localhost:4317`) with `MACHINE_API_TOKEN`, else `~/.config/hardness/machine-api-token`. A server that refuses dynamic client registration (Figma's remote server) needs a client registered by hand, saved as `<MACHINE_STATE_DIR>/mcp/<server>.client.json`, which the login reads.
+
+## Designer agents
+
+RFC 0013, phase 2. Two agent packs read a card's design: `design_spec` and `a11y_audit`. Both need an MCP server only for design tools (`design_spec`); the audit needs the QA image.
+
+### `luna.yaml` `design`
+
+| Key | Default | What it does |
+|---|---|---|
+| `design: off` | not set | turns every designer step off for this repo: no spec, no audit, no bridged design tools |
+| `design.servers` | the machine's list | narrows the machine's MCP servers by name and tool. It never adds one |
+| `design.figma.file`, `.page` | none | the fallback design reference: a Figma file key and an optional page name. It is used when the card names no Figma link |
+| `design.a11y.level` | `AA` | the WCAG 2.2 level the audit checks: `AA` or `AAA`. A criterion above the level is a `nit` |
+| `design.a11y.mode` | `gate` | `gate`: axe `critical` and `serious` findings and every judged failure block. `advisory`: every finding is `should_fix` and nothing blocks |
+| `design.budget.max_tokens` | `1000000` | the tokens the designer agents may spend on one card |
+| `design.budget.max_minutes` | `45` | the minutes the designer agents may run on one card |
+
+The machine finds a card's design in the Figma links of the issue or ticket and its attachments. Else it uses `design.figma`.
+
+The spec runs in Plan, before the planner, on a card with a design reference or on a `frontend` card. A fast-lane card gets a spec only when it has a reference. A failed spec never stops the plan: the plan goes on without it and the gate says so. The audit runs in Verify's browser step, only when the browser run passed. It needs a QA target. With no `verify.e2e.start` and no deploy, the browser run boots its own server, so the audit is skipped and `detail.a11y` says so. Audit blockers send the card back to Build through the e2e loop, so they count against `verify.e2e_rounds`.
+
+### The design budget
+
+The designer runs of a card (the spec, the audit) count against `design.budget`. The machine reads the runtime's own token count and the run's minutes, never a model's text. When a run spends the budget, the next designer step escalates the card with the reason `design_budget`. A person answers it at the escalated gate:
+
+- Approve: the card gets a fresh design budget (`design.budget_reset`).
+- Approve with `response.design = "off"`: also turns design off for this card (`design.card_off`). Every designer step is skipped for it.
+
+On-demand runs have no card, so the budget does not apply to them. The pack-run cap and the daily spend ceiling do.
+
+### On demand: `POST /design/spec` and `POST /design/audit`
+
+Both take the machine API token and a `repo` that is a checkout the machine knows. The machine resolves the link, the QA target and its credential itself. A client never sends a URL, a host or a credential.
+
+| Route | Body | Answers |
+|---|---|---|
+| `POST /design/spec` | `{ repo, link, engine? }`, a Figma link | a `DesignSpecReport`: the design reference and the spec |
+| `POST /design/audit` | `{ repo, target, engine? }`, the name of one of the repo's `qa_targets` | an `A11yReport`: the findings at the repo's level and mode, the pages and notes |
+
+They run through the same machinery as `POST /ticket-chat`: the pack-run cap, the daily ceiling, a `pack_runs` row and the untrusted sandbox. The machine keeps no report. The errors are `404 unknown_repo`, `404 unknown_target`, `400 no_design_reference`, `409 design_off`, `503 qa_image_missing` and `503 agents_off`. A run from these routes counts as trusted for bridged tools only (it holds the machine token, so it is the operator): a default machine, with `untrusted: deny`, still gives it the Figma tools. The pack and the sandbox still treat every input and every tool result as data.
+
+The board runs them: `:spec <figma link>` and `:audit <qa target>`. The report opens in a popup, and `c` makes a card from it.
+
+### Mobbin
+
+`design_spec` and `a11y_audit` may read Mobbin through the bridge, with the search tools only. Mobbin is off until the operator declares it in `mcp.yaml`. Check Mobbin's terms of use before you do. Luna has not.
+
+### Engines
+
+`design_spec` runs on Claude (`claude:sonnet`, `claude:opus`). `a11y_audit` is Claude-only too. Codex joins it when an a11y eval on `codex:sol` matches the Claude baseline. The cases are `evals/design_spec/cases` and `evals/a11y_audit/cases`; see [the evals](../evals/README.md).
 
 ## Machine sandbox policy
 
