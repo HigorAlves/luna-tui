@@ -2,6 +2,7 @@
 // filled by a normaliser, so a plan gate payload or case list written before v2.2 still parses.
 import { z } from "zod";
 
+import { FIGMA_NODE_ID } from "./design.ts";
 import type { Slice } from "./stage.ts";
 
 /** Ids kept across an edit: a text that was in the list keeps its id, a new text takes the next free `C<n>`. */
@@ -48,6 +49,8 @@ export const Scenario = z.object({
   data_needs: z.array(z.string()).optional(),
   layer: ScenarioLayer.nullable().optional(),
   version: z.number().int().optional(),
+  /** The spec frame this scenario checks, by Figma node id (RFC 0013); the machine drops one the spec does not name. */
+  frame_ref: z.string().regex(FIGMA_NODE_ID).nullable().optional(),
 });
 export type Scenario = z.infer<typeof Scenario>;
 
@@ -60,6 +63,8 @@ export const AnswerScenario = z.object({
   then: z.string(),
   data_needs: z.array(z.string()).optional(),
   layer: ScenarioLayer,
+  /** The spec frame this scenario checks, by Figma node id (RFC 0013). */
+  frame_ref: z.string().regex(FIGMA_NODE_ID).optional(),
 });
 export type AnswerScenario = z.infer<typeof AnswerScenario>;
 
@@ -124,6 +129,7 @@ export function scenariosOfAnswer(answer: readonly AnswerScenario[], criteria: r
       data_needs: (a.data_needs ?? []).map((need) => oneLine(need, SCENARIO_TEXT_MAX)),
       layer: a.layer,
       version,
+      ...(a.frame_ref ? { frame_ref: a.frame_ref } : {}),
     };
   });
 }

@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { ChangeExceptionKind, ComplianceRegime } from "./compliance.ts";
 import { DesignContext } from "./design.ts";
+import { DesignSpec } from "./design-spec.ts";
 import { EconomyInput, ProposeContext } from "./economy.ts";
 import { EngineBudgets, EngineId } from "./engines.ts";
 import { EffortId } from "./models.ts";
@@ -1068,6 +1069,10 @@ export const PlanContext = z.object({
   shortlist: z.object({ files: z.array(z.string()), symbols: z.array(z.string()), components: z.array(z.string()), owners: z.array(z.string()) }).optional(),
   /** For the council packs: the plan under review as text, its criteria, the round and what the members said so far. */
   council: z.object({ plan: z.string(), criteria: z.array(z.string()), round: z.union([z.literal(1), z.literal(2)]), transcript: z.array(CouncilTurn) }).optional(),
+  /** The design spec the plan stage opened with (RFC 0013), for the planner, as data; null when it could not be made. */
+  designSpec: DesignSpec.nullable().optional(),
+  /** For the test designer: the spec's frames by id, name, viewport and states, so a scenario may cite one (`frame_ref`). No tokens, no notes. */
+  frames: z.array(z.object({ id: z.string(), name: z.string(), viewport: z.string().nullable(), states: z.array(z.string()) })).max(30).optional(),
 });
 export type PlanContext = z.infer<typeof PlanContext>;
 

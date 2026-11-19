@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { PlanAnswer, TestDesignAnswer } from "./packs.ts";
-import { Plan, PlanStep, isPlainRepoPath, Scenario, criteriaOf, planOf, reviseCriteria, scenarioOf, scenarioText, scenariosOfAnswer, stepOf, stepsOfAnswer } from "./plan.ts";
-import { Slice, TestCase } from "./stage.ts";
+import { Plan, PlanStep, isPlainRepoPath, Scenario, criteriaOf, planOf, reviseCriteria, scenarioOf, scenarioText, scenariosOfAnswer, AnswerScenario, stepOf, stepsOfAnswer } from "./plan.ts";
+import { PlanContext, Slice, TestCase } from "./stage.ts";
 
 describe("the v2.2 plan contracts", () => {
   it("reads a case written before v2.2 as a scenario: an id from its place, the criterion by its id, the approach kept", () => {
@@ -235,4 +235,24 @@ describe("scenariosOfAnswer across a re-plan", () => {
     const twice = scenariosOfAnswer([s("a", "one"), s("a", "one"), s("z", "new")], criteria, 2, first);
     expect(twice.map((x) => x.id)).toEqual(["S1", "S4", "S5"]);
   });
+});
+
+it("lets a scenario cite a spec frame by id", () => {
+  const base = { criterion_ref: "C1", type: "happy", given: "g", when: "w", then: "t", layer: "e2e" } as const;
+  expect(AnswerScenario.parse({ ...base, frame_ref: "12:34" }).frame_ref).toBe("12:34");
+  expect(AnswerScenario.safeParse({ ...base, frame_ref: "Checkout" }).success).toBe(false);
+  expect(Scenario.parse({ title: "t", criterion: null, approach: "a", frame_ref: "12:34" }).frame_ref).toBe("12:34");
+});
+
+it("carries a cited frame from the designer's scenario to the stored one, and only then", () => {
+  const base = { criterion_ref: "C1", type: "happy", given: "g", when: "w", then: "t", layer: "e2e" } as const;
+  const [cited, plain] = scenariosOfAnswer([{ ...base, frame_ref: "12:34" }, { ...base, when: "w2" }], [{ id: "C1", text: "c" }], 1);
+  expect(cited!.frame_ref).toBe("12:34");
+  expect(plain).not.toHaveProperty("frame_ref");
+});
+
+it("hands the planner the design spec and the test designer the frame list", () => {
+  const ctx = PlanContext.parse({ record: null, brief: "b", criteria: [], assumptions: [], slices: [], frames: [{ id: "1:2", name: "Checkout", viewport: "1440x900", states: ["default"] }] });
+  expect(ctx.frames).toHaveLength(1);
+  expect(ctx.designSpec).toBeUndefined();
 });

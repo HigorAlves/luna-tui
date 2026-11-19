@@ -41,6 +41,8 @@ export * from "./compliance.ts";
 export * from "./compliance-review.ts";
 export * from "./docs-drift.ts";
 export * from "./design.ts";
+export * from "./design-spec.ts";
+export * from "./a11y.ts";
 
 /** Board columns: the diagram's seven stages, then Done. Same order as the Rust board, which reads the column of each task from `COLUMN_OF` through the API. */
 export const COLUMNS = [
