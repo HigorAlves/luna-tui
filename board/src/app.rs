@@ -15891,6 +15891,40 @@ mod ticket_chat_tests {
     }
 
     #[test]
+    fn a_long_input_keeps_its_tail_and_the_cursor_on_the_prompt_row() {
+        let mut app = chatting();
+        let long = format!("{}TAILEND", "a".repeat(300));
+        type_text(&mut app, &long);
+        let screen = screen(&mut app);
+        let prompt = screen
+            .lines()
+            .find(|line| line.contains("> "))
+            .expect("a prompt row");
+        assert!(prompt.contains("TAILEND▏"), "{prompt}");
+        assert!(prompt.contains('…'), "{prompt}");
+    }
+
+    #[test]
+    fn long_choices_all_keep_their_number_labels() {
+        let mut app = chatting();
+        type_text(&mut app, "hi");
+        press(&mut app, KeyCode::Enter);
+        let generation = state(&app).generation;
+        app.take_ticket_chat(
+            generation,
+            Ok(Reply {
+                reply: "which?".into(),
+                choices: (1..=4).map(|n| format!("choice{n} {}", "w".repeat(200))).collect(),
+                ..Reply::default()
+            }),
+        );
+        let screen = screen(&mut app);
+        for n in 1..=4 {
+            assert!(screen.contains(&format!(" {n} ")) && screen.contains(&format!("choice{n}")), "{screen}");
+        }
+    }
+
+    #[test]
     fn the_scrollback_keeps_the_newest_turn_at_the_bottom_and_pgup_scrolls_up() {
         let mut app = chatting();
         for i in 0..20 {

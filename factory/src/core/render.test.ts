@@ -541,6 +541,19 @@ describe("renderPrompt", () => {
     expect(renderPrompt({ pack: PACKS.ticket_chat, input, template })).toContain("repo (none)\nmessage:\n(none)\nhistory:\n(none)\nnotes:\n(none)\ndraft:\n(none)");
   });
 
+  it("ticket_chat carries the longest talk and the longest draft its schema allows without a cut", () => {
+    const template = "history:\n{{context.ticketChat.history}}\ndraft:\n{{context.ticketChat.draft}}";
+    const history = Array.from({ length: 30 }, (_, i) => ({ who: (i % 2 === 0 ? "person" : "planner") as "person" | "planner", text: `${"x".repeat(3_980)}END-TURN-${String(i).padStart(2, "0")}` }));
+    const criteria = Array.from({ length: 12 }, (_, i) => `${"c".repeat(488)}END-CRITERION-${String(i).padStart(2, "0")}`);
+    const draft = { title: "t".repeat(200), description: `${"d".repeat(7_980)}END-DESCRIPTION`, criteria };
+    const ticketChat = { repo: { name: "o/a", path: "/work" }, message: "go", history, notes: "", draft };
+    const prompt = renderQuoted({ pack: PACKS.ticket_chat, input: { ...input, pack: "ticket_chat", stage: "ticket_chat", context: { projectContext: null, ticketChat } } as never, template });
+    expect(prompt).toContain("END-TURN-29");
+    expect(prompt).toContain("END-DESCRIPTION");
+    expect(prompt).toContain("END-CRITERION-11");
+    expect(prompt).not.toContain("[cut:");
+  });
+
   it("renders the exceptions for change_exceptions: the facts as the machine's own text, the controls and each PR's title and body as quoted data", () => {
     const template = "repo {{context.exceptions.repo}} period {{context.exceptions.period}}\ncontrols:\n{{context.exceptions.controls}}\nexceptions:\n{{context.exceptions.items}}";
     const exceptions = {

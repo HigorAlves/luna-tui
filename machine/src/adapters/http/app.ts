@@ -177,7 +177,7 @@ export interface AppDeps {
   repoSignals?: RepoSignals;
   /** Every checkout the machine knows, for `POST /repos/proposals`; without it no repo is known and the route answers 404 `unknown_repo`. */
   knownRepos?: () => Promise<string[]>;
-  /** The repos `POST /ticket-chat` may let the planner read: the repo map and the remembered repos, never a task's `repoPath` (a client sets that). Without it the route answers 404 `unknown_repo` for every repo. */
+  /** The repos `POST /ticket-chat` may let the planner read: the repo map, the links made through `POST /github/clone` and the GitHub checkouts, never a task's `repoPath`. Anyone who can call the API can add a link, so this is not a privilege boundary. Without it the route answers 404 `unknown_repo` for every repo. */
   chatRepos?: () => Promise<string[]>;
   /** What time it is for `POST /repos/proposals` (its signal, decline and evidence windows); tests inject one. Defaults to the system clock. */
   clock?: () => Date;

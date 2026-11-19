@@ -69,8 +69,8 @@ export class RepoMap {
     return [...new Set(this.found.values())];
   }
 
-  /** Every checkout the machine itself knows: the map, the remembered links and the GitHub checkouts under the repos dir.
-   *  A task's repoPath is never one of them, so a caller cannot add a folder here. */
+  /** Every checkout the machine itself knows: the map, the links made through `POST /github/clone` (the board's clone prompt) and the GitHub checkouts the scan finds.
+   *  A task's repoPath never counts. Anyone who can call the API can add a link, so this list is not a privilege boundary. */
   async checkouts(): Promise<string[]> {
     await this.load();
     // The scan is not remembered: `remembered()` feeds the graph watch, which must not start watching every checkout.

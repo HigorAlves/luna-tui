@@ -144,11 +144,11 @@ export const CAPS: Readonly<Record<string, number>> = {
   "context.slack.items": 120_000,
   "context.chat.rules": 32_000,
   "context.chat.items": 120_000,
-  // The ticket planner reads the person's message, the turns (at most thirty), its own notes and the draft whole.
+  // The ticket planner reads the person's message, the turns (thirty of 4,000 characters at most), its own notes and the draft (about 14,000 characters at most) whole.
   "context.ticketChat.message": 4_000,
-  "context.ticketChat.history": 60_000,
+  "context.ticketChat.history": 125_000,
   "context.ticketChat.notes": 6_000,
-  "context.ticketChat.draft": 10_000,
+  "context.ticketChat.draft": 15_000,
   // The foreman reads the question and the turns whole (2,000 characters each, at most ten turns) and up to sixty cards of about 300 characters.
   "context.foreman.question": 2_000,
   "context.foreman.history": 24_000,

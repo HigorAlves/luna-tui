@@ -2407,6 +2407,8 @@ pub(crate) fn render_ticket_chat(
         ));
     }
     if state.phase == Phase::Typing && !state.choices.is_empty() {
+        // Each choice gets an equal share of the row, so every `1`-`4` label stays on screen.
+        let share = width / state.choices.len();
         let mut spans = Vec::new();
         for (at, choice) in state.choices.iter().enumerate() {
             spans.push(
@@ -2414,7 +2416,8 @@ pub(crate) fn render_ticket_chat(
                     .fg(c(BASE))
                     .bg(c(ACCENT)),
             );
-            spans.push(Span::from(format!(" {}  ", plain(choice))).fg(c(SUBTEXT0)));
+            let room = share.saturating_sub(5);
+            spans.push(Span::from(format!(" {}  ", truncate(&plain(choice), room))).fg(c(SUBTEXT0)));
         }
         foot.push(Line::from(spans));
     }
@@ -2422,7 +2425,7 @@ pub(crate) fn render_ticket_chat(
     foot.push(match &state.phase {
         Phase::Typing => Line::from(vec![
             Span::from("> ").fg(c(ACCENT)).bold(),
-            Span::from(format!("{}▏", plain(&state.input))),
+            Span::from(format!("{}▏", input_tail(&plain(&state.input), width.saturating_sub(3)))),
         ]),
         Phase::Waiting => {
             let secs = state.waiting_since.map_or(0, |t| t.elapsed().as_secs());
@@ -2613,6 +2616,16 @@ fn render_confirm_box(frame: &mut Frame, heading: &str, title: &str, note: &str,
             .wrap(Wrap { trim: false }),
         area,
     );
+}
+
+/// The last `width` characters of `text`, with `…` first when the front is cut, so a cursor after it stays on screen.
+fn input_tail(text: &str, width: usize) -> String {
+    let count = text.chars().count();
+    if count <= width {
+        return text.to_string();
+    }
+    let tail: String = text.chars().skip(count - width.saturating_sub(1)).collect();
+    format!("…{tail}")
 }
 
 /// The `x` menu: each action with the key it maps to.
