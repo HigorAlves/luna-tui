@@ -19,6 +19,7 @@ const inputFor = (pack: keyof typeof PACKS): StageInput => ({
   task: { id: "t1", title: "Fix the bug", description: "", criteria: [], repoPath: "/r", branch: "task/t1-fix", source: null },
   plan: null,
   decisions: [],
+    bridge: [],
   priorFindings: [],
   context: { projectContext: null },
   limits: { maxTurns: 10, timeoutMs: 1000 },

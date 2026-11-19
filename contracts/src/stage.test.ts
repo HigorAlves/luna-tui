@@ -136,6 +136,13 @@ describe("StageInput", () => {
     expect(StageInput.safeParse({ ...stageInputExample, effort: "max" }).success).toBe(false);
   });
 
+  it("reads the bridged tools of a run, none by default", () => {
+    expect(StageInput.parse(stageInputExample).bridge).toEqual([]);
+    const tool = { server: "figma", tool: "get_screenshot", name: "figma_get_screenshot", description: "d", inputSchema: { type: "object" } };
+    expect(StageInput.parse({ ...stageInputExample, bridge: [tool] }).bridge).toEqual([tool]);
+    expect(StageInput.safeParse({ ...stageInputExample, bridge: [{ server: "figma" }] }).success).toBe(false);
+  });
+
   it("reads schema 3 testCases with approach, and still reads schema 2's test field for old images", () => {
     const base = { ...stageInputExample, schema: 3 as const };
     const v3 = StageInput.safeParse({ ...base, context: { ...base.context, testCases: [{ title: "t", criterion: "c", approach: "a" }] } });

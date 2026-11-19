@@ -42,4 +42,10 @@ describe("the ticket reply pack on Claude", () => {
     const { PACKS } = await import("@hardness/contracts");
     expect(claudeTools(PACKS.ticket_reply.access)).toEqual({ tools: [], allowedTools: [] });
   });
+
+  it("allows the bridged luna tools the stage was given", () => {
+    const { tools, allowedTools } = claudeTools({ ...NO_ACCESS, luna: ["step"] }, "/work", ["figma_get_screenshot"]);
+    expect(allowedTools).toEqual(["mcp__luna__step", "mcp__luna__figma_get_screenshot"]);
+    expect(tools).toEqual(["mcp__luna__step", "mcp__luna__figma_get_screenshot"]);
+  });
 });

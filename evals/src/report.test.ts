@@ -45,7 +45,7 @@ describe("evalDatapoint", () => {
     const evalCase: EvalCase = {
       id: "incident-bot-social",
       pack: "slack_triage",
-      input: { schema: 3, stage: "slack_triage", pack: "slack_triage", engine: "claude:haiku", attempt: 1, task: { id: "t", title: "Triage", description: "", criteria: [], repoPath: "", branch: "", source: null }, plan: null, decisions: [], priorFindings: [], context: { projectContext: null }, limits: { maxTurns: 3, timeoutMs: 60_000 }, env: {} } as EvalCase["input"],
+      input: { schema: 3, stage: "slack_triage", pack: "slack_triage", engine: "claude:haiku", attempt: 1, task: { id: "t", title: "Triage", description: "", criteria: [], repoPath: "", branch: "", source: null }, plan: null, decisions: [], bridge: [], priorFindings: [], context: { projectContext: null }, limits: { maxTurns: 3, timeoutMs: 60_000 }, env: {} } as EvalCase["input"],
       expect: Expect.parse({ schema: 1, outcome: "pass", rubric: "the outage is P0", checks: [{ kind: "equals", path: "items[id=m1].priority", value: "P0" }] }),
     };
     const datapoint = evalDatapoint(evalCase, result, { items: [] }, 3, "trace-1");

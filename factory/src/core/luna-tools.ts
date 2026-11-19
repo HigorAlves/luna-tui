@@ -2,7 +2,8 @@
 // decisions, as a description and an input shape per tool plus one handler that keeps the state.
 // The state lives in the factory process, because finish() reads it; each runtime serves the
 // handlers its own way (Claude as an in-process MCP server, eve over a loopback call).
-import type { Ledger, LedgerSlice, LunaTool, RunEvent, StageInput } from "@hardness/contracts";
+import type { BridgedTool, Ledger, LedgerSlice, LunaTool, RunEvent, StageInput } from "@hardness/contracts";
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
@@ -77,6 +78,8 @@ export interface LunaToolsOptions {
   checkWaitMs?: number;
   /** Called once a slice is recorded as committed: the run hands its commits to the machine here (core/bundles.ts). */
   onSliceCommitted?: () => void;
+  /** The MCP tools the machine bridged for this run (RFC 0013); a call to one goes through the checks mailbox. Absent: none. */
+  bridge?: BridgedTool[];
 }
 
 const POLL_MS = 25;
@@ -84,22 +87,36 @@ const MIN_RED_NOTE = 20;
 type CheckAnswer = { verdict: string; problems: string[]; [key: string]: unknown };
 const SKIPPED: CheckAnswer = { verdict: "skipped", problems: [] };
 
-/** Polls for a JSON answer file until `waitMs` has passed; a half-written file is retried. */
-async function awaitAnswer(path: string, waitMs: number): Promise<CheckAnswer> {
+/** Polls for a JSON answer file until `waitMs` has passed; a half-written file, or one `accept` refuses, is retried. */
+async function awaitFile<T>(path: string, waitMs: number, accept: (parsed: unknown) => T | null, none: T): Promise<T> {
   const until = Date.now() + waitMs;
   for (;;) {
     if (existsSync(path)) {
       try {
-        const parsed = JSON.parse(readFileSync(path, "utf8")) as CheckAnswer;
-        if (parsed && typeof parsed === "object" && typeof parsed.verdict === "string") return { ...parsed, problems: Array.isArray(parsed.problems) ? parsed.problems : [] };
+        const answer = accept(JSON.parse(readFileSync(path, "utf8")));
+        if (answer !== null) return answer;
       } catch {
         // half-written: look again
       }
     }
-    if (Date.now() >= until) return SKIPPED;
+    if (Date.now() >= until) return none;
     await new Promise((resolve) => setTimeout(resolve, POLL_MS));
   }
 }
+
+const awaitAnswer = (path: string, waitMs: number): Promise<CheckAnswer> =>
+  awaitFile<CheckAnswer>(
+    path,
+    waitMs,
+    (p) => {
+      const parsed = p as CheckAnswer;
+      return parsed && typeof parsed === "object" && typeof parsed.verdict === "string" ? { ...parsed, problems: Array.isArray(parsed.problems) ? parsed.problems : [] } : null;
+    },
+    SKIPPED,
+  );
+
+/** The luna names of the bridged tools a run was given. */
+export const bridgeNames = (bridge: readonly BridgedTool[]): string[] => bridge.map((b) => b.name);
 
 /** The handlers, by tool, and the state the runner reads at the end. `call` validates the input
  *  first, so a runtime that hands it raw JSON gets the same refusal a schema would give. */
@@ -193,7 +210,22 @@ export function lunaHandlers(options: LunaToolsOptions) {
     },
   };
 
+  // A bridged tool (RFC 0013): the request is a file in the mailbox, the machine's answer another. The nonce keeps
+  // an earlier run's leftovers out; the machine reads only the names this run was given.
+  const nonce = randomBytes(4).toString("hex");
+  let sent = 0;
+  const bridged = async (b: BridgedTool, args: unknown): Promise<unknown> => {
+    if (!options.checksDir) return { skipped: true };
+    const n = ++sent;
+    mkdirSync(options.checksDir, { recursive: true });
+    note({ kind: "note", payload: { phase: "design.mcp_call", server: b.server, tool: b.tool, n } });
+    writeFileSync(join(options.checksDir, `mcp-request-${nonce}-${n}.json`), JSON.stringify({ n, server: b.server, tool: b.tool, args: args ?? {} }));
+    return awaitFile<unknown>(join(options.checksDir, `mcp-answer-${nonce}-${n}.json`), options.checkWaitMs ?? 0, (p) => (p && typeof p === "object" ? p : null), { skipped: true });
+  };
+
   const call = async (tool: string, args: unknown): Promise<unknown> => {
+    const b = (options.bridge ?? []).find((x) => x.name === tool);
+    if (b && !(tool in LUNA_TOOLS)) return bridged(b, args);
     if (!(tool in LUNA_TOOLS)) return { error: `no luna tool ${tool}` };
     const name = tool as LunaTool;
     const parsed = z.object(LUNA_TOOLS[name].input).safeParse(args ?? {});

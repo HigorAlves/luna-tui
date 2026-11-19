@@ -27,6 +27,15 @@ describe("eveTools", () => {
   });
 });
 
+describe("a pack that bridges design tools", () => {
+  const pack = { ...triage, access: { ...triage.access, bridge: [{ server: "figma-desktop", tools: ["get_screenshot"] }] } };
+  it("serves each granted tool bare, as a bridged luna tool", () => {
+    expect(eveTools(pack.access)).toContain("figma_desktop_get_screenshot");
+    const files = agentFiles(pack, options());
+    expect(files["agent/tools/figma_desktop_get_screenshot.ts"]).toContain('bridgedTool("figma_desktop_get_screenshot")');
+  });
+});
+
 describe("eveSubagents", () => {
   it("is the helpers on an eve engine, which the stage's own `delegate` no longer serves", () => {
     expect(eveSubagents(PACKS.triage)).toEqual([{ role: "reply-drafter", engine: "codex:luna" }]);

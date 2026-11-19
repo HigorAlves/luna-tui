@@ -82,6 +82,7 @@ export function judgeInput(evalCase: EvalCase, answer: unknown, engine: EngineId
     task: { id: `eval-${evalCase.pack}-${evalCase.id}`, title: `Judge ${evalCase.pack}/${evalCase.id}`, description: "", criteria: [], repoPath: "", branch: "", source: null },
     plan: null,
     decisions: [],
+    bridge: [],
     priorFindings: [],
     context: {
       projectContext: null,

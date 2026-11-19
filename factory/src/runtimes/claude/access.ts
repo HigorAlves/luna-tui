@@ -2,7 +2,7 @@
 // web, subagents, skills, shell commands and the luna server. A golden test pins the result.
 import type { Access } from "@hardness/contracts";
 
-export function claudeTools(access: Access, workRoot = "/work"): { tools: string[]; allowedTools: string[] } {
+export function claudeTools(access: Access, workRoot = "/work", bridged: readonly string[] = []): { tools: string[]; allowedTools: string[] } {
   const allowedTools = [
     ...(access.read ? ["Read", "Glob", "Grep"] : []),
     ...(access.write ? ["Write", "Edit"] : []),
@@ -10,6 +10,8 @@ export function claudeTools(access: Access, workRoot = "/work"): { tools: string
     ...(access.agent ? ["Agent"] : []),
     ...(access.skills ? ["Skill"] : []),
     ...access.luna.map((tool) => `mcp__luna__${tool}`),
+    // The design tools the machine bridged for this run (RFC 0013), served on the luna server.
+    ...bridged.map((name) => `mcp__luna__${name}`),
     // Models write `git -C /work log` as often as `git log`; the same command, so the same rule. The guard (core/guards.ts)
     // drops a -C that names the worktree and refuses the rest.
     ...access.commands.flatMap((command) => [`Bash(${command}:*)`, ...(command.startsWith("git ") ? [`Bash(git -C ${workRoot} ${command.slice(4)}:*)`] : [])]),

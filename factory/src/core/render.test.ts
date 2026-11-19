@@ -29,6 +29,7 @@ const input: StageInput = {
   attempt: 2,
   task: { id: "t1", title: "Fix the bug", description: "It breaks & crashes", criteria: ["no crash", "a/b"], repoPath: "/r", branch: "task/t1-fix", source: null },
   plan: { brief: "do it", criteria: ["c1"], assumptions: ["a1"], slices: [{ title: "s1", est_loc: 10, touchpoints: ["a.ts"], acceptance: ["ok"] }] },
+  bridge: [],
   decisions: [
     { at: "triage", decision: "answered", reason: null, answers: { Q: "A" } },
     { at: "awaiting_approval", decision: "approved", reason: "go", answers: {} },

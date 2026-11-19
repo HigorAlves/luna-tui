@@ -57,7 +57,7 @@ const emit: Emit = (event) => {
 const checkWaitMs = DRY ? 0 : Number(env.LUNA_CHECK_WAIT_MS ?? 90_000);
 // The agent commits in its own repository in /work/.git; its commits leave as bundles, at each slice and when the run ends.
 const bundler = makeBundler({ work: WORK, out: OUT });
-const luna = lunaHandlers({ onSliceCommitted: () => void bundler.bundle(), ledgerPath: join(OUT, "ledger.json"), ledger: input.context.ledger ?? null, decisions: input.decisions, emit, checksDir: join(OUT, "checks"), checkWaitMs: Number.isFinite(checkWaitMs) ? checkWaitMs : 90_000 });
+const luna = lunaHandlers({ onSliceCommitted: () => void bundler.bundle(), ledgerPath: join(OUT, "ledger.json"), ledger: input.context.ledger ?? null, decisions: input.decisions, bridge: input.bridge, emit, checksDir: join(OUT, "checks"), checkWaitMs: Number.isFinite(checkWaitMs) ? checkWaitMs : 90_000 });
 
 // Laminar, when the machine's traces are on: this run's spans nest under the machine's span for it.
 const telemetry = await factoryTelemetry(env);

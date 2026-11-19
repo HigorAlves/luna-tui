@@ -8,6 +8,7 @@ import { EconomyInput, ProposeContext } from "./economy.ts";
 import { EngineBudgets, EngineId } from "./engines.ts";
 import { EffortId } from "./models.ts";
 import { DesignConfig, EvidenceConfigV22, FactoryConfigInput, SecretNameSchema } from "./config-v22.ts";
+import { BridgedTool } from "./mcp.ts";
 import { Scenario } from "./plan.ts";
 import { SizeContext, SplitContext } from "./split.ts";
 import { ConfidencePolicySchema } from "./questions.ts";
@@ -1515,6 +1516,8 @@ export const StageInput = z.object({
       answers: z.record(z.string(), z.string()),
     }),
   ),
+  /** The MCP tools the machine bridged for this run (RFC 0013): served as luna tools; each call goes through the checks mailbox. */
+  bridge: z.array(BridgedTool).default([]),
   priorFindings: z.array(Finding),
   context: z.object({
     projectContext: z.string().nullable(),
