@@ -90,7 +90,7 @@ export interface McpRequest {
 }
 
 /** The answer to an MCP request: the factory returns the file's JSON to the agent as it is. */
-export type McpAnswer = { ok: true; text: string; images: string[]; truncated: boolean } | { ok: false; error: string };
+export type McpAnswer = { ok: true; text: string; images: string[]; truncated: boolean; imagesDropped?: number } | { ok: false; error: string };
 
 /** What the loop guard's question leaves for the machine: its number is the file's, and the body must say the same. */
 export interface LoopRequest {

@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { storedMcpSecrets } from "../adapters/mcp/tokens.ts";
+import { resolvedRefSecrets, storedMcpSecrets } from "../adapters/mcp/tokens.ts";
 import type { Config } from "../config.ts";
 
 const ENV_KEYS = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "TYPESAFE_API_KEY", "AI_GATEWAY_API_KEY"] as const;
@@ -67,6 +67,7 @@ export function machineSecrets(config: Source, env: NodeJS.ProcessEnv, home: str
     ...Object.fromEntries(CLAUDE_FILES.map(([name, file]) => [name, readText(join(home, ".config", "hardness", file))])),
     ...codexTokens(home, env),
     ...(config.stateDir ? storedMcpSecrets(config.stateDir) : {}),
+    ...resolvedRefSecrets(),
   };
   return Object.fromEntries(Object.entries(found).filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length >= MIN_LENGTH));
 }

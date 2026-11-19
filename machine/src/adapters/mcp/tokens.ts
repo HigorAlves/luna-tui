@@ -1,5 +1,6 @@
 // MCP credentials (RFC 0013): the token store in the state dir, the OAuth provider the SDK drives, and the
 // one resolver for a `ref` credential. No value is ever logged or put in an error message.
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { chmodSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -94,7 +95,20 @@ const realExec: Exec = (file, args) =>
     execFile(file, args, { timeout: 30_000, maxBuffer: 1 << 20 }, (error, stdout) => (error ? reject(error) : resolve(stdout)));
   });
 
+const resolvedRefs = new Map<string, string>();
+
+/** Every value a `ref` credential has resolved to in this process, for redaction. Keyed by a hash of the ref, as a `literal:` ref holds its value. */
+export function resolvedRefSecrets(): Record<string, string> {
+  return Object.fromEntries([...resolvedRefs].map(([ref, value]) => [`MCP_REF_${createHash("sha256").update(ref).digest("hex").slice(0, 12).toUpperCase()}`, value]));
+}
+
 async function resolveRef(ref: string, env: NodeJS.ProcessEnv, exec: Exec): Promise<string> {
+  const value = await resolveRefValue(ref, env, exec);
+  resolvedRefs.set(ref, value);
+  return value;
+}
+
+async function resolveRefValue(ref: string, env: NodeJS.ProcessEnv, exec: Exec): Promise<string> {
   if (ref.startsWith("literal:")) return ref.slice("literal:".length);
   if (ref.startsWith("env:")) {
     const value = env[ref.slice("env:".length)];
@@ -110,7 +124,7 @@ async function resolveRef(ref: string, env: NodeJS.ProcessEnv, exec: Exec): Prom
       throw new McpCredentialError(`${ref}: op read failed (is the op CLI installed and signed in?)`);
     }
   }
-  throw new McpCredentialError(`${ref}: not an env:, literal: or op:// reference`);
+  throw new McpCredentialError("credential ref has no env:, literal: or op:// prefix");
 }
 
 /** The token a server's credential gives: null for none and for a logged-out oauth server. */

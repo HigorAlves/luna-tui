@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { fileTokenStore, lunaOAuthProvider, McpCredentialError, tokenFor } from "./tokens.ts";
+import { fileTokenStore, lunaOAuthProvider, McpCredentialError, resolvedRefSecrets, tokenFor } from "./tokens.ts";
 
 const dir = () => mkdtempSync(join(tmpdir(), "mcp-tokens-"));
 const server = (credential: unknown) => ({ name: "figma", transport: "http", url: "https://x.dev/mcp", credential, tools: [] }) as never;
@@ -85,5 +85,21 @@ describe("lunaOAuthProvider", () => {
   it("registers with token_endpoint_auth_method none when asked", () => {
     const p = lunaOAuthProvider(fileTokenStore(dir()), "x", "http://localhost/cb", { authMethod: "none" });
     expect(p.clientMetadata.token_endpoint_auth_method).toBe("none");
+  });
+});
+
+describe("credential refs and redaction", () => {
+  it("does not echo an unprefixed ref in the error", async () => {
+    const t = tokenFor(fileTokenStore(dir()), {});
+    const error = await t(server({ kind: "ref", ref: "sk-live-secretvalue-1234" })).catch((e: unknown) => e as Error);
+    expect(error).toBeInstanceOf(McpCredentialError);
+    expect((error as Error).message).toBe("credential ref has no env:, literal: or op:// prefix");
+  });
+
+  it("records every resolved ref value for redaction", async () => {
+    const t = tokenFor(fileTokenStore(dir()), { REF_ENV: "env-secret-value-1" });
+    await t(server({ kind: "ref", ref: "literal:literal-secret-value-1" }));
+    await t(server({ kind: "ref", ref: "env:REF_ENV" }));
+    expect(Object.values(resolvedRefSecrets())).toEqual(expect.arrayContaining(["env-secret-value-1", "literal-secret-value-1"]));
   });
 });

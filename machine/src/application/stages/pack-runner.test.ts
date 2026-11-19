@@ -1910,8 +1910,8 @@ describe("the MCP bridge in a stage (RFC 0013)", () => {
     const answers: unknown[] = [];
     const { deps: d, ctx } = mcpDeps(caller([{ tool: "shot" }], answers), mcp);
     await withBridge(grant(["shot"]), () => runAgent(d, ctx, "triage"));
-    expect(answers).toEqual([{ ok: true, text: '<data source="fixture.shot"></data>', images: ["/design/1-0.png"], truncated: false }]);
-    expect(readFileSync(join(seen!.runDir, "design", "1-0.png"), "utf8")).toBe("png");
+    expect(answers).toEqual([{ ok: true, text: '<data source="fixture.shot"></data>', images: ["/design/a1b2c3d4-1-0.png"], truncated: false }]);
+    expect(readFileSync(join(seen!.runDir, "design", "a1b2c3d4-1-0.png"), "utf8")).toBe("png");
   });
 
   it("refuses a tool the run was not given, whatever the request says, and logs it", async () => {
@@ -1930,7 +1930,7 @@ describe("the MCP bridge in a stage (RFC 0013)", () => {
     const emitted: Array<[string, Record<string, unknown>]> = [];
     const { deps: d, ctx } = mcpDeps(caller([{ tool: "boom" }], answers), mcp, emitted);
     await withBridge(grant(["boom"]), () => runAgent(d, ctx, "triage"));
-    expect(answers).toEqual([{ ok: false, error: "nope" }]);
+    expect(answers).toEqual([{ ok: false, error: '<data source="fixture.boom">nope</data>' }]);
     expect(emitted[0]![1]).toMatchObject({ tool: "boom", outcome: "error" });
   });
 
