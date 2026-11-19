@@ -1,0 +1,51 @@
+{
+  "schema": 3,
+  "stage": "a11y_audit",
+  "pack": "a11y_audit",
+  "attempt": 1,
+  "task": {
+    "id": "eval-seeded-axe",
+    "title": "Audit the checkout page for the machine-detectable failures",
+    "description": "The checkout page ships with a low-contrast Pay button, an image with no alt text and an input with no label.",
+    "criteria": [
+      "The checkout page has no WCAG 2.2 AA failure axe can find"
+    ],
+    "repoPath": "fixtures/a11y-seeded",
+    "branch": "task/eval-seeded-axe",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "bridge": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "a11y": {
+      "level": "AA"
+    },
+    "qaTargets": [
+      {
+        "name": "seeded",
+        "baseUrl": "file:///work/index.html"
+      }
+    ],
+    "testCases": [
+      {
+        "title": "Pay form renders",
+        "criterion": "The checkout page is accessible",
+        "approach": "the checkout page is open at /, the page loads, the pay form, its image and the Pay button are visible",
+        "given": "the checkout page is open at /",
+        "when": "the page loads",
+        "then": "the pay form, its image and the Pay button are visible",
+        "layer": "e2e"
+      }
+    ]
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

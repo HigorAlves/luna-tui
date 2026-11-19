@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "mentions",
+      "path": "findings[].criterion",
+      "words": [
+        "2.1.2",
+        "2.4.7"
+      ]
+    },
+    {
+      "kind": "mentions",
+      "path": "findings[].source",
+      "words": [
+        "judged"
+      ]
+    },
+    {
+      "kind": "count",
+      "path": "findings",
+      "min": 2
+    }
+  ],
+  "rubric": "The seeded page plants three failures only a person at the keyboard finds: a help dialog that traps Tab (2.1.2, level A), a Pay button with outline none on focus so no focus is visible (2.4.7, level AA) and a hover state at 1.6:1 contrast (1.4.11, level AA). A good answer drives the page with the keyboard, reports each as source judged with rule null, impact null, the state it reached and a screenshot file in evidence. Recall by level counts: the trap and the missing focus indicator are required; the hover contrast is the hard one. A false blocker is a judged finding with no screenshot, a failure the page does not have, or an AAA criterion treated as blocking at AA. Findings that axe also reports are fine."
+}

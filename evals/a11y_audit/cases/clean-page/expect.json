@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "count",
+      "path": "findings",
+      "max": 1
+    },
+    {
+      "kind": "equals",
+      "path": "pages[].axe",
+      "value": "ran"
+    }
+  ],
+  "rubric": "The page is the seeded page with every failure fixed. A good answer runs axe and the keyboard pass and reports nothing, or at most one low-confidence nit. Every finding is a false blocker here unless it names a real failure of the HTML in /work/index.html, which a person must be able to point at. Reporting the seeded failures (contrast, alt, label, trap, focus outline) is a real error: they are not in this page. An AAA criterion is never a blocker at level AA."
+}
