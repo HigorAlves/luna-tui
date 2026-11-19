@@ -15,7 +15,7 @@ import { toEvent, toTask } from "./adapters/http/serialize.ts";
 import { machineSecrets } from "./bootstrap/machine-secrets.ts";
 import { useTruthSecrets } from "./application/ground-truth.ts";
 import { buildTelemetry, probeCollector } from "./bootstrap/telemetry.ts";
-import { buildPackRuns, buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
+import { type DesignDecisions, buildPackRuns, buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
 import { loadConfig, sandboxPolicyNotes } from "./config.ts";
 import { createMcpApi } from "./adapters/http/mcp.ts";
 import { mcpFactory } from "./bootstrap/mcp.ts";
@@ -294,6 +294,8 @@ if (config.disabledRuntimes.length > 0) console.log(`runtimes off (MACHINE_DISAB
 const triageSignals: TriageSignalDeps = { classify: null, graph, policy: (repoPath) => policies.for(repoPath), save: (id, patch) => engineSpend.updateTask(id, patch) };
 /** The plan stage's decisions run through PackRuns, which is built below: bound once it exists. */
 const planDecisions: { decide: PlanDeps["decide"]; size: { decide: NonNullable<PlanDeps["size"]>["decide"]; similar?: NonNullable<PlanDeps["size"]>["similar"] }; split: { decompose: NonNullable<PlanDeps["split"]>["decompose"]; check: NonNullable<PlanDeps["split"]>["check"]; depthOf?: NonNullable<PlanDeps["split"]>["depthOf"]; via?: NonNullable<PlanDeps["split"]>["via"] } } = { decide: null, size: { decide: null }, split: { decompose: null, check: null } };
+/** The designer agents' budget and the person's "design off" for a card (RFC 0013): bound once the pipeline exists, read by the plan and e2e stages. */
+const designDecisions: DesignDecisions = {};
 /** Build's red and scope checks run through PackRuns too: bound once it exists. */
 const buildDecisions: { decide: Decide | null; budget?: (taskId: string) => Promise<{ spent: boolean; minutesLeft: number }> } = { decide: null };
 /** Verify's finding_classify (and e2e's failure cause) run through PackRuns as the `verify` client: bound once it exists. */
@@ -383,6 +385,7 @@ const { stubReason, real, resolveConflicts, verifyPack, checksExec, proofRig, ag
     },
     record: (taskId, links, pr) => pipeline.recordReview(taskId, links, pr),
   },
+  designDecisions,
 );
 /** The retro's facts for a task, from the machine's own records. */
 async function retroFactsFor(taskId: string) {
@@ -782,6 +785,8 @@ if (packRuns) verifyDecisions.decide = async (pack, check) => tagged(await ownCa
 if (packRuns) evidenceDecisions.decide = async (evidence) => tagged(await ownCalls(packRuns).run({ pack: "evidence_format", context: { evidence }, stage: "evidence" }, "evidence"));
 if (packRuns) shipDecisions.decide = async (pack, ship) => tagged(await ownCalls(packRuns).run({ pack, context: { ship }, stage: "ship" }, "ship"));
 buildDecisions.budget = (taskId) => pipeline.buildBudgetState(taskId);
+designDecisions.budget = (taskId) => pipeline.designBudgetState(taskId);
+designDecisions.cardOff = (taskId) => pipeline.designCardOff(taskId);
 if (packRuns)
   buildDecisions.decide = async (pack, check, repoPath) => {
     const out = await ownCalls(packRuns).run({ pack, context: { check }, stage: "build" }, "build");

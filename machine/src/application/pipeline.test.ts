@@ -4507,3 +4507,54 @@ describe("the address of a card's PR", () => {
   });
 });
 
+
+describe("the design budget", () => {
+  const spentBudget = { tokens: 1_200_000, tokensCounted: true, minutes: 20, spent: "tokens", limits: { max_tokens: 1_000_000, max_minutes: 45 } };
+  /** The plan stage (a stand-in for any stage that runs a designer pack) escalates once with the spent design budget, then runs as the stub does. */
+  const escalating = (ran: string[]): ((stage: TaskState) => StageRunner) => (stage) =>
+    stage === "test_design"
+      ? async (context) => (ran.push(stage), ran.length === 1 ? { outcome: "escalated" as const, detail: { escalation: "design_budget", reason: "the design budget is spent: a person decides", designBudget: spentBudget } } : stubs.runnerFor(stage)(context))
+      : stubs.runnerFor(stage);
+
+  it("reads the card's design runs against the repo's design.budget", async () => {
+    const p = new Pipeline(db, (stage) => stubs.runnerFor(stage), { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    expect(await p.designBudgetState(task.id)).toMatchObject({ tokens: null, minutes: 0, spent: null, limits: { max_tokens: 1_000_000, max_minutes: 45 } });
+    await p.record(task.id, "design.run", { pack: "design_spec", tokens: 1_000_001, minutes: 2, outcome: "pass" });
+    expect((await p.designBudgetState(task.id)).spent).toBe("tokens");
+  });
+
+  it("gives the card a fresh design budget when a person approves a design_budget escalation", async () => {
+    const ran: string[] = [];
+    const p = new Pipeline(db, escalating(ran), { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    expect((await p.get(task.id)).state).toBe("escalated");
+    await p.decide(task.id, "approved");
+    const kinds = (await p.events(task.id)).map((e) => e.kind);
+    expect(kinds.filter((k) => k === "design.budget_reset")).toHaveLength(1);
+    expect(kinds).not.toContain("design.card_off");
+    expect(await p.designCardOff(task.id)).toBe(false);
+  });
+
+  it("also turns design off for the card when the approval says so", async () => {
+    const ran: string[] = [];
+    const p = new Pipeline(db, escalating(ran), { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved", undefined, { design: "off" });
+    const kinds = (await p.events(task.id)).map((e) => e.kind);
+    expect(kinds).toContain("design.budget_reset");
+    expect(kinds).toContain("design.card_off");
+    expect(await p.designCardOff(task.id)).toBe(true);
+  });
+
+  it("leaves a Build-budget escalation without a design reset", async () => {
+    const p = new Pipeline(db, (stage) => (stage === "test_design" ? async () => ({ outcome: "escalated" as const, detail: { escalation: "plan_wrong", reason: "x" } }) : stubs.runnerFor(stage)), { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    expect((await p.get(task.id)).state).toBe("escalated");
+    await p.decide(task.id, "approved");
+    expect((await p.events(task.id)).some((e) => e.kind === "design.budget_reset")).toBe(false);
+  });
+});

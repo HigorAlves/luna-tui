@@ -19,7 +19,7 @@ describe("the kinds only the machine writes", () => {
   });
 
   it("reserves every kind that would become a row the machine itself logs, and lets the agent's ledger kinds and its notes through", () => {
-    for (const kind of ["finished", "stage.finished", "started", "stage.started", "engine", "held", "reattached", "sub_container", "restarted", "malformed", "pr.opened", "build.checkpoint", "ship.ready", "evidence.published", "verify.findings", "ci.status", "sandbox.egress_blocked", "stage.sandbox.egress_blocked", "design.mcp_call", "stage.design.mcp_call"]) expect(isReservedKind(kind), kind).toBe(true);
+    for (const kind of ["finished", "stage.finished", "started", "stage.started", "engine", "held", "reattached", "sub_container", "restarted", "malformed", "pr.opened", "build.checkpoint", "ship.ready", "evidence.published", "verify.findings", "ci.status", "sandbox.egress_blocked", "stage.sandbox.egress_blocked", "design.mcp_call", "stage.design.mcp_call", "design.run", "stage.design.run"]) expect(isReservedKind(kind), kind).toBe(true);
     for (const kind of ["slice.red", "slice.green", "slice.committed", "stage.slice.red", "ledger.init", "step", "note", "something.new"]) expect(isReservedKind(kind), kind).toBe(false);
   });
 

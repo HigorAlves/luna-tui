@@ -6,7 +6,7 @@ import { looksLikeTestPath } from "../domain/locked-files.ts";
 import { trustOf } from "../domain/trust.ts";
 import { z } from "zod";
 
-import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, TERMINAL, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, SplitChild, coverageOf, criteriaOf, sizeLimits, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type CardSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, maxRisk, reviseCriteria, stepOf, stepsOfAnswer, stronger, RUN_OR_GATE } from "@hardness/contracts";
+import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, TERMINAL, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, SplitChild, coverageOf, criteriaOf, sizeLimits, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type CardSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, maxRisk, reviseCriteria, stepOf, stepsOfAnswer, stronger, RUN_OR_GATE, designSettings } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -54,6 +54,7 @@ import { CONFIG_FILE, POLICY_FILE, PolicyStore } from "./policy.ts";
 
 import type { CommitFact, PriorityTruthEntry } from "./ground-truth.ts";
 import { budgetRowsOf, buildBudget, rateLimitWaitMs } from "../domain/build-budget.ts";
+import { type DesignBudget, designBudget } from "../domain/design-budget.ts";
 import { DECIDED_REASONS, type DecidedEscalation, decideEscalation } from "./stages/escalation.ts";
 import { type Economy, type Propose, noEconomy } from "./economy.ts";
 import { type LoopStop, loopStop } from "../domain/economy/stop.ts";
@@ -1727,6 +1728,11 @@ export class Pipeline {
     // "Build's budget is spent: a person decides": a person who approves has decided the card goes on, so it goes on with a fresh budget.
     // Without one, the next Build reads the same spent budget and escalates again, and approving can never move the card.
     if (escalated && wanted === "approved" && budgetWasSpent(escalated.requested)) await this.log(id, "build.budget_reset", { reason: "a person approved the card past its spent budget" });
+    // "The design budget is spent: a person decides": approving gives a fresh design budget; approving with design off also skips the designer agents for this card.
+    if (escalated && wanted === "approved" && escalated.requested.escalation === "design_budget") {
+      await this.log(id, "design.budget_reset", { reason: "a person approved the card past its spent design budget" });
+      if (response?.design === "off") await this.log(id, "design.card_off", { reason: "a person turned design off for this card" });
+    }
     // A person approving a plan made after Build already ran has decided the card builds that plan: its Build counts from a fresh budget.
     // Otherwise the runs spent on the old plan (and its bounces) escalate the new one before it starts, and the stronger model's one run is burnt.
     if (before.state === "awaiting_approval" && wanted === "approved" && !options.auto && (await this.events(id)).some((e) => e.kind === "stage.finished" && e.payload.stage === "implementing")) {
@@ -3436,6 +3442,17 @@ export class Pipeline {
     const { runs, events } = await this.budgetRows(id);
     const budget = buildBudget(runs, events, (await this.policyFor(task.repoPath)).factory.build);
     return { spent: budget.spent !== null, minutesLeft: budget.minutesLeft };
+  }
+
+  /** The card's design budget now (RFC 0013): the designer runs since the last `design.budget_reset`, against the repo's `design.budget`. */
+  async designBudgetState(id: string): Promise<DesignBudget> {
+    const task = await this.get(id);
+    return designBudget(await this.events(id), designSettings((await this.policyFor(task.repoPath)).design).budget);
+  }
+
+  /** Whether a person turned the designer agents off for this card (approving a `design_budget` escalation with design off). */
+  async designCardOff(id: string): Promise<boolean> {
+    return (await this.events(id)).some((e) => e.kind === "design.card_off");
   }
 
   /** The minutes of Build's budget the card has left. */

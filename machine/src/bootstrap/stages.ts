@@ -51,6 +51,7 @@ import { InstallFailedError, type InstallInput, type InstallOutcome, ensureInsta
 import { removeNestedRepositories } from "../adapters/git/machine-repo.ts";
 import { ensureClone, isClone, removeClone } from "../adapters/git/clone.ts";
 import { type ProofRig, proofAppDeps } from "../application/config-proof.ts";
+import type { DesignBudget } from "../domain/design-budget.ts";
 import { sandboxSizeOf } from "../domain/sandbox-bounds.ts";
 import { type Trust, trustOf } from "../domain/trust.ts";
 import { runtimeChecker } from "../adapters/docker/runtimes.ts";
@@ -86,6 +87,12 @@ import { type ComplianceDeps } from "../application/stages/compliance-review.ts"
 import { type DocsDriftDeps } from "../application/stages/docs-drift.ts";
 import { sharedWiki } from "../adapters/git/wiki.ts";
 import { type ShipGateProbe, shipGateProbe } from "../application/ship-gate-probe.ts";
+
+/** What the designer agents' stages ask the pipeline (RFC 0013): the card's design budget now, and whether a person turned design off for it. */
+export interface DesignDecisions {
+  budget?: (taskId: string) => Promise<DesignBudget>;
+  cardOff?: (taskId: string) => Promise<boolean>;
+}
 
 export interface RealStagesResult {
   /** Why every stage is a stub (no Claude credential, no runner image, no egress image), for `GET /health`; null when stages are real, and when agents are off on purpose (`MACHINE_AGENTS=off`). */
@@ -170,6 +177,8 @@ export async function buildRealStages(
   jira?: Jira | null,
   /** What the review route links a PR to (the board's cards, the Jev fallback, where the links are kept); absent, only the keys a PR names are read. */
   reviewLinks?: PrReviewDeps["links"],
+  /** The designer agents' budget and a card's "design off" (RFC 0013), bound once the pipeline exists; absent, no budget applies and design stays on. */
+  designDecisions?: DesignDecisions,
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
