@@ -153,6 +153,8 @@ export const DesignConfig = z.union([
     figma: z.object({ file: z.string().regex(FIGMA_FILE_KEY), page: z.string().max(200).optional() }).strict().optional(),
     budget: section({ max_tokens: count(20_000_000).optional(), max_minutes: minutes(1440).optional() }).optional(),
     a11y: section({ level: z.enum(["AA", "AAA"]).optional(), mode: z.enum(["gate", "advisory"]).optional() }).optional(),
+    /** Design parity (phase 3): `bar` is the confidence under which the sign-off gate fires (default 0.75), `publish` whether the frame | build pairs go on the PR (default `auto`). */
+    parity: section({ bar: z.number().min(0).max(1).optional(), publish: z.enum(["auto", "always", "never"]).optional() }).optional(),
   }),
 ]);
 export type DesignConfig = z.infer<typeof DesignConfig>;

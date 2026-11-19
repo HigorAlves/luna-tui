@@ -109,12 +109,14 @@ export const Finding = z.object({
   confidence: z.number().min(0).max(1),
   // v2.2, all optional: a finding written before the wave has none of them (see finding.ts).
   id: z.string().optional(),
-  category: z.enum(["correctness", "missing_criterion", "security", "error_handling", "convention", "performance", "env", "tests", "size", "accessibility"]).optional(),
+  category: z.enum(["correctness", "missing_criterion", "security", "error_handling", "convention", "performance", "env", "tests", "size", "accessibility", "design"]).optional(),
   criterion_ref: z.string().nullable().optional(),
   suggested_fix: z.string().nullable().optional(),
   description: z.string().optional(),
   /** How the finding ended: fixed in a commit, kept by the author, or dismissed by a person. */
-  resolution: z.object({ status: z.enum(["fixed", "kept", "dismissed"]), by: z.string(), commit: z.string().optional(), /** True when the machine worked the resolution out (a finding that stopped being raised), rather than a person or a stage saying so. */ inferred: z.boolean().optional() }).optional(),
+  resolution: z.object({ status: z.enum(["fixed", "kept", "dismissed", "waived"]), by: z.string(), commit: z.string().optional(), /** True when the machine worked the resolution out (a finding that stopped being raised), rather than a person or a stage saying so. */ inferred: z.boolean().optional() }).optional(),
+  /** A design finding (RFC 0013): where in the frame and where in the build. */
+  design: z.object({ source: z.enum(["parity", "a11y"]), frame: z.string().optional(), node: z.string().optional(), element: z.string(), viewport: z.string().optional(), state: z.string().optional(), kind: z.string(), expected: z.string().optional(), actual: z.string().optional() }).optional(),
   /** Ids of the duplicates folded into this finding by `mergeDuplicateFindings`. */
   merged: z.array(z.string()).optional(),
 });
