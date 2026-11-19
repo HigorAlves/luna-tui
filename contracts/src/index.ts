@@ -22,6 +22,7 @@ export * from "./egress.ts";
 export * from "./machine-policy.ts";
 export * from "./events.ts";
 export * from "./foreman.ts";
+export * from "./ticket-chat.ts";
 export * from "./packs.ts";
 export * from "./models.ts";
 export * from "./engines.ts";

@@ -18,6 +18,7 @@ import { AccessReviewAnswer, ChangeExceptionsAnswer, PostmortemAnswer, Questionn
 import { ComplianceReviewAnswer } from "./compliance-review.ts";
 import { DocsDriftAnswer } from "./docs-drift.ts";
 import { ForemanAnswer } from "./foreman.ts";
+import { TicketChatAnswer } from "./ticket-chat.ts";
 import { FactProposal, ProjectContextSection } from "./economy.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
 import { SplitChild } from "./split.ts";
@@ -69,6 +70,8 @@ export const AgentRole = z.enum([
   "second-opinion",
   // The foreman: answers a question about the board from a snapshot and suggests actions; no tools, no worktree.
   "foreman",
+  // The ticket planner: talks a ticket through with a person over a read-only checkout and drafts it.
+  "ticket-planner",
   // Settles triage's open questions from the code and the card; read-only.
   "question-settler",
   // Explains why a merged PR missed a change-management control, for the auditor and the engineering manager; text only, no tools.
@@ -1637,6 +1640,23 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: ForemanAnswer,
     template: "foreman.md",
+    network: "engine",
+  },
+  ticket_chat: {
+    id: "ticket_chat",
+    kind: "agent",
+    // Plans a ticket with a person over a read-only checkout (one turn per call). It only drafts: the board creates the card.
+    agent: "ticket-planner",
+    helpers: [],
+    skills: [],
+    access: access(READ_ONLY, {}),
+    writable: false,
+    maxTurns: 25,
+    timeoutMs: 8 * MINUTE,
+    engines: { default: "claude:opus", allowed: ["claude:opus", "codex:sol"] },
+    effort: "medium",
+    answer: TicketChatAnswer,
+    template: "ticket_chat.md",
     network: "engine",
   },
   change_exceptions: {
