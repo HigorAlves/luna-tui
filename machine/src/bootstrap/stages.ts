@@ -14,6 +14,7 @@ import type { Graph } from "../application/graph.ts";
 import type { Watcher } from "../application/ports.ts";
 import type { TruthSink } from "../application/decision-truth.ts";
 import type { Decide } from "../application/stages/check-decide.ts";
+import { mcpFactory } from "./mcp.ts";
 import { type AgentDeps, type AgentExtra, agentRunners, runAgent } from "../application/stages/pack-runner.ts";
 import { ciWatchRunner } from "../application/stages/ci.ts";
 import { e2eRunner, missingQaImageRunner } from "../application/stages/e2e.ts";
@@ -336,6 +337,9 @@ export async function buildRealStages(
     credentials,
     worktreesDir: config.worktreesDir,
     stateDir: config.stateDir,
+    // The MCP servers a pack may bridge (RFC 0013): one client per stage run.
+    mcpFor: mcpFactory(config).mcpFor,
+    mcpUntrusted: config.mcp.untrusted,
     watcher,
     exec: checksExec,
     hostExec: exec,

@@ -174,6 +174,14 @@ describe("parseLunaConfig", () => {
     expect(renderLunaConfig(config)).toContain("effort:\n  triage: low");
   });
 
+  it("reads the design section into the policy, and keeps it through a render", () => {
+    const config = validateLunaConfig({ design: { servers: { figma: { tools: ["get_design_context"] } } } });
+    expect(policyOf(config).design).toEqual({ servers: { figma: { tools: ["get_design_context"] } } });
+    expect(renderLunaConfig(config)).toContain("design:\n  servers:\n    figma:");
+    expect(policyOf(validateLunaConfig({ design: "off" })).design).toBe("off");
+    expect(policyOf(validateLunaConfig({})).design).toBeUndefined();
+  });
+
   it("reads the compliance regimes into the policy, and keeps them through a render", () => {
     const config = validateLunaConfig({ compliance: ["soc2", "lgpd"] });
     expect(policyOf(config).compliance).toEqual(["soc2", "lgpd"]);

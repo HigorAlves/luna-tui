@@ -17,10 +17,8 @@ import { useTruthSecrets } from "./application/ground-truth.ts";
 import { buildTelemetry, probeCollector } from "./bootstrap/telemetry.ts";
 import { buildPackRuns, buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
 import { loadConfig, sandboxPolicyNotes } from "./config.ts";
-import { noTokenMcp } from "./application/mcp.ts";
 import { createMcpApi } from "./adapters/http/mcp.ts";
-import { createMcp } from "./adapters/mcp/client.ts";
-import { fileTokenStore, lunaOAuthProvider, tokenFor } from "./adapters/mcp/tokens.ts";
+import { mcpFactory } from "./bootstrap/mcp.ts";
 import { createDataSource, poolSizeFor } from "./adapters/persistence/data-source.ts";
 import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
 import { pruneOldRuns, prunePackRuns, pruneTombstones, TOMBSTONE_RETENTION_DAYS } from "./adapters/persistence/prune.ts";
@@ -1009,15 +1007,7 @@ const approveBase = async (repo: string, base: string): Promise<{ ok: true } | {
   return approveRepoBase({ knownRepos, policyOf: (r) => policies.for(r), sourceOf: (r) => deps.imageSource.for(r), approvals: deps.approvals, approved: (r) => deps.repoImages.approved(r) }, repo, base);
 };
 /** The MCP servers (RFC 0013): tokens in the state dir, the OAuth redirect at the board's address (`MACHINE_PUBLIC_URL`, else this machine's own port). */
-const mcpStore = fileTokenStore(config.stateDir);
-const mcpRedirect = (server: string) => `${config.publicUrl ?? `http://localhost:${config.port}`}/mcp/${server}/callback`;
-const mcpFor = () =>
-  config.mcp.servers.length === 0
-    ? noTokenMcp()
-    : createMcp(config.mcp.servers, {
-        token: tokenFor(mcpStore, process.env),
-        authProvider: (server) => (server.credential.kind === "oauth" ? lunaOAuthProvider(mcpStore, server.name, mcpRedirect(server.name)) : undefined),
-      });
+const { store: mcpStore, redirect: mcpRedirect, mcpFor } = mcpFactory(config);
 const app = createApp({
   mcp: createMcpApi({ mcp: mcpFor(), store: mcpStore, redirectUrl: mcpRedirect }),
   knownRepos,

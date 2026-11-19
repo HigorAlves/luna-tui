@@ -74,8 +74,23 @@ export interface BuildWatchOptions {
   onCardSearch?: (query: string) => Promise<void>;
   /** Called once per `checks/loop-request-<nonce>-<n>.json` the loop guard writes, in order of first sight and then `n`; its verdict is written as `loop-answer-<nonce>-<n>.json`. A request already there when the watch starts belongs to an earlier container and is never answered. Not awaited by the watch: a judge takes seconds, and a red slice or a commit does not wait for it. */
   onLoopRequest?: (request: LoopRequest) => Promise<LoopVerdict>;
+  /** Called once per `checks/mcp-request-<nonce>-<n>.json` a bridged design tool writes (RFC 0013), in order of first sight and then `n`, one at a time; its answer is written as `mcp-answer-<nonce>-<n>.json`. A request already there when the watch starts is never answered. Not awaited by the watch. Past `MAX_MCP_REQUESTS` the watch answers with an error itself and reports the request to `onMcpCapped`. */
+  onMcpRequest?: (request: McpRequest) => Promise<McpAnswer>;
+  onMcpCapped?: (request: McpRequest) => void;
   log?: (line: string) => void;
 }
+
+/** What a bridged tool's call leaves for the machine: the number is the file's, the nonce its name's. */
+export interface McpRequest {
+  nonce: string;
+  n: number;
+  server: string;
+  tool: string;
+  args: unknown;
+}
+
+/** The answer to an MCP request: the factory returns the file's JSON to the agent as it is. */
+export type McpAnswer = { ok: true; text: string; images: string[]; truncated: boolean } | { ok: false; error: string };
 
 /** What the loop guard's question leaves for the machine: its number is the file's, and the body must say the same. */
 export interface LoopRequest {
@@ -112,17 +127,20 @@ export const MAX_SCOPE_REQUESTS = 3;
 export const MAX_CARD_SEARCHES = 5;
 /** Loop requests judged per run: the container writes the files, and each one is a metered decision. */
 export const MAX_LOOP_REQUESTS = 20;
+/** Design tool calls answered per run: each one is a call to an outside server. */
+export const MAX_MCP_REQUESTS = 60;
 /** The most names of `checks/` one look reads. */
 const MAX_NAMES = 200;
 /** Looks at an unreadable request file before it is given up. */
 const UNREADABLE_LOOKS = 5;
 const LOOP_REQUEST_NAME = /^loop-request-([0-9a-f]{8})-(\d{1,4})\.json$/;
+const MCP_REQUEST_NAME = /^mcp-request-([0-9a-f]{8})-(\d{1,4})\.json$/;
 
 /** The loop request files in a list of names, with the nonce and number their names carry; the order of `n`. */
-function loopNames(names: readonly string[]): Array<{ name: string; nonce: string; n: number }> {
+function loopNames(names: readonly string[], pattern: RegExp = LOOP_REQUEST_NAME): Array<{ name: string; nonce: string; n: number }> {
   return names
     .flatMap((name) => {
-      const found = LOOP_REQUEST_NAME.exec(name);
+      const found = pattern.exec(name);
       return found ? [{ name, nonce: found[1]!, n: Number(found[2]) }] : [];
     })
     .sort((a, b) => a.n - b.n || (a.nonce < b.nonce ? -1 : a.nonce > b.nonce ? 1 : 0));
@@ -186,6 +204,11 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
   let unreadable = 0;
   let loopPending = false;
   let loopCapLogged = false;
+  const mcpSeen = new Set<string>(options.onMcpRequest ? loopNames(checkNamesNow(options.outDir), MCP_REQUEST_NAME).map((r) => r.name) : []);
+  const mcpQueue: Array<{ name: string; nonce: string; n: number }> = [];
+  let mcpHandled = 0;
+  let mcpUnreadable = 0;
+  let mcpPending = false;
   let stopped = false;
   let tick: Promise<void> = Promise.resolve();
 
@@ -325,8 +348,58 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
     }
   };
 
+  /** The design tools' calls, one at a time, in the order first seen and then by `n`. A file that is not JSON, names another number than its own or lacks a server and tool is skipped and counts. */
+  const mcps = async (): Promise<void> => {
+    if (!options.onMcpRequest) return;
+    for (const request of loopNames(await checkNames(options.outDir), MCP_REQUEST_NAME)) {
+      if (mcpSeen.has(request.name)) continue;
+      mcpSeen.add(request.name);
+      mcpQueue.push(request);
+    }
+    while (!mcpPending && mcpQueue.length > 0) {
+      const { name, nonce, n } = mcpQueue[0]!;
+      const text = await readMailbox(options.outDir, name);
+      if (text === null) {
+        mcpUnreadable += 1;
+        if (mcpUnreadable < UNREADABLE_LOOKS) return;
+        options.log?.(`build watch: mcp request ${nonce}-${n} cannot be read; skipped`);
+      }
+      mcpUnreadable = 0;
+      mcpQueue.shift();
+      mcpHandled += 1;
+      if (text === null) continue;
+      let request: McpRequest;
+      try {
+        const parsed = JSON.parse(text) as { n?: unknown; server?: unknown; tool?: unknown; args?: unknown } | null;
+        if (parsed?.n !== n || typeof parsed.server !== "string" || typeof parsed.tool !== "string") {
+          options.log?.(`build watch: mcp request ${nonce}-${n} names another number than its file or lacks a server or tool; skipped`);
+          continue;
+        }
+        request = { nonce, n, server: parsed.server, tool: parsed.tool, args: parsed.args };
+      } catch {
+        options.log?.(`build watch: mcp request ${nonce}-${n} is not JSON; skipped`);
+        continue;
+      }
+      if (mcpHandled > MAX_MCP_REQUESTS) {
+        options.onMcpCapped?.(request);
+        const capped: McpAnswer = { ok: false, error: "too many design tool calls in this run" };
+        if (!stopped) await writeMailbox(options.outDir, `mcp-answer-${nonce}-${n}.json`, JSON.stringify(capped));
+        continue;
+      }
+      mcpPending = true;
+      void options.onMcpRequest(request).then(
+        async (answer) => {
+          if (!stopped) await writeMailbox(options.outDir, `mcp-answer-${nonce}-${n}.json`, JSON.stringify(answer));
+        },
+        (error: unknown) => options.log?.(`build watch: mcp request ${nonce}-${n}: ${error instanceof Error ? error.message : String(error)}`),
+      ).catch(() => {}).finally(() => {
+        mcpPending = false;
+      });
+    }
+  };
+
   const timer = setInterval(() => {
-    tick = tick.then(() => (stopped ? undefined : poll().then(requests).then(searches).then(loops)));
+    tick = tick.then(() => (stopped ? undefined : poll().then(requests).then(searches).then(loops).then(mcps)));
   }, options.every);
 
   return {

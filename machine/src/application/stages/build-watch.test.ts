@@ -9,7 +9,8 @@ import { describe, expect, it } from "vitest";
 import type { CheckContext } from "@hardness/contracts";
 
 import { type Learned, tagged } from "../decision-truth.ts";
-import { type Decide, MAX_CARD_SEARCHES, MAX_LOOP_REQUESTS, MAX_MAILBOX_BYTES, MAX_REDS_PER_SLICE, MAX_SCOPE_REQUESTS, NOTE_TAIL, buildChecks, buildWatch, cardSearchAnswers, judgeRedCheck, loopAnswers, readMailbox, writeMailbox } from "./build-watch.ts";
+import type { McpAnswer } from "./build-watch.ts";
+import { type Decide, MAX_CARD_SEARCHES, MAX_LOOP_REQUESTS, MAX_MAILBOX_BYTES, MAX_MCP_REQUESTS, MAX_REDS_PER_SLICE, MAX_SCOPE_REQUESTS, NOTE_TAIL, buildChecks, buildWatch, cardSearchAnswers, judgeRedCheck, loopAnswers, readMailbox, writeMailbox } from "./build-watch.ts";
 
 const ledger = (slices: Array<{ id: number; status: string; commit?: string | null }>) =>
   JSON.stringify({ schema: 1, slices: slices.map((s) => ({ id: s.id, title: `slice ${s.id}`, status: s.status, commit: s.commit ?? null })) });
@@ -597,5 +598,72 @@ describe("a deleted test the card's own branch wrote", () => {
     const out = mkdtempSync(join(tmpdir(), "build-checks-"));
     const c = checks(out, null, { planPresent: true, planned: ["docs/README.md"], git: { nameStatus: async () => nameStatus, diff: async () => diff } });
     expect((await c.finalFacts([])).removedTests).toEqual(["contracts/src/readme-ste.test.ts", "contracts/src/readme.test.ts"]);
+  });
+});
+
+describe("the design tool mailbox", () => {
+  const NONCE = "a1b2c3d4";
+  const answer = (out: string, n: number, nonce = NONCE) => join(out, "checks", `mcp-answer-${nonce}-${n}.json`);
+  const request = (out: string, n: number, nonce = NONCE, extra: object = {}) => {
+    mkdirSync(join(out, "checks"), { recursive: true });
+    writeFileSync(join(out, "checks", `mcp-request-${nonce}-${n}.json`), JSON.stringify({ n, server: "fixture", tool: "echo", args: { text: "hi" }, ...extra }));
+  };
+  const ok = (text: string): McpAnswer => ({ ok: true, text, images: [], truncated: false });
+
+  it("answers each mcp-request-<nonce>-<n>.json with the handler's answer, in order of n, one at a time", async () => {
+    const out = mkdtempSync(join(tmpdir(), "mcp-watch-"));
+    const seen: unknown[] = [];
+    let release: () => void = () => {};
+    const first = new Promise<void>((resolve) => (release = resolve));
+    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onMcpRequest: async (r) => (seen.push(r), r.n === 1 && (await first), ok(`n${r.n}`)) });
+    request(out, 1);
+    await settle(30);
+    request(out, 3);
+    request(out, 2);
+    await settle(50);
+    expect(seen).toHaveLength(1);
+    release();
+    await waitFor(answer(out, 3));
+    await watch.stop();
+    expect(seen).toEqual([1, 2, 3].map((n) => ({ nonce: NONCE, n, server: "fixture", tool: "echo", args: { text: "hi" } })));
+    expect(await waitFor(answer(out, 2))).toEqual(ok("n2"));
+  });
+
+  it("leaves a request already there when the watch starts unanswered", async () => {
+    const out = mkdtempSync(join(tmpdir(), "mcp-watch-"));
+    request(out, 1, "deadbeef");
+    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onMcpRequest: async (r) => ok(String(r.n)) });
+    request(out, 1);
+    await waitFor(answer(out, 1));
+    await settle(30);
+    await watch.stop();
+    expect(existsSync(answer(out, 1, "deadbeef"))).toBe(false);
+  });
+
+  it("retries a half-written file, and skips one that names another number than its own", async () => {
+    const out = mkdtempSync(join(tmpdir(), "mcp-watch-"));
+    const seen: number[] = [];
+    const watch = buildWatch({ outDir: out, every: 3, onCommitted: async () => {}, onMcpRequest: async (r) => (seen.push(r.n), ok("x")) });
+    mkdirSync(join(out, "checks"), { recursive: true });
+    request(out, 1, NONCE, { n: 9 });
+    request(out, 2);
+    await waitFor(answer(out, 2));
+    await watch.stop();
+    expect(seen).toEqual([2]);
+    expect(existsSync(answer(out, 1))).toBe(false);
+  });
+
+  it("answers past MAX_MCP_REQUESTS with an error, without calling the handler, and reports each one", async () => {
+    const out = mkdtempSync(join(tmpdir(), "mcp-watch-"));
+    const seen: number[] = [];
+    const capped: number[] = [];
+    const watch = buildWatch({ outDir: out, every: 2, onCommitted: async () => {}, onMcpRequest: async (r) => (seen.push(r.n), ok("x")), onMcpCapped: (r) => capped.push(r.n) });
+    for (let n = 1; n <= MAX_MCP_REQUESTS + 2; n++) request(out, n);
+    await waitFor(answer(out, MAX_MCP_REQUESTS + 2));
+    await watch.stop();
+    expect(MAX_MCP_REQUESTS).toBe(60);
+    expect(seen).toHaveLength(60);
+    expect(capped).toEqual([61, 62]);
+    expect(await waitFor(answer(out, 61))).toEqual({ ok: false, error: "too many design tool calls in this run" });
   });
 });

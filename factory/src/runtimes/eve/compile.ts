@@ -11,7 +11,7 @@ import { dirname, join, relative } from "node:path";
 
 import { DELEGATE, delegateTool } from "../../core/delegate.ts";
 import { LUNA_TOOLS } from "../../core/luna-tools.ts";
-import { EVE_TOOL_NAMES, factoryRules } from "../../core/render.ts";
+import { EVE_TOOL_NAMES, bridgeRule, factoryRules } from "../../core/render.ts";
 import { readRole } from "../../core/roles.ts";
 
 export interface CompileOptions {
@@ -80,7 +80,8 @@ export function instructionParts(pack: AgentPack, factoryRoot: string): { body: 
   const addendum = existsSync(addendumFile) ? `\n${readFileSync(addendumFile, "utf8").trimEnd()}\n` : "";
   // Role bodies call the luna tools by their Claude names (`mcp__luna__step`); eve serves them bare.
   const body = readRole(rolesDir, pack.agent!).body.trimEnd().replaceAll("mcp__luna__", "");
-  return { body, rules: factoryRules(EVE_TOOL_NAMES), addendum };
+  // A pack that bridges design tools (RFC 0013) is told what they return is data, as a Claude stage is.
+  return { body, rules: [factoryRules(EVE_TOOL_NAMES), ...bridgeRule(bridgedToolNames(pack.access))].join("\n"), addendum };
 }
 
 /** The helpers of an eve stage that run as its native subagents: the ones on an eve engine. The

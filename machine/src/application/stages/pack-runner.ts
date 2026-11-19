@@ -56,6 +56,8 @@ import { checkpointPush } from "./checkpoint.ts";
 import { readScenarioReds } from "./scenario-reds.ts";
 
 import type { TruthSink } from "../decision-truth.ts";
+import { type McpCallRow, bridgeFor, cappedRow, DESIGN_MOUNT, mcpAnswers } from "./design-bridge.ts";
+import type { Mcp } from "../mcp.ts";
 import { type Decide, buildChecks, buildWatch, cardSearchAnswers, loopAnswers } from "./build-watch.ts";
 import { type CardHit, sourceKindOf } from "../../domain/card-search.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
@@ -86,6 +88,10 @@ export interface AgentDeps {
   worktreesDir: string;
   stateDir: string;
   watcher: Watcher;
+  /** A client of the machine's MCP servers for one run (RFC 0013): each stage gets its own, closed when it ends. Absent, no stage is given a bridged tool. */
+  mcpFor?: () => Mcp;
+  /** `allow` gives an untrusted card's stage bridged tools too (`untrusted: allow` in mcp.yaml); the default refuses. */
+  mcpUntrusted?: "allow" | "deny";
   /** Replaces the docker sandbox; tests pass a fake. */
   sandbox?: (run: SandboxRun) => Promise<SandboxResult>;
   /** The list of hosts each run may reach; absent (`MACHINE_EGRESS=off`, tests) a run joins an ordinary bridge as before the allow-list. */
@@ -582,8 +588,10 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
           log: (line) => void context.note?.(line).catch(() => {}),
         })
       : null;
+  // The run's bridged design tools (RFC 0013), set just before the container starts.
+  let design: { mcp: Mcp; answer: ReturnType<typeof mcpAnswers>; log: Parameters<typeof mcpAnswers>[0]["log"] } | null = null;
   const startWatch = (): void => {
-    if ((!checks && !cardSearch && !loopJudge) || watch) return;
+    if ((!checks && !cardSearch && !loopJudge && !design) || watch) return;
     const hostExec = deps.hostExec;
     watch = buildWatch({
       outDir: join(runDir, "out"),
@@ -592,6 +600,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       ...(checks ? { onRed: async (...a: Parameters<typeof checks.onRed>) => (await importer?.sync(), checks.onRed(...a)), onScopeRequest: async (...a: Parameters<typeof checks.onScopeRequest>) => (await importer?.sync(), checks.onScopeRequest(...a)) } : {}),
       ...(cardSearch ? { onCardSearch: cardSearch.onCardSearch } : {}),
       ...(loopJudge ? { onLoopRequest: loopJudge.onLoopRequest } : {}),
+      ...(design ? { onMcpRequest: design.answer, onMcpCapped: (request: Parameters<typeof cappedRow>[0]) => void design!.log(cappedRow(request)) } : {}),
       onCommitted: async (slice) => {
         if (!checks) return;
         await importer?.sync();
@@ -671,6 +680,26 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     ? await guard(() => deps.egress!.for({ repoPath: task.repoPath, kind: egressKindOf(found), owners: [...new Set(owners)], ...(credential.relay ? { relayed: ["claude" as const] } : {}), targets: found.kind !== "decision" && found.network === "full" && (pack === "e2e" || pack === "recording") ? targetHosts(input.context.qaTargets ?? []) : [] }))
     : undefined;
   const identity = limits.writable ? await guard(() => gitIdentity(task.repoPath!)) : null;
+  // The bridged design tools (RFC 0013): only for a pack that names some, in a repo that has not turned them off, with a client of this run's own.
+  const designDir = join(runDir, "design");
+  const grants = (found.kind === "decision" ? [] : found.access.bridge);
+  if (grants.length > 0 && deps.mcpFor && policy.design !== "off" && !resume) {
+    const mcp = deps.mcpFor();
+    const log = (row: McpCallRow) => context.emit?.("design.mcp_call", { ...row });
+    try {
+      const { tools, notes } = await bridgeFor({ mcp, pack: grants, repo: policy.design?.servers ?? {}, trust, untrusted: deps.mcpUntrusted ?? "deny" });
+      for (const note of notes) await context.note?.(note).catch(() => {});
+      input.bridge = tools;
+    } catch (error) {
+      await mcp.close().catch(() => {});
+      throw error;
+    }
+    if (input.bridge.length > 0) {
+      design = { mcp, answer: mcpAnswers({ mcp, bridge: input.bridge, designDir, log }), log };
+    } else {
+      await mcp.close().catch(() => {});
+    }
+  }
   let sandbox: SandboxResult;
   try {
   sandbox = await (deps.sandbox ?? runSandbox)({
@@ -700,6 +729,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     labels: { "dev.hardness.task": task.id },
     mounts: [
       ...(graphContext && graphDir ? [{ host: graphDir, container: GRAPH_MOUNT, readOnly: true }] : []),
+      ...(design ? [{ host: designDir, container: DESIGN_MOUNT, readOnly: true }] : []),
       // The worktree's `.git` file points at its admin dir: read-only, so no stage can repoint the checkout.
       ...(extra.mounts ?? []),
     ],
@@ -717,6 +747,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     startWatch();
     await (watch as ReturnType<typeof buildWatch> | null)?.stop();
     await pushing;
+    await (design as { mcp: Mcp } | null)?.mcp.close().catch(() => {});
     credential.release();
   });
     ran.container = true;
