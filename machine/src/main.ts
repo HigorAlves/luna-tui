@@ -138,6 +138,7 @@ import { exec } from "./adapters/process/exec.ts";
 import { createGitHub } from "./adapters/github/octokit.ts";
 import { taskDiff } from "./adapters/git/diff.ts";
 import { noTokenGitHub } from "./application/github.ts";
+import { designPairsPublished } from "./application/design-publish.ts";
 import { realDeliverRunner } from "./application/stages/deliver.ts";
 import { currentStackFacts } from "./application/stack.ts";
 import { similarCards } from "./application/size-estimate.ts";
@@ -438,7 +439,7 @@ const realVerifyRunner = verifyRunner({
 /** Delivering and shipping need only git and gh, not a Claude credential, so they always run for real. */
 const runnerFor = buildRunnerFor({
   real,
-  realDeliverRunner: realDeliverRunner(github, { facts: stackDeps.facts, clearBase: stackDeps.clearBase }, resolveConflicts),
+  realDeliverRunner: realDeliverRunner(github, { facts: stackDeps.facts, clearBase: stackDeps.clearBase }, resolveConflicts, designPairsPublished({ github, policies, slugOf: originSlugOf })),
   realVerifyRunner,
   shipRunner: shipRunner(github),
   stubRunnerFor: (stage) => stubs.runnerFor(stage),

@@ -1,11 +1,11 @@
 // The v2.2 Build Report and Verify Report, assembled from what the stages already leave: the stage runs,
 // the `stage.finished` details, the task's counters. Pure; the caller reads the rows. Reads only the
 // machine's own events, never anything a model or a ticket wrote beyond what a stage detail already holds.
-import { type FactoryConfig, type BuildProgress, type BuildReport, CoverageSummary, DiffSummary, Finding, type VerifyReport, credentialOwner, mergeDuplicateFindings, normaliseFinding, severityOf } from "@hardness/contracts";
+import { type FactoryConfig, type BuildProgress, type BuildReport, CoverageSummary, DiffSummary, Finding, VerifyDesignReport, type VerifyReport, credentialOwner, mergeDuplicateFindings, normaliseFinding, severityOf } from "@hardness/contracts";
 
 import { safe } from "../domain/evidence-markdown.ts";
 import { budgetRowsOf, buildBudget } from "../domain/build-budget.ts";
-import type { EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
+import type { ApprovalRow, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
 
 const REPORT_VERSION = 2;
 
@@ -110,12 +110,29 @@ const findingsOf = (detail: Record<string, unknown> | undefined): Finding[] =>
     return parsed.success ? [normaliseFinding(parsed.data)] : [];
   });
 
+/**
+ * The last browser run's design block with the design sign-off's waivers applied, and how many findings a person kept by approving. The sign-off belongs to that run when its payload's parity run id is the
+ * same (an earlier round's sign-off, sent back, is not read). "Kept at sign-off" is not stored: it is the findings still open on an approved gate. Null when the run left no block that parses.
+ */
+export function designOf(events: readonly EventRow[], approvals: readonly ApprovalRow[] = []): { report: VerifyDesignReport; kept: number } | null {
+  const last = finishes(events).filter((f) => f.stage === "e2e").at(-1);
+  const ran = VerifyDesignReport.safeParse(last?.detail.design);
+  if (!ran.success) return null;
+  const gate = approvals.findLast((a) => a.kind === "awaiting_design" && VerifyDesignReport.safeParse(a.requested.design).data?.parity?.runId === (ran.data.parity?.runId ?? null));
+  const signed = gate ? VerifyDesignReport.safeParse(gate.requested.design) : null;
+  const report = signed?.success ? signed.data : ran.data;
+  const kept = gate?.decision === "approved" ? report.findings.filter((f) => f.resolution?.status !== "waived").length : 0;
+  return { report, kept };
+}
+
 /** What the draft PR's body is fed, from the rows of Build, Verify and the browser run (Deliver runs after all three): the open findings of the last verifying run that are not blockers
  *  (a blocker fails the stage), the files Build declared outside the map and the file of each scenario's tagged test. */
-export function prFactsOf(task: TaskRow, runs: readonly StageRunRow[], events: readonly EventRow[]): { findings: Finding[]; outOfMap: Array<{ path: string; reason: string }>; tests: Map<string, string> } {
+export function prFactsOf(task: TaskRow, runs: readonly StageRunRow[], events: readonly EventRow[], approvals: readonly ApprovalRow[] = []): { findings: Finding[]; outOfMap: Array<{ path: string; reason: string }>; tests: Map<string, string>; design?: { report: VerifyDesignReport; kept: number } } {
   const build = buildReportOf(task, runs, events);
   const last = finishes(events).filter((f) => f.stage === "verifying").at(-1);
+  const design = designOf(events, approvals);
   return {
+    ...(design ? { design } : {}),
     findings: findingsOf(last?.detail).filter((f) => !f.resolution && severityOf(f.severity) !== "blocker"),
     outOfMap: build?.declaredFiles ?? [],
     tests: new Map((build?.tests ?? []).flatMap((t) => (t.file ? [[t.scenario, t.file] as [string, string]] : []))),
@@ -123,7 +140,7 @@ export function prFactsOf(task: TaskRow, runs: readonly StageRunRow[], events: r
 }
 
 /** What Verify hands to Evidence; null until a verifying run has happened. */
-export function verifyReportOf(task: TaskRow, runs: readonly StageRunRow[], events: readonly EventRow[]): VerifyReport | null {
+export function verifyReportOf(task: TaskRow, runs: readonly StageRunRow[], events: readonly EventRow[], approvals: readonly ApprovalRow[] = []): VerifyReport | null {
   const verifyingRuns = runs.filter((r) => r.stage === "verifying");
   if (verifyingRuns.length === 0) return null;
   const all = finishes(events);
@@ -151,6 +168,7 @@ export function verifyReportOf(task: TaskRow, runs: readonly StageRunRow[], even
   const opened = events.findLast((e) => e.kind === "stage.pr.opened");
   const prNumber = all.findLast((f) => f.stage === "delivering" && typeof f.detail.prNumber === "number")?.detail.prNumber ?? opened?.payload.number;
   const lastRun = verifyingRuns.at(-1)!;
+  const design = designOf(events, approvals);
   return {
     prNumber: typeof prNumber === "number" ? prNumber : null,
     headSha: lastRun.outputCommit ?? lastRun.inputCommit,
@@ -175,6 +193,7 @@ export function verifyReportOf(task: TaskRow, runs: readonly StageRunRow[], even
     mutation: mutationOf(last?.detail.mutation),
     ciClass: typeof all.findLast((f) => f.stage === "ci_watch")?.detail.class === "string" ? (all.findLast((f) => f.stage === "ci_watch")!.detail.class as string) : null,
     ...(task.retries ? { rounds: { verify: task.retries.verify, e2e: task.retries.e2e, ci: task.retries.ci } } : {}),
+    ...(design ? { design: design.report } : {}),
   };
 }
 

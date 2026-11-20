@@ -8,6 +8,7 @@ import type {
   RunInfo,
   TaskState,
   TokensIn,
+  VerifyDesignReport,
 } from "@hardness/contracts";
 
 import type { ApprovalRow, TaskRow } from "../domain/task.ts";
@@ -41,7 +42,7 @@ export interface StageContext {
   /** For implementing: the minutes Build's budget has left; a run's time limit is the smaller of its own and this. */
   budgetMinutes?: number;
   /** For delivering: what the draft PR's body is fed, from the rows of the stages before it (the open findings, the files outside the map, each scenario's test file). */
-  prFacts?: { findings: Finding[]; outOfMap: Array<{ path: string; reason: string }>; tests: Map<string, string> };
+  prFacts?: { findings: Finding[]; outOfMap: Array<{ path: string; reason: string }>; tests: Map<string, string>; /** The last browser run's design block with the sign-off's waivers, and the findings kept at sign-off. */ design?: { report: VerifyDesignReport; kept: number } };
   /** For delivering and ci_watch: the numbers of the PRs the machine opened for this card, oldest first (its `pr.opened` rows). A merged one means the card shipped. */
   recordedPrs?: number[];
   /** Findings from the latest verifying run, fed to the next implementing attempt. */

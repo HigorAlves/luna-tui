@@ -235,6 +235,8 @@ export interface GitHub {
   /** Opens a new issue in `slug` (a split's child ticket). A write: only on a person's tap. */
   /** The repository's default branch as GitHub says it, or null when it cannot be read. */
   defaultBranch(slug: string): Promise<string | null>;
+  /** Whether GitHub reports the repository private; null when it cannot be read. */
+  repoPrivate(slug: string): Promise<boolean | null>;
   createIssue(slug: string, issue: { title: string; body: string; labels?: string[] }): Promise<{ number: number; url: string }>;
   /** The open PR whose head is `branch`, or null. */
   findPr(slug: string, branch: string): Promise<PrRef | null>;
@@ -321,6 +323,7 @@ export function noTokenGitHub(): GitHub {
     issueAssociation: refuse,
     commentOnIssue: refuse,
     defaultBranch: async () => null,
+    repoPrivate: async () => null,
     createIssue: refuse,
     findPr: refuse,
     openPr: refuse,

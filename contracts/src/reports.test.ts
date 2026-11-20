@@ -42,6 +42,14 @@ describe("the v2.2 reports", () => {
     expect(VerifyReport.safeParse({ ...verify, findings: [{ path: "x" }] }).success).toBe(false);
   });
 
+  it("carries the design block of the last browser run, and a report from before it still parses (RFC 0013)", () => {
+    const design = { wcag: "AA", a11y: null, parity: null, findings: [], gate: { fires: false, why: [] } };
+    expect(VerifyReport.parse({ ...verify, design })).toEqual({ ...verify, design });
+    expect(VerifyReport.parse({ ...verify, design: null }).design).toBeNull();
+    expect(VerifyReport.safeParse({ ...verify, design: { wcag: "AA" } }).success).toBe(false);
+    expect(VerifyReport.parse(verify)).not.toHaveProperty("design");
+  });
+
   it("holds both under reports, each nullable", () => {
     expect(TaskReports.parse({ build, verify: null })).toEqual({ build, verify: null });
   });

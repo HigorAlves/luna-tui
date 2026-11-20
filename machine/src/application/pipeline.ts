@@ -3370,7 +3370,7 @@ export class Pipeline {
   /** What the draft PR's body is fed: the rows of the stages that ran before Deliver. */
   private async prFacts(id: string): Promise<NonNullable<StageContext["prFacts"]>> {
     const [task, runs, events] = await Promise.all([this.get(id), this.store.listStageRuns(id), this.store.listEvents(id)]);
-    return prFactsOf(task, runs, events);
+    return prFactsOf(task, runs, events, await this.store.listApprovals(id));
   }
 
   /** The failures the browser run's or CI's loop may have before a person is asked: the repository's `verify.e2e_rounds` or `verify.ci_rounds`. */
@@ -3761,7 +3761,7 @@ export class Pipeline {
     const [task, runs, events] = await Promise.all([this.get(id), this.store.listStageRuns(id), this.store.listEvents(id)]);
     // This run's finish is not logged yet: it is the newest row.
     const current: EventRow = { id: "0", taskId: id, stageRunId: null, kind: "stage.finished", payload: finishing, at: new Date() };
-    return stage === "implementing" ? buildReportOf(task, runs, [...events, current], (await this.policyFor(task.repoPath)).factory.build) : verifyReportOf(task, runs, [...events, current]);
+    return stage === "implementing" ? buildReportOf(task, runs, [...events, current], (await this.policyFor(task.repoPath)).factory.build) : verifyReportOf(task, runs, [...events, current], await this.store.listApprovals(id));
   }
 
   /** Build's progress while it runs (for the board's detail): null for a card that has not begun to build. Counts from the last fresh budget. */
@@ -3777,7 +3777,7 @@ export class Pipeline {
     const [task, runs, events] = await Promise.all([this.get(id), this.store.listStageRuns(id), this.store.listEvents(id)]);
     const build = buildReportOf(task, runs, events, (await this.policyFor(task.repoPath)).factory.build);
     const ciPassed = runs.some((r) => r.stage === "ci_watch" && r.status === "passed");
-    return { build, verify: ciPassed ? verifyReportOf(task, runs, events) : null };
+    return { build, verify: ciPassed ? verifyReportOf(task, runs, events, await this.store.listApprovals(id)) : null };
   }
 
   /** A repository image's event as a row on the card that needed it: started, built, refused or failed (text already flattened and capped). */

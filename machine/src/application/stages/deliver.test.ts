@@ -185,6 +185,32 @@ describe("the draft PR's body", () => {
     expect(body).not.toContain("docs/x.md");
   });
 
+  describe("the Design & accessibility block (RFC 0013)", () => {
+    const report = { wcag: "AA", a11y: null, parity: { ran: true, runId: "r-parity", confidence: 0.9, bar: 0.75, designInput: "complete", summary: "", counts: { blocker: 0, should_fix: 0, nit: 1, waived: 0 }, frames: [{ frame: "F1", name: "Checkout", node: "1:2", scenario: "S1", viewport: "1440x900", state: "default", status: "compared", capture: null, render: null, diff: null, pair: "/s/p.png", diffRatio: 0.01 }] }, findings: [], gate: { fires: false, why: [] } };
+    const bodyOf = async (deps: Record<string, unknown>, withDesign = true) => {
+      const github = fakeGitHub({ findPr: async () => null, openPr: async () => ({ url: "u", number: 7, isDraft: true }) });
+      const { context } = withBody(github);
+      const run = deliverRunner({ exec: async () => ok(), github, slugOf: async () => "acme/widgets", defaultBranch: async () => "main", commitsOf: async () => null, ...deps });
+      await run({ ...context, prFacts: { findings: [], outOfMap: [], tests: new Map(), ...(withDesign ? { design: { report, kept: 0 } } : {}) } } as unknown as StageContext);
+      return (github.openPr as ReturnType<typeof vi.fn>).mock.calls[0]![1].body as string;
+    };
+
+    it("is in the PR body when the browser run left a design report, with the pairs on the board only unless the repo publishes them", async () => {
+      const body = await bodyOf({});
+      expect(body).toContain("## Design & accessibility");
+      expect(body).toContain("S1 1440x900/default — Checkout: compared, no difference");
+      expect(body).toContain("pairs on the board only");
+    });
+
+    it("says the images are in the Evidence section when the publish rule lets them out", async () => {
+      expect(await bodyOf({ designPublished: async () => true })).toContain("images in the Evidence section");
+    });
+
+    it("is not in the body without a design report", async () => {
+      expect(await bodyOf({}, false)).not.toContain("Design & accessibility");
+    });
+  });
+
   it("follows the repository's PR template, read from its default branch", async () => {
     const github = fakeGitHub({ findPr: async () => null, openPr: async () => ({ url: "u", number: 7, isDraft: true }) });
     const { context } = withBody(github);

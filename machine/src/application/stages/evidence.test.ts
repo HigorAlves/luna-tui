@@ -545,6 +545,69 @@ describe("evidenceStage", () => {
     });
   });
 
+  describe("the design pairs (RFC 0013)", () => {
+    const pairDir = () => {
+      const dir = join(stateDir, "runs", "e2e-run-parity", "pairs");
+      mkdirSync(dir, { recursive: true });
+      return dir;
+    };
+    const frame = (over: Record<string, unknown>) => ({ frame: "F1", name: "Checkout", node: "12:34", scenario: "S1", viewport: "1440x900", state: "default", status: "compared", capture: null, render: null, diff: null, pair: null, diffRatio: 0.03, ...over });
+    const design = (frames: unknown[]) => ({ wcag: "AA", a11y: null, parity: { ran: true, runId: "e2e-run-parity", confidence: 0.8, bar: 0.75, designInput: "complete", summary: "", counts: { blocker: 0, should_fix: 0, nit: 0, waived: 0 }, frames }, findings: [], gate: { fires: false, why: [] } });
+    const withDesign = (frames: unknown[], opts: { publish?: "auto" | "always" | "never"; isPrivate?: boolean | null } = {}) => {
+      browserRun();
+      const detail = { design: design(frames) };
+      const policy = { decisions: {}, qaTargets: [], ...(opts.publish ? { design: { parity: { publish: opts.publish } } } : {}) };
+      const { run, saved } = stage({ latestE2e: async () => ({ runId: "e2e-run", detail }), policies: { for: async () => policy as never }, repoPrivate: async () => (opts.isPrivate === undefined ? null : opts.isPrivate) });
+      return { run, media: async () => (await run(taskContext()), (saved[0]![1] as { evidence: { media: { kind: string; label: string; url: string }[] } }).evidence.media) };
+    };
+    const png = () => {
+      const file = join(pairDir(), "S1-1440x900-default.png");
+      writeFileSync(file, "pair");
+      return file;
+    };
+
+    it("adds each pair as a screenshot on a private repo", async () => {
+      const file = png();
+      const media = await withDesign([frame({ pair: file })], { publish: "auto", isPrivate: true }).media();
+      const pair = media.find((m) => m.label === "design pair S1 1440x900/default");
+      expect(pair).toMatchObject({ kind: "screenshot" });
+      expect(readFileSync(pair!.url, "utf8")).toBe("pair");
+    });
+
+    it("adds none when the repo says never, on auto for a public or unknown repo, and for a frame not compared", async () => {
+      const file = png();
+      for (const opts of [{ publish: "never", isPrivate: true }, { publish: "auto", isPrivate: false }, { publish: "auto", isPrivate: null }] as const) {
+        expect((await withDesign([frame({ pair: file })], opts).media()).some((m) => m.label.startsWith("design pair"))).toBe(false);
+      }
+      expect((await withDesign([frame({ status: "not_compared", pair: null })], { publish: "always" }).media()).some((m) => m.label.startsWith("design pair"))).toBe(false);
+    });
+
+    it("on always publishes even for a public repo", async () => {
+      const file = png();
+      expect((await withDesign([frame({ pair: file })], { publish: "always", isPrivate: false }).media()).map((m) => m.label)).toContain("design pair S1 1440x900/default");
+    });
+
+    it("never reads a pair outside the card's runs folder, or one that is a link", async () => {
+      const outside = join(stateDir, "secret.png");
+      writeFileSync(outside, "secret");
+      const link = join(pairDir(), "link.png");
+      symlinkSync(outside, link);
+      const media = await withDesign([frame({ pair: outside }), frame({ state: "hover", pair: link }), frame({ state: "focus", pair: "../../etc/passwd" })], { publish: "always" }).media();
+      expect(media.some((m) => m.label.startsWith("design pair"))).toBe(false);
+    });
+
+    it("sends the pairs through the on-screen text check like every screenshot", async () => {
+      const file = png();
+      browserRun();
+      const seen: string[] = [];
+      const { run, saved } = stage({ latestE2e: async () => ({ runId: "e2e-run", detail: { design: design([frame({ pair: file })]) } }), policies: { for: async () => ({ decisions: {}, qaTargets: [], design: { parity: { publish: "always" } } }) as never }, scanImages: async (dir) => (seen.push(dir), [{ file: "0.png", text: "a" }, { file: "1.png", text: "b" }, { file: "2.png", text: `key ${"gh" + "p_" + "a".repeat(36)}` }]) });
+      await run(taskContext());
+      const media = (saved[0]![1] as { evidence: { media: { label: string }[] } }).evidence.media;
+      expect(seen).toHaveLength(1);
+      expect(media.map((m) => m.label)).not.toContain("design pair S1 1440x900/default");
+    });
+  });
+
   describe("the text on screenshots is read before they are kept", () => {
     const token = "gh" + "p_" + "a".repeat(36);
     const shot = async (frames: { file: string; text: string; kinds?: ("token" | "email")[]; truncated?: true }[] | null) => {

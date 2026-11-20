@@ -74,6 +74,7 @@ import { PolicyStore } from "../application/policy.ts";
 import { keepFolder } from "../application/kept-sandboxes.ts";
 import { hostBaselineWorkspace, hostFreshWorkspace, publishBranch } from "../adapters/git/clone.ts";
 import { at } from "../adapters/git/machine-repo.ts";
+import { repoPrivateOf } from "../application/design-publish.ts";
 import { HOST_GIT, changedPaths, changedSince, diffNameStatus, originSlugOf, dirtyFiles, gitIdentity, blobsAtRepo, branchBase, commitAll, currentBranch, headCommit, lockfilesAt, nestedLockfilesAt, restoreFiles, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
 import { checkpointPush } from "../application/stages/checkpoint.ts";
 import { judgeRedCheck } from "../application/stages/build-watch.ts";
@@ -615,6 +616,7 @@ export async function buildRealStages(
       headCommit,
       videoImage: async () => videoImage,
       publishing: { github, publish: publishByPolicy, slugOf: originSlugOf },
+      repoPrivate: repoPrivateOf(github, originSlugOf),
       // Host git on a workspace goes through `at()` inside diffNameStatus; a failure means "unknown", which makes the film stale.
       changedBetween: async (worktreePath, from, to) => {
         try {
