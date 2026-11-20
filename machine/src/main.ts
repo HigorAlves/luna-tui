@@ -1,6 +1,7 @@
 // Entry point for `pnpm dev`: migrates the database, recovers tasks a previous run left
 // mid-stage, then serves the API on localhost.
 import { expireKept, keepFolder } from "./application/kept-sandboxes.ts";
+import { checkGit } from "./adapters/git/helper.ts";
 import { hostBaselineWorkspace, hostFreshWorkspace, readCopy, removeLeftovers } from "./adapters/git/clone.ts";
 import { type BudgetAlert, type EvidenceContext, FACTORY_DEFAULTS, Ledger, PrAction, type PullRequest, RUN_OR_GATE, type TicketContext, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
@@ -205,6 +206,10 @@ async function sweep(): Promise<void> {
   await step("worktrees", async () => {
     const swept = await sweepWorktrees(db, config.worktreeRetentionDays);
     return swept.worktrees > 0 ? `removed ${swept.worktrees} closed task worktree(s), ${swept.branches} merged branch(es)` : null;
+  });
+  await step("git version", async () => {
+    const problem = await checkGit();
+    return problem ? `${problem}; a ui-designer helper cannot be picked here` : null;
   });
   await step("workspace leftovers", async () => {
     const removed = await removeLeftovers(config.worktreesDir);

@@ -50,6 +50,20 @@ function copyBounded(from: string, to: string, max: number): string | null {
 }
 
 /**
+ * Moves a card's branch from `from` to `to` by compare-and-swap (`update-ref <ref> <new> <old>`): it moves only if it is still at
+ * `from`, else `{ ok: false, reason: "moved" }` and nothing changes. The index follows the branch (the folder is not touched): a folder
+ * that equals the tip then shows no change. The caller checked that `to` descends from `from`: the branch moves only by fast-forward.
+ */
+export async function advanceBranch(cardPath: string, branch: string, from: string, to: string): Promise<{ ok: true } | { ok: false; reason: "moved" | "invalid" }> {
+  if (!isBranchName(branch) || !/^[0-9a-f]{40,64}$/.test(from) || !/^[0-9a-f]{40,64}$/.test(to)) return { ok: false, reason: "invalid" };
+  const git = (...args: string[]) => exec("git", [...HOST_GIT, ...at(cardPath), ...args]);
+  const moved = await git("update-ref", `refs/heads/${branch}`, to, from);
+  if (moved.code !== 0) return { ok: false, reason: "moved" };
+  await git("read-tree", to);
+  return { ok: true };
+}
+
+/**
  * Imports the bundles a run leaves in `dir` into the card's repository, newest first-come: `sync()` reads the highest-numbered
  * `<n>.bundle` not read before. Each bundle holds everything the run committed since it started, so the newest is enough.
  */
@@ -99,11 +113,8 @@ export function bundleImporter(options: { path: string; branch: string; runId: s
         if (/^:\d{6} 160000 /m.test(changes.stdout)) return bad("the bundle adds or changes a nested repository (a gitlink, mode 160000)");
         const descends = await git("merge-base", "--is-ancestor", current, tip);
         if (descends.code !== 0) return { ok: false, kind: "head_moved", reason: `the run's commits do not descend from the card's branch at ${current.slice(0, 7)}` };
-        // Compare-and-swap: the branch moves only if it is still where it was read.
-        const moved = await git("update-ref", `refs/heads/${options.branch}`, tip, current);
-        if (moved.code !== 0) return { ok: false, kind: "head_moved", reason: "the card's branch moved while the bundle was read" };
-        // The index follows the branch (the folder is not touched): a folder that equals the tip then shows no change.
-        await git("read-tree", tip);
+        const moved = await advanceBranch(options.path, options.branch, current, tip);
+        if (!moved.ok) return { ok: false, kind: "head_moved", reason: "the card's branch moved while the bundle was read" };
         await options.onAccepted?.(tip);
         return { ok: true, head: tip, changed: true };
       } finally {
