@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "frames[state=hover].status",
+      "value": "not_compared"
+    },
+    {
+      "kind": "equals",
+      "path": "frames[state=default].status",
+      "value": "compared"
+    },
+    {
+      "kind": "count",
+      "path": "findings[level=blocker]",
+      "max": 0
+    }
+  ],
+  "rubric": "The default capture matches the frame; the scenario also cites the hover state but the browser run took no hover capture. The hover frame is answered not_compared with that reason, and the pass is never claimed for it. Every finding names the frame, the Figma node and the build element, with the expected and the actual value. No finding is invented where the build matches the frame: the machine drops none of them, so an invented difference reaches a person as a blocker. Pixel noise is a nit at most. A frame with no capture is answered not_compared with its reason, never a pass."
+}

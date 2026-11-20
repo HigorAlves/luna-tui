@@ -2,13 +2,17 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import {
+  A11yAuditAnswer,
+  DesignParityAnswer,
   AGENT_PACKS,
   AgentRole,
+  DesignSpec,
   ArtifactKind,
   ChatTriageAnswer,
   ChatTriageContext,
   CloneInput,
   EscalationReason,
+  Finding,
   EvidenceContext,
   PrReplyAnswer,
   ShipContext,
@@ -136,6 +140,13 @@ describe("StageInput", () => {
     expect(StageInput.safeParse({ ...stageInputExample, effort: "max" }).success).toBe(false);
   });
 
+  it("reads the bridged tools of a run, none by default", () => {
+    expect(StageInput.parse(stageInputExample).bridge).toEqual([]);
+    const tool = { server: "figma", tool: "get_screenshot", name: "figma_get_screenshot", description: "d", inputSchema: { type: "object" } };
+    expect(StageInput.parse({ ...stageInputExample, bridge: [tool] }).bridge).toEqual([tool]);
+    expect(StageInput.safeParse({ ...stageInputExample, bridge: [{ server: "figma" }] }).success).toBe(false);
+  });
+
   it("reads schema 3 testCases with approach, and still reads schema 2's test field for old images", () => {
     const base = { ...stageInputExample, schema: 3 as const };
     const v3 = StageInput.safeParse({ ...base, context: { ...base.context, testCases: [{ title: "t", criterion: "c", approach: "a" }] } });
@@ -234,9 +245,9 @@ describe("StageOutput", () => {
 describe("PackId", () => {
   it("has the eleven stage packs, each named after a task state, plus the Slack, chat and Jira intake triages, the issue classifier and the eval judge", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "build_tests", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "foreman", "ticket_chat", "change_exceptions", "compliance_review", "vuln_triage", "breach_assess", "capacity_check", "status_report", "release_notes", "access_review", "postmortem", "docs_drift", "questionnaire", "code_map", "council_second", "council_security", "question_council", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "ci_failure_class", "frame_privacy", "evidence_format", "size_estimate", "split_check", "decompose", "video_script", "recording", "video_qa", "video_fix", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "pr_reply", "loop_judge", "loop_redirect", "fact_propose", "conversation_assess", "conversation_relation", "conversation_reply", "pr_link"].sort(),
+      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "build_tests", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "foreman", "design_spec", "a11y_audit", "design_parity", "ticket_chat", "change_exceptions", "compliance_review", "vuln_triage", "breach_assess", "capacity_check", "status_report", "release_notes", "access_review", "postmortem", "docs_drift", "questionnaire", "code_map", "council_second", "council_security", "question_council", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "ci_failure_class", "frame_privacy", "evidence_format", "size_estimate", "split_check", "decompose", "video_script", "recording", "video_qa", "video_fix", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "pr_reply", "loop_judge", "loop_redirect", "fact_propose", "conversation_assess", "conversation_relation", "conversation_reply", "pr_link"].sort(),
     );
-    const onDemand: string[] = ["slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "foreman", "ticket_chat", "change_exceptions", "compliance_review", "vuln_triage", "breach_assess", "capacity_check", "status_report", "release_notes", "access_review", "postmortem", "docs_drift", "questionnaire", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "ci_failure_class", "frame_privacy", "evidence_format", "size_estimate", "split_check", "decompose", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "loop_judge", "loop_redirect", "fact_propose", "conversation_assess", "conversation_relation", "conversation_reply", "pr_link"];
+    const onDemand: string[] = ["slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "foreman", "design_spec", "a11y_audit", "design_parity", "ticket_chat", "change_exceptions", "compliance_review", "vuln_triage", "breach_assess", "capacity_check", "status_report", "release_notes", "access_review", "postmortem", "docs_drift", "questionnaire", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "ci_failure_class", "frame_privacy", "evidence_format", "size_estimate", "split_check", "decompose", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "loop_judge", "loop_redirect", "fact_propose", "conversation_assess", "conversation_relation", "conversation_reply", "pr_link"];
     // The planner runs in the test_design state (the machine's RUNS_IN), so it names no state of its own.
     const runsInAnotherState: string[] = ["plan", "plan_fast", "test_design_fast", "build_tests", "code_map", "council_security", "council_second", "question_council", "video_script", "recording", "video_qa", "video_fix", "pr_reply"];
     for (const pack of PackId.options) {
@@ -775,4 +786,45 @@ describe("the question council pack", () => {
     expect(QuestionsContext.safeParse({ ...questions, questions: [] }).success).toBe(false);
     expect(QuestionsContext.safeParse({ ...questions, questions: Array(7).fill(q) }).success).toBe(false);
   });
+});
+
+it("knows the design budget as an escalation reason and accessibility as a finding category", () => {
+  expect(EscalationReason.parse("design_budget")).toBe("design_budget");
+  expect(Finding.parse({ path: "/checkout", line: 0, severity: "blocker", title: "t", body: "b", confidence: 0.9, category: "accessibility" }).category).toBe("accessibility");
+});
+
+it("carries the design reference and the audit level in a stage input's context", () => {
+  const ctx = StageInput.shape.context.parse({ projectContext: null, design: { refs: [{ fileKey: "AbCdEf0123456789", nodeIds: ["12:34"], page: null, from: "issue" }] }, a11y: { level: "AAA" } });
+  expect(ctx.design?.refs[0]?.fileKey).toBe("AbCdEf0123456789");
+  expect(ctx.a11y).toEqual({ level: "AAA" });
+});
+
+it("design_spec is a read-only agent pack on Claude, with the design tools through the bridge", () => {
+  expect(PACKS.design_spec).toMatchObject({
+    kind: "agent", agent: "design-spec-writer", writable: false, effort: "medium", network: "engine", template: "design_spec.md", answer: DesignSpec,
+    engines: { default: "claude:sonnet", allowed: ["claude:sonnet", "claude:opus"] },
+  });
+  expect(PACKS.design_spec.access).toMatchObject({ read: true, write: false, web: false, commands: expect.not.arrayContaining(["curl"]) });
+});
+
+it("a11y_audit is a browser agent pack on Claude, with Mobbin's searches only through the bridge and qa-axe among its commands", () => {
+  expect(PACKS.a11y_audit).toMatchObject({
+    kind: "agent", agent: "a11y-auditor", writable: true, effort: "medium", network: "full", maxTurns: 60, template: "a11y_audit.md", answer: A11yAuditAnswer,
+    engines: { default: "claude:sonnet", allowed: ["claude:sonnet", "claude:opus"] },
+  });
+  expect(PACKS.a11y_audit.access.commands).toContain("qa-axe");
+});
+
+it("design_parity is a read-only agent pack on Claude with the Figma reading tools only, and a context that carries the captures", () => {
+  const tools = ["get_design_context", "get_metadata", "get_screenshot", "get_variable_defs"];
+  expect(PACKS.design_parity).toMatchObject({
+    kind: "agent", agent: "parity-reviewer", writable: false, effort: "high", network: "engine", template: "design_parity.md", answer: DesignParityAnswer,
+    engines: { default: "claude:opus", allowed: ["claude:opus", "claude:sonnet"] },
+  });
+  expect(PACKS.design_parity.access.write).toBe(false);
+  expect(PACKS.design_parity.access.bridge).toEqual([{ server: "figma", tools }, { server: "figma-desktop", tools }]);
+  const target = { scenario: "S1", frame: "1:2", viewport: { name: "desktop", width: 1440, height: 900 }, state: "default" };
+  const capture = { scenario: "S1", frame: "1:2", viewport: "desktop", state: "default", image: "/evidence/parity/S1/desktop-default.png", styles: null, elements: 3 };
+  const ctx = StageInput.shape.context.parse({ projectContext: null, parity: { plan: { targets: [target], uncited: [], notes: [] }, captures: [capture], spec: null } });
+  expect(ctx.parity?.captures[0]?.image).toBe("/evidence/parity/S1/desktop-default.png");
 });

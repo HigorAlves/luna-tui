@@ -21,7 +21,7 @@ const base: FingerprintInput = {
   rules: "Never push.",
   skills: ["tdd"],
   skillsDir,
-  access: { read: true, write: true, web: false, agent: false, skills: true, commands: ["git add"], luna: ["step"] },
+  access: { read: true, write: true, web: false, agent: false, skills: true, commands: ["git add"], luna: ["step"], bridge: [] },
   answer: { type: "object", properties: { summary: { type: "string" } } },
 };
 

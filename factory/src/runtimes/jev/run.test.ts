@@ -24,6 +24,7 @@ const input = (context: Partial<StageInput["context"]> = { issue }): StageInput 
   task: { id: "t1", title: "From the task", description: "Task text", criteria: [], repoPath: "", branch: "", source: null },
   plan: null,
   decisions: [],
+  bridge: [],
   priorFindings: [],
   context: { projectContext: null, ...context },
   limits: { maxTurns: 1, timeoutMs: 60_000 },

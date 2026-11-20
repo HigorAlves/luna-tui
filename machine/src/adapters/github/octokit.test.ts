@@ -71,6 +71,14 @@ function stub(answers: Record<string, unknown>, now?: () => Date) {
 
 const item = (repo: string, number: number) => ({ number, repository_url: `https://api.github.com/repos/${repo}`, updated_at: "t" });
 
+describe("OctokitGitHub: repoPrivate (the design pairs' publish rule)", () => {
+  it("says whether GitHub reports the repository private, and null when it does not say", async () => {
+    expect(await stub({ "repos.get": { private: true } }).github.repoPrivate("o/a")).toBe(true);
+    expect(await stub({ "repos.get": { private: false } }).github.repoPrivate("o/a")).toBe(false);
+    expect(await stub({ "repos.get": {} }).github.repoPrivate("o/a")).toBeNull();
+  });
+});
+
 describe("OctokitGitHub", () => {
   it("maps the search API to hits, deduped across the two queries", async () => {
     const { github, calls } = stub({

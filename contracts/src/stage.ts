@@ -4,10 +4,15 @@
 import { z } from "zod";
 
 import { ChangeExceptionKind, ComplianceRegime } from "./compliance.ts";
+import { A11yContext } from "./a11y.ts";
+import { CapturePlan, ParityCapture } from "./design-parity.ts";
+import { DesignContext } from "./design.ts";
+import { DesignSpec } from "./design-spec.ts";
 import { EconomyInput, ProposeContext } from "./economy.ts";
 import { EngineBudgets, EngineId } from "./engines.ts";
 import { EffortId } from "./models.ts";
-import { EvidenceConfigV22, FactoryConfigInput, SecretNameSchema } from "./config-v22.ts";
+import { DesignConfig, EvidenceConfigV22, FactoryConfigInput, SecretNameSchema } from "./config-v22.ts";
+import { BridgedTool } from "./mcp.ts";
 import { Scenario } from "./plan.ts";
 import { SizeContext, SplitContext } from "./split.ts";
 import { ConfidencePolicySchema } from "./questions.ts";
@@ -105,12 +110,14 @@ export const Finding = z.object({
   confidence: z.number().min(0).max(1),
   // v2.2, all optional: a finding written before the wave has none of them (see finding.ts).
   id: z.string().optional(),
-  category: z.enum(["correctness", "missing_criterion", "security", "error_handling", "convention", "performance", "env", "tests", "size"]).optional(),
+  category: z.enum(["correctness", "missing_criterion", "security", "error_handling", "convention", "performance", "env", "tests", "size", "accessibility", "design"]).optional(),
   criterion_ref: z.string().nullable().optional(),
   suggested_fix: z.string().nullable().optional(),
   description: z.string().optional(),
   /** How the finding ended: fixed in a commit, kept by the author, or dismissed by a person. */
-  resolution: z.object({ status: z.enum(["fixed", "kept", "dismissed"]), by: z.string(), commit: z.string().optional(), /** True when the machine worked the resolution out (a finding that stopped being raised), rather than a person or a stage saying so. */ inferred: z.boolean().optional() }).optional(),
+  resolution: z.object({ status: z.enum(["fixed", "kept", "dismissed", "waived"]), by: z.string(), commit: z.string().optional(), /** True when the machine worked the resolution out (a finding that stopped being raised), rather than a person or a stage saying so. */ inferred: z.boolean().optional() }).optional(),
+  /** A design finding (RFC 0013): where in the frame and where in the build. */
+  design: z.object({ source: z.enum(["parity", "a11y"]), frame: z.string().optional(), node: z.string().optional(), element: z.string(), viewport: z.string().optional(), state: z.string().optional(), kind: z.string(), expected: z.string().optional(), actual: z.string().optional() }).optional(),
   /** Ids of the duplicates folded into this finding by `mergeDuplicateFindings`. */
   merged: z.array(z.string()).optional(),
 });
@@ -213,6 +220,12 @@ export const PackId = z.enum([
   // Plans a ticket with a person over a read-only checkout; it only drafts, the board creates it (on demand).
   "ticket_chat",
   // The plan council (run in test_design after plan_check): a security review and an independent second opinion on a High-risk or large plan.
+  // Reads the card's Figma design through the bridge and writes the spec the planner reads (RFC 0013): a sub-run of the plan stage, and on demand.
+  "design_spec",
+  // Audits the rendered change for WCAG 2.2 in the QA browser (RFC 0013): a sub-run of the e2e stage after a passing browser run, and on demand.
+  "a11y_audit",
+  // Compares the captured build with its Figma frames (RFC 0013, phase 3): a sub-run of the e2e stage after a passing browser run, read-only.
+  "design_parity",
   "council_security",
   "council_second",
   // The question council (run in triage before the person is asked): settles open questions from the code and the card, or says it cannot.
@@ -861,6 +874,8 @@ export const LunaConfig = z.object({
   budget: z.object({ engines: EngineBudgets.optional() }).optional(),
   /** How long the machine keeps a task's local Evidence Pack and media; 0 never sweeps it, absent defers to MACHINE_RETENTION_DAYS. */
   evidence: z.object({ retention_days: z.number().int().min(0).optional(), ...EvidenceConfigV22 }).optional(),
+  /** The designer agents in this repo (RFC 0013): `off`, or the machine's MCP servers narrowed by name. */
+  design: DesignConfig.optional(),
   /** Windows in which the machine merges nothing, whatever the policy says. */
   freeze: z
     .array(
@@ -925,8 +940,8 @@ export type ArchiveReason = z.infer<typeof ArchiveReason>;
 /** Why a stage stopped on purpose: `plan_wrong` the plan cannot be built as written (the planner runs again with the evidence),
  *  `env_broken` the sandbox or toolchain is, `flaky_tests` the tests do not hold still, `too_complex`
  *  the work is bigger than one stage, `undeclared_scope` it needs files or packages the plan did not name, `head_moved` the PR head moved after
- *  the evidence pack was made (Evidence runs again). */
-export const EscalationReason = z.enum(["plan_wrong", "env_broken", "flaky_tests", "too_complex", "undeclared_scope", "head_moved", "other"]);
+ *  the evidence pack was made (Evidence runs again), `design_budget` the card's design budget is spent. */
+export const EscalationReason = z.enum(["plan_wrong", "env_broken", "flaky_tests", "too_complex", "undeclared_scope", "head_moved", "design_budget", "other"]);
 export type EscalationReason = z.infer<typeof EscalationReason>;
 
 /** How risky a change or a ticket reads: on one scale for the triage record and the evidence pack. */
@@ -1064,6 +1079,10 @@ export const PlanContext = z.object({
   shortlist: z.object({ files: z.array(z.string()), symbols: z.array(z.string()), components: z.array(z.string()), owners: z.array(z.string()) }).optional(),
   /** For the council packs: the plan under review as text, its criteria, the round and what the members said so far. */
   council: z.object({ plan: z.string(), criteria: z.array(z.string()), round: z.union([z.literal(1), z.literal(2)]), transcript: z.array(CouncilTurn) }).optional(),
+  /** The design spec the plan stage opened with (RFC 0013), for the planner, as data; null when it could not be made. */
+  designSpec: DesignSpec.nullable().optional(),
+  /** For the test designer: the spec's frames by id, name, viewport and states, so a scenario may cite one (`frame_ref`). No tokens, no notes. */
+  frames: z.array(z.object({ id: z.string(), name: z.string(), viewport: z.string().nullable(), states: z.array(z.string()) })).max(30).optional(),
 });
 export type PlanContext = z.infer<typeof PlanContext>;
 
@@ -1513,9 +1532,19 @@ export const StageInput = z.object({
       answers: z.record(z.string(), z.string()),
     }),
   ),
+  /** The MCP tools the machine bridged for this run (RFC 0013): served as luna tools; each call goes through the checks mailbox. */
+  bridge: z.array(BridgedTool).default([]),
   priorFindings: z.array(Finding),
   context: z.object({
     projectContext: z.string().nullable(),
+    /** For design_spec: the card's design reference, composed by the machine (RFC 0013). */
+    design: DesignContext.nullable().optional(),
+    /** For a11y_audit: the WCAG level the repo audits at; the machine's own value. */
+    a11y: A11yContext.nullable().optional(),
+    /** For design_parity: what the browser run captured for each cited frame, the plan it followed, and the approved spec. The machine's own composition. */
+    parity: z.object({ plan: CapturePlan, captures: z.array(ParityCapture), spec: DesignSpec.nullable() }).optional(),
+    /** For e2e: the captures the browser run is asked to take for the frames its scenarios cite (RFC 0013, phase 3), one `qa-capture` command each. The machine's own plan. */
+    parityPlan: CapturePlan.optional(),
     /** What the token economy hands this run (RFC 0007): the loop guard's settings, the facts learned in this repository, the approved tool mask. Absent with `MACHINE_ECONOMY=off`. */
     economy: EconomyInput.optional(),
     /** For fact_propose: the repository's name, the digests of its last runs and the texts of the facts it holds. */

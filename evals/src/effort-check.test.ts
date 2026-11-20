@@ -1,7 +1,7 @@
 import type { StageOutput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { IGNORED_EFFORT, effortProblems, honourEffort } from "./effort-check.ts";
+import { IGNORED_EFFORT, effortProblems, honourEffort, visionProblems } from "./effort-check.ts";
 import type { CaseResult } from "./grade.ts";
 
 const output = (effort?: string) => ({ ok: true, run: { runtime: "claude", engine: "claude:haiku", modelId: "m", ...(effort ? { effort } : {}), sdk: { name: "s", version: "1" }, fingerprint: "0".repeat(64) } }) as unknown as StageOutput;
@@ -54,5 +54,14 @@ describe("effortProblems", () => {
   it("checks every engine, --against included, and names the first that cannot run the effort", () => {
     expect(effortProblems("plan", ["claude:opus", "claude:haiku"], "low")).toBeNull();
     expect(effortProblems("plan", ["claude:opus", "jev"], "low")).toBe("jev: jev does not support effort low (supports: none)");
+  });
+});
+
+describe("visionProblems", () => {
+  it("names the first engine that cannot read images for a pack that needs them", () => {
+    expect(visionProblems("design_parity", ["claude:opus", "openai:sol"])).toBe("openai:sol cannot read images, which design_parity needs");
+  });
+  it("lets a pack that needs no images run on any engine", () => {
+    expect(visionProblems("triage", ["codex:luna"])).toBeNull();
   });
 });

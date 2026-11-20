@@ -5,13 +5,13 @@
 // engine's, read when the server starts (agent/model.ts), so one build serves every eve engine.
 // A helper on an eve engine is the agent's native subagent (agent/subagents/<role>/), reached
 // through the `delegate` workflow tool.
-import { type Access, type AgentPack, type AgentRole, type EngineId, HELPER_LIMITS, PACKS, type Pack, answerJsonSchema, helperPack, helpersOn, resolveEngine } from "@hardness/contracts";
+import { type Access, type AgentPack, type AgentRole, type EngineId, HELPER_LIMITS, PACKS, type Pack, answerJsonSchema, bridgedName, helperPack, helpersOn, resolveEngine } from "@hardness/contracts";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
 import { DELEGATE, delegateTool } from "../../core/delegate.ts";
 import { LUNA_TOOLS } from "../../core/luna-tools.ts";
-import { EVE_TOOL_NAMES, factoryRules } from "../../core/render.ts";
+import { EVE_TOOL_NAMES, bridgeRule, factoryRules } from "../../core/render.ts";
 import { readRole } from "../../core/roles.ts";
 
 export interface CompileOptions {
@@ -38,8 +38,13 @@ export function eveTools(access: Access): string[] {
     ...(access.write ? ["write_file"] : []),
     ...(access.web ? ["web_fetch"] : []),
     ...access.luna,
+    // The design tools the pack may be given (RFC 0013), served bare; a run's own list (StageInput.bridge) is what its calls are checked against.
+    ...bridgedToolNames(access),
   ];
 }
+
+/** The luna names of the tools a pack's access grants for bridging. */
+export const bridgedToolNames = (access: Access): string[] => access.bridge.flatMap((g) => g.tools.map((t) => bridgedName(g.server, t)));
 
 /** The one app every decision pack on an eve engine runs on: no tools, no skills, no role. */
 export const DECIDE_APP = "decide";
@@ -75,7 +80,8 @@ export function instructionParts(pack: AgentPack, factoryRoot: string): { body: 
   const addendum = existsSync(addendumFile) ? `\n${readFileSync(addendumFile, "utf8").trimEnd()}\n` : "";
   // Role bodies call the luna tools by their Claude names (`mcp__luna__step`); eve serves them bare.
   const body = readRole(rolesDir, pack.agent!).body.trimEnd().replaceAll("mcp__luna__", "");
-  return { body, rules: factoryRules(EVE_TOOL_NAMES), addendum };
+  // A pack that bridges design tools (RFC 0013) is told what they return is data, as a Claude stage is.
+  return { body, rules: [factoryRules(EVE_TOOL_NAMES), ...bridgeRule(bridgedToolNames(pack.access))].join("\n"), addendum };
 }
 
 /** The helpers of an eve stage that run as its native subagents: the ones on an eve engine. The
@@ -84,19 +90,20 @@ export const eveSubagents = (pack: AgentPack): Array<{ role: AgentRole; engine: 
 
 /** One tool file per tool, by path under `dir`, importing the runtime's tools from `lib`; a native
  *  subagent's guarded tools (`readOnly` its child run's commands) approve against its own read-only policy. */
-function toolFiles(dir: string, tools: string[], fromTools: (file: string) => string, { readOnly, scripted = false }: { readOnly?: string[]; scripted?: boolean } = {}): Record<string, string> {
+function toolFiles(dir: string, tools: string[], fromTools: (file: string) => string, { readOnly, scripted = false, bridged = [], vision = false }: { readOnly?: string[]; scripted?: boolean; bridged?: string[]; vision?: boolean } = {}): Record<string, string> {
   // The conformance fake's `bash` runs through its scripted executor (fake.ts).
   const fake = scripted ? `import { scriptedExec } from "${fromTools("fake.ts")}";\n` : "";
-  const exec = scripted ? ", scriptedExec" : "";
   return Object.fromEntries(
     tools.map((tool) => {
       const body = GUARDED.has(tool)
         ? readOnly
-          ? `import { readOnlyTools } from "${fromTools("agent/tools.ts")}";\n${tool === "bash" ? fake : ""}\nexport default readOnlyTools(${JSON.stringify(readOnly)}${tool === "bash" ? exec : ""}).${tool};\n`
+          ? `import { readOnlyTools } from "${fromTools("agent/tools.ts")}";\n${tool === "bash" ? fake : ""}\nexport default readOnlyTools(${JSON.stringify(readOnly)}, ${tool === "bash" && scripted ? "scriptedExec" : "undefined"}, ${vision}).${tool};\n`
           : tool === "bash" && scripted
             ? `import { bashTool } from "${fromTools("agent/tools.ts")}";\n${fake}\nexport default bashTool(scriptedExec);\n`
             : `export { ${tool} as default } from "${fromTools("agent/tools.ts")}";\n`
-        : tool in LUNA_TOOLS
+        : bridged.includes(tool)
+          ? `import { bridgedTool } from "${fromTools("agent/tools.ts")}";\n\nexport default bridgedTool("${tool}");\n`
+          : tool in LUNA_TOOLS
           ? `import { lunaTool } from "${fromTools("agent/tools.ts")}";\n\nexport default lunaTool("${tool}");\n`
           : `export { default } from "eve/tools/${tool}";\n`;
       return [`${dir}/${tool}.ts`, body];
@@ -135,7 +142,7 @@ function subagentFiles(pack: AgentPack, helper: { role: AgentRole; engine: Engin
     [`${dir}/agent.ts`]: agent,
     [`${dir}/instructions.md`]: `${body}\n\n${rules}\n${addendum}`,
     [`${dir}/sandbox.ts`]: `import { defineParentSandbox } from "eve/sandbox";\n\nexport default defineParentSandbox();\n`,
-    ...toolFiles(`${dir}/tools`, eveTools(child.access), from("tools"), { readOnly: child.access.commands, scripted }),
+    ...toolFiles(`${dir}/tools`, eveTools(child.access), from("tools"), { readOnly: child.access.commands, scripted, bridged: bridgedToolNames(child.access), vision: resolveEngine(helper.engine).caps.vision }),
   };
 }
 
@@ -211,7 +218,7 @@ export function agentFiles(pack: AgentPack, options: CompileOptions): Record<str
   const { body, rules, addendum } = instructionParts(pack, options.factoryRoot);
   const instructions = `${body}\n\n${rules}\n${addendum}`;
 
-  const tools = toolFiles("agent/tools", eveTools(pack.access), fromTools, { scripted: options.model === "scripted" });
+  const tools = toolFiles("agent/tools", eveTools(pack.access), fromTools, { scripted: options.model === "scripted", bridged: bridgedToolNames(pack.access) });
   // `delegate`, when the pack hands work to helpers: a native subagent for each on an eve engine, the bridge for the rest.
   const helpers = helpersOn(pack, "eve");
   const subagents = eveSubagents(pack);

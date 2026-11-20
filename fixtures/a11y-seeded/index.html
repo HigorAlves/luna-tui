@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Checkout</title>
+    <style>
+      body { font-family: sans-serif; background: #fff; color: #1a1a1a; margin: 2rem; }
+      /* Seeded: white on #4caf50 is 2.8:1. */
+      .pay { background: #4caf50; color: #fff; border: 0; padding: 0.75rem 1.5rem; font-size: 1rem; }
+      /* Seeded: no visible focus. */
+      .pay:focus { outline: none; }
+      /* Seeded: the hover colours are 1.6:1. */
+      .pay:hover { background: #a5d6a7; color: #fff; }
+      dialog { padding: 1rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Checkout</h1>
+    <!-- Seeded: no alt. -->
+    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" width="120" height="80" />
+    <form>
+      <!-- Seeded: no label. -->
+      <input id="card" name="card" placeholder="Card number" />
+      <button class="pay" type="submit">Pay now</button>
+    </form>
+    <button id="help" type="button">Help</button>
+    <dialog id="dialog">
+      <p>Call us any time.</p>
+      <button id="close" type="button">Close</button>
+    </dialog>
+    <script>
+      // Seeded: a trap. Tab wraps inside the dialog and Escape is swallowed.
+      const dialog = document.getElementById("dialog");
+      const close = document.getElementById("close");
+      document.getElementById("help").addEventListener("click", () => {
+        dialog.show();
+        close.focus();
+      });
+      dialog.addEventListener("keydown", (event) => {
+        if (event.key === "Tab" || event.key === "Escape") {
+          event.preventDefault();
+          close.focus();
+        }
+      });
+      close.addEventListener("click", () => {});
+    </script>
+  </body>
+</html>

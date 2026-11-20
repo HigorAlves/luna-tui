@@ -80,4 +80,19 @@ describe("luna tools", () => {
     expect(await call(server, "decision_get", { key: "approved" })).toEqual([decisions[1]]);
     expect(await call(server, "decision_get", { key: "nothing" })).toEqual({ decided: null });
   });
+
+  it("registers one tool per bridged entry, a passthrough for a schema zod cannot read, with a note", async () => {
+    const notes: string[] = [];
+    const calls: unknown[] = [];
+    const bridge = [
+      { server: "figma", tool: "get_screenshot", name: "figma_get_screenshot", description: "d", inputSchema: { type: "object", properties: { nodeId: { type: "string" } } } },
+      { server: "figma", tool: "odd", name: "figma_odd", description: "d", inputSchema: { type: "nonsense" } },
+    ];
+    const server = lunaServer(async (tool, args) => (calls.push([tool, args]), { ok: true }), null, [], { tools: bridge, note: (m) => notes.push(m) });
+    expect(Object.keys((server.instance as unknown as { _registeredTools: Record<string, unknown> })._registeredTools).sort()).toEqual(["figma_get_screenshot", "figma_odd"]);
+    expect(await call(server, "figma_get_screenshot", { nodeId: "1:2" })).toEqual({ ok: true });
+    expect(await call(server, "figma_odd", { arguments: { anything: 1 } })).toEqual({ ok: true });
+    expect(calls).toEqual([["figma_get_screenshot", { nodeId: "1:2" }], ["figma_odd", { anything: 1 }]]);
+    expect(notes).toEqual([expect.stringContaining("figma_odd")]);
+  });
 });

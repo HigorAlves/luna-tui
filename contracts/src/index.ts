@@ -23,10 +23,13 @@ export * from "./machine-policy.ts";
 export * from "./events.ts";
 export * from "./foreman.ts";
 export * from "./ticket-chat.ts";
+export * from "./design-parity.ts";
+export * from "./design-report.ts";
 export * from "./packs.ts";
 export * from "./models.ts";
 export * from "./engines.ts";
 export * from "./access.ts";
+export * from "./mcp.ts";
 export * from "./economy.ts";
 export * from "./economy-vocabulary.ts";
 export * from "./questions.ts";
@@ -39,6 +42,9 @@ export * from "./jira.ts";
 export * from "./compliance.ts";
 export * from "./compliance-review.ts";
 export * from "./docs-drift.ts";
+export * from "./design.ts";
+export * from "./design-spec.ts";
+export * from "./a11y.ts";
 
 /** Board columns: the diagram's seven stages, then Done. Same order as the Rust board, which reads the column of each task from `COLUMN_OF` through the API. */
 export const COLUMNS = [
@@ -68,6 +74,8 @@ export const TaskState = z.enum([
   "paused_rate_limit",
   "verifying",
   "e2e",
+  // The design sign-off: a person looks at the frame beside the build (RFC 0013). Stops only when parity leaves something open.
+  "awaiting_design",
   "delivering",
   "ci_watch",
   "evidence",
@@ -98,6 +106,7 @@ export const COLUMN_OF: Record<TaskState, Column> = {
   paused_rate_limit: "Build",
   verifying: "Verify",
   e2e: "Verify",
+  awaiting_design: "Verify",
   delivering: "Verify",
   ci_watch: "Verify",
   evidence: "Evidence",
@@ -143,6 +152,7 @@ export const WAITING_ON_USER: ReadonlySet<TaskState> = new Set([
   "awaiting_answers",
   "awaiting_approval",
   "awaiting_test_check",
+  "awaiting_design",
   "awaiting_ship",
   "reviewing_memory",
   "escalated",

@@ -18,6 +18,12 @@ describe("task states", () => {
     }
   });
 
+  it("shows the design sign-off in Verify and as waiting on you", () => {
+    expect(COLUMN_OF.awaiting_design).toBe("Verify");
+    expect(WAITING_ON_USER.has("awaiting_design")).toBe(true);
+    expect(RUNNING.has("awaiting_design")).toBe(false);
+  });
+
   it("draws the columns as the diagram's seven stages, then Done", () => {
     expect([...COLUMNS]).toEqual(["Intake", "Triage", "Plan", "Build", "Verify", "Evidence", "Ship", "Done"]);
     const states = (column: string) => TaskState.options.filter((s) => COLUMN_OF[s] === column);

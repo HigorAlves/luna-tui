@@ -29,6 +29,7 @@ const input: StageInput = {
   attempt: 2,
   task: { id: "t1", title: "Fix the bug", description: "It breaks & crashes", criteria: ["no crash", "a/b"], repoPath: "/r", branch: "task/t1-fix", source: null },
   plan: { brief: "do it", criteria: ["c1"], assumptions: ["a1"], slices: [{ title: "s1", est_loc: 10, touchpoints: ["a.ts"], acceptance: ["ok"] }] },
+  bridge: [],
   decisions: [
     { at: "triage", decision: "answered", reason: null, answers: { Q: "A" } },
     { at: "awaiting_approval", decision: "approved", reason: "go", answers: {} },
@@ -210,6 +211,16 @@ describe("renderPrompt", () => {
     expect(prompt).toContain("- Rejects a bad password (criterion: no crash): Given a user, When a bad password is sent, Then 401");
     expect(prompt).toContain("steps.jsonl");
     expect(prompt).not.toContain("{{");
+  });
+
+  it("gives the e2e agent one qa-capture command per planned capture, or none", () => {
+    const template = readFileSync(new URL("../../prompts/e2e.md", import.meta.url), "utf8");
+    const plan = { targets: [{ scenario: "S1", frame: "12:34", viewport: { name: "1440x900", width: 1440, height: 900 }, state: "hover" as const }], uncited: [], notes: [] };
+    const e2e = (parityPlan?: typeof plan) => renderPrompt({ pack: PACKS.e2e, input: { ...input, pack: "e2e", stage: "e2e", context: { projectContext: null, testCases: [], qaTargets: [], ...(parityPlan ? { parityPlan } : {}) } } as never, template });
+    expect(e2e(plan)).toContain("qa-capture S1 1440x900 hover 1440 900  (frame 12:34)");
+    expect(e2e(plan)).toContain("## Design captures");
+    expect(e2e()).toContain("## Design captures\n(none)");
+    expect(e2e(plan)).not.toContain("{{");
   });
 
   it("renders the video context, the evidence pack as text, and leaves no placeholder in any video template", () => {
@@ -493,6 +504,66 @@ describe("renderPrompt", () => {
     expect(slack).toContain("from Slack\n");
     expect(slack).toContain("rules:\n## VIPs\n- @cto\nitems:");
     expect(renderPrompt({ pack: PACKS.chat_triage, input, template })).toContain("from (none)\nme (none)\nrules:\n(none)\nitems:\n(none)");
+  });
+
+  it("renders the design reference for design_spec as the machine's own text, one line per reference", () => {
+    const design = { refs: [{ fileKey: "AbCdEf0123456789", nodeIds: ["12:34", "5:6"], page: null, from: "issue" as const }, { fileKey: "ZyXwVu9876543210", nodeIds: [], page: "Checkout", from: "luna.yaml" as const }] };
+    const prompt = renderPrompt({ pack: PACKS.design_spec, input: { ...input, pack: "design_spec", context: { projectContext: null, design } } as StageInput, template: "{{context.design.refs}}" });
+    expect(prompt).toContain("\nfile AbCdEf0123456789 · nodes 12:34, 5:6 · from issue\nfile ZyXwVu9876543210 · page Checkout · from luna.yaml");
+    expect(prompt).not.toContain("<<<data");
+    expect(renderPrompt({ pack: PACKS.design_spec, input, template: "{{context.design.refs}}" })).toContain("\n(none)");
+  });
+
+  it("renders design_parity with the captures, the uncited frames, the spec as data and the rule on missing captures", () => {
+    const prompt = renderPrompt({
+      pack: PACKS.design_parity,
+      input: {
+        ...input,
+        pack: "design_parity",
+        context: {
+          projectContext: null,
+          parity: {
+            plan: { targets: [{ scenario: "S1", frame: "1:2", viewport: { name: "desktop", width: 1440, height: 900 }, state: "default" }], uncited: ["3:4"], notes: [] },
+            captures: [{ scenario: "S1", frame: "1:2", viewport: "desktop", state: "default", image: "/evidence/parity/S1/desktop-default.png", styles: "/evidence/parity/S1/desktop-default.styles.json", elements: 87 }],
+            spec: { frames: [{ id: "1:2", name: "Checkout / Desktop", viewport: { width: 1440, height: 900 }, states: [] }], tokens: { color: [], type: [], spacing: [], radius: [] }, components: [], a11yNotes: [], missing: [], confidence: 0.9 },
+          },
+        },
+      } as StageInput,
+      template: readFileSync(new URL("../../prompts/design_parity.md", import.meta.url), "utf8"),
+    });
+    expect(prompt).toContain("/evidence/parity/S1/desktop-default.png");
+    expect(prompt).toContain("/evidence/parity/S1/desktop-default.styles.json");
+    expect(prompt).toContain("3:4");
+    expect(prompt).toContain("1:2 Checkout / Desktop 1440x900");
+    expect(prompt).toMatch(/no capture.*not_compared/i);
+    expect(prompt).not.toContain("{{");
+  });
+
+  it("renders the audit level for a11y_audit as the machine's own text, WCAG 2.2 AA when absent", () => {
+    const render = (a11y?: { level: "AA" | "AAA" }) => renderPrompt({ pack: PACKS.a11y_audit, input: { ...input, pack: "a11y_audit", context: { projectContext: null, ...(a11y ? { a11y } : {}) } } as StageInput, template: "{{context.a11y.level}}" });
+    expect(render({ level: "AAA" })).toContain("\nWCAG 2.2 AAA");
+    expect(render()).toContain("\nWCAG 2.2 AA");
+    expect(render({ level: "AAA" })).not.toContain("<<<data");
+  });
+
+  it("renders the design spec for the planner as a quoted block, and the frames for the test designer one line each", () => {
+    const spec = {
+      frames: [{ id: "1:2", name: "Checkout", viewport: { width: 1440, height: 900 }, states: [{ state: "default", nodeId: "1:2", suggestion: null }, { state: "error", nodeId: null, suggestion: { source: "mobbin", ref: "m/9", note: "inline error" } }] }],
+      tokens: { color: [{ name: "brand", value: "#1A73E8", variable: "color/brand", nodeId: null }], type: [], spacing: [{ name: "gap", value: "8", variable: null, nodeId: "3:4" }], radius: [] },
+      components: [{ name: "PayButton", nodeId: "5:6", codeConnect: { path: "src/PayButton.tsx", name: "PayButton" } }],
+      a11yNotes: [{ frame: "1:2", note: "focus order: card, pay" }],
+      missing: ["no mobile frame"],
+      confidence: 0.8,
+    };
+    const frames = [{ id: "1:2", name: "Checkout", viewport: "1440x900", states: ["default", "error"] }];
+    const withPlan = (plan: object) => ({ ...input, pack: "plan", context: { projectContext: null, plan: { record: null, brief: "", criteria: [], assumptions: [], slices: [], ...plan } } }) as StageInput;
+    const quoted = renderQuoted({ pack: PACKS.plan, input: withPlan({ designSpec: spec }), template: "{{context.plan.designSpec}}" });
+    expect(quoted).toContain("<<<data:context.plan.designSpec>>>");
+    const text = renderPrompt({ pack: PACKS.plan, input: withPlan({ designSpec: spec }), template: "{{context.plan.designSpec}}" });
+    for (const part of ["1:2 Checkout 1440x900", "default (1:2)", "error (no frame; suggestion from mobbin: inline error)", "brand #1A73E8 (variable color/brand)", "gap 8 (node 3:4)", "PayButton 5:6 (Code Connect: src/PayButton.tsx)", "focus order: card, pay", "no mobile frame", "confidence 0.8"]) expect(text).toContain(part);
+    expect(renderPrompt({ pack: PACKS.plan, input: withPlan({}), template: "{{context.plan.designSpec}}" })).toContain("(none)");
+    expect(renderPrompt({ pack: PACKS.test_design, input: withPlan({ frames }), template: "{{context.plan.frames}}" })).toContain("1:2 Checkout 1440x900: default, error");
+    expect(renderPrompt({ pack: PACKS.test_design, input: withPlan({}), template: "{{context.plan.frames}}" })).toContain("(none)");
   });
 
   it("renders the board for foreman: the question, the turns and one line per card, all quoted data, and the packs as the machine's own text", () => {

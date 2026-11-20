@@ -1,0 +1,141 @@
+{
+  "schema": 3,
+  "stage": "design_parity",
+  "pack": "design_parity",
+  "attempt": 1,
+  "task": {
+    "id": "eval-parity-radius",
+    "title": "Restyle the checkout page to the new design",
+    "description": "Checkout follows the Figma frame.",
+    "criteria": [
+      "The checkout page matches the Figma frame"
+    ],
+    "repoPath": "fixtures/golden-web",
+    "branch": "task/eval-parity-radius",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "bridge": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "design": {
+      "refs": [
+        {
+          "fileKey": "Qx7LmP2vR9sTa",
+          "nodeIds": [
+            "12:34"
+          ],
+          "page": null,
+          "from": "issue"
+        }
+      ]
+    },
+    "parity": {
+      "plan": {
+        "targets": [
+          {
+            "scenario": "S1",
+            "frame": "12:34",
+            "viewport": {
+              "name": "1440x900",
+              "width": 1440,
+              "height": 900
+            },
+            "state": "default"
+          }
+        ],
+        "uncited": [],
+        "notes": []
+      },
+      "captures": [
+        {
+          "scenario": "S1",
+          "frame": "12:34",
+          "viewport": "1440x900",
+          "state": "default",
+          "image": "/evidence/parity/S1/1440x900-default.png",
+          "styles": "/evidence/parity/S1/1440x900-default.styles.json",
+          "elements": 4
+        }
+      ],
+      "spec": {
+        "frames": [
+          {
+            "id": "12:34",
+            "name": "Checkout",
+            "viewport": {
+              "width": 1440,
+              "height": 900
+            },
+            "states": [
+              {
+                "state": "default",
+                "nodeId": "12:34",
+                "suggestion": null
+              }
+            ]
+          }
+        ],
+        "tokens": {
+          "color": [
+            {
+              "name": "primary",
+              "value": "#1B5E20",
+              "variable": "color/primary",
+              "nodeId": null
+            },
+            {
+              "name": "surface",
+              "value": "#FFFFFF",
+              "variable": "color/surface",
+              "nodeId": null
+            }
+          ],
+          "type": [
+            {
+              "name": "body",
+              "value": "Inter 16/24 400",
+              "variable": "type/body",
+              "nodeId": null
+            }
+          ],
+          "spacing": [
+            {
+              "name": "space-4",
+              "value": "16",
+              "variable": "space/4",
+              "nodeId": null
+            }
+          ],
+          "radius": [
+            {
+              "name": "md",
+              "value": "8",
+              "variable": "radius/md",
+              "nodeId": null
+            }
+          ]
+        },
+        "components": [
+          {
+            "name": "PayButton",
+            "nodeId": "12:40",
+            "codeConnect": null
+          }
+        ],
+        "a11yNotes": [],
+        "missing": [],
+        "confidence": 0.9
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

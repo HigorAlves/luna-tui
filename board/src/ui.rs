@@ -489,6 +489,14 @@ pub fn draw(frame: &mut Frame, app: &App) {
             }
         }
         Mode::Foreman(state) => render_foreman(frame, app, state),
+        Mode::DesignReport { report, scroll, .. } => render_design_report(frame, report, *scroll),
+        Mode::DesignBudget { .. } => render_confirm_box(
+            frame,
+            "Fresh design budget, or design off for this card?",
+            " Design budget spent ",
+            "y fresh budget · o design off · esc cancel",
+            PEACH,
+        ),
         Mode::TicketChat(state) => render_ticket_chat(frame, app, body, state),
         Mode::ConfirmApprove(held) => {
             if let Some(task) = app.task(&held.id) {
@@ -962,6 +970,14 @@ fn footer_line(app: &App, width: u16) -> Line<'static> {
         | Mode::ConfirmAbort(_)
         | Mode::ConfirmWorktree(_)
         | Mode::ConfirmQuit => hint(&[("y", "yes"), ("n", "no")]),
+        Mode::DesignReport { .. } => {
+            hint(&[("j/k", "scroll"), ("c", "make a card"), ("esc", "close")])
+        }
+        Mode::DesignBudget { .. } => hint(&[
+            ("y", "fresh budget"),
+            ("o", "design off"),
+            ("esc", "cancel"),
+        ]),
         Mode::Foreman(state) => match state.phase {
             crate::foreman::Phase::Typing => hint(&[("enter", "ask"), ("esc", "back")]),
             crate::foreman::Phase::Waiting => hint(&[("esc", "close")]),
@@ -2417,7 +2433,8 @@ pub(crate) fn render_ticket_chat(
                     .bg(c(ACCENT)),
             );
             let room = share.saturating_sub(5);
-            spans.push(Span::from(format!(" {}  ", truncate(&plain(choice), room))).fg(c(SUBTEXT0)));
+            spans
+                .push(Span::from(format!(" {}  ", truncate(&plain(choice), room))).fg(c(SUBTEXT0)));
         }
         foot.push(Line::from(spans));
     }
@@ -2425,7 +2442,10 @@ pub(crate) fn render_ticket_chat(
     foot.push(match &state.phase {
         Phase::Typing => Line::from(vec![
             Span::from("> ").fg(c(ACCENT)).bold(),
-            Span::from(format!("{}▏", input_tail(&plain(&state.input), width.saturating_sub(3)))),
+            Span::from(format!(
+                "{}▏",
+                input_tail(&plain(&state.input), width.saturating_sub(3))
+            )),
         ]),
         Phase::Waiting => {
             let secs = state.waiting_since.map_or(0, |t| t.elapsed().as_secs());
@@ -2488,6 +2508,37 @@ pub(crate) fn render_ticket_chat(
 }
 
 /// The foreman's popup: the talk's last reply, then one row per suggested action with where it stands.
+/// The design report popup: the report's rows from `scroll` down.
+fn render_design_report(frame: &mut Frame, report: &crate::design::DesignReport, scroll: usize) {
+    let area = centered(
+        frame.area(),
+        frame.area().width * 9 / 10,
+        frame.area().height * 8 / 10,
+    );
+    frame.render_widget(Clear, area);
+    let width = (area.width as usize).saturating_sub(6);
+    let title = match report {
+        crate::design::DesignReport::Spec { .. } => " Design spec ",
+        crate::design::DesignReport::Audit { .. } => " Accessibility audit ",
+    };
+    let lines: Vec<Line> = crate::design::report_lines(report)
+        .into_iter()
+        .skip(scroll)
+        .map(|l| {
+            Line::from(Span::from(truncate(
+                &crate::text::sanitize(&l, false),
+                width,
+            )))
+        })
+        .collect();
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(title).fg(c(ACCENT)).bold());
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
 pub(crate) fn render_foreman(frame: &mut Frame, app: &App, state: &crate::foreman::State) {
     use crate::foreman::{Phase, Status};
     let area = centered(

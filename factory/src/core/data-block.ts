@@ -54,11 +54,11 @@ export type VariableKind = "machine" | "line" | "block";
 // Only what the machine alone writes (a constant, a count, an enum, a hash, a path it chose). Traced one by one: the checks and QA targets
 // are the repository's own text, the scenario tests and the video's narration and sheets carry names a model or a tool wrote, the coverage
 // report lists paths from a report the container wrote, and a classification holds labels a model answered: all foreign.
-const machine = ["agent", "attempt", "skills", "plan.risk", "context.plan.risk", "context.baseCommit", "context.testsCommit", "context.docsOnly", "context.unlockedTests.note", "context.browserScenarios", "context.plan.docsOnly", "context.graph", "context.chat.source", "context.jira.repoPath", "plan.fallback", "context.video.budgetS", "context.conversation.relation", "context.conversation.note", "context.foreman.now", "context.ticketChat.repo", "context.foreman.truncated", "context.foreman.packs", "context.exceptions.repo", "context.exceptions.period", "context.status.week", "context.status.from", "context.status.to", "context.status.metrics", "context.status.capacity", "context.vulns.repo", "context.vulns.today", "context.release.repo", "context.release.tag", "context.release.since", "context.compliance.repo", "context.questionnaire.repo", "context.compliance.regimes", "context.access.org", "context.access.period", "context.postmortem.breach", "context.docsDrift.repo", "context.questionnaire.source"];
+const machine = ["agent", "attempt", "skills", "plan.risk", "context.plan.risk", "context.baseCommit", "context.testsCommit", "context.docsOnly", "context.unlockedTests.note", "context.browserScenarios", "context.plan.docsOnly", "context.graph", "context.chat.source", "context.jira.repoPath", "plan.fallback", "context.video.budgetS", "context.conversation.relation", "context.conversation.note", "context.foreman.now", "context.design.refs", "context.a11y.level", "context.parityPlan", "context.ticketChat.repo", "context.foreman.truncated", "context.foreman.packs", "context.exceptions.repo", "context.exceptions.period", "context.status.week", "context.status.from", "context.status.to", "context.status.metrics", "context.status.capacity", "context.vulns.repo", "context.vulns.today", "context.release.repo", "context.release.tag", "context.release.since", "context.compliance.repo", "context.questionnaire.repo", "context.compliance.regimes", "context.access.org", "context.access.period", "context.postmortem.breach", "context.docsDrift.repo", "context.questionnaire.source"];
 const line = ["task.title", "task.branch", "task.goal", "task.classification", "context.jira.classification", "context.slack.me", "context.chat.me", "context.questionnaire.requester", "context.questionnaire.name", "context.eval.pack", "context.eval.case"];
 const block = [
   "task.description", "task.criteria", "task.record", "task.evidence", "plan.brief", "plan.criteria", "plan.criteria.ids", "plan.assumptions", "plan.slices",
-  "context.plan.map", "context.plan.shortlist", "context.plan.replan", "context.plan.coverageNotes", "context.plan.gaps", "context.plan.review", "context.plan.cases", "context.plan.council",
+  "context.plan.map", "context.plan.shortlist", "context.plan.replan", "context.plan.coverageNotes", "context.plan.gaps", "context.plan.review", "context.plan.cases", "context.plan.council", "context.plan.designSpec", "context.plan.frames", "context.parityCaptures", "context.parityUncited", "context.designSpec",
   "context.questions.list", "context.questions.card", "context.questions.answers",
   "context.sweepFailures", "context.blastRadius", "context.checks", "context.scenarioTests", "context.testsCommit.files", "context.unlockedTests", "context.coverage", "context.qaTargets", "context.video.narration", "context.video.sheets", "decisions", "priorFindings", "context.projectContext", "context.testCases", "context.ci", "context.review", "context.threads", "context.ship", "context.retro",
   "context.video.scenarios", "context.video.steps", "context.video.chapters", "context.video.target", "context.video.timeline", "context.video.report", "context.video.transcript", "context.video.fixCards",
@@ -100,6 +100,13 @@ export const CAPS: Readonly<Record<string, number>> = {
   "context.plan.gaps": 32_000,
   "context.plan.review": 32_000,
   "context.plan.council": 80_000,
+  // A design spec is at most 30 frames, 135 tokens and 60 components; a frame list is one short line each.
+  "context.plan.designSpec": 24_000,
+  "context.plan.frames": 4_000,
+  // At most 24 captures at about 300 characters a line; the uncited frames are an id and a name each; the spec is the same one the planner reads.
+  "context.parityCaptures": 12_000,
+  "context.parityUncited": 4_000,
+  "context.designSpec": 24_000,
   // At most six questions, the card (title and description) and the answers so far.
   "context.questions.list": 16_000,
   "context.questions.card": 32_000,

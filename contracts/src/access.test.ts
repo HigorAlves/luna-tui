@@ -41,4 +41,18 @@ describe("access", () => {
   it("lets the implementer move and delete files, because a change that renames or removes one has no other way to", () => {
     expect(PACKS.implementing.access.commands).toEqual(expect.arrayContaining(["git mv", "git rm", "mv", "rm"]));
   });
+
+  it("merges bridge grants by server, each tool once", () => {
+    const a = access({ bridge: [{ server: "figma", tools: ["a"] }] }, { bridge: [{ server: "figma", tools: ["b", "a"] }, { server: "mobbin", tools: ["search_screens"] }] });
+    expect(a.bridge).toEqual([{ server: "figma", tools: ["a", "b"] }, { server: "mobbin", tools: ["search_screens"] }]);
+  });
+
+  it("keeps bridge grants in readOnly: every bridged tool reads", () => {
+    const a = access({ write: true, bridge: [{ server: "figma", tools: ["a"] }] });
+    expect(readOnly(a).bridge).toEqual([{ server: "figma", tools: ["a"] }]);
+  });
+
+  it("grants no bridge by default", () => {
+    expect(NO_ACCESS.bridge).toEqual([]);
+  });
 });

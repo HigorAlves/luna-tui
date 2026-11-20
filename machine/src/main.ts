@@ -15,8 +15,10 @@ import { toEvent, toTask } from "./adapters/http/serialize.ts";
 import { machineSecrets } from "./bootstrap/machine-secrets.ts";
 import { useTruthSecrets } from "./application/ground-truth.ts";
 import { buildTelemetry, probeCollector } from "./bootstrap/telemetry.ts";
-import { buildPackRuns, buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
+import { type DesignDecisions, buildPackRuns, buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
 import { loadConfig, sandboxPolicyNotes } from "./config.ts";
+import { createMcpApi } from "./adapters/http/mcp.ts";
+import { mcpFactory } from "./bootstrap/mcp.ts";
 import { createDataSource, poolSizeFor } from "./adapters/persistence/data-source.ts";
 import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
 import { pruneOldRuns, prunePackRuns, pruneTombstones, TOMBSTONE_RETENTION_DAYS } from "./adapters/persistence/prune.ts";
@@ -36,7 +38,7 @@ import { finishedRunsOf } from "./adapters/persistence/finished-runs.ts";
 import { fileStore as economyStore } from "./adapters/economy/store.ts";
 import { OVERHEAD_PACKS } from "./domain/economy/ledger.ts";
 import { DecisionTruth, tagged } from "./application/decision-truth.ts";
-import { priorityTruth, escalationTruthWriter, evidenceFeedbackWriter, groundTruthWriter, ticketTruthWriter } from "./application/ground-truth.ts";
+import { priorityTruth, escalationTruthWriter, evidenceFeedbackWriter, groundTruthWriter, ticketTruthWriter, writeTruthFile } from "./application/ground-truth.ts";
 import { commitsSince, defaultBranchFile, gitIdentity, headCommit, originSlugOf } from "./adapters/git/worktree.ts";
 import { ConfigProofs } from "./application/config-proofs.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
@@ -91,7 +93,9 @@ import { sharedWiki } from "./adapters/git/wiki.ts";
 import { questionnaireWriters } from "./application/compliance-writers.ts";
 import { Questionnaires } from "./application/questionnaires.ts";
 import { graphifyGraph } from "./adapters/graph/graphify.ts";
-import { imageId, imageLabel, runSandbox } from "./adapters/docker/docker.ts";
+import { imageExists, imageId, imageLabel, runSandbox } from "./adapters/docker/docker.ts";
+import { repoSecrets } from "./adapters/credentials/repo-secrets.ts";
+import { homedir } from "node:os";
 import { removeRunNetwork } from "./adapters/docker/egress.ts";
 import { sweepRunSecrets } from "./adapters/docker/leftover-secrets.ts";
 import { LOCKFILES, type EnvRecord, envOf } from "./domain/env-hash.ts";
@@ -134,6 +138,7 @@ import { exec } from "./adapters/process/exec.ts";
 import { createGitHub } from "./adapters/github/octokit.ts";
 import { taskDiff } from "./adapters/git/diff.ts";
 import { noTokenGitHub } from "./application/github.ts";
+import { designPairsPublished } from "./application/design-publish.ts";
 import { realDeliverRunner } from "./application/stages/deliver.ts";
 import { currentStackFacts } from "./application/stack.ts";
 import { similarCards } from "./application/size-estimate.ts";
@@ -292,6 +297,8 @@ if (config.disabledRuntimes.length > 0) console.log(`runtimes off (MACHINE_DISAB
 const triageSignals: TriageSignalDeps = { classify: null, graph, policy: (repoPath) => policies.for(repoPath), save: (id, patch) => engineSpend.updateTask(id, patch) };
 /** The plan stage's decisions run through PackRuns, which is built below: bound once it exists. */
 const planDecisions: { decide: PlanDeps["decide"]; size: { decide: NonNullable<PlanDeps["size"]>["decide"]; similar?: NonNullable<PlanDeps["size"]>["similar"] }; split: { decompose: NonNullable<PlanDeps["split"]>["decompose"]; check: NonNullable<PlanDeps["split"]>["check"]; depthOf?: NonNullable<PlanDeps["split"]>["depthOf"]; via?: NonNullable<PlanDeps["split"]>["via"] } } = { decide: null, size: { decide: null }, split: { decompose: null, check: null } };
+/** The designer agents' budget and the person's "design off" for a card (RFC 0013): bound once the pipeline exists, read by the plan and e2e stages. */
+const designDecisions: DesignDecisions = {};
 /** Build's red and scope checks run through PackRuns too: bound once it exists. */
 const buildDecisions: { decide: Decide | null; budget?: (taskId: string) => Promise<{ spent: boolean; minutesLeft: number }> } = { decide: null };
 /** Verify's finding_classify (and e2e's failure cause) run through PackRuns as the `verify` client: bound once it exists. */
@@ -381,6 +388,7 @@ const { stubReason, real, resolveConflicts, verifyPack, checksExec, proofRig, ag
     },
     record: (taskId, links, pr) => pipeline.recordReview(taskId, links, pr),
   },
+  designDecisions,
 );
 /** The retro's facts for a task, from the machine's own records. */
 async function retroFactsFor(taskId: string) {
@@ -431,7 +439,7 @@ const realVerifyRunner = verifyRunner({
 /** Delivering and shipping need only git and gh, not a Claude credential, so they always run for real. */
 const runnerFor = buildRunnerFor({
   real,
-  realDeliverRunner: realDeliverRunner(github, { facts: stackDeps.facts, clearBase: stackDeps.clearBase }, resolveConflicts),
+  realDeliverRunner: realDeliverRunner(github, { facts: stackDeps.facts, clearBase: stackDeps.clearBase }, resolveConflicts, designPairsPublished({ github, policies, slugOf: originSlugOf })),
   realVerifyRunner,
   shipRunner: shipRunner(github),
   stubRunnerFor: (stage) => stubs.runnerFor(stage),
@@ -577,6 +585,7 @@ pipeline = new Pipeline(db, runnerFor, {
   },
   priorityTruth: (entry) => priorityTruth(config.stateDir, entry),
   truthKept: async (task) => !task.repoPath || (await policies.for(task.repoPath)).factory.learning.truth,
+  ...(config.groundTruth ? { designTruth: (_task: unknown, name: string, body: object) => writeTruthFile(config.stateDir, "design_parity", name, body) } : {}),
   ...(config.groundTruth ? { evidenceFeedback: evidenceFeedbackWriter(config.stateDir), groundTruth: groundTruthWriter(config.stateDir), escalationTruth: escalationTruthWriter(config.stateDir), commitsSince, headOf: headCommit } : {}),
   truth: decisionTruth,
   ...(shipGateProbe ? { shipGateProbe, shipProbeMs: config.shipPoll.intervalMs } : {}),
@@ -738,8 +747,16 @@ async function learningOf(taskId: string | undefined): Promise<{ repo: string | 
 }
 /** Packs on demand (`POST /runs`): the stage image, each call with its own engine's credential;
  *  off only with MACHINE_AGENTS=off. Their cost counts toward the day's ceiling, which they obey. */
+/** The QA image: the design routes' audit runs in it; without it they answer 503 and the audit's runs fail. */
+const qaImageReady = await imageExists(config.runnerQaImage);
+const mcpClients = mcpFactory(config);
 const packRuns = buildPackRuns(config, {
   policies,
+  // The design routes (RFC 0013): bridged design tools through the machine's MCP servers, and the QA image with the target's own credential.
+  mcpFor: mcpClients.mcpFor,
+  mcpUntrusted: config.mcp.untrusted,
+  ...(qaImageReady ? { qaImage: config.runnerQaImage } : {}),
+  qaSecrets: repoSecrets({ home: homedir() }),
   ...(config.egress.enabled && agentDeps?.egress ? { egress: agentDeps.egress } : {}),
   credentials,
   // A run that reads a repo (ticket_chat) gets a throwaway copy of its tracked files, never the checkout.
@@ -780,6 +797,8 @@ if (packRuns) verifyDecisions.decide = async (pack, check) => tagged(await ownCa
 if (packRuns) evidenceDecisions.decide = async (evidence) => tagged(await ownCalls(packRuns).run({ pack: "evidence_format", context: { evidence }, stage: "evidence" }, "evidence"));
 if (packRuns) shipDecisions.decide = async (pack, ship) => tagged(await ownCalls(packRuns).run({ pack, context: { ship }, stage: "ship" }, "ship"));
 buildDecisions.budget = (taskId) => pipeline.buildBudgetState(taskId);
+designDecisions.budget = (taskId) => pipeline.designBudgetState(taskId);
+designDecisions.cardOff = (taskId) => pipeline.designCardOff(taskId);
 if (packRuns)
   buildDecisions.decide = async (pack, check, repoPath) => {
     const out = await ownCalls(packRuns).run({ pack, context: { check }, stage: "build" }, "build");
@@ -1004,7 +1023,12 @@ const approveBase = async (repo: string, base: string): Promise<{ ok: true } | {
   const deps = agentDeps;
   return approveRepoBase({ knownRepos, policyOf: (r) => policies.for(r), sourceOf: (r) => deps.imageSource.for(r), approvals: deps.approvals, approved: (r) => deps.repoImages.approved(r) }, repo, base);
 };
+/** The MCP servers (RFC 0013): tokens in the state dir, the OAuth redirect at the board's address (`MACHINE_PUBLIC_URL`, else this machine's own port). */
+const { store: mcpStore, redirect: mcpRedirect, mcpFor } = mcpClients;
 const app = createApp({
+  policies,
+  qaImage: qaImageReady,
+  mcp: createMcpApi({ mcp: mcpFor(), store: mcpStore, redirectUrl: mcpRedirect }),
   knownRepos,
   // The ticket chat's planner reads only the repo map and the remembered repos: a task's repoPath is a client's word.
   chatRepos: () => repoMap.checkouts(),

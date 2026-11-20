@@ -4,23 +4,78 @@ import { readFile, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import { branchBase, diffNameStatus, headCommit } from "../../adapters/git/worktree.ts";
-import type { DecisionOverrides } from "@hardness/contracts";
+import { A11yAuditAnswer, type CapturePlan, type DecisionOverrides, type Finding, type VerifyDesignReport, mergeDuplicateFindings, severityOf } from "@hardness/contracts";
 
 import type { Policy } from "../../domain/policy.ts";
 import { trustOf } from "../../domain/trust.ts";
+import { a11yFindings } from "../../domain/a11y-findings.ts";
+import type { DesignBudget } from "../../domain/design-budget.ts";
+import { designSteps } from "../../domain/verify-order.ts";
 import { type ManifestRow, boundedArtifacts, manifestRows } from "../../domain/e2e-manifest.ts";
-import { approvedScenarios } from "../../domain/stage-input.ts";
+import { blockerSetKey } from "../../domain/finding-sets.ts";
+import { type Unplaced } from "../../domain/design-parity.ts";
+import { capturePlan, citedWithoutViewport } from "../../domain/parity-plan.ts";
+import { approvedScenarios, designSpecOf } from "../../domain/stage-input.ts";
 import { type ScenarioRow, scenarioFindings } from "../../domain/send-back.ts";
 import { type OpenAppInput, type OpenAppResult, type OpenPreviewResult, e2eModeOf } from "../app-session.ts";
 import { blockedPayloads } from "../egress-policy.ts";
+import { type Collected, collectCaptures } from "../parity-captures.ts";
 import type { AgentExtra } from "./pack-runner.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { type TruthSink, e2eCauseTruth } from "../decision-truth.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
+import { classifyFindings } from "./classify-findings.ts";
+import type { DesignParityOutcome } from "./design-parity.ts";
+import { designBudgetEscalation, designRun } from "./design-run.ts";
+import { addUsage } from "./usage.ts";
+import { verdictOf } from "./verify.ts";
+
+type BrowserExtra = Pick<AgentExtra, "qaTarget" | "alsoJoin" | "noProxy" | "redactValues">;
+
+/** What the browser run captured for the frames its scenarios cite: the plan it followed, what the machine took in, and the folder it keeps them in. */
+export type ParityRun = { plan: CapturePlan; dir: string } & Collected;
+
+/** What a step after a passing browser run is handed: the run's own context, the extra the browser run had (so the same target, network and redaction), and how the browser run ended. */
+export interface AfterBrowserInput {
+  context: StageContext;
+  extra: BrowserExtra | undefined;
+  browserRun: "pass" | "skipped";
+  /** The captures the browser run took (RFC 0013, phase 3); null when none were planned. */
+  parity?: ParityRun | null;
+  /** What the steps before this one left, in order (the parity step reads the accessibility audit's findings). */
+  previous?: AfterBrowserOutput[];
+}
+
+/** What such a step leaves: its detail under `key`, findings for Build, whether they block, its usage, or an escalation that ends the stage. A step that has nothing to say returns null. */
+export interface AfterBrowserOutput {
+  key: string;
+  detail?: unknown;
+  findings?: Finding[];
+  blocking?: boolean;
+  usage?: StageResult["usage"];
+  escalate?: StageResult;
+  /** More detail keys the step leaves beside its own (the parity step's `design` report). */
+  also?: Record<string, unknown>;
+}
+
+/** One step run after the browser run while its app or preview is still open (RFC 0013: the accessibility audit; phase 3 adds design parity). Its failure never changes the browser run's verdict. */
+export type AfterBrowserStep = (input: AfterBrowserInput) => Promise<AfterBrowserOutput | null>;
 
 export interface E2eDeps {
   /** Runs the e2e pack; `extra` names the one target the machine chose (the app it started), the network to join and the names to reach directly. */
-  runPack: (context: StageContext, extra?: Pick<AgentExtra, "qaTarget" | "alsoJoin" | "noProxy" | "redactValues">) => Promise<StageResult>;
+  runPack: (context: StageContext, extra?: BrowserExtra & Partial<Pick<AgentExtra, "a11yLevel" | "parityPlan">>, pack?: "e2e" | "a11y_audit") => Promise<StageResult>;
+  /** The designer agents (RFC 0013): the repo's settings, whether a person turned design off for the card, and the design budget. Absent, no audit runs. */
+  design?: {
+    settings: (repoPath: string | null, taskId: string) => Promise<{ off: boolean; cardOff: boolean; level: "AA" | "AAA"; mode: "gate" | "advisory" }>;
+    budget?: (taskId: string) => Promise<DesignBudget>;
+  };
+  /**
+   * The design parity review (RFC 0013, phase 3), run after the audit when the browser run took captures: the captures the plan asked for and the cited frames with
+   * no viewport. Null when it has nothing to review; an `escalate` ends the stage (the budget is spent). Absent, no review runs.
+   */
+  designParity?: (context: StageContext, parity: ParityRun, unplaced: Unplaced[]) => Promise<DesignParityOutcome | { escalate: StageResult } | null>;
+  /** Further steps after the accessibility audit, in order, in the same open app session. */
+  afterBrowser?: AfterBrowserStep[];
   /** Starts and seeds the repository's app (`verify.e2e.start`); absent, the browser run boots its own server as before. */
   openApp?: (input: OpenAppInput) => Promise<OpenAppResult>;
   /** Waits for the preview the repository's `url_pattern` names (`verify.e2e.deploy`), deploying first when it has a command. */
@@ -42,6 +97,19 @@ export interface E2eDeps {
   truth?: TruthSink | null;
   /** The machine's state dir: a re-run starts from an empty `runs/<runId>/out`, so the first attempt's packet never reaches Evidence. */
   stateDir?: string;
+}
+
+const RANK: Record<"blocker" | "should_fix" | "nit", number> = { blocker: 0, should_fix: 1, nit: 2 };
+/** The design report keeps this many findings. */
+const DESIGN_FINDINGS_MAX = 40;
+const EXCERPT_CAP = 2000;
+
+/** What finding_classify is shown of a design finding: where it is in the frame and the build, and what differs. */
+function designExcerpt(f: Finding): string {
+  const d = f.design;
+  if (!d) return "";
+  const text = d.source === "parity" ? `frame ${d.frame ?? ""} node ${d.node ?? ""}\nelement: ${d.element}\nexpected: ${d.expected ?? ""}\nbuilt: ${d.actual ?? ""}` : `element: ${d.element}\n${f.body}`;
+  return text.slice(0, EXCERPT_CAP);
 }
 
 /** How many failed scenarios the cause decision is asked about. */
@@ -204,10 +272,113 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
     };
     /** One browser run: in `start` mode a fresh app first (each attempt, the re-run too), that one target on its network, and the app closed after, whatever happens. */
     let runs = 0;
-    type Attempted = { done: StageResult } | { pack: StageResult; preview: { kind: string; url: string } | null; note: string | null };
+    type Attempted = { done: StageResult } | { settled: StageResult; after: AfterBrowserOutput[] };
+    /** The accessibility audit (RFC 0013): on the same target, at the repo's level, with the design budget read before and after. Its failure never changes the browser run's verdict. */
+    const e2eConfig = repoPolicy?.factory?.verify.e2e;
+    const e2eMode = repoPolicy && e2eConfig ? e2eModeOf({ qaTargets: repoPolicy.qaTargets ?? [], factory: { verify: { e2e: e2eConfig } } as never }) : "agent";
+    // Parity (RFC 0013, phase 3): with an approved spec and design on, the browser run is asked for the frames its scenarios cite. Like the audit, it needs an app URL.
+    const parityDesign = deps.design && qaDir ? await deps.design.settings(context.task.repoPath ?? null, context.task.id) : null;
+    const spec = parityDesign && !parityDesign.off && !parityDesign.cardOff ? designSpecOf(context.approvals) : null;
+    const parityPlan = spec && e2eMode !== "agent" ? capturePlan(approved, spec) : null;
+    const parityDir = deps.stateDir ? join(deps.stateDir, "runs", context.runId, "parity") : null;
+    /** The extra the browser run is given: the plan rides along only when there is one, so a run without a design reference is called as it always was. */
+    const planned = (extra: BrowserExtra): BrowserExtra & { parityPlan?: CapturePlan } => (parityPlan ? { ...extra, parityPlan } : extra);
+    /** A re-run starts from nothing: what the first attempt left in the run's folders is not its packet. */
+    const clearRun = async () => {
+      if (!deps.stateDir) return;
+      await rm(join(deps.stateDir, "runs", context.runId, "out"), { recursive: true, force: true });
+      if (parityDir) await rm(parityDir, { recursive: true, force: true });
+      if (qaDir) await rm(join(qaDir, "parity"), { recursive: true, force: true });
+    };
+    const auditStep: AfterBrowserStep = async ({ extra, browserRun }) => {
+      const settings = deps.design ? await deps.design.settings(context.task.repoPath ?? null, context.task.id) : null;
+      if (!settings) return null;
+      const steps = designSteps({ off: settings.off, cardOff: settings.cardOff, qa: repoPolicy?.qa ?? "web", touchesRendered: true, hasDesignRef: false, browserRun });
+      if (!steps.includes("a11y_audit")) return null;
+      // Agent mode (no `verify.e2e.start`, no deploy): the browser run boots its own server, so there is no app URL to audit.
+      if (e2eMode === "agent") return { key: "a11y", detail: { skipped: "no app URL in agent mode" } };
+      const { result, spentAfter } = await designRun(
+        { ...(deps.design?.budget ? { budget: deps.design.budget } : {}) },
+        context,
+        "a11y_audit",
+        () => deps.runPack({ ...context, runId: `${context.runId}-a11y`, started: undefined, resume: undefined, engine: undefined } as StageContext, { ...extra, a11yLevel: settings.level }, "a11y_audit"),
+      );
+      if (result.outcome === "escalated" && result.detail?.escalation === "design_budget") return { key: "a11y", escalate: { ...result, detail: { ...result.detail, step: "e2e" } } };
+      const parsed = A11yAuditAnswer.safeParse(result.detail?.answer);
+      if (result.outcome !== "pass" || !parsed.success) {
+        const why = result.outcome !== "pass" ? String(result.detail?.reason ?? result.detail?.error ?? result.outcome) : "its answer did not parse";
+        return { key: "a11y", detail: { level: settings.level, mode: settings.mode, findings: [], pages: [], notes: [`the accessibility audit did not run: ${why}`] }, usage: result.usage };
+      }
+      const mapped = a11yFindings(parsed.data.findings, settings);
+      // Two rules or two states on one criterion, selector and page are one problem for Build: they merge, at the higher severity.
+      const findings = mergeDuplicateFindings(mapped.findings);
+      const blocking = verdictOf(findings) === "fail";
+      // Build's own rule: blockers with the budget spent after the run go to a person, not back to Build.
+      if (blocking && spentAfter && deps.design?.budget) return { key: "a11y", escalate: { ...designBudgetEscalation(await deps.design.budget(context.task.id)), usage: result.usage } };
+      return { key: "a11y", detail: { level: settings.level, mode: settings.mode, findings, pages: parsed.data.pages, notes: mapped.notes }, findings, blocking, usage: result.usage };
+    };
+    /** The design parity review after the audit: its findings are classified with the audit's and joined in the design report; confident blockers fail the run. */
+    const parityStep: AfterBrowserStep = async ({ parity, previous }) => {
+      if (!parity || !deps.designParity) return null;
+      const out = await deps.designParity(context, parity, citedWithoutViewport(approved, spec));
+      if (!out) return null;
+      if ("escalate" in out) return { key: "parity", escalate: out.escalate };
+      const audit = (previous ?? []).find((o) => o.key === "a11y")?.detail as { level?: "A" | "AA" | "AAA"; mode?: "gate" | "advisory"; findings?: Finding[] } | undefined;
+      const auditFindings = Array.isArray(audit?.findings) ? audit.findings : [];
+      const merged = mergeDuplicateFindings([...out.findings, ...auditFindings])
+        .map((f, i) => ({ f, i }))
+        .sort((a, b) => RANK[severityOf(a.f.severity)] - RANK[severityOf(b.f.severity)] || a.i - b.i)
+        .map(({ f }) => f)
+        .slice(0, DESIGN_FINDINGS_MAX);
+      const repoPath = context.task.repoPath ?? null;
+      const { classified } = await classifyFindings({ decide: deps.decide ?? null, repoPath, decisions: (await deps.overrides?.(repoPath)) ?? {}, excerpt: async (f) => designExcerpt(f) }, merged);
+      const counts = { blocker: 0, should_fix: 0, nit: 0, waived: 0 };
+      for (const f of auditFindings) counts[severityOf(f.severity)]++;
+      const design: VerifyDesignReport = {
+        wcag: audit?.level ?? null,
+        a11y: audit?.mode ? { mode: audit.mode, counts } : null,
+        parity: out.report,
+        findings: merged,
+        ...(classified.length > 0 ? { classified: classified.map(({ id, recordId }) => ({ id, ...(recordId ? { recordId } : {}) })) } : {}),
+        gate: out.gate,
+      };
+      const blocking = blockerSetKey(out.findings) !== null;
+      // Build's own rule, as for the audit: blockers with the budget spent after the run go to a person, not back to Build.
+      if (blocking && out.spentAfter && deps.design?.budget) return { key: "parity", escalate: { ...designBudgetEscalation(await deps.design.budget(context.task.id)), usage: out.usage } };
+      return {
+        key: "parity",
+        // The browser run's own detail.parity (the plan, the captures, what is missing) stays; the review's settle joins it.
+        detail: { ...parity, ...out.report, notes: [...parity.notes, ...out.notes] },
+        also: { design },
+        findings: out.findings,
+        blocking,
+        usage: out.usage,
+      };
+    };
+    const afterSteps: AfterBrowserStep[] = [auditStep, parityStep, ...(deps.afterBrowser ?? [])];
+    /** Settles the browser run, then, only when it passed, runs the steps after it (in order, stopping at an escalation) before the caller closes the app. */
+    const finish = async (pack: StageResult, preview: { kind: string; url: string } | null, note: string | null, extra: BrowserExtra | undefined): Promise<Attempted> => {
+      const settled = await judged(settle([pack, preview, note]));
+      const verdict = (settled.detail as { verdict?: string; skipped?: boolean } | undefined);
+      const after: AfterBrowserOutput[] = [];
+      if (settled.outcome === "pass") {
+        const browserRun = verdict?.skipped === true ? "skipped" : "pass";
+        let parity: ParityRun | null = null;
+        if (parityPlan && qaDir && parityDir) {
+          parity = { plan: parityPlan, ...(await collectCaptures(qaDir, parityPlan, parityDir)), dir: parityDir };
+          settled.detail = { ...settled.detail, parity };
+        } else if (spec && e2eMode === "agent") settled.detail = { ...settled.detail, parity: { skipped: "no app URL in agent mode" } };
+        for (const step of afterSteps) {
+          const out = await step({ context, extra, browserRun, parity, previous: after });
+          if (!out) continue;
+          after.push(out);
+          if (out.escalate) break;
+        }
+      }
+      return { settled, after };
+    };
     const attempt = async (): Promise<Attempted> => {
-      const e2e = repoPolicy?.factory?.verify.e2e;
-      const mode = repoPolicy && e2e ? e2eModeOf({ qaTargets: repoPolicy.qaTargets ?? [], factory: { verify: { e2e } } as never }) : "agent";
+      const mode = e2eMode;
       const repoPath = context.task.repoPath ?? null;
       if (mode === "deploy" && deps.openPreview && repoPath) {
         const preview = await deps.openPreview({
@@ -223,8 +394,9 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
         });
         if (!preview.ok) return { done: { outcome: "escalated", detail: preview.detail } };
         try {
-          const pack = await deps.runPack(context, { qaTarget: { ...preview.target, credential: null }, redactValues: preview.redactValues });
-          return { pack, preview: { kind: "deploy", url: preview.target.baseUrl }, note: null };
+          const extra = { qaTarget: { ...preview.target, credential: null }, redactValues: preview.redactValues };
+          const pack = await deps.runPack(context, planned(extra));
+          return await finish(pack, { kind: "deploy", url: preview.target.baseUrl }, null, extra);
         } finally {
           await preview.close();
         }
@@ -242,24 +414,40 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
         });
         if (!opened.ok) return { done: { outcome: "escalated", detail: opened.detail } };
         try {
-          const pack = await deps.runPack(context, { qaTarget: { ...opened.target, credential: null }, alsoJoin: [opened.network], noProxy: opened.aliases, redactValues: opened.redactValues });
-          return { pack, preview: { kind: "start", url: opened.target.baseUrl }, note: null };
+          const extra = { qaTarget: { ...opened.target, credential: null }, alsoJoin: [opened.network], noProxy: opened.aliases, redactValues: opened.redactValues };
+          const pack = await deps.runPack(context, planned(extra));
+          return await finish(pack, { kind: "start", url: opened.target.baseUrl }, null, extra);
         } finally {
           await opened.close();
         }
       }
-      const pack = await deps.runPack(context);
+      const pack = await (parityPlan ? deps.runPack(context, planned({})) : deps.runPack(context));
       if (mode === "target") {
         const targets = repoPolicy?.qaTargets ?? [];
         const named = typeof (pack.detail?.answer as { target?: unknown } | undefined)?.target === "string" ? targets.find((t) => t.name === (pack.detail!.answer as { target: string }).target) : undefined;
         const chosen = named ?? targets[0];
-        return { pack, preview: chosen ? { kind: "target", url: chosen.baseUrl } : null, note: null };
+        return finish(pack, chosen ? { kind: "target", url: chosen.baseUrl } : null, null, undefined);
       }
-      return { pack, preview: null, note: mode === "agent" ? "verify.e2e.start is not set: the agent booted its own dev server" : null };
+      return finish(pack, null, mode === "agent" ? "verify.e2e.start is not set: the agent booted its own dev server" : null, undefined);
     };
+    /** Results a step after the browser run failed: their findings are final and are not judged for a cause. */
+    const fromSteps = new WeakSet<StageResult>();
     const run = async (): Promise<StageResult> => {
       const a = await attempt();
-      return "done" in a ? a.done : judged(settle([a.pack, a.preview, a.note]));
+      if ("done" in a) return a.done;
+      let result = a.settled;
+      for (const out of a.after) {
+        if (out.escalate) return { ...out.escalate, usage: addUsage(result.usage, out.escalate.usage), detail: { ...out.escalate.detail, step: "e2e" } };
+        result = { ...result, usage: addUsage(result.usage, out.usage), detail: { ...result.detail, ...(out.also ?? {}), [out.key]: out.detail } };
+      }
+      const blocking = a.after.filter((out) => out.blocking);
+      if (blocking.length === 0) return result;
+      // Findings the steps built: they go to Build as they are (a scenario failure's findings are built later, from the manifest).
+      // A design blocker is its own failure: Build is sent back with the same-set rounds of Verify (`step: "design"`); the audit's alone stays an e2e failure.
+      const step = blocking.some((out) => out.key === "parity") ? { step: "design" } : {};
+      const failed: StageResult = { ...result, outcome: "fail", detail: { ...result.detail, ...step, verdict: blocking[0]!.key }, findings: blocking.flatMap((out) => out.findings ?? []).filter((f) => severityOf(f.severity) !== "nit") };
+      fromSteps.add(failed);
+      return failed;
     };
     /** Why a browser run failed, from the decision pack asked once per failed scenario (five at most): an `env_flake` only when every one is, a product bug when any is, else a test bug. */
     let causeRecord: string | undefined;
@@ -297,17 +485,17 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
     };
 
     let result = await run();
-    if (result.outcome !== "fail") return result;
+    if (result.outcome !== "fail" || fromSteps.has(result)) return result;
     const judgedCause = await causeOf(result);
     if (judgedCause === null) return withFindings(result, null);
     const cause = judgedCause.overall;
     if (cause !== "env_flake" || flakeRetries === 0) return withFindings({ ...result, detail: { ...result.detail, cause } }, judgedCause.per);
     // An environment flake: the scenario was never really tried, so once more before a person is asked.
     // The re-run writes into the same run folder: what the first attempt left there must not be read as its packet.
-    if (deps.stateDir) await rm(join(deps.stateDir, "runs", context.runId, "out"), { recursive: true, force: true });
+    await clearRun();
     result = await run();
     for (let more = 1; more < flakeRetries && result.outcome === "fail"; more++) {
-      if (deps.stateDir) await rm(join(deps.stateDir, "runs", context.runId, "out"), { recursive: true, force: true });
+      await clearRun();
       result = await run();
     }
     // The re-run is the fact: a pass says it was the environment, a second failure says it was not.

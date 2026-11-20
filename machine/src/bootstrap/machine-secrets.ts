@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { resolvedRefSecrets, storedMcpSecrets } from "../adapters/mcp/tokens.ts";
 import type { Config } from "../config.ts";
 
 const ENV_KEYS = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "TYPESAFE_API_KEY", "AI_GATEWAY_API_KEY"] as const;
@@ -14,7 +15,7 @@ const CLAUDE_FILES = [["CLAUDE_OAUTH_TOKEN_FILE", "claude-oauth-token"], ["ANTHR
 /** A value shorter than this is not a secret worth hunting for: redacting it would mangle ordinary text. */
 const MIN_LENGTH = 8;
 
-type Source = Pick<Config, "githubToken" | "apiToken" | "slack" | "jira" | "traces"> & Partial<Pick<Config, "slackInbox" | "databaseUrl">>;
+type Source = Pick<Config, "githubToken" | "apiToken" | "slack" | "jira" | "traces"> & Partial<Pick<Config, "slackInbox" | "databaseUrl" | "stateDir">>;
 
 const readText = (path: string): string | null => {
   try {
@@ -65,6 +66,8 @@ export function machineSecrets(config: Source, env: NodeJS.ProcessEnv, home: str
     ...Object.fromEntries(ENV_KEYS.map((key) => [key, env[key]])),
     ...Object.fromEntries(CLAUDE_FILES.map(([name, file]) => [name, readText(join(home, ".config", "hardness", file))])),
     ...codexTokens(home, env),
+    ...(config.stateDir ? storedMcpSecrets(config.stateDir) : {}),
+    ...resolvedRefSecrets(),
   };
   return Object.fromEntries(Object.entries(found).filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length >= MIN_LENGTH));
 }

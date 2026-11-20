@@ -1,12 +1,23 @@
 // The luna tools as plain handlers, the way a runtime without an in-process MCP server serves
 // them (eve over a loopback call): same state, same ledger file, same answers as the Claude server.
 import type { RunEvent } from "@hardness/contracts";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { LUNA_TOOLS, lunaHandlers } from "./luna-tools.ts";
+
+const FIGMA = { server: "figma", tool: "get_screenshot", name: "figma_get_screenshot", description: "d", inputSchema: { type: "object", properties: { nodeId: { type: "string" } } } };
+
+async function waitForFile(dir: string, pattern: RegExp): Promise<{ path: string; match: RegExpExecArray }> {
+  for (let i = 0; i < 100; i++) {
+    const name = existsSync(dir) ? readdirSync(dir).find((f) => pattern.test(f)) : undefined;
+    if (name) return { path: join(dir, name), match: pattern.exec(name)! };
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error(`no file matching ${pattern}`);
+}
 
 describe("lunaHandlers", () => {
   it("validates the input, keeps the state and persists the ledger", async () => {
@@ -123,5 +134,46 @@ describe("the build checks", () => {
     expect(await setup(0).luna.call("card_search", { query: "x" })).toMatchObject({ verdict: "skipped" });
     expect(await luna.call("card_search", { query: "x".repeat(301) })).toMatchObject({ error: expect.stringContaining("query") });
     expect(await luna.call("card_search", {})).toMatchObject({ error: expect.stringContaining("query") });
+  });
+});
+
+describe("bridged tools", () => {
+  const setup = (over = {}) => {
+    const dir = mkdtempSync(join(tmpdir(), "luna-bridge-"));
+    const events: RunEvent[] = [];
+    const checksDir = join(dir, "checks");
+    mkdirSync(checksDir);
+    return { checksDir, events, luna: lunaHandlers({ ledgerPath: join(dir, "ledger.json"), decisions: [], emit: (e) => events.push(e), checksDir, checkWaitMs: 2000, bridge: [FIGMA], ...over }) };
+  };
+
+  it("sends a bridged call through the mailbox and returns the machine's answer", async () => {
+    const { checksDir, luna, events } = setup();
+    const pending = luna.call("figma_get_screenshot", { nodeId: "1:2" });
+    const request = await waitForFile(checksDir, /^mcp-request-(\w+)-1\.json$/);
+    expect(JSON.parse(readFileSync(request.path, "utf8"))).toEqual({ n: 1, server: "figma", tool: "get_screenshot", args: { nodeId: "1:2" } });
+    writeFileSync(join(checksDir, `mcp-answer-${request.match[1]}-1.json`), JSON.stringify({ ok: true, text: "<data>frame</data>", images: ["/design/1-0.png"] }));
+    expect(await pending).toEqual({ ok: true, text: "<data>frame</data>", images: ["/design/1-0.png"] });
+    expect(events).toContainEqual({ kind: "note", payload: { phase: "design.mcp_call", server: "figma", tool: "get_screenshot", n: 1 } });
+  });
+
+  it("numbers the calls of a run in order", async () => {
+    const { checksDir, luna } = setup();
+    const first = luna.call("figma_get_screenshot", {});
+    const r1 = await waitForFile(checksDir, /^mcp-request-(\w+)-1\.json$/);
+    writeFileSync(join(checksDir, `mcp-answer-${r1.match[1]}-1.json`), JSON.stringify({ ok: true, text: "a" }));
+    await first;
+    const second = luna.call("figma_get_screenshot", {});
+    const r2 = await waitForFile(checksDir, /^mcp-request-\w+-2\.json$/);
+    expect(JSON.parse(readFileSync(r2.path, "utf8")).n).toBe(2);
+    writeFileSync(join(checksDir, `mcp-answer-${r1.match[1]}-2.json`), JSON.stringify({ ok: true, text: "b" }));
+    expect(await second).toMatchObject({ text: "b" });
+  });
+
+  it("refuses a bridged name the stage was not given", async () => {
+    expect(await setup({ bridge: [] }).luna.call("figma_get_screenshot", {})).toEqual({ error: "no luna tool figma_get_screenshot" });
+  });
+
+  it("is skipped with no checks folder", async () => {
+    expect(await setup({ checksDir: undefined }).luna.call("figma_get_screenshot", {})).toEqual({ skipped: true });
   });
 });

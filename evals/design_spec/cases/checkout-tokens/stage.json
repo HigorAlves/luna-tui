@@ -1,0 +1,44 @@
+{
+  "schema": 3,
+  "stage": "design_spec",
+  "pack": "design_spec",
+  "attempt": 1,
+  "task": {
+    "id": "eval-checkout-tokens",
+    "title": "Restyle the checkout page to the new design",
+    "description": "Checkout follows the new Figma frame. Use the design's colours, spacing and the existing PayButton.",
+    "criteria": [
+      "The checkout page matches the Figma frame",
+      "The pay button is the existing PayButton component"
+    ],
+    "repoPath": "fixtures/golden-web",
+    "branch": "task/eval-checkout-tokens",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "bridge": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "design": {
+      "refs": [
+        {
+          "fileKey": "Qx7LmP2vR9sTa",
+          "nodeIds": [
+            "12:34"
+          ],
+          "page": null,
+          "from": "issue"
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

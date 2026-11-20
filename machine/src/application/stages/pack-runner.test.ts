@@ -4,6 +4,10 @@ import { existsSync, mkdirSync, readFileSync, mkdtempSync, realpathSync, renameS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+
 import { FACTORY_DEFAULTS, PACKS, StageInput, type StageOutput } from "@hardness/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -22,6 +26,8 @@ import { noEconomy } from "../economy.ts";
 import { type AgentDeps, agentRunners, runAgent } from "./pack-runner.ts";
 import type { StageContext } from "../ports.ts";
 import type { Graph, GraphStamp } from "../graph.ts";
+import { noTokenMcp, type Mcp } from "../mcp.ts";
+import { createMcp } from "../../adapters/mcp/client.ts";
 import { engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "../engine-gates.ts";
 
 /** What the agent does in its own repository, in the folder's own .git (the one the machine made for it). */
@@ -1253,6 +1259,14 @@ describe("the engine a stage runs on", () => {
     expect(result.events?.find((e) => e.kind === "engine")?.payload).toMatchObject({ engine: "claude:opus", reason: expect.stringMatching(/^codex:sol has no credential/) });
   });
 
+  it("refuses a handed engine that cannot read images for a pack that needs them, before any container starts (RFC 0013)", async () => {
+    seen = undefined;
+    const { credentials, log } = recordingCredentials();
+    await expect(runAgent({ ...deps(fakeSandbox(output())), credentials }, { ...context("e2e"), engine: "openai:sol" }, "design_parity")).rejects.toThrow("openai:sol cannot read images, which design_parity needs: refused before the container started");
+    expect(seen).toBeUndefined();
+    expect(log).toEqual([]);
+  });
+
   it("runs the default and says so on the task when the engine asked for is on a runtime MACHINE_DISABLE_RUNTIMES turned off", async () => {
     const { credentials: inner, log } = recordingCredentials();
     const credentials = gatedCredentials(inner, [runtimeKillSwitch(["eve"])]);
@@ -1772,6 +1786,32 @@ describe("the browser run's one target", () => {
     expect(JSON.stringify(seen?.input)).not.toContain("OTHER_PW");
   });
 
+  it.each(["e2e", "a11y_audit"] as const)("%s runs in the QA image, on the one target given: its host on the list, its credential loaded and passed, and no other target in the input", async (pack) => {
+    two();
+    const s = store();
+    const requests: Array<{ targets?: string[] }> = [];
+    const d: AgentDeps = { ...deps(fakeSandbox(output())), secrets: s, egress: { for: async (r) => (requests.push(r as never), { allow: [], allowPrivate: [], proxyImage: "img" }) } };
+    await runAgent(d, context("e2e"), pack, { qaTarget: { name: "prod-like", baseUrl: "https://other.example.com", credential: "env:OTHER_PW" } });
+    expect(seen?.image).toBe("qa-img");
+    expect(requests[0]!.targets).toEqual(["other.example.com:443"]);
+    expect(s.loads).toEqual([["OTHER_PW"]]);
+    expect(seen?.secrets).toEqual({ OTHER_PW: `${secret}-OTHER_PW` });
+    expect((seen?.input as { context: { qaTargets: Array<{ name: string }> } }).context.qaTargets.map((t) => t.name)).toEqual(["prod-like"]);
+  });
+
+  it("gives a11y_audit the repo's first target when none is named, as the browser run has it", async () => {
+    two();
+    const s = store();
+    await runAgent({ ...deps(fakeSandbox(output())), secrets: s }, context("e2e"), "a11y_audit");
+    expect(s.loads).toEqual([["STAGING_PW"]]);
+    expect((seen?.input as { context: { qaTargets: Array<{ name: string }> } }).context.qaTargets.map((t) => t.name)).toEqual(["staging"]);
+  });
+
+  it("keeps every other pack out of the QA image: a decision-free stage pack still runs in the stage image", async () => {
+    await runAgent(deps(fakeSandbox(output())), context("verifying"), "verifying");
+    expect(seen?.image).not.toBe("qa-img");
+  });
+
   it("is the app the machine started when it is given one: no credential, the app's network joined, and the aliases kept off the proxy", async () => {
     two();
     const s = store();
@@ -1837,5 +1877,132 @@ describe("a value kept only for redaction, and the failure paths", () => {
       extra,
     );
     expect(JSON.stringify(result)).not.toContain(secret);
+  });
+});
+
+describe("the MCP bridge in a stage (RFC 0013)", () => {
+  const declared = { name: "fixture", transport: "http" as const, url: "https://fixture.invalid/mcp", credential: { kind: "none" as const }, tools: ["echo", "shot", "boom"] };
+  const grant = (tools: string[]) => [{ server: "fixture", tools }];
+  const withBridge = <T>(bridge: ReturnType<typeof grant>, run: () => Promise<T>): Promise<T> => {
+    const access = PACKS.triage.access as { bridge: ReturnType<typeof grant> };
+    const before = access.bridge;
+    access.bridge = bridge;
+    return run().finally(() => {
+      access.bridge = before;
+    });
+  };
+  async function fixtureMcp(): Promise<{ mcp: Mcp; closed: () => number }> {
+    const server = new McpServer({ name: "fixture", version: "1.0.0" });
+    server.registerTool("echo", { description: "Echo", inputSchema: { word: z.string() } }, async ({ word }) => ({ content: [{ type: "text", text: word }] }));
+    server.registerTool("shot", { description: "An image" }, async () => ({ content: [{ type: "image", data: Buffer.from("png").toString("base64"), mimeType: "image/png" }] }));
+    server.registerTool("boom", { description: "Fails" }, async () => ({ isError: true, content: [{ type: "text", text: "nope" }] }));
+    const [client, serverSide] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverSide);
+    const inner = createMcp([declared], { transportFor: () => client, token: async () => null });
+    let closes = 0;
+    return { mcp: { ...inner, servers: () => inner.servers(), listTools: (s) => inner.listTools(s), callTool: (s, t, a) => inner.callTool(s, t, a), close: async () => void (closes += 1) }, closed: () => closes };
+  }
+  /** A container that makes the calls the test asks for through the mailbox, reads each answer, and then finishes. */
+  const caller = (calls: Array<{ tool: string; args?: unknown; server?: string }>, answers: unknown[]) => async (run: SandboxRun): Promise<SandboxResult> => {
+    run.onStarted?.("c1");
+    const checks = join(run.runDir, "out", "checks");
+    mkdirSync(checks, { recursive: true });
+    let n = 0;
+    for (const call of calls) {
+      n += 1;
+      writeFileSync(join(checks, `mcp-request-a1b2c3d4-${n}.json`), JSON.stringify({ n, server: call.server ?? "fixture", tool: call.tool, args: call.args ?? {} }));
+      const file = join(checks, `mcp-answer-a1b2c3d4-${n}.json`);
+      for (let i = 0; i < 400 && !existsSync(file); i++) await new Promise((r) => setTimeout(r, 10));
+      answers.push(JSON.parse(readFileSync(file, "utf8")));
+    }
+    seen = run;
+    return fakeSandbox(output())(run);
+  };
+  const mcpDeps = (sandbox: (run: SandboxRun) => Promise<SandboxResult>, mcp: Mcp, emitted: Array<[string, Record<string, unknown>]> = []) => ({
+    deps: { ...deps(sandbox), mcpFor: () => mcp, watchEvery: 5 } as AgentDeps,
+    ctx: { ...context("triage"), emit: async (kind: string, payload: Record<string, unknown>) => void emitted.push([kind, payload]) } as StageContext,
+  });
+
+  it("fills StageInput.bridge from the grants, mounts /design read-only, and answers a call with the result as data", async () => {
+    const { mcp, closed } = await fixtureMcp();
+    const answers: unknown[] = [];
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    const { deps: d, ctx } = mcpDeps(caller([{ tool: "echo", args: { word: "hi" } }], answers), mcp, emitted);
+    await withBridge(grant(["echo"]), () => runAgent(d, ctx, "triage"));
+    const input = seen?.input as { bridge: Array<{ server: string; tool: string; name: string }> };
+    expect(input.bridge.map((b) => [b.server, b.tool, b.name])).toEqual([["fixture", "echo", "fixture_echo"]]);
+    expect(extraMounts(seen!)).toContainEqual({ host: join(seen!.runDir, "design"), container: "/design", readOnly: true });
+    expect(answers).toEqual([{ ok: true, text: '<data source="fixture.echo">hi</data>', images: [], truncated: false }]);
+    const row = emitted.find(([kind]) => kind === "design.mcp_call")![1];
+    expect(row).toMatchObject({ server: "fixture", tool: "echo", n: 1, outcome: "ok", bytes: 2 });
+    expect(row.argsSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(closed()).toBe(1);
+  });
+
+  it("writes an image under <runDir>/design and names it by its /design path", async () => {
+    const { mcp } = await fixtureMcp();
+    const answers: unknown[] = [];
+    const { deps: d, ctx } = mcpDeps(caller([{ tool: "shot" }], answers), mcp);
+    await withBridge(grant(["shot"]), () => runAgent(d, ctx, "triage"));
+    expect(answers).toEqual([{ ok: true, text: '<data source="fixture.shot"></data>', images: ["/design/a1b2c3d4-1-0.png"], truncated: false }]);
+    expect(readFileSync(join(seen!.runDir, "design", "a1b2c3d4-1-0.png"), "utf8")).toBe("png");
+  });
+
+  it("refuses a tool the run was not given, whatever the request says, and logs it", async () => {
+    const { mcp } = await fixtureMcp();
+    const answers: unknown[] = [];
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    const { deps: d, ctx } = mcpDeps(caller([{ tool: "boom" }, { tool: "echo", server: "other" }], answers), mcp, emitted);
+    await withBridge(grant(["echo"]), () => runAgent(d, ctx, "triage"));
+    expect(answers).toEqual([{ ok: false, error: "fixture.boom is not available in this run" }, { ok: false, error: "other.echo is not available in this run" }]);
+    expect(emitted.map(([, p]) => p.outcome)).toEqual(["refused", "refused"]);
+  });
+
+  it("turns a failing tool into an error answer and an error row", async () => {
+    const { mcp } = await fixtureMcp();
+    const answers: unknown[] = [];
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    const { deps: d, ctx } = mcpDeps(caller([{ tool: "boom" }], answers), mcp, emitted);
+    await withBridge(grant(["boom"]), () => runAgent(d, ctx, "triage"));
+    expect(answers).toEqual([{ ok: false, error: '<data source="fixture.boom">nope</data>' }]);
+    expect(emitted[0]![1]).toMatchObject({ tool: "boom", outcome: "error" });
+  });
+
+  it("says why a server gave no tool, and starts without a bridge", async () => {
+    const notes: string[] = [];
+    const { deps: d, ctx } = mcpDeps(fakeSandbox(output()), noTokenMcp([declared]));
+    await withBridge(grant(["echo"]), () => runAgent(d, { ...ctx, note: async (t) => void notes.push(t) }, "triage"));
+    expect((seen?.input as { bridge: unknown[] }).bridge).toEqual([]);
+    expect(notes).toContain("fixture: not logged in (pnpm mcp login fixture)");
+    expect(extraMounts(seen!).some((m) => m.container === "/design")).toBe(false);
+  });
+
+  it("gives an untrusted card no bridged tools, and says so", async () => {
+    const { mcp } = await fixtureMcp();
+    const notes: string[] = [];
+    const { deps: d, ctx } = mcpDeps(fakeSandbox(output()), mcp);
+    const untrusted = { ...ctx, task: { ...ctx.task, source: { kind: "github", authorAssociation: "NONE" } }, note: async (t: string) => void notes.push(t) } as unknown as StageContext;
+    await withBridge(grant(["echo"]), () => runAgent(d, untrusted, "triage"));
+    expect((seen?.input as { bridge: unknown[] }).bridge).toEqual([]);
+    expect(notes).toContain("untrusted card: no bridged tools");
+  });
+
+  it("gives no bridge to a repo whose luna.yaml turns design off, and narrows by its servers otherwise", async () => {
+    const { mcp } = await fixtureMcp();
+    const policy = (design: unknown) => ({ policies: { for: async () => ({ ...DEFAULT_POLICY, design }) } as never });
+    const off = { ...mcpDeps(fakeSandbox(output()), mcp).deps, ...policy("off") };
+    await withBridge(grant(["echo"]), () => runAgent(off, context("triage"), "triage"));
+    expect((seen?.input as { bridge: unknown[] }).bridge).toEqual([]);
+    const narrowed = { ...mcpDeps(fakeSandbox(output()), mcp).deps, ...policy({ servers: { fixture: { tools: ["boom"] } } }) };
+    await withBridge(grant(["echo", "boom"]), () => runAgent(narrowed, context("triage"), "triage"));
+    expect((seen?.input as { bridge: Array<{ tool: string }> }).bridge.map((b) => b.tool)).toEqual(["boom"]);
+  });
+
+  it("neither connects nor mounts for a pack with no grants, and closes the run's client when it has some", async () => {
+    let made = 0;
+    const d = { ...deps(fakeSandbox(output())), mcpFor: () => (made += 1, noTokenMcp()) } as AgentDeps;
+    await runAgent(d, context("triage"), "triage");
+    expect(made).toBe(0);
+    expect(extraMounts(seen!).some((m) => m.container === "/design")).toBe(false);
   });
 });

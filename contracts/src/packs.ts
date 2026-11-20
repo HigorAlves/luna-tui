@@ -16,6 +16,9 @@ import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from 
 import { type Bands, type KnockOutFlags, type SubScores, type Weights, knockOut, riskProduct, scorePriority } from "./scoring.ts";
 import { AccessReviewAnswer, ChangeExceptionsAnswer, PostmortemAnswer, QuestionnaireAnswer, ReleaseNotesAnswer, StatusReportAnswer, VulnTriageAnswer } from "./compliance.ts";
 import { ComplianceReviewAnswer } from "./compliance-review.ts";
+import { A11yAuditAnswer } from "./a11y.ts";
+import { DesignParityAnswer } from "./design-parity.ts";
+import { DesignSpec } from "./design-spec.ts";
 import { DocsDriftAnswer } from "./docs-drift.ts";
 import { ForemanAnswer } from "./foreman.ts";
 import { TicketChatAnswer } from "./ticket-chat.ts";
@@ -68,6 +71,11 @@ export const AgentRole = z.enum([
   "thread-writer",
   "code-fixer",
   "second-opinion",
+  // Reads a card's Figma design through the bridge and writes the spec the planner reads; read-only.
+  "design-spec-writer",
+  // Audits a rendered UI change for WCAG 2.2 with axe-core and judged checks, in the QA browser; read-only on the code.
+  "a11y-auditor",
+  "parity-reviewer",
   // The foreman: answers a question about the board from a snapshot and suggests actions; no tools, no worktree.
   "foreman",
   // The ticket planner: talks a ticket through with a person over a read-only checkout and drafts it.
@@ -447,6 +455,14 @@ export type LoopRedirectAnswer = z.infer<typeof LoopRedirectAnswer>;
 export const ConversationReplyAnswer = z.object({ reply: z.string().max(1500), confidence: z.number().min(0).max(1) });
 export type ConversationReplyAnswer = z.infer<typeof ConversationReplyAnswer>;
 
+const FIGMA_READ = ["get_metadata", "get_design_context", "get_variable_defs", "get_code_connect_map", "get_screenshot"];
+const MOBBIN_READ = ["search_screens", "search_flows", "search_sections"];
+/** The design tools a designer pack may call (RFC 0013): Figma's reading tools on either server, Mobbin's searches. A golden test pins them. */
+const DESIGN_READ: Partial<Access> = { bridge: [{ server: "figma", tools: FIGMA_READ }, { server: "figma-desktop", tools: FIGMA_READ }, { server: "mobbin", tools: MOBBIN_READ }] };
+
+/** The parity reviewer reads frames and tokens only (RFC 0013, phase 3): no Code Connect, no Mobbin. A golden test pins the list. */
+const PARITY_READ = ["get_design_context", "get_metadata", "get_screenshot", "get_variable_defs"];
+
 /** council_security and council_second: a short summary and findings from the member's own lane. No findings means nothing to add. */
 export const CouncilAnswer = z.object({ summary: z.string().max(300), findings: z.array(Finding).max(8) });
 export type CouncilAnswer = z.infer<typeof CouncilAnswer>;
@@ -495,6 +511,8 @@ export interface AgentPack extends PackBase {
   effort: Effort;
   /** The prompt template under factory/prompts/. */
   template: string;
+  /** It reads images (design frames, Verify's captures) and runs only on engines whose model has vision (RFC 0013). */
+  vision?: true;
   /** The hosts the stage may reach: `engine` its engines' (and the relay) only, `github` those and GitHub's (`gh`, issues, PRs), `full` also the repository's
    *  hosts, registries, the QA targets and the machine's private entries. A pack that needs less than `full` says so; a missing value does not compile. */
   network: PackNetwork;
@@ -1131,6 +1149,25 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     template: "council_second.md",
     network: "engine",
   },
+  // The design-spec writer (RFC 0013): runs in Plan before the planner on a UI card, and on demand (POST /design/spec). Read-only; design tools through the bridge.
+  design_spec: {
+    id: "design_spec",
+    kind: "agent",
+    agent: "design-spec-writer",
+    helpers: [],
+    skills: [],
+    access: access(READ_ONLY, { skills: false }, DESIGN_READ),
+    writable: false,
+    maxTurns: 30,
+    timeoutMs: 10 * MINUTE,
+    // Claude only. Codex sees images (probed, RFC 0013) but joins only after the admission eval; a blind engine is refused (visionProblem).
+    engines: { default: "claude:sonnet", allowed: ["claude:sonnet", "claude:opus"] },
+    vision: true,
+    effort: "medium",
+    answer: DesignSpec,
+    template: "design_spec.md",
+    network: "engine",
+  },
   // Triage's question council: settles open questions from the code before a person is asked. Read-only, no web, no gh.
   question_council: {
     id: "question_council",
@@ -1254,6 +1291,43 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     template: "e2e.md",
     network: "full",
   },
+  // The accessibility auditor (RFC 0013): a sub-run of the e2e stage after a passing browser run, against the app the machine started; and on demand (POST /design/audit).
+  a11y_audit: {
+    id: "a11y_audit",
+    kind: "agent",
+    agent: "a11y-auditor",
+    helpers: [],
+    skills: ["browser-qa", "playwright-qa", "agent-browser", "qa-targets"],
+    access: access(READ_ONLY, { write: true, commands: ["curl", "node", "npm", "pnpm", "npx", "agent-browser", "npx agent-browser", "command -v", "qa-axe"] }, { bridge: [{ server: "mobbin", tools: MOBBIN_READ }] }),
+    writable: true,
+    maxTurns: 60,
+    timeoutMs: 20 * MINUTE,
+    // codex joins after an a11y eval on codex:sol matches the Claude baseline (RFC 0013, phase 4's parity rule).
+    engines: { default: "claude:sonnet", allowed: ["claude:sonnet", "claude:opus"] },
+    effort: "medium",
+    answer: A11yAuditAnswer,
+    template: "a11y_audit.md",
+    network: "full",
+  },
+  // The parity reviewer (RFC 0013, phase 3): a sub-run of the e2e stage after a passing browser run. Reads the captures mounted at /evidence/parity and the frames through the bridge; never edits.
+  design_parity: {
+    id: "design_parity",
+    kind: "agent",
+    agent: "parity-reviewer",
+    helpers: [],
+    skills: [],
+    access: access(READ_ONLY, { skills: false }, { bridge: [{ server: "figma", tools: PARITY_READ }, { server: "figma-desktop", tools: PARITY_READ }] }),
+    writable: false,
+    maxTurns: 40,
+    timeoutMs: 15 * MINUTE,
+    // Claude only for now. Codex sees images (probed, RFC 0013) but joins after the admission eval matches the Claude baseline.
+    engines: { default: "claude:opus", allowed: ["claude:opus", "claude:sonnet"] },
+    vision: true,
+    effort: "high",
+    answer: DesignParityAnswer,
+    template: "design_parity.md",
+    network: "engine",
+  },
   evidence: {
     id: "evidence",
     kind: "script",
@@ -1315,7 +1389,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     writable: false,
     maxTurns: 12,
     timeoutMs: 8 * MINUTE,
-    // Another engine than the writer (sonnet). Only the Claude runtime is known to read images, so haiku is the default; codex:sol judges from the report, the transcript and the timeline.
+    // Another engine than the writer (sonnet). No `vision: true`: the run sees the contact sheets on an engine whose model reads images, and judges from the report, the transcript and the timeline where it cannot.
     engines: { default: "claude:haiku", allowed: ["claude:haiku", "codex:sol"], fallback: ["codex:sol"] },
     effort: "medium",
     answer: VideoQaAnswer,
@@ -1940,6 +2014,11 @@ export function effortProblem(pack: PackId, engine: EngineId, effort: Effort): s
   const supported = resolveEngine(engine).caps.effort;
   if (supported.includes(effort)) return null;
   return `${engine} does not support effort ${effort} (supports: ${supported.join(", ") || "none"})`;
+}
+
+/** Why `engine` cannot run `pack` for want of vision, or null: a pack that reads images on a model that cannot. */
+export function visionProblem(pack: { id: PackId; vision?: boolean }, engine: EngineId): string | null {
+  return pack.vision && !resolveEngine(engine).caps.vision ? `${engine} cannot read images, which ${pack.id} needs` : null;
 }
 
 /** A helper as the pack its child run is: the helper's role on its engine, the parent's access

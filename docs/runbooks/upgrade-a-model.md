@@ -11,7 +11,7 @@ Everything here runs on your machine. Evals and live runs need a model credentia
   - Set its `runtime`.
   - Set the exact `id` that the vendor SDK takes (never an alias).
   - Set `status: "preview"`.
-  - Set its `caps` (tools, structured output, the efforts it supports).
+  - Set its `caps` (tools, structured output, the efforts it supports, and `vision`: false until a probe says otherwise).
 - Add a candidate engine for it in `contracts/src/engines.ts` (`"claude:opus-next": { model: "anthropic/opus-5.6" }`). A `codex:*` or `openai:*` engine also names its `auth`.
 
 No pack names the candidate yet.
@@ -111,6 +111,8 @@ To roll back, revert the alias line. A stage already running keeps its engine. T
 From the day after that date, the contract test fails while any pack's engines still reach the entry.
 
 Delete the old entry once no pack's engines reach it.
+
+A model with `vision: true` is probed again on an upgrade (`LUNA_LIVE_VISION=1 pnpm --filter @hardness/factory exec vitest run src/runtimes/eve/vision.live.test.ts`, for a model on the Codex login). If it fails, set `vision: false`. The vision packs it joined (`design_spec`, `design_parity`) are measured again: run `pnpm eval admit` ([admit an engine to a vision pack](admit-an-engine-to-a-vision-pack.md)) on the new baselines.
 
 The evals measure a decision pack's engine default. Nobody assumes it. After the upgrade, do these steps:
 

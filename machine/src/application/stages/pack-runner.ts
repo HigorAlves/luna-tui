@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { AnswerScenario, AnswerStep, type CiContext, type ComplianceReviewContext, type CoverageSummary, type DocsDriftContext, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
+import { AnswerScenario, AnswerStep, type CapturePlan, type DesignSpec, type ParityCapture, type CiContext, type ComplianceReviewContext, type CoverageSummary, type DesignContext, type DocsDriftContext, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, visionProblem, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -56,6 +56,8 @@ import { checkpointPush } from "./checkpoint.ts";
 import { readScenarioReds } from "./scenario-reds.ts";
 
 import type { TruthSink } from "../decision-truth.ts";
+import { type McpCallRow, bridgeFor, cappedRow, DESIGN_MOUNT, mcpAnswers } from "./design-bridge.ts";
+import type { Mcp } from "../mcp.ts";
 import { type Decide, buildChecks, buildWatch, cardSearchAnswers, loopAnswers } from "./build-watch.ts";
 import { type CardHit, sourceKindOf } from "../../domain/card-search.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
@@ -86,6 +88,10 @@ export interface AgentDeps {
   worktreesDir: string;
   stateDir: string;
   watcher: Watcher;
+  /** A client of the machine's MCP servers for one run (RFC 0013): each stage gets its own, closed when it ends. Absent, no stage is given a bridged tool. */
+  mcpFor?: () => Mcp;
+  /** `allow` gives an untrusted card's stage bridged tools too (`untrusted: allow` in mcp.yaml); the default refuses. */
+  mcpUntrusted?: "allow" | "deny";
   /** Replaces the docker sandbox; tests pass a fake. */
   sandbox?: (run: SandboxRun) => Promise<SandboxResult>;
   /** The list of hosts each run may reach; absent (`MACHINE_EGRESS=off`, tests) a run joins an ordinary bridge as before the allow-list. */
@@ -152,6 +158,9 @@ const isFile = (path: string): boolean => {
   }
 };
 
+/** The packs that drive the QA target in the browser (RFC 0013): they run in the QA image, hold the one target's credential and may reach its hosts. */
+const BROWSER_PACKS: ReadonlySet<PackId> = new Set<PackId>(["e2e", "a11y_audit"]);
+
 export interface AgentExtra {
   /** ci_watch: what the host fetched about the PR's CI, since the sandbox has no GitHub credential. */
   ci?: CiContext | null;
@@ -169,6 +178,14 @@ export interface AgentExtra {
   checkout?: boolean;
   /** The plan stage's packs: the plan under review (the test designer reads it as its plan; a second round carries the gaps or the review). */
   plan?: PlanContext;
+  /** design_spec: the card's design reference, composed by the machine. */
+  design?: DesignContext;
+  /** a11y_audit: the WCAG level the repo asks for; absent, AA. */
+  a11yLevel?: "AA" | "AAA";
+  /** e2e: the captures the browser run is asked to take for the frames its scenarios cite (RFC 0013). */
+  parityPlan?: CapturePlan;
+  /** design_parity: what the browser run captured, the plan it followed and the approved spec; the captures themselves are mounted. */
+  parity?: { plan: CapturePlan; captures: ParityCapture[]; spec: DesignSpec | null };
   /** question_council: the open triage questions, the card and the answers so far. */
   questions?: QuestionsContext;
   /** verifying: the files the code graph says depend on what the change touched. */
@@ -207,7 +224,7 @@ export interface AgentExtra {
 }
 
 /** `host:port` of each QA target's URL, for the browser run's list (an address or a private name is dropped later, by the list's own rules). */
-function targetHosts(targets: ReadonlyArray<{ baseUrl: string }>): string[] {
+export function targetHosts(targets: ReadonlyArray<{ baseUrl: string }>): string[] {
   return targets.flatMap((target) => {
     try {
       const url = new URL(target.baseUrl);
@@ -408,6 +425,9 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     const other = reviewerEngine(PACKS.verifying, implementer, (e) => ready.has(e));
     if (other) choice = { engine: other.engine, reason: other.reason };
   }
+  // A resumed or handed engine is not re-chosen: a pack that reads images is still never started on a model that cannot (RFC 0013).
+  const blind = visionProblem(PACKS[pack], choice.engine);
+  if (blind) throw new Error(`${blind}: refused before the container started`);
   // The repo's effort for the pack, when the engine that runs can serve it; else the pack's own, with why.
   const effortChoice = chooseEffort({ pack: PACKS[pack], engine: choice.engine, config: policy.effort });
   const engineEvents = [
@@ -431,7 +451,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       : null;
 
   // The browser run drives ONE target, chosen here, and holds only that target's credential.
-  const e2eTarget = pack === "e2e" ? (extra.qaTarget !== undefined ? extra.qaTarget : (policy.qaTargets[0] ?? null)) : null;
+  const e2eTarget = BROWSER_PACKS.has(pack) ? (extra.qaTarget !== undefined ? extra.qaTarget : (policy.qaTargets[0] ?? null)) : null;
   // Verify is told which files the machine's own tests commit added, so a "which files change" criterion is judged without them.
   const testsRead = pack === "verifying" && context.testsCommit ? await readCommitDiff(workspace.path, context.testsCommit).catch(() => null) : null;
   const testsCommit = testsRead
@@ -445,6 +465,10 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     pack,
     ...(extra.plan ? { plan: extra.plan } : {}),
     ...(extra.questions ? { questions: extra.questions } : {}),
+    ...(extra.design ? { design: extra.design } : {}),
+    ...(extra.a11yLevel ? { a11yLevel: extra.a11yLevel } : {}),
+    ...(extra.parityPlan ? { parityPlan: extra.parityPlan } : {}),
+    ...(extra.parity ? { parity: extra.parity } : {}),
     engine: choice.engine,
     ...(effortChoice.source === "config" ? { effort: effortChoice.effort } : {}),
     attempt: context.attempt,
@@ -467,7 +491,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     ...(extra.scenarioTests?.length ? { scenarioTests: extra.scenarioTests } : {}),
     ...(extra.sweepFailures?.length ? { sweepFailures: extra.sweepFailures } : {}),
     // The recorder drives the one target the film is recorded against; the e2e pack picks from the repo's list.
-    qaTargets: pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : pack === "e2e" ? (e2eTarget ? [e2eTarget] : []) : policy.qaTargets,
+    qaTargets: pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : BROWSER_PACKS.has(pack) ? (e2eTarget ? [e2eTarget] : []) : policy.qaTargets,
     ...(extra.video ? { video: extra.video } : {}),
     checks: policy.checks,
     ...(economyInput ? { economy: economyInput } : {}),
@@ -582,8 +606,10 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
           log: (line) => void context.note?.(line).catch(() => {}),
         })
       : null;
+  // The run's bridged design tools (RFC 0013), set just before the container starts.
+  let design: { mcp: Mcp; answer: ReturnType<typeof mcpAnswers>; log: Parameters<typeof mcpAnswers>[0]["log"] } | null = null;
   const startWatch = (): void => {
-    if ((!checks && !cardSearch && !loopJudge) || watch) return;
+    if ((!checks && !cardSearch && !loopJudge && !design) || watch) return;
     const hostExec = deps.hostExec;
     watch = buildWatch({
       outDir: join(runDir, "out"),
@@ -592,6 +618,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       ...(checks ? { onRed: async (...a: Parameters<typeof checks.onRed>) => (await importer?.sync(), checks.onRed(...a)), onScopeRequest: async (...a: Parameters<typeof checks.onScopeRequest>) => (await importer?.sync(), checks.onScopeRequest(...a)) } : {}),
       ...(cardSearch ? { onCardSearch: cardSearch.onCardSearch } : {}),
       ...(loopJudge ? { onLoopRequest: loopJudge.onLoopRequest } : {}),
+      ...(design ? { onMcpRequest: design.answer, onMcpCapped: (request: Parameters<typeof cappedRow>[0]) => void design!.log(cappedRow(request)) } : {}),
       onCommitted: async (slice) => {
         if (!checks) return;
         await importer?.sync();
@@ -652,7 +679,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   // prompt and by value only in the container's environment. Implementing and the rest get none, whatever a check declares.
   let secretValues: Record<string, string> | undefined;
   let qaCredentialNames: string[] = [];
-  if (deps.secrets && (pack === "e2e" || pack === "recording")) {
+  if (deps.secrets && (BROWSER_PACKS.has(pack) || pack === "recording")) {
     const names = [...new Set((pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : e2eTarget ? [e2eTarget] : []).flatMap((t) => (t.credential?.startsWith("env:") ? [t.credential.slice(4)] : [])))];
     if (names.length > 0) {
       const loaded = await guard(() => deps.secrets!.load(task.repoPath!, names));
@@ -668,9 +695,29 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const found = PACKS[pack];
   const owners = [credentialOwner(choice.engine), ...(found.kind === "decision" ? [] : helpersOn(found, resolveEngine(choice.engine).runtime).map((h) => credentialOwner(h.engine)))];
   const egress = deps.egress
-    ? await guard(() => deps.egress!.for({ repoPath: task.repoPath, kind: egressKindOf(found), owners: [...new Set(owners)], ...(credential.relay ? { relayed: ["claude" as const] } : {}), targets: found.kind !== "decision" && found.network === "full" && (pack === "e2e" || pack === "recording") ? targetHosts(input.context.qaTargets ?? []) : [] }))
+    ? await guard(() => deps.egress!.for({ repoPath: task.repoPath, kind: egressKindOf(found), owners: [...new Set(owners)], ...(credential.relay ? { relayed: ["claude" as const] } : {}), targets: found.kind !== "decision" && found.network === "full" && (BROWSER_PACKS.has(pack) || pack === "recording") ? targetHosts(input.context.qaTargets ?? []) : [] }))
     : undefined;
   const identity = limits.writable ? await guard(() => gitIdentity(task.repoPath!)) : null;
+  // The bridged design tools (RFC 0013): only for a pack that names some, in a repo that has not turned them off, with a client of this run's own.
+  const designDir = join(runDir, "design");
+  const grants = (found.kind === "decision" ? [] : found.access.bridge);
+  if (grants.length > 0 && deps.mcpFor && policy.design !== "off" && !resume) {
+    const mcp = deps.mcpFor();
+    const log = (row: McpCallRow) => context.emit?.("design.mcp_call", { ...row });
+    try {
+      const { tools, notes } = await bridgeFor({ mcp, pack: grants, repo: policy.design?.servers ?? {}, trust, untrusted: deps.mcpUntrusted ?? "deny" });
+      for (const note of notes) await context.note?.(note).catch(() => {});
+      input.bridge = tools;
+    } catch (error) {
+      await mcp.close().catch(() => {});
+      throw error;
+    }
+    if (input.bridge.length > 0) {
+      design = { mcp, answer: mcpAnswers({ mcp, bridge: input.bridge, designDir, log }), log };
+    } else {
+      await mcp.close().catch(() => {});
+    }
+  }
   let sandbox: SandboxResult;
   try {
   sandbox = await (deps.sandbox ?? runSandbox)({
@@ -684,7 +731,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     // The verifier never sees the card's shared agent session: it reviews from the plan, the scenarios and the Build Report, not the implementer's trail.
     ...(pack === "verifying" ? {} : { sessionMount }),
     cacheVolume: cacheVolumeFor(task.repoPath, size.cacheTrust),
-    image: pack === "e2e" ? deps.qaImage : pack === "recording" ? (deps.videoImage ?? deps.qaImage) : stageImage,
+    image: BROWSER_PACKS.has(pack) ? deps.qaImage : pack === "recording" ? (deps.videoImage ?? deps.qaImage) : stageImage,
     runDir,
     worktree: workspace.path,
     writable: limits.writable,
@@ -700,6 +747,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     labels: { "dev.hardness.task": task.id },
     mounts: [
       ...(graphContext && graphDir ? [{ host: graphDir, container: GRAPH_MOUNT, readOnly: true }] : []),
+      ...(design ? [{ host: designDir, container: DESIGN_MOUNT, readOnly: true }] : []),
       // The worktree's `.git` file points at its admin dir: read-only, so no stage can repoint the checkout.
       ...(extra.mounts ?? []),
     ],
@@ -717,6 +765,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     startWatch();
     await (watch as ReturnType<typeof buildWatch> | null)?.stop();
     await pushing;
+    await (design as { mcp: Mcp } | null)?.mcp.close().catch(() => {});
     credential.release();
   });
     ran.container = true;

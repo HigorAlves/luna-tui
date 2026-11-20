@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { type DecisionRecord, type EngineId, PACKS, StageInput, type StageOutput, resolveEngine } from "@hardness/contracts";
+import { type DecisionRecord, type EngineId, FACTORY_DEFAULTS, PACKS, StageInput, type StageOutput, resolveEngine } from "@hardness/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import { ZodError } from "zod";
 
@@ -812,3 +812,48 @@ describe("decision records", () => {
   });
 });
 
+
+describe("design runs", () => {
+  const ref = { refs: [{ fileKey: "AbCdEf0123456789", nodeIds: ["12:34"], page: null, from: "link" as const }] };
+  const spec = { frames: [], tokens: { color: [], type: [], spacing: [], radius: [] }, components: [], a11yNotes: [], missing: [], confidence: 0.5 };
+  const figma = { name: "figma", transport: "http" as const, url: "https://mcp.figma.com/mcp", credential: { kind: "oauth" as const }, tools: ["get_design_context", "get_screenshot"] };
+  const mcp = () => ({ servers: () => [figma], listTools: async () => [{ server: "figma", tool: "get_design_context", description: "d", inputSchema: {} }], callTool: async () => ({ ok: true as const, text: "", images: [], truncated: false }), close: async () => {} });
+  const policies = (over: Record<string, unknown> = {}) => ({ for: async () => ({ design: undefined, qaTargets: [], factory: FACTORY_DEFAULTS, ...over }) }) as never;
+  const target = { name: "staging", baseUrl: "https://staging.example.com", credential: "env:QA_PASSWORD" };
+  const auditCall = { pack: "a11y_audit" as const, context: { a11y: { level: "AA" as const } } };
+
+  it("grants design_spec its pack's tools as a trusted caller, mounts /design, records one row and keeps neither context nor answer", async () => {
+    const pack = runs(fakeSandbox(output({ answer: spec })), { mcpFor: mcp, mcpUntrusted: "deny", policies: policies() });
+    const result = await pack.run({ pack: "design_spec", context: { design: ref } }, "board", undefined, { bridge: { repoPath: "/r/shop" } });
+    expect(result.answer).toEqual(spec);
+    expect((seen[0]!.input as { bridge: Array<{ name: string }> }).bridge.map((t) => t.name)).toEqual(["figma_get_design_context"]);
+    expect(seen[0]!.mounts).toContainEqual(expect.objectContaining({ container: "/design", readOnly: true }));
+    expect(records).toHaveLength(1);
+    expect(readdirSync(join(stateDir, PACK_RUNS_DIR))).toEqual([]);
+  });
+
+  it("runs a11y_audit in the QA image with the target's hosts and its credential, never the credential in the input", async () => {
+    const egressAsked: string[][] = [];
+    const egress = { for: async (req: { targets?: readonly string[] }) => (egressAsked.push([...(req.targets ?? [])]), { network: "n" }) };
+    const qaSecrets = { load: async (_repo: string, names: readonly string[]) => ({ values: Object.fromEntries(names.map((n) => [n, "pw"])), missing: [] }) };
+    const pack = runs(fakeSandbox(output({ answer: { summary: "s", pages: [], findings: [] } })), { qaImage: "hardness-runner-qa:dev", qaSecrets, egress: egress as never, policies: policies({ qaTargets: [target] }) });
+    await pack.run(auditCall, "board", undefined, { qa: { repoPath: "/r/shop", target } });
+    expect(seen[0]!.image).toBe("hardness-runner-qa:dev");
+    expect(egressAsked).toEqual([["staging.example.com:443"]]);
+    expect(seen[0]!.secrets).toEqual({ QA_PASSWORD: "pw" });
+    expect(JSON.stringify(seen[0]!.input)).not.toContain("pw");
+  });
+
+  it("fails a QA run whose credential is missing, naming the variable and nothing else", async () => {
+    const qaSecrets = { load: async () => ({ values: {}, missing: [{ name: "QA_PASSWORD", reason: "not found" }] }) };
+    const pack = runs(fakeSandbox(output()), { qaImage: "hardness-runner-qa:dev", qaSecrets, policies: policies({ qaTargets: [target] }) });
+    await expect(pack.run(auditCall, "board", undefined, { qa: { repoPath: "/r/shop", target } })).rejects.toThrow(/QA_PASSWORD is not set for this repository/);
+    expect(seen).toHaveLength(0);
+  });
+
+  it("fails a QA run on a machine with no QA image, before anything runs", async () => {
+    const pack = runs(fakeSandbox(output()), { policies: policies() });
+    await expect(pack.run(auditCall, "board", undefined, { qa: { repoPath: "/r/shop", target } })).rejects.toThrow(RunFailedError);
+    expect(seen).toHaveLength(0);
+  });
+});

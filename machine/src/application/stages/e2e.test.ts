@@ -500,3 +500,348 @@ describe("the e2e stage and a preview", () => {
     expect(result.detail).toMatchObject({ preview: { kind: "deploy", url: "https://x.preview.example.com" } });
   });
 });
+
+describe("the accessibility audit after the browser run", () => {
+  const start = parseLunaConfig("verify:\n  e2e:\n    start:\n      command: npm start\n      port: 4000\n");
+  const browserPass: StageResult = { outcome: "pass", detail: { answer: { verdict: "pass", summary: "ok", criteria: [] } }, usage: { turns: 5, costUsd: 0.3 } };
+  const browserFail: StageResult = { outcome: "pass", detail: { answer: { verdict: "fail", summary: "pay broke", criteria: [{ text: "pay", result: "fail", evidence: [] }] } } };
+  const blocker = { criterion: "2.1.2", level: "A", source: "judged", rule: null, impact: null, page: "/checkout", state: "modal", selector: "div.modal", summary: "trap", evidence: ["trap.png"], fix: null, confidence: 0.9 };
+  const minor = { criterion: "1.4.3", level: "AA", source: "axe", rule: "color-contrast", impact: "minor", page: "/checkout", state: "default", selector: "p.note", summary: "low", evidence: [], fix: null, confidence: 1 };
+  const audit = (findings: unknown[]): StageResult => ({ outcome: "pass", detail: { answer: { summary: "audited", pages: [{ page: "/checkout", states: ["default"], axe: "ran" }], findings } }, usage: { turns: 9, costUsd: 0.4 } });
+  const budget = (spent: "tokens" | null) => ({ tokens: spent ? 1_000_001 : 10, tokensCounted: true, minutes: 1, spent, limits: { max_tokens: 1_000_000, max_minutes: 45 } });
+  type Settings = { off: boolean; cardOff: boolean; level: "AA" | "AAA"; mode: "gate" | "advisory" };
+  const on: Settings = { off: false, cardOff: false, level: "AA", mode: "gate" };
+
+  function harness(opts: { browser?: StageResult | StageResult[]; audit?: StageResult; settings?: Settings; budgets?: Array<ReturnType<typeof budget>>; decide?: unknown; afterBrowser?: unknown[]; policy?: unknown } = {}) {
+    const events: string[] = [];
+    const calls: Array<{ pack?: string; runId: string; extra?: Record<string, unknown> }> = [];
+    const reads = [...(opts.budgets ?? [])];
+    const browsers = Array.isArray(opts.browser) ? [...opts.browser] : null;
+    const runner = e2eRunner({
+      runPack: async (c: StageContext, extra?: Record<string, unknown>, pack?: string) => {
+        calls.push({ pack, runId: c.runId, extra });
+        if (pack === "a11y_audit") return events.push("a11y"), opts.audit ?? audit([]);
+        events.push("pack");
+        return browsers ? browsers.shift()! : ((opts.browser as StageResult | undefined) ?? browserPass);
+      },
+      detectWeb: async () => true,
+      changedFiles: async () => null,
+      policy: async () => opts.policy ?? start,
+      headCommit: async () => "c".repeat(40),
+      openApp: async (input: OpenAppInput) => (events.push(`open ${input.attempt}`), { ok: true as const, target: { name: "app" as const, baseUrl: "http://luna-app:4000" }, network: "net-app", aliases: ["luna-app"], close: async () => void events.push("close"), redactValues: { K: "v" } }),
+      design: { settings: async () => opts.settings ?? on, ...(opts.budgets ? { budget: async () => (reads.length > 1 ? reads.shift()! : reads[0]!) } : {}) },
+      ...(opts.decide ? { decide: opts.decide, overrides: async () => ({}) } : {}),
+      ...(opts.afterBrowser ? { afterBrowser: opts.afterBrowser } : {}),
+    } as never);
+    const context = { task: { id: "t1", repoPath: "/repo", worktreePath: dir, branch: "task/x" }, stage: "e2e", attempt: 1, runId: "r1", approvals: [], signal: new AbortController().signal, emit: async () => {} } as unknown as StageContext;
+    return { run: () => runner(context), events, calls };
+  }
+
+  it("skips the audit in agent mode, where there is no app URL, and says so without findings or budget spend", async () => {
+    const h = harness({ policy: parseLunaConfig(""), audit: audit([blocker]), budgets: [budget(null)] });
+    const result = await h.run();
+    expect(h.events).toEqual(["pack"]);
+    expect(result.outcome).toBe("pass");
+    expect(result.findings).toBeUndefined();
+    expect(result.detail).toMatchObject({ a11y: { skipped: "no app URL in agent mode" } });
+    expect(result.usage?.turns).toBe(5);
+  });
+
+  it("audits after a passing browser run, while the app is still open, then closes it", async () => {
+    const h = harness({ audit: audit([minor]) });
+    const result = await h.run();
+    expect(h.events).toEqual(["open 10", "pack", "a11y", "close"]);
+    expect(result).toMatchObject({ outcome: "pass", detail: { a11y: { level: "AA", mode: "gate", findings: [expect.objectContaining({ severity: "should_fix", category: "accessibility" })] } } });
+    expect(result.usage?.turns).toBe(14);
+  });
+
+  it("runs the audit as <runId>-a11y on the same target, network and redaction as the browser run", async () => {
+    const h = harness();
+    await h.run();
+    const [browser, a11y] = h.calls;
+    expect(a11y!.runId).toBe("r1-a11y");
+    expect(a11y!.pack).toBe("a11y_audit");
+    expect(a11y!.extra).toMatchObject({ qaTarget: browser!.extra!.qaTarget, alsoJoin: ["net-app"], noProxy: ["luna-app"], redactValues: { K: "v" }, a11yLevel: "AA" });
+  });
+
+  it("hands the audit the repo's level", async () => {
+    const h = harness({ settings: { ...on, level: "AAA" } });
+    await h.run();
+    expect(h.calls[1]!.extra).toMatchObject({ a11yLevel: "AAA" });
+  });
+
+  it("fails the stage with the audit's blockers for Build", async () => {
+    const result = await harness({ audit: audit([blocker, minor]) }).run();
+    expect(result.outcome).toBe("fail");
+    expect(result.findings!.map((f) => [f.severity, f.title])).toEqual([["blocker", "WCAG 2.1.2 (A): div.modal on /checkout"], ["should_fix", "WCAG 1.4.3 (AA): p.note on /checkout"]]);
+  });
+
+  it("merges two rules on the same criterion, selector and page into one finding, on purpose, keeping the higher severity", async () => {
+    const second = { ...minor, rule: "color-contrast-enhanced", impact: "critical", state: "hover" };
+    const result = await harness({ audit: audit([minor, second]) }).run();
+    const found = (result.detail as { a11y: { findings: Array<{ severity: string; merged?: string[] }> } }).a11y.findings;
+    expect(found).toHaveLength(1);
+    expect(found[0]!.severity).toBe("blocker");
+    expect(result.outcome).toBe("fail");
+  });
+
+  it("keeps blockers as should_fix in advisory mode, and passes", async () => {
+    const result = await harness({ audit: audit([blocker]), settings: { ...on, mode: "advisory" } }).run();
+    expect(result.outcome).toBe("pass");
+  });
+
+  it("does not audit a failed browser run, nor when design is off for the repo or the card", async () => {
+    for (const h of [harness({ browser: browserFail }), harness({ settings: { ...on, off: true } }), harness({ settings: { ...on, cardOff: true } })]) {
+      await h.run();
+      expect(h.events).not.toContain("a11y");
+    }
+  });
+
+  it("does not audit when no design settings are wired", async () => {
+    const events: string[] = [];
+    const runner = e2eRunner({ runPack: async () => (events.push("pack"), browserPass), detectWeb: async () => true, changedFiles: async () => null, policy: async () => start, headCommit: async () => "c".repeat(40), openApp: async () => ({ ok: true, target: { name: "app", baseUrl: "http://x" }, network: "n", aliases: [], close: async () => {}, redactValues: {} }) } as never);
+    await runner({ task: { id: "t1", repoPath: "/repo", worktreePath: dir }, stage: "e2e", attempt: 1, runId: "r1", approvals: [], signal: new AbortController().signal } as unknown as StageContext);
+    expect(events).toEqual(["pack"]);
+  });
+
+  it("keeps the browser run's verdict, with a note, when the audit fails or answers off the schema", async () => {
+    for (const bad of [{ outcome: "fail", detail: { error: "browser crashed" } } as StageResult, { outcome: "pass", detail: { answer: { findings: "x" } } } as StageResult]) {
+      const result = await harness({ audit: bad }).run();
+      expect(result.outcome).toBe("pass");
+      expect((result.detail as { a11y: { notes: string[] } }).a11y.notes[0]).toMatch(/^the accessibility audit did not run: /);
+    }
+  });
+
+  it("escalates design_budget, and starts no audit, when the design budget is spent before it", async () => {
+    const h = harness({ budgets: [budget("tokens")] });
+    const result = await h.run();
+    expect(h.events).toEqual(["open 10", "pack", "close"]);
+    expect(result).toMatchObject({ outcome: "escalated", detail: { step: "e2e", escalation: "design_budget" } });
+  });
+
+  it("escalates design_budget instead of sending blockers back when the budget is spent after the audit", async () => {
+    const result = await harness({ audit: audit([blocker]), budgets: [budget(null), budget("tokens")] }).run();
+    expect(result).toMatchObject({ outcome: "escalated", detail: { step: "e2e", escalation: "design_budget" } });
+  });
+
+  it("audits once, after the re-run, when the first browser run was an env_flake", async () => {
+    const flake: StageResult = { outcome: "pass", detail: { answer: { verdict: "fail", summary: "x", criteria: [{ text: "a", result: "fail" }] } } };
+    const h = harness({ browser: [flake, browserPass], decide: async () => ({ cause: { choice: "env_flake", confidence: 0.9 } }), audit: audit([minor]) });
+    const result = await h.run();
+    expect(h.events).toEqual(["open 10", "pack", "close", "open 11", "pack", "a11y", "close"]);
+    expect(result).toMatchObject({ outcome: "pass", detail: { rerun: true, a11y: { findings: [expect.anything()] } } });
+  });
+
+  it("runs further afterBrowser steps, in order, in the same open app session, and merges their findings and usage", async () => {
+    const order: string[] = [];
+    const parity = {
+      key: "parity",
+      detail: { frames: 1 },
+      findings: [{ path: "/checkout", line: 0, severity: "blocker", title: "parity", body: "b", confidence: 0.9, category: "design", criterion_ref: null, suggested_fix: null }],
+      blocking: true,
+      usage: { turns: 2, costUsd: 0.1 },
+    };
+    const h = harness({
+      afterBrowser: [async () => (order.push("second"), h.events.push("parity"), parity)],
+    });
+    const result = await h.run();
+    expect(h.events).toEqual(["open 10", "pack", "a11y", "parity", "close"]);
+    expect(order).toEqual(["second"]);
+    expect(result.outcome).toBe("fail");
+    expect(result.detail).toMatchObject({ parity: { frames: 1 } });
+    expect(result.findings!.map((f) => f.title)).toEqual(["parity"]);
+    expect(result.usage?.turns).toBe(16);
+  });
+});
+
+describe("parity captures (RFC 0013)", () => {
+  const start = parseLunaConfig("verify:\n  e2e:\n    start:\n      command: npm start\n      port: 4000\n");
+  const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+  const spec = { frames: [{ id: "12:34", name: "Checkout", viewport: { width: 1440, height: 900 }, states: [{ state: "default", nodeId: "12:35", suggestion: null }] }], tokens: { color: [], type: [], spacing: [], radius: [] }, components: [], a11yNotes: [], missing: [], confidence: 0.9 };
+  const cases = [{ id: "S1", title: "pay", criterion: null, approach: "x", layer: "e2e", frame_ref: "12:34" }];
+  const approvals = (withSpec: boolean) => [{ id: "a1", taskId: "t1", kind: "awaiting_approval", requested: { criteria: [], cases, ...(withSpec ? { design: { ref: null, spec } } : {}) }, decision: "approved" }];
+  const pass: StageResult = { outcome: "pass", detail: { answer: { verdict: "pass", summary: "ok", criteria: [{ text: "pay", result: "pass", evidence: [] }] } } };
+  const on = { off: false, cardOff: false, level: "AA" as const, mode: "gate" as const };
+
+  function harness(opts: { withSpec?: boolean; policy?: unknown; settings?: typeof on; browser?: StageResult[]; capture?: boolean; decide?: unknown } = {}) {
+    const stateDir = mkdtempSync(join(tmpdir(), "e2e-parity-"));
+    const seen: Array<Record<string, unknown> | undefined> = [];
+    const runs = [...(opts.browser ?? [pass])];
+    const runner = e2eRunner({
+      stateDir,
+      runPack: async (c: StageContext, extra?: Record<string, unknown>) => {
+        seen.push(extra);
+        if (opts.capture !== false) {
+          const dir = join(stateDir, "runs", c.runId, "files", "qa", "parity", "S1");
+          mkdirSync(dir, { recursive: true });
+          writeFileSync(join(dir, "1440x900-default.png"), PNG);
+        }
+        return runs.shift() ?? pass;
+      },
+      detectWeb: async () => true,
+      changedFiles: async () => null,
+      policy: async () => opts.policy ?? start,
+      headCommit: async () => "c".repeat(40),
+      openApp: async () => ({ ok: true as const, target: { name: "app" as const, baseUrl: "http://luna-app:4000" }, network: "net", aliases: [], close: async () => {}, redactValues: {} }),
+      design: { settings: async () => opts.settings ?? on },
+      ...(opts.decide ? { decide: opts.decide, overrides: async () => ({}) } : {}),
+    } as never);
+    const ctx = { task: { id: "t1", repoPath: "/repo", worktreePath: dir, branch: "task/x" }, stage: "e2e", attempt: 1, runId: "r1", approvals: approvals(opts.withSpec ?? true), signal: new AbortController().signal, emit: async () => {} } as unknown as StageContext;
+    return { run: () => runner(ctx), seen, stateDir };
+  }
+
+  it("hands the plan to the browser run and takes the captures in after it", async () => {
+    const h = harness();
+    const result = await h.run();
+    expect(h.seen[0]).toMatchObject({ parityPlan: { targets: [expect.objectContaining({ scenario: "S1", frame: "12:34", state: "default" })] } });
+    expect(result.detail?.parity).toMatchObject({ captures: [expect.objectContaining({ image: "/evidence/parity/S1/1440x900-default.png" })], missing: [], dir: join(h.stateDir, "runs", "r1", "parity") });
+    expect(existsSync(join(h.stateDir, "runs", "r1", "parity", "S1", "1440x900-default.png"))).toBe(true);
+  });
+  it("plans nothing and leaves the run and its detail as they were without a design spec, or with design off for the card or the repo", async () => {
+    for (const h of [harness({ withSpec: false }), harness({ settings: { ...on, cardOff: true } }), harness({ settings: { ...on, off: true } })]) {
+      const result = await h.run();
+      expect(h.seen[0]).not.toHaveProperty("parityPlan");
+      expect(result.detail).not.toHaveProperty("parity");
+    }
+  });
+  it("skips parity in agent mode, where there is no app URL, and plans no capture", async () => {
+    const h = harness({ policy: parseLunaConfig("") });
+    const result = await h.run();
+    expect(h.seen[0]).toBeUndefined();
+    expect(result.detail).toMatchObject({ parity: { skipped: "no app URL in agent mode" } });
+  });
+  it("takes in nothing from a failed browser run", async () => {
+    const failed: StageResult = { outcome: "pass", detail: { answer: { verdict: "fail", summary: "x", criteria: [{ text: "pay", result: "fail", evidence: [] }] } } };
+    const result = await harness({ browser: [failed] }).run();
+    expect(result.detail).not.toHaveProperty("parity");
+  });
+  it("clears the parity folders before the re-run after a flake, so a first attempt's captures are never the second's", async () => {
+    const flake: StageResult = { outcome: "pass", detail: { answer: { verdict: "fail", summary: "x", criteria: [{ text: "pay", result: "fail", evidence: [] }] } } };
+    const h = harness({ browser: [flake, pass], decide: async () => ({ cause: { choice: "env_flake", confidence: 0.9 } }) });
+    mkdirSync(join(h.stateDir, "runs", "r1", "parity", "S1"), { recursive: true });
+    writeFileSync(join(h.stateDir, "runs", "r1", "parity", "S1", "stale.png"), PNG);
+    const result = await h.run();
+    expect(result).toMatchObject({ outcome: "pass", detail: { rerun: true } });
+    expect(existsSync(join(h.stateDir, "runs", "r1", "parity", "S1", "stale.png"))).toBe(false);
+    expect((result.detail?.parity as { captures: unknown[] }).captures).toHaveLength(1);
+  });
+});
+
+describe("the design parity review after the browser run (RFC 0013)", () => {
+  const start = parseLunaConfig("verify:\n  e2e:\n    start:\n      command: npm start\n      port: 4000\n");
+  const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+  const designed = { state: "default", nodeId: "12:35", suggestion: null };
+  const spec = { frames: [{ id: "12:34", name: "Checkout", viewport: { width: 1440, height: 900 }, states: [designed] }, { id: "40:1", name: "Modal", viewport: null, states: [designed] }], tokens: { color: [], type: [], spacing: [], radius: [] }, components: [], a11yNotes: [], missing: [], confidence: 0.9 };
+  const scenarios = (extra: unknown[] = []) => [{ id: "S1", title: "pay", criterion: null, approach: "x", layer: "e2e", frame_ref: "12:34" }, ...extra];
+  const pass: StageResult = { outcome: "pass", detail: { answer: { verdict: "pass", summary: "ok", criteria: [{ text: "pay", result: "pass", evidence: [] }, { text: "modal", result: "pass", evidence: [] }] } } };
+  const on = { off: false, cardOff: false, level: "AA" as const, mode: "gate" as const };
+  const designFinding = (severity: string, confidence = 0.9) => ({ id: `D-${severity}`, path: "figma:12:34/12:35", line: 0, severity, title: "Pay colour", body: "b", confidence, category: "design", design: { source: "parity", frame: "12:34", node: "12:35", element: "button.pay", kind: "token", expected: "#1A73E8", actual: "#1B74E9" } });
+  const report = { ran: true, runId: "r1-parity", confidence: 0.9, bar: 0.75, designInput: "complete", frames: [], counts: { blocker: 0, should_fix: 0, nit: 0, waived: 0 }, summary: "s" };
+  const reviewed = (over: Record<string, unknown> = {}) => ({ report, findings: [], blockers: 0, gate: { fires: false, why: [] }, notes: [], spentAfter: false, ...over });
+  const a11yBlocker = { criterion: "2.1.2", level: "A", source: "judged", rule: null, impact: null, page: "/checkout", state: "modal", selector: "div.modal", summary: "trap", evidence: [], fix: null, confidence: 0.9 };
+
+  function harness(opts: { review?: unknown; withSpec?: boolean; extraScenarios?: unknown[]; policy?: unknown; decide?: unknown; budgets?: unknown[]; audit?: StageResult } = {}) {
+    const stateDir = mkdtempSync(join(tmpdir(), "e2e-design-"));
+    const reviews: unknown[][] = [];
+    const reads = [...((opts.budgets as Array<Record<string, unknown>>) ?? [])];
+    const runner = e2eRunner({
+      stateDir,
+      runPack: async (c: StageContext, _extra?: unknown, pack?: string) => {
+        if (pack === "a11y_audit") return opts.audit ?? { outcome: "pass", detail: { answer: { summary: "a", pages: [], findings: [] } } };
+        const dir = join(stateDir, "runs", c.runId, "files", "qa", "parity", "S1");
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, "1440x900-default.png"), PNG);
+        return pass;
+      },
+      detectWeb: async () => true,
+      changedFiles: async () => null,
+      policy: async () => opts.policy ?? start,
+      headCommit: async () => "c".repeat(40),
+      openApp: async () => ({ ok: true as const, target: { name: "app" as const, baseUrl: "http://luna-app:4000" }, network: "net", aliases: [], close: async () => {}, redactValues: {} }),
+      design: { settings: async () => on, ...(opts.budgets ? { budget: async () => (reads.length > 1 ? reads.shift()! : reads[0]!) } : {}) },
+      designParity: async (...args: unknown[]) => {
+        reviews.push(args);
+        return "review" in opts ? opts.review : reviewed();
+      },
+      ...(opts.decide ? { decide: opts.decide, overrides: async () => ({}) } : {}),
+    } as never);
+    const approvals = [{ id: "a1", taskId: "t1", kind: "awaiting_approval", requested: { criteria: [], cases: scenarios(opts.extraScenarios), ...(opts.withSpec === false ? {} : { design: { ref: null, spec } }) }, decision: "approved" }];
+    const ctx = { task: { id: "t1", repoPath: "/repo", worktreePath: dir, branch: "task/x" }, stage: "e2e", attempt: 1, runId: "r1", approvals, signal: new AbortController().signal, emit: async () => {} } as unknown as StageContext;
+    return { run: () => runner(ctx), reviews };
+  }
+
+  it("fails the browser run on a confident design blocker, with the design findings for Build and the report beside", async () => {
+    const f = designFinding("blocker");
+    const h = harness({ review: reviewed({ findings: [f], blockers: 1, report: { ...report, counts: { ...report.counts, blocker: 1 } } }) });
+    const r = await h.run();
+    expect(r).toMatchObject({ outcome: "fail", detail: { step: "design", verdict: "parity", design: { findings: [expect.objectContaining({ id: "D-blocker" })], gate: { fires: false } } }, findings: [expect.objectContaining({ category: "design", id: "D-blocker" })] });
+  });
+
+  it("merges into detail.parity and never clobbers what the browser run left there", async () => {
+    const r = await harness({ review: reviewed({ notes: ["a note"] }) }).run();
+    expect(r.detail?.parity).toMatchObject({ captures: [expect.objectContaining({ image: "/evidence/parity/S1/1440x900-default.png" })], missing: [], plan: expect.any(Object), dir: expect.stringContaining("parity"), ran: true, runId: "r1-parity", confidence: 0.9, notes: ["a note"] });
+  });
+
+  it("passes with the design report when nothing blocks, and says whether the gate fires", async () => {
+    const h = harness({ review: reviewed({ findings: [designFinding("should_fix")], gate: { fires: true, why: ["open_findings"] } }) });
+    expect(await h.run()).toMatchObject({ outcome: "pass", detail: { design: { gate: { fires: true, why: ["open_findings"] }, parity: { ran: true } } } });
+  });
+
+  it("is handed the spec's cited frames with no viewport, and the captures the browser run took", async () => {
+    const h = harness({ extraScenarios: [{ id: "S2", title: "modal", criterion: null, approach: "x", layer: "e2e", frame_ref: "40:1" }] });
+    await h.run();
+    expect(h.reviews[0]![1]).toMatchObject({ captures: [expect.objectContaining({ scenario: "S1" })] });
+    expect(h.reviews[0]![2]).toEqual([{ scenario: "S2", frame: "40:1" }]);
+  });
+
+  it("does not run in agent mode, where there is no app URL: parity is skipped and says so", async () => {
+    const h = harness({ policy: parseLunaConfig("") });
+    const r = await h.run();
+    expect(h.reviews).toEqual([]);
+    expect(r.detail).toMatchObject({ parity: { skipped: "no app URL in agent mode" } });
+    expect(r.detail).not.toHaveProperty("design");
+  });
+
+  it("does not run without a design spec, or when the review has nothing to review", async () => {
+    const none = harness({ withSpec: false });
+    expect((await none.run()).detail).not.toHaveProperty("design");
+    expect(none.reviews).toEqual([]);
+    const idle = harness({ review: null });
+    expect((await idle.run()).detail).not.toHaveProperty("design");
+  });
+
+  it("merges the accessibility findings into the design report, and the design findings go to Build beside the blockers of the audit", async () => {
+    const audit: StageResult = { outcome: "pass", detail: { answer: { summary: "a", pages: [], findings: [a11yBlocker] } } };
+    const h = harness({ audit, review: reviewed({ findings: [designFinding("blocker")], blockers: 1 }) });
+    const r = await h.run();
+    expect(r.outcome).toBe("fail");
+    const design = r.detail?.design as { wcag: string; a11y: { mode: string; counts: Record<string, number> }; findings: Array<{ category: string }> };
+    expect(design.wcag).toBe("AA");
+    expect(design.a11y).toMatchObject({ mode: "gate", counts: { blocker: 1 } });
+    expect(design.findings.map((f) => f.category).sort()).toEqual(["accessibility", "design"]);
+    expect((r.findings ?? []).map((f) => f.category).sort()).toEqual(["accessibility", "design"]);
+  });
+
+  it("classifies the design findings with the frame, node, element, expected and built as the excerpt, and keeps the record ids", async () => {
+    const asked: Array<{ pack: string; check: { excerpt?: string } }> = [];
+    const decide = async (pack: string, check: { excerpt?: string }) => (asked.push({ pack, check }), { severity: { choice: "should_fix", confidence: 0.8 } });
+    const h = harness({ decide, review: reviewed({ findings: [designFinding("should_fix")], gate: { fires: true, why: ["open_findings"] } }) });
+    const r = await h.run();
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({ pack: "finding_classify", check: { excerpt: "frame 12:34 node 12:35\nelement: button.pay\nexpected: #1A73E8\nbuilt: #1B74E9" } });
+    expect((r.detail?.design as { classified: unknown[] }).classified).toEqual([{ id: "D-should_fix" }]);
+  });
+
+  it("escalates design_budget from e2e when the budget is spent before the review", async () => {
+    const h = harness({ review: { escalate: { outcome: "escalated", detail: { escalation: "design_budget", step: "e2e", reason: "spent" } } } });
+    expect(await h.run()).toMatchObject({ outcome: "escalated", detail: { escalation: "design_budget", step: "e2e" } });
+  });
+
+  it("escalates design_budget instead of sending blockers back when the review spent the budget", async () => {
+    const spent = { tokens: 9, tokensCounted: true, minutes: 1, spent: "tokens", limits: { max_tokens: 5, max_minutes: 60 } };
+    const fine = { ...spent, tokens: 1, spent: null };
+    // The audit reads the budget before and after its run; the review's own read comes third.
+    const h = harness({ budgets: [fine, fine, spent], review: reviewed({ findings: [designFinding("blocker")], blockers: 1, spentAfter: true }) });
+    expect(await h.run()).toMatchObject({ outcome: "escalated", detail: { escalation: "design_budget" } });
+  });
+});

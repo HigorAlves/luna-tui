@@ -2,7 +2,8 @@
 // in-process by the runner, so the ledger is a file the runner owns (/out/ledger.json) and every
 // call is also an event the machine ingests.
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
-import type { LunaTool } from "@hardness/contracts";
+import type { BridgedTool, LunaTool } from "@hardness/contracts";
+import { z } from "zod";
 
 import { DELEGATE, type DelegateTool } from "../../core/delegate.ts";
 import { LUNA_TOOLS } from "../../core/luna-tools.ts";
@@ -13,11 +14,24 @@ const text = (value: unknown) => ({ content: [{ type: "text" as const, text: typ
 /** A result that says it failed: `{ error }`. */
 const failed = (value: unknown): boolean => typeof value === "object" && value !== null && "error" in value;
 
+/** The input shape of a bridged tool: its JSON Schema through zod. A schema zod cannot read takes one `arguments` object instead
+ *  (the SDK builds a strict object from a shape, so a passthrough is not expressible), unwrapped before the call; the note says so. */
+function shapeOf(b: BridgedTool, note: (message: string) => void): { shape: z.ZodRawShape; wrapped: boolean } {
+  try {
+    const schema = z.fromJSONSchema(b.inputSchema as never);
+    if (schema instanceof z.ZodObject) return { shape: schema.shape as z.ZodRawShape, wrapped: false };
+    throw new Error("not an object schema");
+  } catch {
+    note(`${b.name}: its input schema could not be read; the tool takes an arguments object`);
+    return { shape: { arguments: z.record(z.string(), z.unknown()).optional().describe("the tool's arguments, as an object") }, wrapped: true };
+  }
+}
+
 /** The server config for `mcpServers.luna`, over the handlers' `call` (core/luna-tools.ts keeps
  *  the state), with `delegate` beside them when the run delegates: a helper that gave no answer
  *  is the call's error. `served` names the luna tools to register: the pack's own `access.luna` (already narrowed by a
  *  person's mask), so a pack is never shown a tool `allowedTools` would then refuse. Built by the Claude runtime only, so no other runtime loads the SDK for it. */
-export function lunaServer(call: RunContext["luna"]["call"], delegate: DelegateTool | null = null, served: readonly LunaTool[] = Object.keys(LUNA_TOOLS) as LunaTool[]) {
+export function lunaServer(call: RunContext["luna"]["call"], delegate: DelegateTool | null = null, served: readonly LunaTool[] = Object.keys(LUNA_TOOLS) as LunaTool[], bridge: { tools: readonly BridgedTool[]; note: (message: string) => void } = { tools: [], note: () => {} }) {
   return createSdkMcpServer({
     name: "luna",
     version: "1.0.0",
@@ -27,6 +41,11 @@ export function lunaServer(call: RunContext["luna"]["call"], delegate: DelegateT
       ...(Object.keys(LUNA_TOOLS) as LunaTool[]).filter((name) => served.includes(name)).map((name) =>
         tool(name, LUNA_TOOLS[name].description, LUNA_TOOLS[name].input, async (args) => text(await call(name, args))),
       ),
+      // The design tools the machine bridged for this run (RFC 0013): the machine's listing is the schema.
+      ...bridge.tools.map((b) => {
+        const { shape, wrapped } = shapeOf(b, bridge.note);
+        return tool(b.name, b.description, shape, async (args) => text(await call(b.name, wrapped ? ((args as { arguments?: unknown }).arguments ?? {}) : args)));
+      }),
       ...(delegate
         ? [
             tool(DELEGATE, delegate.description, delegate.input, async (args) => {

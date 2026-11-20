@@ -2,6 +2,9 @@
 // these schemas; responses follow the interfaces.
 import { z } from "zod";
 
+import type { A11yAuditAnswer } from "./a11y.ts";
+import type { DesignContext } from "./design.ts";
+import type { DesignSpec } from "./design-spec.ts";
 import type { Column, TaskState } from "./index.ts";
 import type { Tokens } from "./economy.ts";
 import type { PrSnapshot } from "./github.ts";
@@ -13,7 +16,7 @@ import { EffortId, type ModelEntry, type RuntimeId } from "./models.ts";
 import { type CardFields, CardEntryFields } from "./card.ts";
 import type { CardEventName } from "./card-events.ts";
 import type { TaskReports } from "./reports.ts";
-import { type ArtifactKind, PackId, StageEngines, StageOutcome, type TaskClassification, type TaskRoute, TaskSource, TestCase, ArchiveReason, type EvidencePack, type TriageRecord } from "./stage.ts";
+import { type ArtifactKind, type Finding, PackId, StageEngines, StageOutcome, type TaskClassification, type TaskRoute, TaskSource, TestCase, ArchiveReason, type EvidencePack, type TriageRecord } from "./stage.ts";
 
 export const NewTaskInput = z.object({
   title: z.string().trim().min(1),
@@ -56,6 +59,34 @@ export interface RunResult {
   /** The decision record this call left (a decision pack with records on), so a later fact can name it. Host use. */
   recordId?: string;
 }
+
+/** `POST /design/spec` (RFC 0013): the repository (an absolute path of a checkout the machine knows) and a Figma link. The machine finds the design reference in the link. */
+export const DesignSpecRunInput = z.object({ repo: z.string().min(1), link: z.string().url().max(2000), engine: EngineId.optional() });
+export type DesignSpecRunInput = z.infer<typeof DesignSpecRunInput>;
+
+/** `POST /design/audit`: the repository and the name of one of its declared `qa_targets`. The machine holds the target's URL, hosts and credential; a client never sends them. */
+export const A11yRunInput = z.object({ repo: z.string().min(1), target: z.string().min(1).max(100), engine: EngineId.optional() });
+export type A11yRunInput = z.infer<typeof A11yRunInput>;
+
+/** What `POST /design/spec` answers. The machine keeps nothing of it. */
+export interface DesignSpecReport {
+  kind: "spec";
+  ref: DesignContext;
+  spec: DesignSpec;
+}
+
+/** What `POST /design/audit` answers: the audit's findings as review findings at the repository's level and mode. The machine keeps nothing of it. */
+export interface A11yReport {
+  kind: "audit";
+  target: string;
+  level: "AA" | "AAA";
+  mode: "gate" | "advisory";
+  findings: Finding[];
+  pages: A11yAuditAnswer["pages"];
+  notes: string[];
+}
+
+export type DesignReport = DesignSpecReport | A11yReport;
 
 /** `GET /economy?repo=`, and the body of the economy's POST routes: the repository is an absolute path of a checkout the machine knows. */
 export const EconomyRepoInput = z.object({ repo: z.string().trim().min(1) });
@@ -243,6 +274,8 @@ export const DecisionInput = z.object({
   keepWhole: z.boolean().optional(),
   /** At the plan gate: criterion ids with no scenario that the approver excuses as untestable. An approval with any other open gap is refused (`409 coverage_gaps`). */
   untestable: z.array(z.string().max(40)).max(100).optional(),
+  /** At a `design_budget` escalation: `off` approves and turns the designer agents off for this card (RFC 0013, D10). Dropped anywhere else. */
+  design: z.literal("off").optional(),
   /** Who is deciding, by name. A plan of High risk needs two distinct names; any decision keeps its own. */
   approver: z
     .string()
@@ -253,6 +286,10 @@ export const DecisionInput = z.object({
     .optional(),
 });
 export type DecisionInput = z.infer<typeof DecisionInput>;
+
+/** `POST /tasks/:id/design/findings/:findingId/waive` at the design sign-off (RFC 0013): `not_a_difference` says the reviewer was wrong, `accepted` says the difference is real and allowed. A reason is required. */
+export const WaiveDesignFindingInput = z.object({ kind: z.enum(["not_a_difference", "accepted"]), reason: z.string().trim().min(3).max(500) });
+export type WaiveDesignFindingInput = z.infer<typeof WaiveDesignFindingInput>;
 
 /** `POST /tasks/:id/escalation-reason`: a person corrects the reason Build's escalation was decided with. The six reasons only; the correction labels the decision record and moves nothing. */
 export const EscalationReasonInput = z.object({ reason: z.enum(["plan_wrong", "env_broken", "flaky_tests", "too_complex", "undeclared_scope", "other"]) });

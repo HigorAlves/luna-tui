@@ -4,13 +4,14 @@
 // a mechanical veto), assembles the Evidence Pack, keeps a local copy of its media and saves the pack
 // on the task. The pack and its files show up in the ship approval's `requested`, the gate Ship publishes from.
 import { type TruthSink, evidenceFormatTruth, recordIdOf } from "../decision-truth.ts";
-import { type ArtifactKind, type EvidenceContext, EvidencePack, Finding, PACKS, Risk, type TaskReports, type TaskState, VerifyReport, applyPolicy } from "@hardness/contracts";
+import { type ArtifactKind, type EvidenceContext, EvidencePack, Finding, PACKS, Risk, type TaskReports, type TaskState, VerifyDesignReport, VerifyReport, applyPolicy } from "@hardness/contracts";
 import { mkdir, readdir, stat } from "node:fs/promises";
-import { extname, join, relative } from "node:path";
+import { extname, join, relative, resolve, sep } from "node:path";
 
 import { assembleEvidencePack, packComplete, repairPack } from "../../domain/evidence-pack.ts";
 import { type CheckOutput, checksExcerpt, terminalCapture } from "../../domain/terminal-capture.ts";
 import { parseNote } from "../../domain/fix-card.ts";
+import { pairsPublished, parityPublishRule } from "../../domain/parity-publish.ts";
 import type { Policy } from "../../domain/policy.ts";
 import { approvedCases, approvedPlan, approvedScenarios, browserCases } from "../../domain/stage-input.ts";
 import { EvidenceStore, MAX_MEDIA_BYTES, safeName } from "../evidence-store.ts";
@@ -234,7 +235,9 @@ export interface EvidenceStageDeps extends EvidenceDeps {
   /** Runs evidence_format on an evidence context and returns its answer; bound late, once PackRuns exists. Read at call time. */
   decideFormat: ((context: EvidenceContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
   /** The repo's decision bars and its QA targets: how-to-verify names a target's URL from here, never from the manifest. */
-  policies: { for: (repoPath: string | null) => Promise<Pick<Policy, "decisions" | "qaTargets"> & Partial<Pick<Policy, "factory">>> };
+  policies: { for: (repoPath: string | null) => Promise<Pick<Policy, "decisions" | "qaTargets"> & Partial<Pick<Policy, "factory" | "design">>> };
+  /** Whether the card's repository is private on GitHub (the design pairs' publish rule); null when it cannot be read, which counts as public. Absent, unknown. */
+  repoPrivate?: (repoPath: string | null) => Promise<boolean | null>;
   /** What publishing inside Evidence needs: the GitHub port, the publish function, and the worktree's GitHub slug. Absent, Ship publishes as before. */
   publishing?: { github: GitHub; publish: PublishEvidence; slugOf: (worktreePath: string) => Promise<string | null> };
   /** Told the format the pack finally shipped with, after the vetoes and the video degrade (RFC 0005 wave 7). */
@@ -259,6 +262,8 @@ type Format = EvidencePack["format"];
 const FORMAT_OF: Record<string, Format> = { video: "video", screenshots_or_terminal: "captures", text_only: "text", captures: "captures", text: "text" };
 const CHANGED_CAP = 50;
 const MEDIA_SCREENSHOTS = 30;
+/** The frame | build pairs a pack carries, as many as the PR block lists. */
+const DESIGN_PAIRS = 6;
 
 const objectOf = (value: unknown): Record<string, unknown> | undefined => (value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined);
 
@@ -475,6 +480,20 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
         else if (a.kind === "video" && stitched !== null && a.label === stitched) picked.push({ path: a.path, label: a.label, kind: "video", scanned: false });
         else if (a.kind === "har") picked.push({ path: a.path, label: a.label, kind: "har" });
         else if (a.kind === "qa-manifest") picked.push({ path: a.path, label: a.label, kind: "report" });
+      }
+    }
+    // The frame | build pairs of the browser run's design review, when the repo's publish rule lets them out: they are screenshots, so the text on them is read like the rest.
+    if (format !== "text") {
+      const runs = join(deps.stateDir, "runs") + sep;
+      const design = VerifyDesignReport.safeParse(facts.e2e?.detail?.design);
+      const policy = await deps.policies.for(task.repoPath);
+      const publish = design.success && design.data.parity !== null && pairsPublished(parityPublishRule(policy.design), await (deps.repoPrivate?.(task.repoPath) ?? Promise.resolve(null)).catch(() => null));
+      if (design.success && publish) {
+        for (const f of design.data.parity!.frames.filter((x) => x.status === "compared" && x.pair !== null).slice(0, DESIGN_PAIRS)) {
+          // Only a file the machine wrote under its own runs folder; the store refuses a link.
+          if (!resolve(f.pair!).startsWith(runs)) continue;
+          picked.push({ path: f.pair!, label: `design pair ${f.scenario ?? "-"} ${f.viewport}/${f.state}`, kind: "screenshot" });
+        }
       }
     }
     // The text on the screenshots is read before anything is kept: a token, a key or personal data leaves the screenshot out. Nobody sees them before they are public.

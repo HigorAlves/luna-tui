@@ -17,7 +17,8 @@ import type { GuardContext } from "../../core/guards.ts";
 import { GRAPH_ROOT } from "../../core/roots.ts";
 
 import { EMPTY_RUN, type RunOutcome, timeRanOut } from "../../core/output.ts";
-import { FACTORY_RULES } from "../../core/render.ts";
+import { bridgeNames } from "../../core/luna-tools.ts";
+import { FACTORY_RULES, bridgeRule } from "../../core/render.ts";
 import { NO_TELEMETRY } from "../../core/telemetry.ts";
 import { type Instructions, NO_INSTRUCTIONS, type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
 import { claudeTools } from "./access.ts";
@@ -81,7 +82,7 @@ export function guardPolicy({ pack, input, paths }: Pick<RunContext, "pack" | "i
     branchPrefix: branchPrefixFor(input.task),
     workRoot: paths.work,
     outRoot: paths.out,
-    roots: { scratch: paths.scratch, read: [paths.input, join(paths.factoryRoot, "plugin"), GRAPH_ROOT, ...sessionResults()] },
+    roots: { scratch: paths.scratch, read: [paths.input, join(paths.factoryRoot, "plugin"), GRAPH_ROOT, ...sessionResults(), ...(paths.images ?? [])] },
     web: pack.kind === "agent" && pack.access.web,
     // e2e signs in with the credentials its targets name (`env:QA_PASSWORD`), inline as "$QA_PASSWORD".
     expandable: (input.context.qaTargets ?? []).flatMap((t) => (t.credential?.startsWith("env:") ? [t.credential.slice(4)] : [])),
@@ -112,15 +113,15 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
       })
     : {};
   // `delegate` rides on the luna server when the pack hands work to a helper on another runtime.
-  const { tools, allowedTools } = claudeTools(pack.access, paths.work);
+  const { tools, allowedTools } = claudeTools(pack.access, paths.work, bridgeNames(input.bridge));
   const delegating = ctx.delegate ? [`mcp__luna__${DELEGATE}`] : [];
   const options = {
     cwd: paths.work,
     // The folders a stage reads or writes beside /work: without them the SDK refuses a shell read of /in/stage.json that the guard's roots allow.
-    additionalDirectories: [paths.input, paths.out, paths.scratch],
+    additionalDirectories: [paths.input, paths.out, paths.scratch, ...(paths.images ?? [])],
     agent: pack.agent,
     agents: agentDefinitions(pack, join(paths.factoryRoot, "roles"), engine.modelId, ctx.effort ?? pack.effort),
-    systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: [FACTORY_RULES, ...commandsLine(pack.access.commands)].join("\n") },
+    systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: [FACTORY_RULES, ...bridgeRule(bridgeNames(input.bridge)), ...commandsLine(pack.access.commands)].join("\n") },
     plugins: [{ type: "local" as const, path: join(paths.factoryRoot, "plugin") }],
     // With skills masked the SDK offers only the rest (it hides the others from the model and rejects their calls); with no mask the key is absent.
     ...(pack !== ctx.pack && ctx.pack.kind === "agent" && pack.skills.length !== ctx.pack.skills.length ? { skills: pack.skills.map((skill) => `${PLUGIN_NAME}:${skill}`) } : {}),
@@ -132,7 +133,7 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
     permissionMode: "dontAsk" as const,
     maxTurns: input.limits.maxTurns,
     outputFormat: { type: "json_schema" as const, schema: answerJsonSchema(pack) },
-    mcpServers: { luna: lunaServer(luna.call, ctx.delegate ?? null, pack.access.luna) },
+    mcpServers: { luna: lunaServer(luna.call, ctx.delegate ?? null, pack.access.luna, { tools: input.bridge, note: (message) => emit({ kind: "note", payload: { phase: "design.schema", message } }) }) },
     hooks: {
       PreToolUse: preToolUseGuards(guardPolicy({ ...ctx, pack }), (id, tool, toolInput, decision) => calls.decided(id, tool, toolInput, decision)),
       ...economy,

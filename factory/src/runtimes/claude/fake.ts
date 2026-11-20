@@ -18,6 +18,7 @@ const ABORTED = "Claude Code process aborted by user";
 /** The tool the SDK would name for a scripted call, and its input. */
 function toolUse(step: Extract<ScriptStep, { call: string }>): { name: string; input: Record<string, unknown> } {
   if (step.call === "bash") return { name: "Bash", input: { command: step.command } };
+  if (step.call === "read") return { name: "Read", input: { file_path: step.path } };
   if (step.call === "delegate") return { name: "mcp__luna__delegate", input: { helper: step.helper, message: step.message } };
   return { name: `mcp__luna__${step.tool}`, input: step.args };
 }

@@ -734,3 +734,32 @@ describe("awaiting_ship and reviewing_memory hold a running stage or an open gat
     expect(transition(at("awaiting_ship"), { type: "sent_back" })).toMatchObject({ state: "evidence" });
   });
 });
+
+describe("the design sign-off (RFC 0013 phase 3)", () => {
+  const approved: PipelineEvent = { type: "approved" };
+  it("stops after the browser run only when the parity review leaves something for a person", () => {
+    expect(transition(at("e2e"), { type: "stage_done", outcome: "pass", designGate: true })).toMatchObject({ state: "awaiting_design", effect: { kind: "wait", gate: "awaiting_design" } });
+    expect(transition(at("e2e"), { type: "stage_done", outcome: "pass" })).toMatchObject({ state: "delivering", effect: { kind: "run", stage: "delivering" } });
+  });
+  it("delivers on approval and builds again on a send-back, on the implementer's runs", () => {
+    expect(transition(at("awaiting_design"), approved)).toMatchObject({ state: "delivering", effect: { kind: "run", stage: "delivering" } });
+    const back = transition(at("awaiting_design"), { type: "sent_back" });
+    expect(back).toMatchObject({ state: "implementing" });
+    expect(back.retries.total).toBe(1);
+    expect(transition(at("awaiting_design", { retries: { ...NO_RETRIES, total: IMPLEMENTER_CAP } }), { type: "sent_back" }).state).toBe("escalated");
+  });
+  it("asks a person at the gate, not an escalation, when the same design blockers come back after the build rounds", () => {
+    const fail = { type: "stage_done" as const, outcome: "fail" as const, design: true, findingSet: "D1", buildRounds: 1 };
+    const first = transition(at("e2e"), fail);
+    expect(first.state).toBe("implementing");
+    expect(transition({ ...first, state: "e2e" }, fail)).toMatchObject({ state: "awaiting_design", effect: { kind: "wait", gate: "awaiting_design" } });
+  });
+  it("turns a design failure at the browser loop's cap into the gate, and leaves any other at the cap an escalation", () => {
+    const capped = at("e2e", { retries: { ...NO_RETRIES, e2e: LOOP_CAP - 1 } });
+    expect(transition(capped, { type: "stage_done", outcome: "fail", design: true, findingSet: "D2", buildRounds: 9 }).state).toBe("awaiting_design");
+    expect(transition(capped, { type: "stage_done", outcome: "fail" }).state).toBe("escalated");
+  });
+  it("re-runs the browser run after a Stop at the gate", () => {
+    expect(transition(at("awaiting_design"), { type: "stop" })).toMatchObject({ state: "escalated", resumeTo: "e2e", reason: "stopped" });
+  });
+});

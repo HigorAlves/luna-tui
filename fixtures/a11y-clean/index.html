@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Checkout</title>
+    <style>
+      body { font-family: sans-serif; background: #fff; color: #1a1a1a; margin: 2rem; }
+      .pay { background: #1b5e20; color: #fff; border: 0; padding: 0.75rem 1.5rem; font-size: 1rem; }
+      .pay:focus-visible { outline: 3px solid #0b3d91; outline-offset: 2px; }
+      .pay:hover { background: #144a18; color: #fff; }
+      dialog { padding: 1rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Checkout</h1>
+    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" width="120" height="80" alt="Blue mug, 350 ml" />
+    <form>
+      <label for="card">Card number</label>
+      <input id="card" name="card" />
+      <button class="pay" type="submit">Pay now</button>
+    </form>
+    <button id="help" type="button">Help</button>
+    <dialog id="dialog">
+      <p>Call us any time.</p>
+      <button id="close" type="button">Close</button>
+    </dialog>
+    <script>
+      const dialog = document.getElementById("dialog");
+      const help = document.getElementById("help");
+      help.addEventListener("click", () => dialog.showModal());
+      document.getElementById("close").addEventListener("click", () => dialog.close());
+      dialog.addEventListener("close", () => help.focus());
+    </script>
+  </body>
+</html>

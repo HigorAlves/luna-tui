@@ -45,7 +45,7 @@ export interface OctokitLike {
       listReviews: unknown;
     };
     repos: {
-      get(params: Record<string, unknown>): Promise<{ data: { default_branch: string } }>;
+      get(params: Record<string, unknown>): Promise<{ data: { default_branch: string; private?: boolean } }>;
       getCombinedStatusForRef(params: Record<string, unknown>): Promise<{ data: { statuses: Array<{ context: string; state: string; target_url: string | null }> } }>;
       listReleases(params: Record<string, unknown>): Promise<{ data: Array<{ id: number; tag_name: string; html_url: string; draft?: boolean; published_at?: string | null }> }>;
       createRelease(params: Record<string, unknown>): Promise<{ data: { id: number; html_url: string } }>;
@@ -656,6 +656,12 @@ export class OctokitGitHub implements GitHub {
     const { owner, repo } = repoRef(slug);
     const { data } = await call(`reading the default branch of ${slug}`, () => this.octokit.rest.repos.get({ owner, repo }));
     return typeof data.default_branch === "string" && data.default_branch.length > 0 ? data.default_branch : null;
+  }
+
+  async repoPrivate(slug: string): Promise<boolean | null> {
+    const { owner, repo } = repoRef(slug);
+    const { data } = await call(`reading the visibility of ${slug}`, () => this.octokit.rest.repos.get({ owner, repo }));
+    return typeof data.private === "boolean" ? data.private : null;
   }
 
   async createIssue(slug: string, issue: { title: string; body: string; labels?: string[] }): Promise<{ number: number; url: string }> {

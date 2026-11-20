@@ -46,12 +46,13 @@ pub enum Scope {
     Inbox,
     Digest,
     Floor,
+    Design,
     Editor,
     Help,
 }
 
 impl Scope {
-    pub const ALL: [Scope; 14] = [
+    pub const ALL: [Scope; 15] = [
         Scope::Board,
         Scope::Detail,
         Scope::Pulls,
@@ -64,6 +65,7 @@ impl Scope {
         Scope::Inbox,
         Scope::Digest,
         Scope::Floor,
+        Scope::Design,
         Scope::Editor,
         Scope::Help,
     ];
@@ -83,6 +85,7 @@ impl Scope {
             Scope::Inbox => "Inbox",
             Scope::Digest => "Digest",
             Scope::Floor => "Floor",
+            Scope::Design => "Design report",
             Scope::Editor => "Editor",
             Scope::Help => "Keys",
         }
@@ -103,6 +106,7 @@ impl Scope {
             Scope::Inbox => "inbox",
             Scope::Digest => "digest",
             Scope::Floor => "floor",
+            Scope::Design => "design",
             Scope::Editor => "editor",
             Scope::Help => "help",
         }
@@ -274,6 +278,8 @@ pub(crate) fn sendable_back(t: &Task) -> bool {
         // A config proposal is approved or rejected: the machine refuses to send it back.
         "awaiting_setup" => t.route != "config",
         "awaiting_approval" | "awaiting_test_check" => true,
+        // The design sign-off goes back to Build with the note, as the machine counts it.
+        "awaiting_design" => t.route == "feature",
         // An escalated feature card sent back is planned again (`a` retries the stage that stopped, on the same plan).
         "escalated" => t.route == "feature",
         // Only while the machine waits on you: otherwise it is watching the PR, and a send-back has nothing to stop.
@@ -361,6 +367,12 @@ fn open_key(app: &App) -> Avail {
     if app.detail_section == Section::Evidence && app.detail_rows() == 0 {
         return Avail::Off("no evidence yet");
     }
+    if app.detail_section == Section::Design {
+        return match app.detail_rows() {
+            0 => Avail::Off("no frames yet"),
+            _ => Avail::On,
+        };
+    }
     if app.detail_open_target().is_some() {
         return Avail::On;
     }
@@ -408,7 +420,10 @@ fn enter_key(app: &App) -> Avail {
         return Avail::Off("no opener on this system");
     }
     match app.detail_rows() {
-        _ if app.detail_section != Section::Evidence => Avail::Off("only in the Evidence section"),
+        _ if !matches!(app.detail_section, Section::Evidence | Section::Design) => {
+            Avail::Off("only in the Evidence and Design sections")
+        }
+        0 if app.detail_section == Section::Design => Avail::Off("no frames yet"),
         0 => Avail::Off("no evidence yet"),
         _ => Avail::On,
     }
@@ -491,6 +506,7 @@ const GATE_STATES: &[&str] = &[
     "awaiting_answers",
     "awaiting_approval",
     "awaiting_test_check",
+    "awaiting_design",
     "awaiting_ship",
     "escalated",
     "paused_rate_limit",
@@ -1511,6 +1527,28 @@ const BOARD: &[Binding] = &[
     ),
     cmd(
         b(
+            ":waive <finding id> <reason>",
+            "waive a design finding: not a difference",
+            Group::Commands,
+            Scope::Board,
+            on,
+            0,
+        ),
+        "waive",
+    ),
+    cmd(
+        b(
+            ":accept <finding id> <reason>",
+            "accept a design difference as it is",
+            Group::Commands,
+            Scope::Board,
+            on,
+            0,
+        ),
+        "accept",
+    ),
+    cmd(
+        b(
             ":finding <blocker|should_fix|nit> <title>",
             "add a finding Verify missed",
             Group::Commands,
@@ -1519,6 +1557,39 @@ const BOARD: &[Binding] = &[
             0,
         ),
         "finding",
+    ),
+    cmd(
+        b(
+            ":spec <figma link>",
+            "read a design into a spec",
+            Group::Commands,
+            Scope::Board,
+            on,
+            0,
+        ),
+        "spec",
+    ),
+    cmd(
+        b(
+            ":audit <qa target>",
+            "audit a QA target (WCAG)",
+            Group::Commands,
+            Scope::Board,
+            on,
+            0,
+        ),
+        "audit",
+    ),
+    cmd(
+        b(
+            ":report",
+            "reopen a waiting design report",
+            Group::Commands,
+            Scope::Board,
+            on,
+            0,
+        ),
+        "report",
     ),
     cmd(
         b(
@@ -2697,6 +2768,20 @@ const FLOOR: &[Binding] = &[
     cmd(b("?", "keys", Group::App, Scope::Floor, on, 100), "help"),
 ];
 
+const DESIGN: &[Binding] = &[
+    b(
+        "c",
+        "card: make a ticket from the report",
+        Group::Ticket,
+        Scope::Design,
+        on,
+        90,
+    ),
+    b("j / k", "scroll", Group::Move, Scope::Design, on, 30),
+    b("esc / q", "close", Group::Move, Scope::Design, on, 20),
+    cmd(b("?", "keys", Group::App, Scope::Design, on, 100), "help"),
+];
+
 const EDITOR: &[Binding] = &[
     b("i a o", "insert", Group::App, Scope::Editor, in_normal, 90),
     b("dd x", "delete", Group::App, Scope::Editor, in_normal, 80),
@@ -2765,6 +2850,7 @@ const TOTAL: usize = BOARD.len()
     + WATCHES.len()
     + DIGEST.len()
     + FLOOR.len()
+    + DESIGN.len()
     + EDITOR.len()
     + HELP.len();
 
@@ -2839,6 +2925,7 @@ const fn build() -> [Binding; TOTAL] {
     copy_into(WATCHES, Scope::Watches, "", &mut out, &mut at);
     copy_into(DIGEST, Scope::Digest, "", &mut out, &mut at);
     copy_into(FLOOR, Scope::Floor, "", &mut out, &mut at);
+    copy_into(DESIGN, Scope::Design, "", &mut out, &mut at);
     copy_into(EDITOR, Scope::Editor, "", &mut out, &mut at);
     copy_into(HELP, Scope::Help, "", &mut out, &mut at);
     out
@@ -2861,6 +2948,7 @@ pub fn active_scope(app: &App) -> Scope {
         | Mode::Answer { .. }
         | Mode::SlackReply { .. } => return Scope::Editor,
         Mode::Detail(_) => return Scope::Detail,
+        Mode::DesignReport { .. } => return Scope::Design,
         _ => {}
     }
     if app.slack.as_ref().is_some_and(|s| s.watches.is_some()) {
@@ -2913,7 +3001,7 @@ fn detail_offered(app: &App, b: &Binding) -> bool {
     match b.first() {
         "e" => task_of(app).is_some_and(|t| at_gate(t) && edit_blocked(app, t).is_none()),
         "J" => app.detail_section.has_cursor(),
-        "enter" => app.detail_section == Section::Evidence,
+        "enter" => matches!(app.detail_section, Section::Evidence | Section::Design),
         _ => true,
     }
 }
@@ -3500,6 +3588,13 @@ mod tests {
             "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}}"#
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn the_design_sign_off_is_a_gate_that_approves_and_sends_back() {
+        let t = task("t1", "awaiting_design", true, false, true);
+        assert!(at_gate(&t));
+        assert!(sendable_back(&t));
     }
 
     fn app_with(tasks: Vec<Task>) -> App {
@@ -4149,6 +4244,7 @@ mod tests {
         parity(Scope::Watches, handled::WATCHES);
         parity(Scope::Digest, handled::DIGEST);
         parity(Scope::Floor, handled::FLOOR);
+        parity(Scope::Design, handled::DESIGN);
         parity(Scope::Help, handled::HELP);
         // The board's menu chords are handled by the menu, not the board.
         let chords: Vec<char> = BINDINGS

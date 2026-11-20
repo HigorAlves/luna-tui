@@ -1,7 +1,9 @@
 // Wires up which StageRunner serves which TaskState: the real agent packs (when a
 // credential and the runner image are available), the host-only runners that always run
 // for real, and the stub fallback.
-import { FACTORY_DEFAULTS } from "@hardness/contracts";
+import { FACTORY_DEFAULTS, designSettings, parityBarOf } from "@hardness/contracts";
+import { cardOf } from "../domain/card-fields.ts";
+import { designRefOf } from "../domain/design-ref.ts";
 import type { EvidencePack, QuestionsContext, ShipContext, TaskRoute, TaskState } from "@hardness/contracts";
 
 import type { CoverageSummary, Ledger, RunSummary } from "@hardness/contracts";
@@ -14,9 +16,13 @@ import type { Graph } from "../application/graph.ts";
 import type { Watcher } from "../application/ports.ts";
 import type { TruthSink } from "../application/decision-truth.ts";
 import type { Decide } from "../application/stages/check-decide.ts";
+import { mcpFactory } from "./mcp.ts";
 import { type AgentDeps, type AgentExtra, agentRunners, runAgent } from "../application/stages/pack-runner.ts";
 import { ciWatchRunner } from "../application/stages/ci.ts";
 import { e2eRunner, missingQaImageRunner } from "../application/stages/e2e.ts";
+import { runDesignParity } from "../application/stages/design-parity.ts";
+import { pairImages } from "../adapters/image/parity-pairs.ts";
+import { designSpecOf } from "../domain/stage-input.ts";
 import { type EvidenceDeps, type EvidenceStageDeps, evidenceStage } from "../application/stages/evidence.ts";
 import { type RetroFacts, memoryReviewRunner } from "../application/stages/memory.ts";
 import type { StageContext, StageResult, StageRunner } from "../application/ports.ts";
@@ -50,6 +56,7 @@ import { InstallFailedError, type InstallInput, type InstallOutcome, ensureInsta
 import { removeNestedRepositories } from "../adapters/git/machine-repo.ts";
 import { ensureClone, isClone, removeClone } from "../adapters/git/clone.ts";
 import { type ProofRig, proofAppDeps } from "../application/config-proof.ts";
+import type { DesignBudget } from "../domain/design-budget.ts";
 import { sandboxSizeOf } from "../domain/sandbox-bounds.ts";
 import { type Trust, trustOf } from "../domain/trust.ts";
 import { runtimeChecker } from "../adapters/docker/runtimes.ts";
@@ -67,6 +74,7 @@ import { PolicyStore } from "../application/policy.ts";
 import { keepFolder } from "../application/kept-sandboxes.ts";
 import { hostBaselineWorkspace, hostFreshWorkspace, publishBranch } from "../adapters/git/clone.ts";
 import { at } from "../adapters/git/machine-repo.ts";
+import { repoPrivateOf } from "../application/design-publish.ts";
 import { HOST_GIT, changedPaths, changedSince, diffNameStatus, originSlugOf, dirtyFiles, gitIdentity, blobsAtRepo, branchBase, commitAll, currentBranch, headCommit, lockfilesAt, nestedLockfilesAt, restoreFiles, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
 import { checkpointPush } from "../application/stages/checkpoint.ts";
 import { judgeRedCheck } from "../application/stages/build-watch.ts";
@@ -85,6 +93,12 @@ import { type ComplianceDeps } from "../application/stages/compliance-review.ts"
 import { type DocsDriftDeps } from "../application/stages/docs-drift.ts";
 import { sharedWiki } from "../adapters/git/wiki.ts";
 import { type ShipGateProbe, shipGateProbe } from "../application/ship-gate-probe.ts";
+
+/** What the designer agents' stages ask the pipeline (RFC 0013): the card's design budget now, and whether a person turned design off for it. */
+export interface DesignDecisions {
+  budget?: (taskId: string) => Promise<DesignBudget>;
+  cardOff?: (taskId: string) => Promise<boolean>;
+}
 
 export interface RealStagesResult {
   /** Why every stage is a stub (no Claude credential, no runner image, no egress image), for `GET /health`; null when stages are real, and when agents are off on purpose (`MACHINE_AGENTS=off`). */
@@ -169,6 +183,8 @@ export async function buildRealStages(
   jira?: Jira | null,
   /** What the review route links a PR to (the board's cards, the Jev fallback, where the links are kept); absent, only the keys a PR names are read. */
   reviewLinks?: PrReviewDeps["links"],
+  /** The designer agents' budget and a card's "design off" (RFC 0013), bound once the pipeline exists; absent, no budget applies and design stays on. */
+  designDecisions?: DesignDecisions,
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -336,6 +352,9 @@ export async function buildRealStages(
     credentials,
     worktreesDir: config.worktreesDir,
     stateDir: config.stateDir,
+    // The MCP servers a pack may bridge (RFC 0013): one client per stage run.
+    mcpFor: mcpFactory(config).mcpFor,
+    mcpUntrusted: config.mcp.untrusted,
     watcher,
     exec: checksExec,
     hostExec: exec,
@@ -482,7 +501,18 @@ export async function buildRealStages(
     ...(triageSignals && agents.triage ? { triage: withTriageSignals(agents.triage, Object.assign(triageSignals, { council: triageSignals.council ?? ((subContext: StageContext, questions: QuestionsContext) => runAgent(deps, subContext, "question_council", { questions })) })) } : {}),
     // The plan stage runs in test_design: the planner, the test designer, then three decisions, each pack a sub-run.
     test_design: planStage({
-      runPack: (pack, subContext, extra) => runAgent(deps, subContext, pack, extra.plan ? { plan: extra.plan } : {}),
+      runPack: (pack, subContext, extra) => runAgent(deps, subContext, pack, { ...(extra.plan ? { plan: extra.plan } : {}), ...(extra.design ? { design: extra.design } : {}) }),
+      // The designer agents (RFC 0013): the card's design reference and its budget, read at call time (the budget is bound late).
+      design: {
+        context: async (task) => {
+          const policy = await policies.for(task.repoPath);
+          const settings = designSettings(policy.design);
+          return { off: settings.off, cardOff: designDecisions?.cardOff ? await designDecisions.cardOff(task.id) : false, ref: designRefOf({ text: `${task.title}\n${task.description}`, attachments: cardOf(task).attachments, settings }) };
+        },
+        get budget() {
+          return designDecisions?.budget;
+        },
+      },
       get decide() {
         return planDecisions?.decide ?? null;
       },
@@ -532,7 +562,34 @@ export async function buildRealStages(
     // e2e skips repos with no web surface; without the QA image it passes with a note.
     e2e: qaImage
       ? e2eRunner({
-          runPack: (context, extra) => runAgent(deps, context, "e2e", extra ?? {}),
+          runPack: (context, extra, pack) => runAgent(deps, context, pack ?? "e2e", extra ?? {}),
+          // The accessibility audit after the browser run (RFC 0013): the repo's design settings, a person's "design off" for the card, and the design budget (late-bound).
+          design: {
+            settings: async (repoPath, taskId) => {
+              const s = designSettings((await policies.for(repoPath)).design);
+              return { off: s.off, cardOff: designDecisions?.cardOff ? await designDecisions.cardOff(taskId) : false, level: s.a11y.level, mode: s.a11y.mode };
+            },
+            get budget() {
+              return designDecisions?.budget;
+            },
+          },
+          // The design parity review after the audit (RFC 0013, phase 3): a read-only sub-run over the captures, then the frame | build pairs on the host.
+          designParity: (context, parity, unplaced) =>
+            runDesignParity(
+              {
+                run: (subContext, extra) => runAgent(deps, subContext, "design_parity", extra),
+                spec: (c) => designSpecOf(c.approvals),
+                bar: async (repoPath) => parityBarOf((await policies.for(repoPath)).design),
+                pair: pairImages,
+                get budget() {
+                  return designDecisions?.budget;
+                },
+                stateDir: config.stateDir,
+              },
+              context,
+              parity,
+              unplaced,
+            ),
           openApp: (input) => openApp(appDeps, input),
           openPreview: (input) => openPreview(appDeps, input),
           policy: (repoPath) => policies.for(repoPath),
@@ -559,6 +616,7 @@ export async function buildRealStages(
       headCommit,
       videoImage: async () => videoImage,
       publishing: { github, publish: publishByPolicy, slugOf: originSlugOf },
+      repoPrivate: repoPrivateOf(github, originSlugOf),
       // Host git on a workspace goes through `at()` inside diffNameStatus; a failure means "unknown", which makes the film stale.
       changedBetween: async (worktreePath, from, to) => {
         try {

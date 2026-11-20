@@ -21,4 +21,11 @@ describe("evalSandbox", () => {
     expect(evalSandbox("triage", true).credentials).toEqual({ engineRelay: true });
     expect(evalSandbox("triage", false).credentials).toEqual({ engineRelay: false });
   });
+
+  it("runs a browser pack in the QA image and the others in the stage image", () => {
+    expect(evalSandbox("a11y_audit", false)).toMatchObject({ image: "qa" });
+    expect(evalSandbox("e2e", false)).toMatchObject({ image: "qa" });
+    expect(evalSandbox("design_spec", false)).toMatchObject({ image: "stage" });
+    expect(evalSandbox("triage", false)).toMatchObject({ image: "stage" });
+  });
 });

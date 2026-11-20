@@ -45,6 +45,7 @@ const ASKS: Partial<Record<TaskState, string>> = {
   awaiting_answers: "answer triage's questions",
   awaiting_approval: "approve the plan",
   awaiting_test_check: "check the tests",
+  awaiting_design: "sign off the design",
   awaiting_ship: "choose how to ship",
   reviewing_memory: "review the memory proposal",
 };

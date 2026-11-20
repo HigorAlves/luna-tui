@@ -3,6 +3,7 @@
 // a field the machine cannot know yet is null, with the wave that fills it named beside it.
 import { z } from "zod";
 
+import { VerifyDesignReport } from "./design-report.ts";
 import { CoverageSummary, Finding } from "./stage.ts";
 
 /** The Diff Summary the implementer writes after reading its own diff. A plain string (an answer from before v2.2) is read as `what`. */
@@ -109,6 +110,8 @@ export const VerifyReport = z.object({
   ciClass: z.string().nullable().optional(),
   /** The failures each loop has had: Verify, the browser run, CI. */
   rounds: z.object({ verify: z.number().int(), e2e: z.number().int(), ci: z.number().int() }).optional(),
+  /** The last browser run's design block (RFC 0013, phase 3), with the design sign-off's waivers applied; absent on a card with no design run. */
+  design: VerifyDesignReport.nullable().optional(),
 });
 export type VerifyReport = z.infer<typeof VerifyReport>;
 

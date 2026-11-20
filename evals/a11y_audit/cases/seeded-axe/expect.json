@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "mentions",
+      "path": "findings[].criterion",
+      "words": [
+        "1.4.3",
+        "1.1.1"
+      ]
+    },
+    {
+      "kind": "mentions",
+      "path": "findings[].rule",
+      "words": [
+        "color-contrast",
+        "image-alt",
+        "label"
+      ]
+    },
+    {
+      "kind": "mentions",
+      "path": "findings[].source",
+      "words": [
+        "axe"
+      ]
+    },
+    {
+      "kind": "equals",
+      "path": "pages[].axe",
+      "value": "ran"
+    }
+  ],
+  "rubric": "The seeded page has three failures axe finds: the Pay button text at 2.8:1 on its fill (color-contrast, 1.4.3), the product image with no alt (image-alt, 1.1.1) and the card-number input with no label (label, 1.3.1 and 4.1.2). A good answer reports each as source axe with its rule, impact and selector, at its level, and runs axe on the page. Recall by level counts: every A and AA failure found. A false blocker is a finding on something the page does well, a criterion the page does not break, or an AAA finding presented as blocking at level AA. The judged failures of the page (the dialog, the focus outline) may also appear as judged findings, but their absence is not an error in this case."
+}
