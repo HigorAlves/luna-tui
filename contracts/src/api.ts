@@ -287,6 +287,10 @@ export const DecisionInput = z.object({
 });
 export type DecisionInput = z.infer<typeof DecisionInput>;
 
+/** `POST /tasks/:id/design/findings/:findingId/waive` at the design sign-off (RFC 0013): `not_a_difference` says the reviewer was wrong, `accepted` says the difference is real and allowed. A reason is required. */
+export const WaiveDesignFindingInput = z.object({ kind: z.enum(["not_a_difference", "accepted"]), reason: z.string().trim().min(3).max(500) });
+export type WaiveDesignFindingInput = z.infer<typeof WaiveDesignFindingInput>;
+
 /** `POST /tasks/:id/escalation-reason`: a person corrects the reason Build's escalation was decided with. The six reasons only; the correction labels the decision record and moves nothing. */
 export const EscalationReasonInput = z.object({ reason: z.enum(["plan_wrong", "env_broken", "flaky_tests", "too_complex", "undeclared_scope", "other"]) });
 export type EscalationReasonInput = z.infer<typeof EscalationReasonInput>;

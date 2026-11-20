@@ -10,6 +10,7 @@ import {
   ArchiveInput,
   AddFindingInput,
   DismissFindingInput,
+  WaiveDesignFindingInput,
   EvidenceFeedbackInput,
   DecisionInput,
   EscalationReasonInput,
@@ -872,6 +873,14 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     const id = taskId(c);
     const { reason } = await body(c, DismissFindingInput);
     await pipeline.dismissFinding(id, c.req.param("findingId").slice(0, 200), reason);
+    return c.json(await serialize(await pipeline.get(id)));
+  });
+
+  /** A person waives one design finding at the design sign-off, with a kind and a reason (RFC 0013): not at any other gate (409), not a finding the gate does not hold (404). */
+  app.post("/tasks/:id/design/findings/:findingId/waive", async (c) => {
+    const id = taskId(c);
+    const input = await body(c, WaiveDesignFindingInput);
+    await pipeline.waiveDesignFinding(id, c.req.param("findingId").slice(0, 200), input);
     return c.json(await serialize(await pipeline.get(id)));
   });
 

@@ -38,7 +38,7 @@ import { finishedRunsOf } from "./adapters/persistence/finished-runs.ts";
 import { fileStore as economyStore } from "./adapters/economy/store.ts";
 import { OVERHEAD_PACKS } from "./domain/economy/ledger.ts";
 import { DecisionTruth, tagged } from "./application/decision-truth.ts";
-import { priorityTruth, escalationTruthWriter, evidenceFeedbackWriter, groundTruthWriter, ticketTruthWriter } from "./application/ground-truth.ts";
+import { priorityTruth, escalationTruthWriter, evidenceFeedbackWriter, groundTruthWriter, ticketTruthWriter, writeTruthFile } from "./application/ground-truth.ts";
 import { commitsSince, defaultBranchFile, gitIdentity, headCommit, originSlugOf } from "./adapters/git/worktree.ts";
 import { ConfigProofs } from "./application/config-proofs.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
@@ -584,6 +584,7 @@ pipeline = new Pipeline(db, runnerFor, {
   },
   priorityTruth: (entry) => priorityTruth(config.stateDir, entry),
   truthKept: async (task) => !task.repoPath || (await policies.for(task.repoPath)).factory.learning.truth,
+  ...(config.groundTruth ? { designTruth: (_task: unknown, name: string, body: object) => writeTruthFile(config.stateDir, "design_parity", name, body) } : {}),
   ...(config.groundTruth ? { evidenceFeedback: evidenceFeedbackWriter(config.stateDir), groundTruth: groundTruthWriter(config.stateDir), escalationTruth: escalationTruthWriter(config.stateDir), commitsSince, headOf: headCommit } : {}),
   truth: decisionTruth,
   ...(shipGateProbe ? { shipGateProbe, shipProbeMs: config.shipPoll.intervalMs } : {}),

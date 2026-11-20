@@ -20,7 +20,7 @@ import { withTriageSignals } from "./stages/triage-signals.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import { ApprovalEntity } from "../adapters/persistence/schemas.ts";
-import { ApproverRequiredError, type BudgetAlert, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, Pipeline, PlanApprovedError, testPathsIn, RejectNotAllowedError, QuestionsCarrySecretError, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "./pipeline.ts";
+import { ApproverRequiredError, FindingNotFoundError, type BudgetAlert, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, Pipeline, PlanApprovedError, testPathsIn, RejectNotAllowedError, QuestionsCarrySecretError, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "./pipeline.ts";
 import { DEFAULT_POLICY } from "../domain/policy.ts";
 import { approvedPlan, buildStageInput } from "../domain/stage-input.ts";
 import { ensureClone } from "../adapters/git/clone.ts";
@@ -4593,3 +4593,108 @@ describe("the design sign-off gate (RFC 0013 phase 3)", () => {
     expect((await startAndApprove(task.id)).state).not.toBe("awaiting_design");
   });
 });
+
+describe("the design sign-off's answers (RFC 0013 phase 3)", () => {
+  const learned: Array<Record<string, unknown>> = [];
+  const truths: Array<{ name: string; body: Record<string, unknown> }> = [];
+  const finding = (id: string, severity = "should_fix") => ({ id, path: "figma:F1/12:34", line: 0, severity, title: "Pay colour", body: "b", confidence: 0.9, category: "design" as const, design: { source: "parity" as const, frame: "F1", node: "12:34", element: "button.pay", kind: "token" } });
+  const row = (state: string, status: "compared" | "not_compared") => ({ frame: "F1", name: "Checkout", node: "12:34", scenario: "S1", viewport: "1440x900", state, status, capture: "/s/c.png", render: "/s/r.png", diff: null, pair: "/s/p.png", diffRatio: 0.1 });
+  const design = { wcag: "AA", a11y: null, parity: { ran: true, runId: "r1-parity", confidence: 0.9, bar: 0.75, designInput: "complete", frames: [row("default", "compared"), row("hover", "not_compared")], counts: { blocker: 0, should_fix: 2, nit: 0, waived: 0 }, summary: "" }, findings: [finding("D1"), finding("D2")], classified: [{ id: "D1", recordId: "rec-1" }], gate: { fires: true, why: ["open_findings"] } };
+  const made: Pipeline[] = [];
+  const make = (opts: { kept?: boolean; seen?: Array<Array<{ title: string }>> } = {}) => {
+    const runner = (stage: TaskState): StageRunner => {
+      const inner = stubs.runnerFor(stage);
+      return stage === "implementing" && opts.seen ? async (ctx) => (opts.seen!.push((ctx.priorFindings ?? []) as Array<{ title: string }>), inner(ctx)) : inner;
+    };
+    const p = new Pipeline(db, runner, { inline: true, policies: previewOn, hasConfig: () => true, truth: { learned: async (f: Record<string, unknown>) => (learned.push(f), true) } as never, designTruth: async (_task, name, body) => (truths.push({ name, body: body as Record<string, unknown> }), `/gt/${name}`), truthKept: async () => opts.kept ?? true });
+    made.push(p);
+    return p;
+  };
+  const atGate = async (p: Pipeline) => {
+    stubs.plan("e2e", { outcome: "pass", detail: { step: "e2e", verdict: "pass", design } });
+    const task = await p.createTask({ title: "Checkout", criteria: ["pay works"] });
+    await p.start(task.id);
+    expect(await p.decide(task.id, "approved")).toMatchObject({ state: "awaiting_design" });
+    return task.id;
+  };
+  const openFindings = async (p: Pipeline, id: string) => (((await p.approvals(id)).find((a) => a.decision === null)!.requested.design as { findings: Array<{ id: string; resolution?: unknown }> }).findings);
+  beforeEach(async () => {
+    learned.length = 0;
+    truths.length = 0;
+    await Promise.all(made.splice(0).map((p) => p.shutdown()));
+  });
+
+  it("waives one finding with a reason: marked on the gate, logged by id and kind, kept as truth, and its classification labelled nit", async () => {
+    const p = make();
+    const id = await atGate(p);
+    await p.waiveDesignFinding(id, "D1", { kind: "not_a_difference", reason: "anti-aliasing, same token" });
+    expect((await openFindings(p, id)).map((f) => [f.id, f.resolution ?? null])).toEqual([["D1", { status: "waived", by: "person" }], ["D2", null]]);
+    const gate = (await p.approvals(id)).find((a) => a.decision === null)!;
+    expect((gate.requested.design as { parity: { counts: unknown } }).parity.counts).toEqual({ blocker: 0, should_fix: 1, nit: 0, waived: 1 });
+    expect((await p.events(id)).filter((e) => e.kind === "design.waived").map((e) => e.payload)).toEqual([{ id: "D1", kind: "not_a_difference" }]);
+    expect(truths).toEqual([{ name: expect.stringMatching(new RegExp(`^${id}-D1\\.json$`)), body: expect.objectContaining({ taskId: id, kind: "not_a_difference", reason: "anti-aliasing, same token", parityRunId: "r1-parity", finding: expect.objectContaining({ id: "D1" }), frame: expect.objectContaining({ frame: "F1", status: "compared", capture: "/s/c.png", render: "/s/r.png", pair: "/s/p.png" }) }) }]);
+    expect(learned).toEqual([expect.objectContaining({ pack: "finding_classify", recordId: "rec-1", label: { severity: { choice: "nit" } }, kind: "person", source: "design_waived", taskId: id })]);
+  });
+
+  it("passes a waiver's reason through safe() and keeps it out of the event stream", async () => {
+    const p = make();
+    const id = await atGate(p);
+    await p.waiveDesignFinding(id, "D2", { kind: "accepted", reason: "ask @ana about #12 <b>now</b>" });
+    expect(truths[0]!.body.reason).toBe("ask @\u200bana about #\u200b12 &lt;b&gt;now&lt;/b&gt;");
+    expect(JSON.stringify(await p.events(id))).not.toContain("ask @");
+    expect(learned).toEqual([]);
+  });
+
+  it("writes no truth file when the repo's learning section keeps none, and still marks the waiver", async () => {
+    const p = make({ kept: false });
+    const id = await atGate(p);
+    await p.waiveDesignFinding(id, "D1", { kind: "accepted", reason: "brand allows it" });
+    expect(truths).toEqual([]);
+    expect((await openFindings(p, id))[0]).toMatchObject({ id: "D1", resolution: { status: "waived" } });
+  });
+
+  it("refuses a waiver for a finding the gate does not have, and anywhere but the gate", async () => {
+    const p = make();
+    const id = await atGate(p);
+    await expect(p.waiveDesignFinding(id, "F-nope", { kind: "accepted", reason: "fine" })).rejects.toBeInstanceOf(FindingNotFoundError);
+    await new PgTaskStore(db).updateTask(id, { state: "awaiting_ship" });
+    await expect(p.waiveDesignFinding(id, "D1", { kind: "accepted", reason: "fine" })).rejects.toBeInstanceOf(TransitionError);
+    expect(truths).toEqual([]);
+  });
+
+  it("writes the sign-off as truth on approval: what was kept open, what was waived, what was not compared", async () => {
+    const p = make();
+    const id = await atGate(p);
+    await p.waiveDesignFinding(id, "D1", { kind: "accepted", reason: "brand allows it" });
+    truths.length = 0;
+    await p.decide(id, "approved");
+    expect(truths).toEqual([{ name: expect.stringMatching(new RegExp(`^${id}-[A-Za-z0-9_.-]+\\.json$`)), body: expect.objectContaining({ taskId: id, decision: "approved", note: null, kept: ["D2"], waived: ["D1"], notCompared: ["F1 1440x900-hover"], confidence: 0.9, bar: 0.75 }) }]);
+  });
+
+  it("writes no sign-off truth when the repo keeps none", async () => {
+    const p = make({ kept: false });
+    const id = await atGate(p);
+    await p.decide(id, "approved");
+    expect(truths).toEqual([]);
+  });
+
+  it("hands Build the open design findings and the note after a send-back, and writes the note as truth", async () => {
+    const seen: Array<Array<{ title: string }>> = [];
+    const p = make({ seen });
+    const id = await atGate(p);
+    await p.waiveDesignFinding(id, "D1", { kind: "accepted", reason: "brand allows it" });
+    truths.length = 0;
+    await p.decide(id, "sent_back", "the hover state is missing entirely");
+    expect(seen.at(-1)!.map((f) => f.title)).toEqual(["Pay colour", "Design sign-off: the hover state is missing entirely"]);
+    expect(truths[0]).toEqual({ name: expect.stringMatching(/\.json$/), body: expect.objectContaining({ decision: "sent_back", note: "the hover state is missing entirely", kept: ["D2"], waived: ["D1"] }) });
+  });
+
+  it("does not hand a later Build run the sign-off's note once something newer has run", async () => {
+    const p = make();
+    const id = await atGate(p);
+    await p.decide(id, "sent_back", "the hover state is missing entirely");
+    const prior = await (p as unknown as { latestVerifyingFindings(id: string): Promise<Array<{ title: string }>> }).latestVerifyingFindings(id);
+    expect(prior.map((f) => f.title)).not.toContain("Design sign-off: the hover state is missing entirely");
+  });
+});
+
