@@ -335,6 +335,8 @@ servers:
     tools: [get_design_context]
 ```
 
+The machine keeps an image that a tool returns only up to 3 MiB, at most 8 a call and 20 MB a run. It drops the rest and counts them in `imagesDropped`. A pack that reads images (`vision: true`) runs only on an engine whose catalog model has `vision`.
+
 `op://` references need the 1Password CLI installed and signed in inside the machine's image; `env:` works without it. A `ref` token reaches a stdio server as `MCP_TOKEN` in its environment and an http server as a bearer header; it never reaches a stage container.
 
 | Command | What it does |

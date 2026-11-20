@@ -305,3 +305,29 @@ Deviations from the design above:
 Known gap: the ship monitor's restack rebuilds the PR body without the card's facts, so the Design & accessibility block drops, as the findings already did.
 
 Not verified live: no Figma account, so no real frame has been compared. No live parity run has happened (the tests use in-memory fixtures and drawn PNGs), and no saved eval baseline exists for `design_parity`, because `pnpm eval` needs a Claude login. The Figma tool names and answers in the eval fixtures are hand-written. The harvest ran only on synthetic waivers.
+
+**Phase 4, image input on eve.**
+
+- *Image mounts (slice 50).* `IMAGE_ROOTS` (`/design`, `/evidence`, `factory/src/core/roots.ts`) are read roots on both runtimes. The runner passes the ones present as `paths.images`; Claude adds them to its read roots and `additionalDirectories`, eve to its guard's.
+- *Attachments (slice 51).* eve writes each file a tool returns under `.eve/attachments` in the workspace. The sandbox connection now maps that path to `<state>/attachments` (`LUNA_EVE_ATTACHMENTS`), so no image lands in the worktree. The path is normalised before the prefix check, so a `..` cannot climb out of the store.
+- *The catalog (slice 52).* `caps.vision` is required on every model. `AgentPack.vision?: true` is set on `design_spec` and `design_parity`. `visionProblem(pack, engine)` says what is wrong, and `engines.test.ts` checks that no vision pack allows a blind engine.
+- *Refusal (slice 53).* `chooseEngine` refuses a blind engine as it refuses one a pack does not allow. `fallbackCandidates` never yields one. The pack runner checks again for a resumed or handed engine, before the container starts, and the factory checks in `main.ts` after the effort check. `pnpm eval` refuses it too.
+- *The eve gate (slice 54).* `read_file`'s model output goes through `visionGate`. On an engine with vision it is eve's own, an image as a file part. Without, it is the text line plus a note that the engine cannot read images. The runner sets `LUNA_EVE_VISION` from `caps.vision`, and a compiled subagent takes its own engine's vision. A dry run's session options carry `vision`.
+- *Conformance (slice 55).* A table row reads a PNG under an image mount. On a fake whose engine sees, it checks the image part reached the model, and that no `.eve` folder appears in the worktree. `EveOptions.vision` is the seam for a fake and for the probe.
+- *The live probe (slice 56).* `factory/src/runtimes/eve/vision.live.test.ts`, run with `LUNA_LIVE_VISION=1` on the Codex login. See the open item on Codex. `gpt-5.6-terra` (`codex:sol`) and `gpt-6-luna` (`codex:luna`) pass; their catalog entries are `vision: true`. Two 64x64 fixtures (`red.png`, `green.png`) live in `factory/test-fixtures/vision/`.
+- *The 3 MiB drop (slice 57).* The bridge drops an image over `MAX_IMAGE_BYTES` (3 MiB) before the per-call and per-run caps. It counts in `McpAnswer.imagesDropped` with the other drops.
+- *Admission (slice 58).* `pnpm eval admit --pack <p> --engine <e> --against <claude:*> [--write]` (`evals/src/admission.ts`) compares two saved baselines and writes `evals/baselines/<engine>/<pack>.admission.json`. `TIE_POINTS = 0.02` is the margin; at least `MIN_CASES_TO_MOVE` (8) graded cases. A test fails when a vision pack allows a non-Claude engine with no passing record.
+- *Docs (slice 59).* The runbook [admit an engine to a vision pack](../runbooks/admit-an-engine-to-a-vision-pack.md), the evals README's margin fixed to 2 points, and the architecture and configuration notes.
+
+Deviations from the design above:
+- eve shows any image its `read_file` reads, wherever it is, as Claude's `Read` does. The image mounts matter as read roots, not as a gate on image parts (decision D2).
+- The catalog started with all three OpenAI entries at `vision: false` (D3). The probe flipped `gpt-5.6-terra` and `gpt-6-luna`. `gpt-6-sol` is API-only and was not probed, so it stays false.
+- The probe passed on the Codex backend, so decision D4's fallback (a wrapper that moves the image into a user message) was not needed.
+- The margin is `TIE_POINTS` (2 points), not the 3 the evals README had said (D6).
+- `video_qa` does not get `vision: true` (D9): it judges from text when it must. Only its comment changed.
+- Where the gate is checked: besides `chooseEngine`, the pack runner and the factory each refuse a blind engine, so a resumed or handed engine cannot slip by.
+- `recall` and `falseBlockerRate` count in the gate only where both baselines carry them. The parity grader does not record them yet, so today the gate rests on the pass rate.
+
+Not done, on purpose: Codex sees images but is in no vision pack. `design_parity` and `design_spec` still allow only Claude engines. It joins after `pnpm eval admit` passes against the Claude baselines (slice 60, a follow-up PR). No `design_parity` or `design_spec` baseline is saved yet, because that needs a live Claude run. `gpt-6-sol` is unprobed.
+
+Not verified live: the probe ran on the Codex login only. No live run of a vision pack on any engine has happened, and no `pnpm eval admit` has run on real baselines.

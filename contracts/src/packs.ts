@@ -1389,7 +1389,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     writable: false,
     maxTurns: 12,
     timeoutMs: 8 * MINUTE,
-    // Another engine than the writer (sonnet). Only the Claude runtime is known to read images, so haiku is the default; codex:sol judges from the report, the transcript and the timeline.
+    // Another engine than the writer (sonnet). No `vision: true`: the run sees the contact sheets on an engine whose model reads images, and judges from the report, the transcript and the timeline where it cannot.
     engines: { default: "claude:haiku", allowed: ["claude:haiku", "codex:sol"], fallback: ["codex:sol"] },
     effort: "medium",
     answer: VideoQaAnswer,
