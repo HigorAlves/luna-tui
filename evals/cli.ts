@@ -33,6 +33,7 @@ import { type DefaultsEntry, proposalCandidates } from "./src/candidates.ts";
 import { decisionPack } from "./src/labels.ts";
 import { baselineHashes, changedLines, readLedger, writeLedger } from "./src/baseline-ledger.ts";
 import { labelFor, nextToLabel, renderNext, setLabel } from "./src/label.ts";
+import { harvestParity } from "./src/harvest-parity.ts";
 import { runHarvest, runLabelPush, runPull, runPush } from "./src/loop.ts";
 import { agentPacksWithCases, baselinePlan, parseEfforts } from "./src/baseline-plan.ts";
 import { renderBars } from "./src/propose.ts";
@@ -80,6 +81,13 @@ if (command === "harvest") {
   const { values } = parseArgs({ args: process.argv.slice(3), options: { pack: { type: "string" }, since: { type: "string" }, "with-truth": { type: "boolean", default: false }, all: { type: "boolean", default: false } } });
   const since = values.since ? new Date(values.since) : undefined;
   if (since && Number.isNaN(since.getTime())) fail("--since must be a date, like 2026-11-01");
+  if (values.pack === "design_parity") {
+    // Waivers are not decision records: they come from the machine's ground-truth folder, and make cases with their own frame and capture (RFC 0013).
+    const parity = harvestParity({ stateDir: machineStateDir(), out: EVALS, ...(since ? { since } : {}) });
+    console.log(`wrote ${parity.written.length}: ${parity.written.join(", ") || "-"}\nkept (already cases) ${parity.kept.length}`);
+    for (const r of parity.refused) console.log(`refused ${printable(r.id)}: ${printable(r.reason)}`);
+    process.exit(0);
+  }
   const pack = decisionOf(values.pack);
   const out = await runHarvest(EVALS, pack, log(), { ...(since ? { since } : {}), withTruth: values["with-truth"], all: values.all });
   console.log(`wrote ${out.written.length}: ${out.written.join(", ") || "-"}\nkept (already cases) ${out.kept.length}`);
