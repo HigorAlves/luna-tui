@@ -367,6 +367,12 @@ fn open_key(app: &App) -> Avail {
     if app.detail_section == Section::Evidence && app.detail_rows() == 0 {
         return Avail::Off("no evidence yet");
     }
+    if app.detail_section == Section::Design {
+        return match app.detail_rows() {
+            0 => Avail::Off("no frames yet"),
+            _ => Avail::On,
+        };
+    }
     if app.detail_open_target().is_some() {
         return Avail::On;
     }
@@ -414,7 +420,10 @@ fn enter_key(app: &App) -> Avail {
         return Avail::Off("no opener on this system");
     }
     match app.detail_rows() {
-        _ if app.detail_section != Section::Evidence => Avail::Off("only in the Evidence section"),
+        _ if !matches!(app.detail_section, Section::Evidence | Section::Design) => {
+            Avail::Off("only in the Evidence and Design sections")
+        }
+        0 if app.detail_section == Section::Design => Avail::Off("no frames yet"),
         0 => Avail::Off("no evidence yet"),
         _ => Avail::On,
     }
@@ -2992,7 +3001,7 @@ fn detail_offered(app: &App, b: &Binding) -> bool {
     match b.first() {
         "e" => task_of(app).is_some_and(|t| at_gate(t) && edit_blocked(app, t).is_none()),
         "J" => app.detail_section.has_cursor(),
-        "enter" => app.detail_section == Section::Evidence,
+        "enter" => matches!(app.detail_section, Section::Evidence | Section::Design),
         _ => true,
     }
 }

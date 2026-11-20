@@ -1603,7 +1603,15 @@ impl App {
             },
         };
         let Some(task) = self.task(&id) else { return };
-        if crate::detail::order(task).contains(&self.detail_section) {
+        if crate::detail::order(task).contains(&self.detail_section)
+            || (self.detail_section == Section::Design
+                && self
+                    .detail
+                    .as_ref()
+                    .filter(|d| d.task.id == task.id)
+                    .and_then(crate::detail::design_page)
+                    .is_some())
+        {
             return;
         }
         let (first, column) = (Section::for_task(task), task.column.clone());
@@ -5861,6 +5869,9 @@ impl App {
             {
                 self.open_artifact(id, self.detail_row())
             }
+            KeyCode::Enter if self.detail_section == Section::Design && self.detail_rows() > 0 => {
+                self.open_design_frame(id)
+            }
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.mode = Mode::Normal,
             KeyCode::Tab => {
                 self.detail_refs.flip_focus();
@@ -5884,6 +5895,9 @@ impl App {
             KeyCode::Char('+') => self.detail_full = !self.detail_full,
             KeyCode::Char('?') => {
                 self.open_help();
+            }
+            KeyCode::Char('o') if self.detail_section == Section::Design => {
+                self.open_design_frame(id)
             }
             KeyCode::Char('o') => match self.detail_open_target() {
                 Some(target) => self.open_target(id, target),
@@ -6094,6 +6108,9 @@ impl App {
         match self.detail_section {
             Section::Runs => detail.map_or(0, |d| d.stage_runs.len()),
             Section::Evidence => detail.map_or(0, |d| d.artifacts.len()),
+            Section::Design => detail
+                .and_then(crate::detail::design_page)
+                .map_or(0, |p| p.rows.len()),
             Section::Engines => self
                 .engine_catalog
                 .as_ref()
@@ -6127,6 +6144,14 @@ impl App {
                 })
             }
             Section::Pr => self.detail_pr_url().map(OpenTarget::Url),
+            Section::Design => {
+                let page = crate::detail::design_page(self.open_detail_of()?)?;
+                let target = page.rows.get(self.detail_row())?.open_target()?.to_string();
+                Some(OpenTarget::Path {
+                    path: target,
+                    what: "the frame's pair".to_string(),
+                })
+            }
             _ if self
                 .open_detail_of()
                 .is_some_and(|d| !d.artifacts.is_empty()) =>
@@ -6164,6 +6189,14 @@ impl App {
             },
             OpenTarget::Path { path, what } => self.open_file(id, &path, &what),
             OpenTarget::EvidenceFolder => self.open_evidence_folder(id),
+        }
+    }
+
+    /// `enter` / `o` on the Design page: the selected frame's composite pair, else its build capture, through the usual open rules.
+    fn open_design_frame(&mut self, id: &str) {
+        match self.detail_open_target() {
+            Some(target) => self.open_target(id, target),
+            None => self.notify("nothing to open for this frame", false),
         }
     }
 
@@ -14715,6 +14748,52 @@ mod evidence_open_tests {
         fs::canonicalize(path).unwrap().into_os_string()
     }
 
+    /// The card at the design sign-off, with two frames: the first has a real pair on disk, the second has nothing to open.
+    fn design_card(name: &str) -> (App, PathBuf, Calls) {
+        let (mut app, root, calls) = card(name);
+        let pair = root.join("runs/r1-parity/pairs/S1-desktop-default.png");
+        fs::create_dir_all(pair.parent().unwrap()).unwrap();
+        fs::write(&pair, b"x").unwrap();
+        let frame = |state: &str, status: &str, pair: serde_json::Value| serde_json::json!({"frame": "F1", "name": "Checkout", "node": "12:34", "scenario": "S1", "viewport": "desktop", "state": state, "status": status, "reason": "no capture", "capture": null, "render": null, "diff": null, "pair": pair, "diffRatio": null});
+        app.tasks[0].state = "awaiting_design".into();
+        app.tasks[0].waiting_on_you = true;
+        let detail = app.detail.as_mut().unwrap();
+        detail.task.state = "awaiting_design".into();
+        detail.approvals = vec![serde_json::from_value(serde_json::json!({"id": "g1", "kind": "awaiting_design", "decision": null,
+            "requested": {"design": {"wcag": "AA", "a11y": null, "findings": [], "gate": {"fires": true, "why": ["not_compared"]},
+                "parity": {"ran": true, "runId": "r1-parity", "confidence": 0.9, "bar": 0.75, "designInput": "complete", "summary": "",
+                    "counts": {"blocker": 0, "should_fix": 0, "nit": 0, "waived": 0},
+                    "frames": [frame("default", "compared", serde_json::json!(pair.to_string_lossy())), frame("hover", "not_compared", serde_json::Value::Null)]}}}})).unwrap()];
+        app.set_section(Section::Design);
+        (app, root, calls)
+    }
+
+    #[test]
+    fn on_the_design_page_j_and_k_pick_a_frame_and_enter_opens_its_pair() {
+        let (mut app, root, calls) = design_card("design-open");
+        assert_eq!(app.detail_rows(), 2);
+        press(&mut app, 'j');
+        assert_eq!(app.detail_row(), 1);
+        press(&mut app, 'j');
+        assert_eq!(app.detail_row(), 1, "stops at the last frame");
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(toast(&app), "nothing to open for this frame");
+        assert!(launched(&calls).is_empty());
+        press(&mut app, 'k');
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(
+            launched(&calls),
+            vec![canon(
+                &root.join("runs/r1-parity/pairs/S1-desktop-default.png")
+            )]
+        );
+        assert!(matches!(app.mode, Mode::Detail(_)), "the card stays open");
+        press(&mut app, 'j');
+        press(&mut app, 'o');
+        assert_eq!(toast(&app), "nothing to open for this frame");
+        assert_eq!(launched(&calls).len(), 1);
+    }
+
     #[test]
     fn o_opens_the_evidence_folder_from_any_section_of_a_card_that_has_files() {
         let (mut app, root, calls) = card("o-anywhere");
@@ -14955,7 +15034,7 @@ mod evidence_open_tests {
         assert_eq!(reason(&app, "o"), Avail::On);
         assert_eq!(
             reason(&app, "enter"),
-            Avail::Off("only in the Evidence section")
+            Avail::Off("only in the Evidence and Design sections")
         );
         app.set_section(Section::Evidence);
         assert_eq!(reason(&app, "enter"), Avail::On);

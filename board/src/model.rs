@@ -3165,6 +3165,9 @@ pub struct VerifyReportView {
     pub findings: Vec<ReportFinding>,
     #[serde(default)]
     pub e2e: Option<ReportE2e>,
+    /// The last browser run's design block (parity and accessibility), with the sign-off's waivers applied; absent without a design run.
+    #[serde(default)]
+    pub design: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize, Clone, Debug, Default)]
