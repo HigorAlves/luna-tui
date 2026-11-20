@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { BridgedTool } from "@hardness/contracts";
 
 import type { Mcp, ShapedResult } from "../mcp.ts";
-import { MAX_IMAGE_BYTES_PER_RUN, MAX_IMAGES_PER_CALL, mcpAnswers } from "./design-bridge.ts";
+import { MAX_IMAGE_BYTES, MAX_IMAGE_BYTES_PER_RUN, MAX_IMAGES_PER_CALL, mcpAnswers } from "./design-bridge.ts";
 
 const bridge = [{ server: "figma", tool: "get", name: "figma__get", description: "", inputSchema: {} }] as unknown as BridgedTool[];
 const setup = (result: ShapedResult) => {
@@ -57,16 +57,27 @@ describe("mcpAnswers", () => {
   });
 
   it("drops images once the run's byte cap is spent", async () => {
-    const big = Math.floor(MAX_IMAGE_BYTES_PER_RUN / 2);
-    const { answer, designDir } = setup({ ok: true, text: "", images: [png(big), png(big), png(big)], truncated: false });
+    // Each image is within the per-image cap; seven of them are over the run's.
+    const kept = Math.floor(MAX_IMAGE_BYTES_PER_RUN / MAX_IMAGE_BYTES);
+    const { answer, designDir } = setup({ ok: true, text: "", images: Array.from({ length: kept + 1 }, () => png(MAX_IMAGE_BYTES)), truncated: false });
     const first = await answer(request(1));
     if (!first.ok) throw new Error("expected ok");
-    expect(first.images).toHaveLength(2);
+    expect(first.images).toHaveLength(kept);
     expect(first.imagesDropped).toBe(1);
     const second = await answer(request(2));
     if (!second.ok) throw new Error("expected ok");
     expect(second.images).toHaveLength(0);
-    expect(second.imagesDropped).toBe(3);
-    expect(readdirSync(designDir)).toHaveLength(2);
+    expect(second.imagesDropped).toBe(kept + 1);
+    expect(readdirSync(designDir)).toHaveLength(kept);
+  });
+
+  it("drops an image over 3 MiB, which eve's read_file would refuse, and writes one at the limit", async () => {
+    const { answer, designDir } = setup({ ok: true, text: "", images: [png(MAX_IMAGE_BYTES + 1), png(MAX_IMAGE_BYTES)], truncated: false });
+    const out = await answer(request());
+    if (!out.ok) throw new Error("expected ok");
+    expect(MAX_IMAGE_BYTES).toBe(3 * 1024 * 1024);
+    expect(out.images).toEqual(["/design/abc-1-1.png"]);
+    expect(readdirSync(designDir)).toEqual(["abc-1-1.png"]);
+    expect(out.imagesDropped).toBe(1);
   });
 });

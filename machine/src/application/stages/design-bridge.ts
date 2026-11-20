@@ -15,6 +15,8 @@ export const DESIGN_MOUNT = "/design";
 
 /** The most images one call may leave in the run's design folder; the rest are dropped and counted. */
 export const MAX_IMAGES_PER_CALL = 8;
+/** The largest image a run's design folder keeps: eve's read_file shows the model images up to 3 MiB (RFC 0013, phase 4); a read-only pack cannot shrink one. */
+export const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 /** The most image bytes a run may leave in its design folder across all calls. */
 export const MAX_IMAGE_BYTES_PER_RUN = 20_000_000;
 
@@ -81,7 +83,7 @@ export function mcpAnswers(opts: { mcp: Mcp; bridge: readonly BridgedTool[]; des
       let bytes = Buffer.byteLength(result.text);
       let dropped = 0;
       for (const [i, image] of result.images.entries()) {
-        if (images.length >= MAX_IMAGES_PER_CALL || imageBytes + image.bytes.length > MAX_IMAGE_BYTES_PER_RUN) {
+        if (image.bytes.length > MAX_IMAGE_BYTES || images.length >= MAX_IMAGES_PER_CALL || imageBytes + image.bytes.length > MAX_IMAGE_BYTES_PER_RUN) {
           dropped += 1;
           continue;
         }
