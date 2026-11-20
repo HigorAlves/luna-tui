@@ -32,7 +32,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-import { type EvalCase, baselinePath, bridgeGrantsOf, caseInput, datasetCases, engineSlug, judgeInput, loadCases, mcpServersOf, parseEffort, parseTrials, prepareWorktree, verdictOf } from "./src/cases.ts";
+import { type EvalCase, baselinePath, bridgeGrantsOf, caseInput, datasetCases, engineSlug, judgeInput, loadCases, mcpServersOf, mountsOf, parseEffort, parseTrials, prepareWorktree, verdictOf } from "./src/cases.ts";
 import { IGNORED_EFFORT, effortProblems, honourEffort } from "./src/effort-check.ts";
 import { formatDiff, formatScorecard } from "./src/format.ts";
 import { type CaseResult, type JudgeVerdict, type Scorecard, caseResult, diffScorecards, gradeAnswer, scorecard } from "./src/grade.ts";
@@ -146,7 +146,7 @@ async function runCase(evalCase: EvalCase, engine: EngineId, index: number, tria
     bridge = { tools, mcp, designDir: join(runDir, "design"), log: () => {} };
   }
   const run = await runPackOnce(
-    { name: `hardness-eval-${slug(pack)}-${slug(evalCase.id)}-${slug(engine)}-${stamp.slice(11, 19)}${trial > 1 ? `-t${trial}` : ""}`, image: imageOf(pack), runDir, worktree, input: caseInput(evalCase.input, engine, effort), engine, labels: { luna: "eval" }, extraEnv: span.childEnv(), egressKind: sandboxOf(pack).egressKind, trust: sandboxOf(pack).trust, ...(bridge ? { bridge } : {}) },
+    { name: `hardness-eval-${slug(pack)}-${slug(evalCase.id)}-${slug(engine)}-${stamp.slice(11, 19)}${trial > 1 ? `-t${trial}` : ""}`, image: imageOf(pack), runDir, worktree, input: caseInput(evalCase.input, engine, effort), engine, labels: { luna: "eval" }, extraEnv: span.childEnv(), egressKind: sandboxOf(pack).egressKind, trust: sandboxOf(pack).trust, ...(bridge ? { bridge } : {}), ...(evalCase.mountsDir ? { mounts: mountsOf(evalCase.mountsDir) } : {}) },
     { credentials, policies, ...(egress ? { egress } : {}) },
   ).catch((error: Error) => ({ output: null, error: error.message }) as const);
   const caseRun = { id: evalCase.id, output: run.output, error: run.error, wallMs: Date.now() - started };

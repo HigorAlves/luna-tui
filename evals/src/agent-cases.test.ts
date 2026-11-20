@@ -1,9 +1,10 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { replayMcp } from "@hardness/machine/mcp-replay";
-import { loadCases, mcpServersOf } from "./cases.ts";
+import { loadCases, mcpServersOf, mountsOf } from "./cases.ts";
+import { Expect, runCheck } from "./expect.ts";
 import { casesTable } from "./preflight.ts";
 
 const EVALS = resolve(import.meta.dirname, "..");
@@ -73,5 +74,61 @@ describe("the designer packs' cases (RFC 0013)", () => {
     }
     const clean = cases.find((c) => c.id === "clean-page")!;
     expect(clean.expect.checks).toContainEqual({ kind: "count", path: "findings", max: 1 });
+  });
+});
+
+describe("design_parity cases (RFC 0013)", () => {
+  const cases = loadCases(EVALS, "design_parity");
+  const PLANTED = ["layout-wrap", "radius", "spacing-drift", "token-swap", "type-size"];
+
+  it("has the planted differences, the missing capture and the clean pairs", () => {
+    expect(cases.map((c) => c.id)).toEqual(["clean-desktop", "clean-mobile", "layout-wrap", "missing-hover", "radius", "spacing-drift", "token-swap", "type-size"]);
+  });
+
+  it.each(cases.map((c) => [c.id, c] as const))("%s: its captures are mounted, its frames replay, and its checks are well formed", async (id, c) => {
+    expect(c.input.pack).toBe("design_parity");
+    expect(c.expect.checks.length, id).toBeGreaterThan(0);
+    expect(c.expect.rubric, id).toMatch(/invent/);
+    const mounts = mountsOf(c.mountsDir);
+    expect(mounts).toEqual([expect.objectContaining({ container: "/evidence", readOnly: true })]);
+    for (const cap of c.input.context.parity!.captures) {
+      expect(existsSync(join(c.mountsDir!, cap.image.replace(/^\//, ""))), cap.image).toBe(true);
+      expect(existsSync(join(c.mountsDir!, cap.styles!.replace(/^\//, ""))), cap.styles!).toBe(true);
+    }
+    expect(existsSync(join(c.mcpDir!, "figma", "tools.json"))).toBe(true);
+    // Every cited frame's render replays as a real PNG of the frame's size: the bridge writes it to /design/<n>-<i>.png.
+    const mcp = replayMcp(mcpServersOf(c.mcpDir!), c.mcpDir!);
+    const ref = c.input.context.design?.refs[0] ?? { fileKey: "Qx7LmP2vR9sTa" };
+    for (const t of c.input.context.parity!.plan.targets) {
+      const node = c.input.context.parity!.spec!.frames.find((f) => f.id === t.frame)!.states.find((s) => s.state === t.state)?.nodeId ?? t.frame;
+      const shot = await mcp.callTool("figma", "get_screenshot", { fileKey: ref.fileKey, nodeId: node });
+      expect(shot.ok, `${id} ${node}`).toBe(true);
+      if (!shot.ok) continue;
+      const png = shot.images[0]!.bytes;
+      expect(png.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+      expect(png.readUInt32BE(16)).toBe(t.viewport.width);
+      expect(png.readUInt32BE(20)).toBe(t.viewport.height);
+    }
+  });
+
+  it("expects a finding at the planted frame in each planted case, and no blocker or should_fix in a clean one", () => {
+    const text = (id: string) => JSON.stringify(cases.find((c) => c.id === id)!.expect.checks);
+    for (const id of PLANTED) expect(text(id), id).toContain('"findings[frame=12:34]"');
+    for (const id of ["clean-desktop", "clean-mobile"]) {
+      expect(text(id)).toContain("findings[level=blocker]");
+      expect(text(id)).toContain("findings[level=should_fix]");
+    }
+    expect(text("missing-hover")).toContain("frames[state=hover].status");
+  });
+
+  it("grades a good answer for each case as a pass and an answer that finds nothing as a miss", () => {
+    for (const c of cases) {
+      const good = JSON.parse(readFileSync(join(c.mountsDir!, "..", "good-answer.json"), "utf8"));
+      for (const check of Expect.parse(c.expect).checks) expect(runCheck(good, check).pass, `${c.id}: ${runCheck(good, check).check}`).toBe(true);
+      if (PLANTED.includes(c.id) || c.id === "missing-hover") {
+        const blind = { frames: good.frames.map((f: object) => ({ ...f, status: "compared" })), findings: [], designInput: "complete", confidence: 0.9, summary: "" };
+        expect(c.expect.checks.some((check) => !runCheck(blind, check).pass), c.id).toBe(true);
+      }
+    }
   });
 });

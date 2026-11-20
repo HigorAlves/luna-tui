@@ -20,6 +20,14 @@ export interface EvalCase {
   expect: Expect;
   /** The case's `mcp/` folder: recorded design-server answers, replayed (never connected) when the case runs. */
   mcpDir?: string;
+  /** The case's `mounts/` folder: each subfolder is mounted read-only at `/<name>` (the parity cases' `/evidence`). */
+  mountsDir?: string;
+}
+
+/** The read-only mounts a case's `mounts/` folder asks for. */
+export function mountsOf(mountsDir: string | undefined): Array<{ host: string; container: string; readOnly: true }> {
+  if (!mountsDir) return [];
+  return readdirSync(mountsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => ({ host: join(mountsDir, d.name), container: `/${d.name}`, readOnly: true as const }));
 }
 
 /** The design tools a pack may be granted: none for a decision pack. */
@@ -64,9 +72,11 @@ export function loadCases(evalsDir: string, pack: PackId, only: string[] = []): 
       const expect = Expect.safeParse(readJson(join(where, "expect.json")));
       if (!expect.success) throw new Error(`${where}/expect.json: ${expect.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
       const mcpDir = join(where, "mcp");
-      if (!existsSync(mcpDir)) return { id, pack, input: input.data, expect: expect.data };
+      const mountsDir = join(where, "mounts");
+      const found = { id, pack, input: input.data, expect: expect.data, ...(existsSync(mountsDir) ? { mountsDir } : {}) };
+      if (!existsSync(mcpDir)) return found;
       if (bridgeGrantsOf(pack).length === 0) throw new Error(`${pack} has no design tools: the mcp folder of case ${id} cannot be replayed`);
-      return { id, pack, input: input.data, expect: expect.data, mcpDir };
+      return { ...found, mcpDir };
     });
 }
 

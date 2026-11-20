@@ -1,0 +1,32 @@
+{
+  "frames": [
+    {
+      "frame": "12:34",
+      "scenario": "S1",
+      "viewport": "1440x900",
+      "state": "default",
+      "status": "compared",
+      "capture": "/evidence/parity/S1/1440x900-default.png",
+      "render": "/design/1-0.png"
+    }
+  ],
+  "findings": [
+    {
+      "level": "blocker",
+      "kind": "layout",
+      "frame": "12:34",
+      "node": "12:40",
+      "element": "button.pay",
+      "viewport": "1440x900",
+      "state": "default",
+      "expected": "one line, full width",
+      "actual": "label wraps on a 120px button",
+      "title": "Pay label wraps",
+      "why": "Pay label wraps",
+      "confidence": 0.9
+    }
+  ],
+  "designInput": "complete",
+  "confidence": 0.9,
+  "summary": "layout-wrap"
+}

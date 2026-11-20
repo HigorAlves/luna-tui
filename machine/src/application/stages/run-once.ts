@@ -40,6 +40,8 @@ export interface OneRun {
   /** Whose input the pack reads: `untrusted` (the default) for text from Slack, Jira, a client or a GitHub source with no trusted association; it picks the runtime and the cache. */
   trust?: Trust;
   signal?: AbortSignal;
+  /** Host folders mounted read-only in the container (the parity reviewer's captures at /evidence/parity; an eval case's `mounts/`). Absent or empty adds nothing. */
+  mounts?: Array<{ host: string; container: string; readOnly: true }>;
   /** The bridged tools of the run (RFC 0013): `input.bridge` is set to `tools`, `designDir` is mounted read-only at /design, and the machine answers the container's calls through `mcp` while it runs. The client is closed when the run ends. */
   bridge?: { tools: BridgedTool[]; mcp: Mcp; designDir: string; log: (row: McpCallRow) => void | Promise<void> };
   /** A browser pack's run: the hosts of its QA target for the egress list, the secret values it is handed (its target's credential), the app's network, the names it reaches directly, and values its output is cleaned of. */
@@ -92,7 +94,7 @@ export async function runPackOnce(run: OneRun, deps: OneRunDeps): Promise<OneRun
     labels: run.labels,
     extraEnv: run.extraEnv ?? {},
     signal: run.signal,
-    ...(bridge ? { mounts: [{ host: bridge.designDir, container: DESIGN_MOUNT, readOnly: true }] } : {}),
+    ...(bridge || run.mounts?.length ? { mounts: [...(bridge ? [{ host: bridge.designDir, container: DESIGN_MOUNT, readOnly: true as const }] : []), ...(run.mounts ?? [])] } : {}),
     ...(run.secrets ? { secrets: run.secrets } : {}),
     ...(run.redactValues ? { redactValues: run.redactValues } : {}),
     ...(run.alsoJoin?.length ? { alsoJoin: run.alsoJoin } : {}),

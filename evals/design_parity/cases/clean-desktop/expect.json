@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "count",
+      "path": "findings[level=blocker]",
+      "max": 0
+    },
+    {
+      "kind": "count",
+      "path": "findings[level=should_fix]",
+      "max": 0
+    },
+    {
+      "kind": "equals",
+      "path": "frames[].status",
+      "value": "compared"
+    }
+  ],
+  "rubric": "The build matches the frame exactly at 1440x900. Every finding names the frame, the Figma node and the build element, with the expected and the actual value. No finding is invented where the build matches the frame: the machine drops none of them, so an invented difference reaches a person as a blocker. Pixel noise is a nit at most. A frame with no capture is answered not_compared with its reason, never a pass."
+}

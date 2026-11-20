@@ -58,6 +58,17 @@ describe("runPackOnce", () => {
     expect(seen[2]!.limits).toBeUndefined();
   });
 
+  it("mounts the folders it is handed read-only, and none when it has none", async () => {
+    const runDir = mkdtempSync(join(tmpdir(), "run-once-m-"));
+    const sandbox = vi.fn(async (_run: unknown) => ({ exitCode: 0, timedOut: false, aborted: false, transcriptPath: "" }));
+    const credentials = { prepare: async () => ({ env: {}, mounts: [], release: async () => {} }) };
+    const base = { name: "c", image: "img", runDir, worktree: join(runDir, "work"), input, engine: "claude:haiku" as const, labels: {} };
+    await runPackOnce({ ...base, mounts: [{ host: "/h/evidence", container: "/evidence", readOnly: true }] }, { credentials, sandbox: sandbox as never });
+    expect((sandbox.mock.calls[0]![0] as { mounts?: unknown }).mounts).toEqual([{ host: "/h/evidence", container: "/evidence", readOnly: true }]);
+    await runPackOnce(base, { credentials, sandbox: sandbox as never });
+    expect(sandbox.mock.calls[1]![0]).not.toHaveProperty("mounts");
+  });
+
   it("hands the run's extra env to the container, and an empty one when none is given", async () => {
     const withEnv = setup(JSON.stringify(result), {}, { A: "1" });
     await withEnv.go();
