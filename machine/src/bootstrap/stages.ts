@@ -1,7 +1,7 @@
 // Wires up which StageRunner serves which TaskState: the real agent packs (when a
 // credential and the runner image are available), the host-only runners that always run
 // for real, and the stub fallback.
-import { FACTORY_DEFAULTS, designSettings } from "@hardness/contracts";
+import { FACTORY_DEFAULTS, designSettings, parityBarOf } from "@hardness/contracts";
 import { cardOf } from "../domain/card-fields.ts";
 import { designRefOf } from "../domain/design-ref.ts";
 import type { EvidencePack, QuestionsContext, ShipContext, TaskRoute, TaskState } from "@hardness/contracts";
@@ -20,6 +20,9 @@ import { mcpFactory } from "./mcp.ts";
 import { type AgentDeps, type AgentExtra, agentRunners, runAgent } from "../application/stages/pack-runner.ts";
 import { ciWatchRunner } from "../application/stages/ci.ts";
 import { e2eRunner, missingQaImageRunner } from "../application/stages/e2e.ts";
+import { runDesignParity } from "../application/stages/design-parity.ts";
+import { pairImages } from "../adapters/image/parity-pairs.ts";
+import { designSpecOf } from "../domain/stage-input.ts";
 import { type EvidenceDeps, type EvidenceStageDeps, evidenceStage } from "../application/stages/evidence.ts";
 import { type RetroFacts, memoryReviewRunner } from "../application/stages/memory.ts";
 import type { StageContext, StageResult, StageRunner } from "../application/ports.ts";
@@ -569,6 +572,23 @@ export async function buildRealStages(
               return designDecisions?.budget;
             },
           },
+          // The design parity review after the audit (RFC 0013, phase 3): a read-only sub-run over the captures, then the frame | build pairs on the host.
+          designParity: (context, parity, unplaced) =>
+            runDesignParity(
+              {
+                run: (subContext, extra) => runAgent(deps, subContext, "design_parity", extra),
+                spec: (c) => designSpecOf(c.approvals),
+                bar: async (repoPath) => parityBarOf((await policies.for(repoPath)).design),
+                pair: pairImages,
+                get budget() {
+                  return designDecisions?.budget;
+                },
+                stateDir: config.stateDir,
+              },
+              context,
+              parity,
+              unplaced,
+            ),
           openApp: (input) => openApp(appDeps, input),
           openPreview: (input) => openPreview(appDeps, input),
           policy: (repoPath) => policies.for(repoPath),

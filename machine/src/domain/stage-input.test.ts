@@ -574,4 +574,10 @@ describe("designSpecOf and the e2e capture plan", () => {
     expect(buildStageInput({ ...base, stage: "e2e", pack: "e2e" }).context.parityPlan).toEqual(parityPlan);
     expect(buildStageInput({ ...base, stage: "e2e", pack: "a11y_audit" }).context.parityPlan).toBeUndefined();
   });
+  it("hands the captures, the plan and the spec to the design_parity pack only", () => {
+    const parity = { plan: { targets: [], uncited: [], notes: [] }, captures: [], spec: null };
+    const base = { task, attempt: 1, approvals: [], priorFindings: [] as never[], parity };
+    expect(buildStageInput({ ...base, stage: "e2e", pack: "design_parity" }).context.parity).toEqual(parity);
+    expect(buildStageInput({ ...base, stage: "e2e", pack: "e2e" }).context.parity).toBeUndefined();
+  });
 });

@@ -21,7 +21,13 @@ export interface SettledParity {
   notes: string[];
 }
 
-export function settleParity(answer: DesignParityAnswer | null, { plan, spec, captures, bar }: { plan: CapturePlan; spec: DesignSpec | null; captures: ParityCapture[]; bar: number }): SettledParity {
+/** A browser scenario that cites a frame the spec gives no viewport: there is nothing to capture, but the frame still counts (see `citedWithoutViewport`). */
+export interface Unplaced {
+  scenario: string;
+  frame: string;
+}
+
+export function settleParity(answer: DesignParityAnswer | null, { plan, spec, captures, bar, unplaced = [] }: { plan: CapturePlan; spec: DesignSpec | null; captures: ParityCapture[]; bar: number; unplaced?: Unplaced[] }): SettledParity {
   const notes: string[] = [];
   const frameOf = (id: string) => spec?.frames.find((f) => f.id === id);
   const frames: PairRow[] = plan.targets.map((t) => {
@@ -46,6 +52,12 @@ export function settleParity(answer: DesignParityAnswer | null, { plan, spec, ca
       diffRatio: null,
     };
   });
+  // A cited frame with no viewport cannot be captured, so it is never in the plan; it is not compared, and a cited frame that is not compared opens the gate.
+  for (const { scenario, frame: id } of unplaced) {
+    const spot = frameOf(id);
+    const first = spot?.states.find((s) => s.nodeId !== null) ?? spot?.states[0];
+    frames.push({ frame: id, name: spot?.name ?? id, node: first?.nodeId ?? id, scenario, viewport: "unknown", state: first?.state ?? "default", status: "not_compared", reason: "the spec gives this frame no viewport", capture: null, render: null, diff: null, pair: null, diffRatio: null });
+  }
   for (const id of plan.uncited) {
     const spot = frameOf(id);
     const first = spot?.states[0];

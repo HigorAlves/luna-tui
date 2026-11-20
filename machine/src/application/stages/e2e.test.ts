@@ -726,3 +726,122 @@ describe("parity captures (RFC 0013)", () => {
     expect((result.detail?.parity as { captures: unknown[] }).captures).toHaveLength(1);
   });
 });
+
+describe("the design parity review after the browser run (RFC 0013)", () => {
+  const start = parseLunaConfig("verify:\n  e2e:\n    start:\n      command: npm start\n      port: 4000\n");
+  const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+  const designed = { state: "default", nodeId: "12:35", suggestion: null };
+  const spec = { frames: [{ id: "12:34", name: "Checkout", viewport: { width: 1440, height: 900 }, states: [designed] }, { id: "40:1", name: "Modal", viewport: null, states: [designed] }], tokens: { color: [], type: [], spacing: [], radius: [] }, components: [], a11yNotes: [], missing: [], confidence: 0.9 };
+  const scenarios = (extra: unknown[] = []) => [{ id: "S1", title: "pay", criterion: null, approach: "x", layer: "e2e", frame_ref: "12:34" }, ...extra];
+  const pass: StageResult = { outcome: "pass", detail: { answer: { verdict: "pass", summary: "ok", criteria: [{ text: "pay", result: "pass", evidence: [] }, { text: "modal", result: "pass", evidence: [] }] } } };
+  const on = { off: false, cardOff: false, level: "AA" as const, mode: "gate" as const };
+  const designFinding = (severity: string, confidence = 0.9) => ({ id: `D-${severity}`, path: "figma:12:34/12:35", line: 0, severity, title: "Pay colour", body: "b", confidence, category: "design", design: { source: "parity", frame: "12:34", node: "12:35", element: "button.pay", kind: "token", expected: "#1A73E8", actual: "#1B74E9" } });
+  const report = { ran: true, runId: "r1-parity", confidence: 0.9, bar: 0.75, designInput: "complete", frames: [], counts: { blocker: 0, should_fix: 0, nit: 0, waived: 0 }, summary: "s" };
+  const reviewed = (over: Record<string, unknown> = {}) => ({ report, findings: [], blockers: 0, gate: { fires: false, why: [] }, notes: [], spentAfter: false, ...over });
+  const a11yBlocker = { criterion: "2.1.2", level: "A", source: "judged", rule: null, impact: null, page: "/checkout", state: "modal", selector: "div.modal", summary: "trap", evidence: [], fix: null, confidence: 0.9 };
+
+  function harness(opts: { review?: unknown; withSpec?: boolean; extraScenarios?: unknown[]; policy?: unknown; decide?: unknown; budgets?: unknown[]; audit?: StageResult } = {}) {
+    const stateDir = mkdtempSync(join(tmpdir(), "e2e-design-"));
+    const reviews: unknown[][] = [];
+    const reads = [...((opts.budgets as Array<Record<string, unknown>>) ?? [])];
+    const runner = e2eRunner({
+      stateDir,
+      runPack: async (c: StageContext, _extra?: unknown, pack?: string) => {
+        if (pack === "a11y_audit") return opts.audit ?? { outcome: "pass", detail: { answer: { summary: "a", pages: [], findings: [] } } };
+        const dir = join(stateDir, "runs", c.runId, "files", "qa", "parity", "S1");
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, "1440x900-default.png"), PNG);
+        return pass;
+      },
+      detectWeb: async () => true,
+      changedFiles: async () => null,
+      policy: async () => opts.policy ?? start,
+      headCommit: async () => "c".repeat(40),
+      openApp: async () => ({ ok: true as const, target: { name: "app" as const, baseUrl: "http://luna-app:4000" }, network: "net", aliases: [], close: async () => {}, redactValues: {} }),
+      design: { settings: async () => on, ...(opts.budgets ? { budget: async () => (reads.length > 1 ? reads.shift()! : reads[0]!) } : {}) },
+      designParity: async (...args: unknown[]) => {
+        reviews.push(args);
+        return "review" in opts ? opts.review : reviewed();
+      },
+      ...(opts.decide ? { decide: opts.decide, overrides: async () => ({}) } : {}),
+    } as never);
+    const approvals = [{ id: "a1", taskId: "t1", kind: "awaiting_approval", requested: { criteria: [], cases: scenarios(opts.extraScenarios), ...(opts.withSpec === false ? {} : { design: { ref: null, spec } }) }, decision: "approved" }];
+    const ctx = { task: { id: "t1", repoPath: "/repo", worktreePath: dir, branch: "task/x" }, stage: "e2e", attempt: 1, runId: "r1", approvals, signal: new AbortController().signal, emit: async () => {} } as unknown as StageContext;
+    return { run: () => runner(ctx), reviews };
+  }
+
+  it("fails the browser run on a confident design blocker, with the design findings for Build and the report beside", async () => {
+    const f = designFinding("blocker");
+    const h = harness({ review: reviewed({ findings: [f], blockers: 1, report: { ...report, counts: { ...report.counts, blocker: 1 } } }) });
+    const r = await h.run();
+    expect(r).toMatchObject({ outcome: "fail", detail: { step: "design", verdict: "parity", design: { findings: [expect.objectContaining({ id: "D-blocker" })], gate: { fires: false } } }, findings: [expect.objectContaining({ category: "design", id: "D-blocker" })] });
+  });
+
+  it("merges into detail.parity and never clobbers what the browser run left there", async () => {
+    const r = await harness({ review: reviewed({ notes: ["a note"] }) }).run();
+    expect(r.detail?.parity).toMatchObject({ captures: [expect.objectContaining({ image: "/evidence/parity/S1/1440x900-default.png" })], missing: [], plan: expect.any(Object), dir: expect.stringContaining("parity"), ran: true, runId: "r1-parity", confidence: 0.9, notes: ["a note"] });
+  });
+
+  it("passes with the design report when nothing blocks, and says whether the gate fires", async () => {
+    const h = harness({ review: reviewed({ findings: [designFinding("should_fix")], gate: { fires: true, why: ["open_findings"] } }) });
+    expect(await h.run()).toMatchObject({ outcome: "pass", detail: { design: { gate: { fires: true, why: ["open_findings"] }, parity: { ran: true } } } });
+  });
+
+  it("is handed the spec's cited frames with no viewport, and the captures the browser run took", async () => {
+    const h = harness({ extraScenarios: [{ id: "S2", title: "modal", criterion: null, approach: "x", layer: "e2e", frame_ref: "40:1" }] });
+    await h.run();
+    expect(h.reviews[0]![1]).toMatchObject({ captures: [expect.objectContaining({ scenario: "S1" })] });
+    expect(h.reviews[0]![2]).toEqual([{ scenario: "S2", frame: "40:1" }]);
+  });
+
+  it("does not run in agent mode, where there is no app URL: parity is skipped and says so", async () => {
+    const h = harness({ policy: parseLunaConfig("") });
+    const r = await h.run();
+    expect(h.reviews).toEqual([]);
+    expect(r.detail).toMatchObject({ parity: { skipped: "no app URL in agent mode" } });
+    expect(r.detail).not.toHaveProperty("design");
+  });
+
+  it("does not run without a design spec, or when the review has nothing to review", async () => {
+    const none = harness({ withSpec: false });
+    expect((await none.run()).detail).not.toHaveProperty("design");
+    expect(none.reviews).toEqual([]);
+    const idle = harness({ review: null });
+    expect((await idle.run()).detail).not.toHaveProperty("design");
+  });
+
+  it("merges the accessibility findings into the design report, and the design findings go to Build beside the blockers of the audit", async () => {
+    const audit: StageResult = { outcome: "pass", detail: { answer: { summary: "a", pages: [], findings: [a11yBlocker] } } };
+    const h = harness({ audit, review: reviewed({ findings: [designFinding("blocker")], blockers: 1 }) });
+    const r = await h.run();
+    expect(r.outcome).toBe("fail");
+    const design = r.detail?.design as { wcag: string; a11y: { mode: string; counts: Record<string, number> }; findings: Array<{ category: string }> };
+    expect(design.wcag).toBe("AA");
+    expect(design.a11y).toMatchObject({ mode: "gate", counts: { blocker: 1 } });
+    expect(design.findings.map((f) => f.category).sort()).toEqual(["accessibility", "design"]);
+    expect((r.findings ?? []).map((f) => f.category).sort()).toEqual(["accessibility", "design"]);
+  });
+
+  it("classifies the design findings with the frame, node, element, expected and built as the excerpt, and keeps the record ids", async () => {
+    const asked: Array<{ pack: string; check: { excerpt?: string } }> = [];
+    const decide = async (pack: string, check: { excerpt?: string }) => (asked.push({ pack, check }), { severity: { choice: "should_fix", confidence: 0.8 } });
+    const h = harness({ decide, review: reviewed({ findings: [designFinding("should_fix")], gate: { fires: true, why: ["open_findings"] } }) });
+    const r = await h.run();
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({ pack: "finding_classify", check: { excerpt: "frame 12:34 node 12:35\nelement: button.pay\nexpected: #1A73E8\nbuilt: #1B74E9" } });
+    expect((r.detail?.design as { classified: unknown[] }).classified).toEqual([{ id: "D-should_fix" }]);
+  });
+
+  it("escalates design_budget from e2e when the budget is spent before the review", async () => {
+    const h = harness({ review: { escalate: { outcome: "escalated", detail: { escalation: "design_budget", step: "e2e", reason: "spent" } } } });
+    expect(await h.run()).toMatchObject({ outcome: "escalated", detail: { escalation: "design_budget", step: "e2e" } });
+  });
+
+  it("escalates design_budget instead of sending blockers back when the review spent the budget", async () => {
+    const spent = { tokens: 9, tokensCounted: true, minutes: 1, spent: "tokens", limits: { max_tokens: 5, max_minutes: 60 } };
+    const fine = { ...spent, tokens: 1, spent: null };
+    // The audit reads the budget before and after its run; the review's own read comes third.
+    const h = harness({ budgets: [fine, fine, spent], review: reviewed({ findings: [designFinding("blocker")], blockers: 1, spentAfter: true }) });
+    expect(await h.run()).toMatchObject({ outcome: "escalated", detail: { escalation: "design_budget" } });
+  });
+});

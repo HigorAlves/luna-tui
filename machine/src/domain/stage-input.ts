@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type A11yContext, type CapturePlan, DesignSpec, type DesignContext, type AccessReviewContext, ReleaseNotesContext, type PostmortemContext, type BreachAssessContext, type BridgedTool, type CapacityContext, type StatusReportContext, QuestionnaireContext, VulnTriageContext, type ChangeExceptionsContext, type ComplianceReviewContext, type DocsDriftContext, type ChatTriageContext, type ForemanContext, type TicketChatContext, type QuestionsContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type Effort, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type PrLinkContext, type ProposeContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
+import { type A11yContext, type CapturePlan, type ParityCapture, DesignSpec, type DesignContext, type AccessReviewContext, ReleaseNotesContext, type PostmortemContext, type BreachAssessContext, type BridgedTool, type CapacityContext, type StatusReportContext, QuestionnaireContext, VulnTriageContext, type ChangeExceptionsContext, type ComplianceReviewContext, type DocsDriftContext, type ChatTriageContext, type ForemanContext, type TicketChatContext, type QuestionsContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type Effort, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type PrLinkContext, type ProposeContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
 import { isDocsOnly } from "./docs-only.ts";
 
 export { PACK_LIMITS };
@@ -176,6 +176,8 @@ export function buildStageInput(opts: {
   a11yLevel?: "AA" | "AAA";
   /** e2e: the captures the browser run is asked to take for the frames its scenarios cite. */
   parityPlan?: CapturePlan;
+  /** For design_parity: what the browser run captured, the plan it followed and the approved spec. */
+  parity?: { plan: CapturePlan; captures: ParityCapture[]; spec: DesignSpec | null };
   /** The MCP tools the machine bridged for this run (RFC 0013); none by default. */
   bridge?: BridgedTool[];
   /** For reviewing_memory: the last implementing ledger and every earlier run of the task. */
@@ -275,6 +277,7 @@ export function buildStageInput(opts: {
       ...(opts.plan ? { plan: reviewed ?? opts.plan } : {}),
       ...(pack === "a11y_audit" ? { a11y: { level: opts.a11yLevel ?? "AA" } } : {}),
       ...(pack === "e2e" && opts.parityPlan ? { parityPlan: opts.parityPlan } : {}),
+      ...(pack === "design_parity" && opts.parity ? { parity: opts.parity } : {}),
       ...(pack === "design_spec" && opts.design ? { design: opts.design } : {}),
       ...(pack === "question_council" && opts.questions ? { questions: opts.questions } : {}),
       ...(pack === "verifying" && opts.blastRadius?.length ? { blastRadius: opts.blastRadius } : {}),

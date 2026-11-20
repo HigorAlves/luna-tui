@@ -3,7 +3,7 @@
 import type { DesignBudget } from "../../domain/design-budget.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 
-export type DesignPack = "design_spec" | "a11y_audit";
+export type DesignPack = "design_spec" | "a11y_audit" | "design_parity";
 
 export interface DesignRunDeps {
   /** The card's design budget now; absent, no budget applies (a machine built without one, or a test). */

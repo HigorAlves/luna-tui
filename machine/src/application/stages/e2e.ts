@@ -4,7 +4,7 @@ import { readFile, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import { branchBase, diffNameStatus, headCommit } from "../../adapters/git/worktree.ts";
-import { A11yAuditAnswer, type CapturePlan, type DecisionOverrides, type Finding, mergeDuplicateFindings, severityOf } from "@hardness/contracts";
+import { A11yAuditAnswer, type CapturePlan, type DecisionOverrides, type Finding, type VerifyDesignReport, mergeDuplicateFindings, severityOf } from "@hardness/contracts";
 
 import type { Policy } from "../../domain/policy.ts";
 import { trustOf } from "../../domain/trust.ts";
@@ -12,7 +12,9 @@ import { a11yFindings } from "../../domain/a11y-findings.ts";
 import type { DesignBudget } from "../../domain/design-budget.ts";
 import { designSteps } from "../../domain/verify-order.ts";
 import { type ManifestRow, boundedArtifacts, manifestRows } from "../../domain/e2e-manifest.ts";
-import { capturePlan } from "../../domain/parity-plan.ts";
+import { blockerSetKey } from "../../domain/finding-sets.ts";
+import { type Unplaced } from "../../domain/design-parity.ts";
+import { capturePlan, citedWithoutViewport } from "../../domain/parity-plan.ts";
 import { approvedScenarios, designSpecOf } from "../../domain/stage-input.ts";
 import { type ScenarioRow, scenarioFindings } from "../../domain/send-back.ts";
 import { type OpenAppInput, type OpenAppResult, type OpenPreviewResult, e2eModeOf } from "../app-session.ts";
@@ -22,6 +24,8 @@ import type { AgentExtra } from "./pack-runner.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { type TruthSink, e2eCauseTruth } from "../decision-truth.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
+import { classifyFindings } from "./classify-findings.ts";
+import type { DesignParityOutcome } from "./design-parity.ts";
 import { designBudgetEscalation, designRun } from "./design-run.ts";
 import { addUsage } from "./usage.ts";
 import { verdictOf } from "./verify.ts";
@@ -38,6 +42,8 @@ export interface AfterBrowserInput {
   browserRun: "pass" | "skipped";
   /** The captures the browser run took (RFC 0013, phase 3); null when none were planned. */
   parity?: ParityRun | null;
+  /** What the steps before this one left, in order (the parity step reads the accessibility audit's findings). */
+  previous?: AfterBrowserOutput[];
 }
 
 /** What such a step leaves: its detail under `key`, findings for Build, whether they block, its usage, or an escalation that ends the stage. A step that has nothing to say returns null. */
@@ -48,6 +54,8 @@ export interface AfterBrowserOutput {
   blocking?: boolean;
   usage?: StageResult["usage"];
   escalate?: StageResult;
+  /** More detail keys the step leaves beside its own (the parity step's `design` report). */
+  also?: Record<string, unknown>;
 }
 
 /** One step run after the browser run while its app or preview is still open (RFC 0013: the accessibility audit; phase 3 adds design parity). Its failure never changes the browser run's verdict. */
@@ -61,6 +69,11 @@ export interface E2eDeps {
     settings: (repoPath: string | null, taskId: string) => Promise<{ off: boolean; cardOff: boolean; level: "AA" | "AAA"; mode: "gate" | "advisory" }>;
     budget?: (taskId: string) => Promise<DesignBudget>;
   };
+  /**
+   * The design parity review (RFC 0013, phase 3), run after the audit when the browser run took captures: the captures the plan asked for and the cited frames with
+   * no viewport. Null when it has nothing to review; an `escalate` ends the stage (the budget is spent). Absent, no review runs.
+   */
+  designParity?: (context: StageContext, parity: ParityRun, unplaced: Unplaced[]) => Promise<DesignParityOutcome | { escalate: StageResult } | null>;
   /** Further steps after the accessibility audit, in order, in the same open app session. */
   afterBrowser?: AfterBrowserStep[];
   /** Starts and seeds the repository's app (`verify.e2e.start`); absent, the browser run boots its own server as before. */
@@ -84,6 +97,19 @@ export interface E2eDeps {
   truth?: TruthSink | null;
   /** The machine's state dir: a re-run starts from an empty `runs/<runId>/out`, so the first attempt's packet never reaches Evidence. */
   stateDir?: string;
+}
+
+const RANK: Record<"blocker" | "should_fix" | "nit", number> = { blocker: 0, should_fix: 1, nit: 2 };
+/** The design report keeps this many findings. */
+const DESIGN_FINDINGS_MAX = 40;
+const EXCERPT_CAP = 2000;
+
+/** What finding_classify is shown of a design finding: where it is in the frame and the build, and what differs. */
+function designExcerpt(f: Finding): string {
+  const d = f.design;
+  if (!d) return "";
+  const text = d.source === "parity" ? `frame ${d.frame ?? ""} node ${d.node ?? ""}\nelement: ${d.element}\nexpected: ${d.expected ?? ""}\nbuilt: ${d.actual ?? ""}` : `element: ${d.element}\n${f.body}`;
+  return text.slice(0, EXCERPT_CAP);
 }
 
 /** How many failed scenarios the cause decision is asked about. */
@@ -291,7 +317,45 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
       if (blocking && spentAfter && deps.design?.budget) return { key: "a11y", escalate: { ...designBudgetEscalation(await deps.design.budget(context.task.id)), usage: result.usage } };
       return { key: "a11y", detail: { level: settings.level, mode: settings.mode, findings, pages: parsed.data.pages, notes: mapped.notes }, findings, blocking, usage: result.usage };
     };
-    const afterSteps: AfterBrowserStep[] = [auditStep, ...(deps.afterBrowser ?? [])];
+    /** The design parity review after the audit: its findings are classified with the audit's and joined in the design report; confident blockers fail the run. */
+    const parityStep: AfterBrowserStep = async ({ parity, previous }) => {
+      if (!parity || !deps.designParity) return null;
+      const out = await deps.designParity(context, parity, citedWithoutViewport(approved, spec));
+      if (!out) return null;
+      if ("escalate" in out) return { key: "parity", escalate: out.escalate };
+      const audit = (previous ?? []).find((o) => o.key === "a11y")?.detail as { level?: "A" | "AA" | "AAA"; mode?: "gate" | "advisory"; findings?: Finding[] } | undefined;
+      const auditFindings = Array.isArray(audit?.findings) ? audit.findings : [];
+      const merged = mergeDuplicateFindings([...out.findings, ...auditFindings])
+        .map((f, i) => ({ f, i }))
+        .sort((a, b) => RANK[severityOf(a.f.severity)] - RANK[severityOf(b.f.severity)] || a.i - b.i)
+        .map(({ f }) => f)
+        .slice(0, DESIGN_FINDINGS_MAX);
+      const repoPath = context.task.repoPath ?? null;
+      const { classified } = await classifyFindings({ decide: deps.decide ?? null, repoPath, decisions: (await deps.overrides?.(repoPath)) ?? {}, excerpt: async (f) => designExcerpt(f) }, merged);
+      const counts = { blocker: 0, should_fix: 0, nit: 0, waived: 0 };
+      for (const f of auditFindings) counts[severityOf(f.severity)]++;
+      const design: VerifyDesignReport = {
+        wcag: audit?.level ?? null,
+        a11y: audit?.mode ? { mode: audit.mode, counts } : null,
+        parity: out.report,
+        findings: merged,
+        ...(classified.length > 0 ? { classified: classified.map(({ id, recordId }) => ({ id, ...(recordId ? { recordId } : {}) })) } : {}),
+        gate: out.gate,
+      };
+      const blocking = blockerSetKey(out.findings) !== null;
+      // Build's own rule, as for the audit: blockers with the budget spent after the run go to a person, not back to Build.
+      if (blocking && out.spentAfter && deps.design?.budget) return { key: "parity", escalate: { ...designBudgetEscalation(await deps.design.budget(context.task.id)), usage: out.usage } };
+      return {
+        key: "parity",
+        // The browser run's own detail.parity (the plan, the captures, what is missing) stays; the review's settle joins it.
+        detail: { ...parity, ...out.report, notes: [...parity.notes, ...out.notes] },
+        also: { design },
+        findings: out.findings,
+        blocking,
+        usage: out.usage,
+      };
+    };
+    const afterSteps: AfterBrowserStep[] = [auditStep, parityStep, ...(deps.afterBrowser ?? [])];
     /** Settles the browser run, then, only when it passed, runs the steps after it (in order, stopping at an escalation) before the caller closes the app. */
     const finish = async (pack: StageResult, preview: { kind: string; url: string } | null, note: string | null, extra: BrowserExtra | undefined): Promise<Attempted> => {
       const settled = await judged(settle([pack, preview, note]));
@@ -305,7 +369,7 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
           settled.detail = { ...settled.detail, parity };
         } else if (spec && e2eMode === "agent") settled.detail = { ...settled.detail, parity: { skipped: "no app URL in agent mode" } };
         for (const step of afterSteps) {
-          const out = await step({ context, extra, browserRun, parity });
+          const out = await step({ context, extra, browserRun, parity, previous: after });
           if (!out) continue;
           after.push(out);
           if (out.escalate) break;
@@ -374,12 +438,14 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
       let result = a.settled;
       for (const out of a.after) {
         if (out.escalate) return { ...out.escalate, usage: addUsage(result.usage, out.escalate.usage), detail: { ...out.escalate.detail, step: "e2e" } };
-        result = { ...result, usage: addUsage(result.usage, out.usage), detail: { ...result.detail, [out.key]: out.detail } };
+        result = { ...result, usage: addUsage(result.usage, out.usage), detail: { ...result.detail, ...(out.also ?? {}), [out.key]: out.detail } };
       }
       const blocking = a.after.filter((out) => out.blocking);
       if (blocking.length === 0) return result;
       // Findings the steps built: they go to Build as they are (a scenario failure's findings are built later, from the manifest).
-      const failed: StageResult = { ...result, outcome: "fail", detail: { ...result.detail, verdict: blocking[0]!.key }, findings: blocking.flatMap((out) => out.findings ?? []).filter((f) => severityOf(f.severity) !== "nit") };
+      // A design blocker is its own failure: Build is sent back with the same-set rounds of Verify (`step: "design"`); the audit's alone stays an e2e failure.
+      const step = blocking.some((out) => out.key === "parity") ? { step: "design" } : {};
+      const failed: StageResult = { ...result, outcome: "fail", detail: { ...result.detail, ...step, verdict: blocking[0]!.key }, findings: blocking.flatMap((out) => out.findings ?? []).filter((f) => severityOf(f.severity) !== "nit") };
       fromSteps.add(failed);
       return failed;
     };

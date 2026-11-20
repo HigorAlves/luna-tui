@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { AnswerScenario, AnswerStep, type CapturePlan, type CiContext, type ComplianceReviewContext, type CoverageSummary, type DesignContext, type DocsDriftContext, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
+import { AnswerScenario, AnswerStep, type CapturePlan, type DesignSpec, type ParityCapture, type CiContext, type ComplianceReviewContext, type CoverageSummary, type DesignContext, type DocsDriftContext, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -184,6 +184,8 @@ export interface AgentExtra {
   a11yLevel?: "AA" | "AAA";
   /** e2e: the captures the browser run is asked to take for the frames its scenarios cite (RFC 0013). */
   parityPlan?: CapturePlan;
+  /** design_parity: what the browser run captured, the plan it followed and the approved spec; the captures themselves are mounted. */
+  parity?: { plan: CapturePlan; captures: ParityCapture[]; spec: DesignSpec | null };
   /** question_council: the open triage questions, the card and the answers so far. */
   questions?: QuestionsContext;
   /** verifying: the files the code graph says depend on what the change touched. */
@@ -463,6 +465,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     ...(extra.design ? { design: extra.design } : {}),
     ...(extra.a11yLevel ? { a11yLevel: extra.a11yLevel } : {}),
     ...(extra.parityPlan ? { parityPlan: extra.parityPlan } : {}),
+    ...(extra.parity ? { parity: extra.parity } : {}),
     engine: choice.engine,
     ...(effortChoice.source === "config" ? { effort: effortChoice.effort } : {}),
     attempt: context.attempt,

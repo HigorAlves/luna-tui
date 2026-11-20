@@ -3300,12 +3300,14 @@ export class Pipeline {
     return { loopCap: stage === "ci_watch" ? verify.ci_rounds : verify.e2e_rounds };
   }
 
-  /** What Verify's failure tells the transition about its blocker findings: their set, and the rounds Build may have on one set (`verify.build_rounds`). */
-  private async blockerSet(id: string, stage: TaskState, result: StageResult): Promise<{ findingSet?: string; buildRounds?: number }> {
-    if (stage !== "verifying" || result.outcome !== "fail") return {};
+  /** What Verify's failure (and the e2e stage's design failure) tells the transition about its blocker findings: their set, and the rounds Build may have on one set (`verify.build_rounds`). */
+  private async blockerSet(id: string, stage: TaskState, result: StageResult): Promise<{ findingSet?: string; buildRounds?: number; design?: true }> {
+    // The e2e stage's design blockers (the parity review's, `step: "design"`) are counted in the same-set rounds; any other e2e failure keeps the browser loop's cap.
+    const design = stage === "e2e" && result.detail?.step === "design";
+    if ((stage !== "verifying" && !design) || result.outcome !== "fail") return {};
     const key = blockerSetKey(result.findings ?? []);
-    if (!key) return {};
-    return { findingSet: key, buildRounds: (await this.policyFor((await this.get(id)).repoPath)).factory.verify.build_rounds };
+    if (!key) return design ? { design: true } : {};
+    return { findingSet: key, buildRounds: (await this.policyFor((await this.get(id)).repoPath)).factory.verify.build_rounds, ...(design ? { design: true as const } : {}) };
   }
 
   /** The stuck detector's attempt-level rule: a stage that just failed for the third time in a

@@ -4576,4 +4576,20 @@ describe("the design sign-off gate (RFC 0013 phase 3)", () => {
     expect(await stagesRun(task.id)).toContain("delivering");
     expect((await pipeline.approvals(task.id)).map((a) => a.kind)).not.toContain("awaiting_design");
   });
+  const designBlocked = { outcome: "fail" as const, detail: { step: "design", design: { wcag: null, a11y: null, parity: null, findings: [], gate: { fires: true, why: ["open_findings"] } } }, findings: [{ id: "Dabcd1234", path: "figma:12:34/12:35", line: 0, severity: "blocker", title: "Pay colour", body: "b", confidence: 0.9, category: "design" as const }] };
+  it("sends the design blockers back to Build, and the same set again to a person at the sign-off (verify.build_rounds is 1)", async () => {
+    stubs.plan("e2e", designBlocked, designBlocked);
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: { for: async () => ({ ...DEFAULT_POLICY, factory: factoryConfigOf({ verify: { build_rounds: 1 } }) }) } });
+    const task = await newTask();
+    expect(await startAndApprove(task.id)).toMatchObject({ state: "awaiting_design" });
+    expect((await stagesRun(task.id)).filter((s) => s === "e2e")).toHaveLength(2);
+    expect((await stagesRun(task.id)).filter((s) => s === "implementing").length).toBeGreaterThanOrEqual(2);
+  });
+  it("does not count an e2e failure that is not a design blocker set against the design rounds", async () => {
+    const plain = { outcome: "fail" as const, detail: { step: "e2e" }, findings: designBlocked.findings };
+    stubs.plan("e2e", plain, plain);
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: { for: async () => ({ ...DEFAULT_POLICY, factory: factoryConfigOf({ verify: { build_rounds: 1 } }) }) } });
+    const task = await newTask();
+    expect((await startAndApprove(task.id)).state).not.toBe("awaiting_design");
+  });
 });

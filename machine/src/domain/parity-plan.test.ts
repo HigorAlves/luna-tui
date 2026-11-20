@@ -1,7 +1,7 @@
 import { MAX_CAPTURES } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { capturePlan } from "./parity-plan.ts";
+import { capturePlan, citedWithoutViewport } from "./parity-plan.ts";
 
 const desktop = { width: 1440, height: 900 };
 const designed = (state: string, nodeId: string | null = "1:1") => ({ state, nodeId, suggestion: null });
@@ -48,5 +48,18 @@ describe("capturePlan", () => {
     const plan = capturePlan(scenarios as never, many);
     expect(plan.targets).toHaveLength(MAX_CAPTURES);
     expect(plan.notes).toEqual([expect.stringContaining(`${30 - MAX_CAPTURES} captures over the cap`)]);
+  });
+});
+
+describe("citedWithoutViewport", () => {
+  const sc = (id: string, frame_ref?: string, layer?: "e2e" | "unit") => ({ id, title: id, layer, frame_ref });
+  it("names each browser scenario whose frame the spec gives no viewport", () => {
+    const s = { frames: [frame("A", [designed("default")]), frame("B", [designed("default")], null)] } as never;
+    expect(citedWithoutViewport([sc("S1", "A"), sc("S2", "B"), sc("S3", "B"), sc("S4")], s)).toEqual([{ scenario: "S2", frame: "B" }, { scenario: "S3", frame: "B" }]);
+  });
+  it("leaves out a scenario the browser run does not grade, and a frame the spec does not name", () => {
+    const s = { frames: [frame("B", [designed("default")], null)] } as never;
+    expect(citedWithoutViewport([sc("S1", "B", "unit"), sc("S2", "B", "e2e"), sc("S3", "Z", "e2e")], s)).toEqual([{ scenario: "S2", frame: "B" }]);
+    expect(citedWithoutViewport([sc("S2", "B")], null)).toEqual([]);
   });
 });

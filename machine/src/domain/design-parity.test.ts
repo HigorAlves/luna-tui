@@ -72,3 +72,22 @@ describe("settleParity", () => {
     expect(s).toMatchObject({ confidence: 0, designInput: "missing", findings: [], gate: { fires: true, why: expect.arrayContaining(["low_confidence"]) } });
   });
 });
+
+describe("settleParity: a cited frame with no viewport", () => {
+  const unviewed = { frames: [{ id: "30:1", name: "Modal", viewport: null, states: [designed("default", "30:2")] }] } as never;
+  const noTargets = { targets: [], uncited: [], notes: [] };
+  it("is not compared, with a reason, and fires the gate: never dropped, never a pass", () => {
+    const s = settleParity(answer({ frames: [] }) as never, { plan: noTargets, spec: unviewed, captures: [], bar: 0.75, unplaced: [{ scenario: "S9", frame: "30:1" }] });
+    expect(s.frames).toEqual([expect.objectContaining({ frame: "30:1", name: "Modal", node: "30:2", scenario: "S9", status: "not_compared", reason: "the spec gives this frame no viewport", capture: null, render: null })]);
+    expect(s.gate).toEqual({ fires: true, why: ["not_compared"] });
+  });
+  it("is not made a pass by a reviewer that says it compared it", () => {
+    const said = { frame: "30:1", scenario: "S9", viewport: "unknown", state: "default", status: "compared", capture: "/evidence/parity/S9/x.png", render: "/design/1-0.png" };
+    const s = settleParity(answer({ frames: [said] }) as never, { plan: noTargets, spec: unviewed, captures: [], bar: 0.75, unplaced: [{ scenario: "S9", frame: "30:1" }] });
+    expect(s.frames[0]).toMatchObject({ status: "not_compared", render: null });
+  });
+  it("sits beside the planned frames", () => {
+    const s = settleParity(answer() as never, { plan: onlyDefault, spec, captures, bar: 0.75, unplaced: [{ scenario: "S2", frame: "20:1" }] });
+    expect(s.frames.map((f) => [f.frame, f.scenario, f.status])).toEqual([["12:34", "S1", "compared"], ["20:1", "S2", "not_compared"], ["20:1", null, "not_compared"]]);
+  });
+});

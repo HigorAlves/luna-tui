@@ -43,3 +43,15 @@ export function capturePlan(scenarios: Cited[], spec: DesignSpec | null): Captur
   if (over > 0) plan.notes.push(`${over} captures over the cap of ${MAX_CAPTURES} were not planned`);
   return plan;
 }
+
+/**
+ * The browser scenarios that cite a spec frame with no viewport. `capturePlan` cannot plan a capture for them, but the frame is cited, so it still counts:
+ * the settle lists it as not compared (and that opens the gate), never drops it and never passes it.
+ */
+export function citedWithoutViewport(scenarios: Cited[], spec: DesignSpec | null): Array<{ scenario: string; frame: string }> {
+  if (!spec) return [];
+  const layered = scenarios.some((s) => s.layer);
+  return scenarios
+    .filter((s) => !layered || s.layer === "e2e")
+    .flatMap((s) => (s.frame_ref && spec.frames.some((f) => f.id === s.frame_ref && !f.viewport) ? [{ scenario: s.id ?? "", frame: s.frame_ref }] : []));
+}

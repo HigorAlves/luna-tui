@@ -28,7 +28,8 @@ import { verifySteps } from "../../domain/verify-order.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { noIdentityDetail } from "../env-broken.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
-import { type Decide, judgeCheck } from "./check-decide.ts";
+import type { Decide } from "./check-decide.ts";
+import { classifyFindings } from "./classify-findings.ts";
 import { type SessionExec, openChecksSession } from "./checks-session.ts";
 import { addUsage } from "./usage.ts";
 
@@ -123,9 +124,7 @@ const remember = (cache: Map<string, BaseAnswer>, key: string, answer: BaseAnswe
 };
 const stillFresh = (answer: BaseAnswer | undefined): answer is BaseAnswer => !!answer && Date.now() - answer.at < (answer.red ? RED_TTL_MS : GREEN_TTL_MS);
 
-/** How many findings finding_classify sees, the most severe first, and how much code it gets around each. */
-const CLASSIFY_MAX = 20;
-const LEVEL_RANK = { blocker: 2, should_fix: 1, nit: 0 } as const;
+/** How much code finding_classify gets around each finding. */
 const EXCERPT_RADIUS = 8;
 const EXCERPT_CAP = 2000;
 /** The host reads nothing but a regular file of a sane size from the worktree: a FIFO or a huge file a stage left would stall the machine. */
@@ -293,35 +292,8 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
 
     /** finding_classify over the review's most confident findings: recorded beside the verifier's severities, never a verdict. */
     const classify = async (reviewed: Finding[]): Promise<Record<string, unknown>> => {
-      const decide = deps.decide ?? null;
-      if (!decide || reviewed.length === 0) return {};
-      const top = [...reviewed].sort((a, b) => LEVEL_RANK[severityOf(b.severity)] - LEVEL_RANK[severityOf(a.severity)] || b.confidence - a.confidence).slice(0, CLASSIFY_MAX);
-      const classified = await Promise.all(
-        top.map(async (finding) => {
-          const excerpt = await excerptOf(cwd, finding);
-          const { verdict, answer, recordId } = await judgeCheck(decide, "finding_classify", { kind: "finding", finding, excerpt }, task.repoPath ?? null, decisions);
-          const severity = (answer?.severity ?? null) as { choice?: unknown; confidence?: unknown } | null;
-          const usable = (verdict === "proceed" || verdict === "flag") && typeof severity?.choice === "string";
-          return {
-            id: finding.id ?? "",
-            title: finding.title,
-            path: finding.path,
-            line: finding.line,
-            severity: finding.severity,
-            classified: usable ? (severity!.choice as "blocker" | "should_fix" | "nit") : null,
-            confidence: typeof severity?.confidence === "number" ? severity.confidence : null,
-            verdict,
-            ...(recordId ? { recordId } : {}),
-          };
-        }),
-      );
-      const calibration = { agree: 0, disagree: 0, skipped: 0 };
-      for (const row of classified) {
-        if (row.classified === null) calibration.skipped++;
-        else if (row.classified === severityOf(row.severity)) calibration.agree++;
-        else calibration.disagree++;
-      }
-      return { classified, calibration };
+      if (!deps.decide || reviewed.length === 0) return {};
+      return classifyFindings({ decide: deps.decide, repoPath: task.repoPath ?? null, decisions, excerpt: (finding) => excerptOf(cwd, finding) }, reviewed);
     };
 
     // Step A: the review, before anything of the suite runs (when agents are on).
