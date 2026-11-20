@@ -1,5 +1,6 @@
 // The e2e stage: skip repos with no web surface and changes that touch none of it; otherwise
 // run the e2e pack in the QA image and turn its verdict into a pass or a fail for the e2e loop.
+import { touchesRenderedSurface } from "../../domain/rendered.ts";
 import { readFile, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -121,10 +122,6 @@ const WEB_FRAMEWORKS = ["next", "vite", "react", "vue", "svelte", "astro", "nuxt
 const SKIP_DIRS = new Set(["node_modules", "dist", "build", "target", "vendor"]);
 /** Where a monorepo keeps its apps: one level of these is scanned for a web package.json. */
 const WORKSPACE_DIRS = ["apps", "packages", "services", "sites"];
-/** A file the browser renders, or the folder such files live in; `package.json` because a
- *  dependency bump changes what renders too. */
-const RENDERED_EXT = /\.(tsx|jsx|vue|svelte|astro|html?|css|scss|sass|less|mdx|j2|hbs|ejs|svg|png|jpe?g|gif|webp|woff2?)$/i;
-const RENDERED_DIRS = new Set(["app", "pages", "components", "public", "static", "views", "templates", "ui", "assets", "styles"]);
 
 const isFile = (path: string) => stat(path).then((s) => s.isFile(), () => false);
 
@@ -168,19 +165,7 @@ export async function detectWeb(worktreePath: string): Promise<boolean> {
   return (await webRoots(worktreePath)).length > 0;
 }
 
-/** True when any changed path is something on screen could depend on. */
-export function touchesRenderedSurface(files: string[], webRootDirs: string[] = []): boolean {
-  return files.some((file) => {
-    const parts = file.split("/");
-    const name = parts.at(-1) ?? "";
-    if (name === "package.json" || RENDERED_EXT.test(name) || parts.slice(0, -1).some((dir) => RENDERED_DIRS.has(dir))) return true;
-    // Inside a web package, any source under src/ may render the page (a .ts that builds the
-    // DOM looks like any other .ts); only tests are known not to.
-    if (TEST_PATH.test(file)) return false;
-    return webRootDirs.some((root) => file.startsWith(root === "" ? "src/" : `${root}/src/`));
-  });
-}
-const TEST_PATH = /(^|\/)(__tests__|tests?|spec)\/|\.(test|spec)\.[^/]+$/i;
+export { touchesRenderedSurface };
 
 /** What the task branch changed since it forked, from git; null when that is unknown. */
 export async function changedFilesSinceBase(worktreePath: string, repoPath: string | null): Promise<string[] | null> {
