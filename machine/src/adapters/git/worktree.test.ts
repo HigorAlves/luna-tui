@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { ensureClone } from "./clone.ts";
 import { machineGitDir } from "./machine-repo.ts";
-import { refuseHugeUntracked, UNTRACKED_LIMIT, changedSince, commitsSince, currentBranch, dirtyFiles, headCommit, stagePending, readCommitDiff, branchBase, commitAll, defaultHead, checkoutHead, ensureCleanCheckout, graphCheckoutPath, isAncestor,  intakeCheckoutPath, onDefaultBranch, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
+import { refuseHugeUntracked, UNTRACKED_LIMIT, changedSince, commitsSince, currentBranch, dirtyFiles, headCommit, stagePending, readCommitDiff, branchBase, commitAll, defaultHead, checkoutHead, ensureCleanCheckout, graphCheckoutPath, isAncestor,  intakeCheckoutPath, onDefaultBranch, commitFiles, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
@@ -514,3 +514,23 @@ describe("onDefaultBranch", () => {
   });
 });
 
+
+describe("commitFiles", () => {
+  it("lists each commit of from..to with its files, oldest first, a rename under its new path", async () => {
+    const root = workspaceWith("commit-files-");
+    const from = wgit(root, "rev-parse", "HEAD");
+    writeFileSync(join(root, "b.txt"), "b\n");
+    writeFileSync(join(root, "c.txt"), "c\n");
+    wgit(root, "add", "-A");
+    wgit(root, "commit", "-q", "-m", "one");
+    const one = wgit(root, "rev-parse", "HEAD");
+    wgit(root, "mv", "b.txt", "d.txt");
+    wgit(root, "commit", "-q", "-m", "two");
+    const two = wgit(root, "rev-parse", "HEAD");
+    expect(await commitFiles(root, from, "HEAD")).toEqual([
+      { sha: one, files: ["b.txt", "c.txt"] },
+      { sha: two, files: ["b.txt", "d.txt"] },
+    ]);
+    expect(await commitFiles(root, two, "HEAD")).toEqual([]);
+  });
+});

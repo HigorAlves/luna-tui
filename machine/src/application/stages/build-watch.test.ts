@@ -667,3 +667,43 @@ describe("the design tool mailbox", () => {
     expect(await waitFor(answer(out, 61))).toEqual({ ok: false, error: "too many design tool calls in this run" });
   });
 });
+
+describe("scope_check and the files another agent holds", () => {
+  const commitFiles = async () => [
+    { sha: "mine", files: ["src/a.ts", "src/ui/Card.tsx"] },
+    { sha: "picked1", files: ["src/ui/Card.tsx"] },
+  ];
+
+  it("answers with a locked_file blocker problem for a commit of this run that touches a locked file", async () => {
+    const out = mkdtempSync(join(tmpdir(), "build-locks-"));
+    const c = checks(out, null, { planPresent: true, planned: ["src/a.ts", "src/ui/Card.tsx"], locks: () => ({ other: ["src/ui/Card.tsx"] }), picked: () => new Set(["picked1"]), git: { nameStatus: async () => "M\tsrc/a.ts", diff: async () => "", commitFiles } });
+    await c.onScopeRequest({ diffSummary: "x", outOfMap: [] });
+    const answer = JSON.parse(readFileSync(join(out, "checks", "scope.json"), "utf8"));
+    expect(answer.verdict).toBe("flag");
+    expect(answer.problems).toEqual([expect.stringContaining("src/ui/Card.tsx")]);
+    expect(answer.facts.lockedTouched).toEqual([{ path: "src/ui/Card.tsx", owner: "ui-designer" }]);
+  });
+
+  it("counts a pick made during the run: the picked shas are read when asked, not when the checks are built", async () => {
+    const out = mkdtempSync(join(tmpdir(), "build-locks-late-"));
+    const picked = new Set<string>();
+    const c = checks(out, null, { planPresent: true, planned: ["src/a.ts", "src/ui/Card.tsx"], locks: () => ({ other: ["src/ui/Card.tsx"] }), picked: () => picked, git: { nameStatus: async () => "M\tsrc/a.ts", diff: async () => "", commitFiles: async () => [{ sha: "p", files: ["src/ui/Card.tsx"] }] } });
+    expect((await c.finalFacts([])).lockedTouched).toHaveLength(1);
+    picked.add("p");
+    expect((await c.finalFacts([])).lockedTouched).toEqual([]);
+  });
+
+  it("on the helper's run the locks are the implementer's and nothing counts as picked", async () => {
+    const out = mkdtempSync(join(tmpdir(), "build-locks-helper-"));
+    const c = checks(out, null, { planPresent: true, planned: ["src/a.ts"], locks: () => ({ other: ["src/a.ts"], owner: "implementer" }), git: { nameStatus: async () => "M\tsrc/a.ts", diff: async () => "", commitFiles } });
+    expect((await c.finalFacts([])).lockedTouched).toEqual([{ path: "src/a.ts", owner: "implementer" }]);
+  });
+
+  it("with no helper on the card the commits are never read and the facts have no locked files", async () => {
+    const out = mkdtempSync(join(tmpdir(), "build-nolocks-"));
+    let read = 0;
+    const c = checks(out, null, { planPresent: true, git: { nameStatus: async () => "M\tsrc/a.ts", diff: async () => "", commitFiles: async () => (read++, []) } });
+    expect((await c.finalFacts([])).lockedTouched).toEqual([]);
+    expect(read).toBe(0);
+  });
+});

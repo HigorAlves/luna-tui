@@ -261,3 +261,43 @@ describe("scopeFacts: a token prefix in documentation", () => {
     expect(scopeFacts({ ...none, nameStatus: status("M\tdocs/install.md"), addedLines: [{ path: "docs/install.md", line: `TOKEN=${slack}` }] }).secrets).toEqual(["docs/install.md: xoxp…"]);
   });
 });
+
+describe("scopeFacts: files another agent holds (RFC 0013, phase 5)", () => {
+  const locks = { other: ["src/ui/Card.tsx", "src/ui/parts/"] };
+  const commits = [
+    { sha: "aaa", files: ["src/a.ts", "src/ui/Card.tsx"] },
+    { sha: "bbb", files: ["src/ui/parts/Row.tsx"] },
+    { sha: "ccc", files: ["src/b.ts"] },
+  ];
+  const base = { ...none, nameStatus: "M\tsrc/a.ts", planned: [] as string[] };
+
+  it("reports a commit that is not picked and touches a locked file, once per path", () => {
+    const facts = scopeFacts({ ...base, locks, commits: [...commits, { sha: "ddd", files: ["src/ui/Card.tsx"] }], picked: new Set() });
+    expect(facts.lockedTouched).toEqual([
+      { path: "src/ui/Card.tsx", owner: "ui-designer" },
+      { path: "src/ui/parts/Row.tsx", owner: "ui-designer" },
+    ]);
+  });
+
+  it("does not report a commit the machine picked, even on the same file", () => {
+    const facts = scopeFacts({ ...base, locks, commits, picked: new Set(["aaa", "bbb"]) });
+    expect(facts.lockedTouched).toEqual([]);
+  });
+
+  it("names the owner the lock belongs to (the implementer's files, on the helper's run)", () => {
+    const facts = scopeFacts({ ...base, locks: { other: ["src/a.ts"], owner: "implementer" }, commits });
+    expect(facts.lockedTouched).toEqual([{ path: "src/a.ts", owner: "implementer" }]);
+  });
+
+  it("is empty with no locks, whatever the commits", () => {
+    expect(scopeFacts({ ...base, commits }).lockedTouched).toEqual([]);
+    expect(scopeFacts({ ...base, locks: { other: [] }, commits }).lockedTouched).toEqual([]);
+  });
+
+  it("is a blocker, and a file brought in by a pick is planned, never undeclared", () => {
+    const facts = scopeFacts({ ...base, nameStatus: "M\tsrc/a.ts\nA\tsrc/ui/Card.tsx", planned: ["src/a.ts", "src/ui/Card.tsx"], locks, commits, picked: new Set(["bbb"]) });
+    const issues = scopeIssues(facts, []);
+    expect(issues).toEqual([expect.objectContaining({ severity: "blocker", kind: "locked_file", path: "src/ui/Card.tsx" })]);
+    expect(facts.undeclared).toEqual([]);
+  });
+});

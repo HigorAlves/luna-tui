@@ -18,6 +18,7 @@ import {
   commonGitDir,
   gitIdentity,
   diffNameStatus,
+  commitFiles,
   diffText,
   headCommit,
   lockfilesAt,
@@ -246,6 +247,7 @@ function plannedFiles(plan: StageInput["plan"]): string[] {
 
 const SCOPE_TITLES: Record<ScopeIssue["kind"], string> = {
   undeclared_file: "file outside the plan, not declared",
+  locked_file: "file another agent holds",
   test_removed: "test removed",
   switched_off_test: "test switched off in place",
   test_weakened: "scenario test changed after the tests commit",
@@ -256,6 +258,7 @@ const SCOPE_TITLES: Record<ScopeIssue["kind"], string> = {
 };
 const SCOPE_ADVICE: Partial<Record<ScopeIssue["kind"], string>> = {
   undeclared_file: "The plan's slices and the code map do not name this file and the answer did not declare it. Revert it, or declare it in outOfMap with the reason the slice needs it.",
+  locked_file: "Another agent holds this file for its slice. Revert your change to it; the machine puts the other agent's work on the branch.",
   test_removed: "The change removes this test; restore it.",
   switched_off_test: "A test was switched off in place (skip, only, ignore, disabled). Turn it back on and fix the code instead.",
   test_weakened: "A scenario's tagged test was changed or dropped after the tests commit. Restore it and make it pass.",
@@ -583,7 +586,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
           overrides: policy.decisions,
           truth: deps.truth ?? null,
           taskId: task.id,
-          git: deps.scopeGit ?? { nameStatus: async (from, to) => (await importer?.sync(), diffNameStatus(workspace.path, from, to)), diff: async (from, to) => (await importer?.sync(), diffText(workspace.path, from, to)) },
+          git: deps.scopeGit ?? { nameStatus: async (from, to) => (await importer?.sync(), diffNameStatus(workspace.path, from, to)), diff: async (from, to) => (await importer?.sync(), diffText(workspace.path, from, to)), commitFiles: async (from, to) => (await importer?.sync(), commitFiles(workspace.path, from, to)) },
           log: (line) => void context.note?.(line).catch(() => {}),
         })
       : null;

@@ -641,6 +641,18 @@ export function diffNameStatus(path: string, from: string, to: string): Promise<
   return execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--name-status", from, to]);
 }
 
+/** Each commit of `<from>..<to>`, oldest first, with the files it touched (`--no-renames`: a rename lists both paths, so a locked file moved away still shows). */
+export async function commitFiles(path: string, from: string, to: string): Promise<{ sha: string; files: string[] }[]> {
+  const out = await execOrThrow("git", [...HOST_GIT, ...at(path), "log", "--reverse", "--format=%x00%H", "--name-only", "--no-renames", `${from}..${to}`]);
+  return out
+    .split("\0")
+    .filter((block) => block.trim())
+    .map((block) => {
+      const [sha = "", ...files] = block.split("\n");
+      return { sha: sha.trim(), files: files.map((f) => f.trim()).filter(Boolean) };
+    });
+}
+
 /** `git diff <from> <to>` in `path`: the unified diff, for reading what a change added. */
 export function diffText(path: string, from: string, to: string): Promise<string> {
   return execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--no-color", "--no-ext-diff", from, to]);

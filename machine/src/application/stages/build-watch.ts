@@ -11,7 +11,7 @@ import { scopeFacts as diffFacts } from "../../domain/scope-facts.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
 import type { CardHit } from "../../domain/card-search.ts";
 import { looksLikeTestPath } from "../../domain/locked-files.ts";
-import { type AddedLine, type ScopeFacts, addedLinesOf, removedLinesOf, sanitizeFacts, scopeFacts } from "../../domain/scope.ts";
+import { type AddedLine, type ScopeFacts, type ScopeLocks, addedLinesOf, removedLinesOf, sanitizeFacts, scopeFacts } from "../../domain/scope.ts";
 
 /** The most a request file the container writes may hold: a request is a few lines of JSON. */
 export const MAX_MAILBOX_BYTES = 64 * 1024;
@@ -522,7 +522,13 @@ export interface BuildChecksDeps {
   /** Told, once a slice commits, whether each judged red was a right-reason red (RFC 0005 wave 7). */
   truth?: TruthSink | null;
   taskId?: string;
-  git: { nameStatus(from: string, to: string): Promise<string>; diff(from: string, to: string): Promise<string> };
+  /** The other agent's files (RFC 0013, phase 5), read when asked: the delegated slice's touchpoints on the implementer's run, the implementer's on the helper's (`owner: "implementer"`). */
+  locks?: () => ScopeLocks;
+  /** The shas the machine itself picked onto the branch (its own `build.helper_picked` rows), read when asked so a pick during the run counts. Empty on the helper's run. */
+  picked?: () => ReadonlySet<string>;
+  git: { nameStatus(from: string, to: string): Promise<string>; diff(from: string, to: string): Promise<string>;
+    /** Each commit of `<from>..HEAD` with its files (`git log --format=%H --name-only --no-renames`). Read only while the other side holds files. */
+    commitFiles?(from: string, to: string): Promise<{ sha: string; files: string[] }[]> };
   log?: (line: string) => void;
 }
 
@@ -586,7 +592,9 @@ export function buildChecks(deps: BuildChecksDeps) {
     const repo = !protects && deps.repoFiles && touchedTests.length ? await deps.repoFiles(touchedTests).catch(() => new Set(touchedTests)) : new Set(touchedTests);
     const harness = new Set(touchedTests.filter((p) => !repo.has(p)));
     const removedLines = removedLinesOf(diff).filter((l) => !harness.has(l.path));
-    const facts = sanitizeFacts(scopeFacts({ nameStatus, addedLines, removedLines, planned: deps.planned, declared, planPresent: deps.planPresent === true, ...(deps.scenarioTests?.length ? { scenarioTests: deps.scenarioTests } : {}), ...(deps.protectedPaths?.length ? { protectedPaths: deps.protectedPaths } : {}), ...(deps.inlineTests?.length ? { inlineTests: deps.inlineTests } : {}) }));
+    const locks = deps.locks?.();
+    const commits = locks && locks.other.length > 0 && deps.git.commitFiles ? await deps.git.commitFiles(deps.inputCommit, "HEAD") : [];
+    const facts = sanitizeFacts(scopeFacts({ nameStatus, addedLines, removedLines, ...(locks ? { locks, commits, picked: deps.picked?.() ?? new Set<string>() } : {}), planned: deps.planned, declared, planPresent: deps.planPresent === true, ...(deps.scenarioTests?.length ? { scenarioTests: deps.scenarioTests } : {}), ...(deps.protectedPaths?.length ? { protectedPaths: deps.protectedPaths } : {}), ...(deps.inlineTests?.length ? { inlineTests: deps.inlineTests } : {}) }));
     if (harness.size === 0) return facts;
     return { ...facts, removedTests: facts.removedTests.filter((p) => !harness.has(p)), undeclared: facts.undeclared.filter((p) => !harness.has(p)) };
   };
@@ -624,6 +632,11 @@ export function buildChecks(deps: BuildChecksDeps) {
       const answer = facts
         ? await judge("scope_check", { kind: "scope", planned: deps.planned, ...facts, declared: request.outOfMap, diffSummary: request.diffSummary })
         : { verdict: "skipped", problems: [] };
+      // A locked file is a fact of the diff, not a judgement: it flags whatever the decision said.
+      if (facts && facts.lockedTouched.length > 0) {
+        answer.problems = [...facts.lockedTouched.map((l) => `${l.path}: held by ${l.owner === "implementer" ? "the implementer" : "the ui-designer"}; revert your change to it`), ...answer.problems];
+        answer.verdict = "flag";
+      }
       verdict = answer.verdict;
       // The diff answers four of the six questions by script; a "no" it found says what the answer should have been.
       const scopeRecord = facts ? lastRecord : undefined;

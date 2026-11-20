@@ -26,6 +26,14 @@ export interface ScopeFacts {
   switchedOff: string[];
   /** Scenario ids whose `@scenario:<id>` tag the change removed from a test and did not put back: the test the tests step wrote was dropped or rewritten away. */
   weakened: string[];
+  /** Files the other agent holds (RFC 0013, phase 5) that a commit of this side touched and the machine did not pick: the implementer's files on the helper's run, the helper's slice files on the implementer's. */
+  lockedTouched: { path: string; owner: "implementer" | "ui-designer" }[];
+}
+
+/** The files the other side holds, and who holds them. On the implementer's run the owner is the ui-designer (the default); on the helper's run it is the implementer. */
+export interface ScopeLocks {
+  other: readonly string[];
+  owner?: "implementer" | "ui-designer";
 }
 
 export type ScopeSeverity = "blocker" | "should_fix" | "nit";
@@ -33,7 +41,7 @@ export interface ScopeIssue {
   severity: ScopeSeverity;
   /** The file the issue is about, when it is about one. */
   path?: string;
-  kind: "undeclared_file" | "test_removed" | "switched_off_test" | "test_weakened" | "secret" | "new_dependency" | "unrelated_refactor" | "todo";
+  kind: "undeclared_file" | "locked_file" | "test_removed" | "switched_off_test" | "test_weakened" | "secret" | "new_dependency" | "unrelated_refactor" | "todo";
   text: string;
 }
 
@@ -157,7 +165,9 @@ function dependencyOf({ path, line, section }: AddedLine): string | null {
 
 export function scopeFacts(input: { nameStatus: string; addedLines: AddedLine[]; removedLines?: AddedLine[]; /** The tests the tests step committed, by scenario: the scope is measured from that commit, and any change to one of these files is a weakened test. */ scenarioTests?: readonly { scenario: string; file: string }[]; /** Every path of the tests commit (helpers and fixtures included): none may change without a person. */ protectedPaths?: readonly string[]; /** Source files that hold Rust's inline tests as well as production code: changing one is not a weakened test, losing a scenario tag from one is. */ inlineTests?: readonly string[]; planned: string[]; declared: { path: string; reason?: string }[];
   /** An approved plan exists: an empty planned list then switches nothing off (every changed file is undeclared). */
-  planPresent?: boolean }): ScopeFacts {
+  planPresent?: boolean;
+  /** Files another agent holds, each commit of this side with its files, and the shas the machine itself picked onto the branch (never attributed to this side). */
+  locks?: ScopeLocks; commits?: readonly { sha: string; files: readonly string[] }[]; picked?: ReadonlySet<string> }): ScopeFacts {
   const changed = changedOf(input.nameStatus);
   const declared = new Set(input.declared.map((d) => d.path));
   const deleted = new Set(input.nameStatus.split("\n").filter((l) => l.startsWith("D\t")).map((l) => l.slice(2)));
@@ -172,8 +182,21 @@ export function scopeFacts(input: { nameStatus: string; addedLines: AddedLine[];
       ...input.addedLines.filter((l) => TOKEN.test(l.line)).map((l) => `${l.path}: ${TOKEN.exec(l.line)![0].slice(0, 4)}\u2026`),
     ],
     switchedOff: input.addedLines.filter((l) => SWITCHED_OFF.test(l.line)).map((l) => `${l.path}: ${l.line.trim()}`),
+    lockedTouched: lockedTouchedOf(input.locks, input.commits ?? [], input.picked ?? new Set()),
     weakened: weakenedOf(input.removedLines ?? [], input.addedLines, input.nameStatus, input.scenarioTests ?? [], input.protectedPaths ?? [], input.inlineTests ?? []),
   };
+}
+
+/** A commit the machine picked is the other side's work, whoever's container is running: only the machine's own shas decide, never a claim a container made. */
+function lockedTouchedOf(locks: ScopeLocks | undefined, commits: readonly { sha: string; files: readonly string[] }[], picked: ReadonlySet<string>): ScopeFacts["lockedTouched"] {
+  if (!locks || locks.other.length === 0) return [];
+  const owner = locks.owner ?? "ui-designer";
+  const seen = new Set<string>();
+  for (const commit of commits) {
+    if (picked.has(commit.sha)) continue;
+    for (const file of commit.files) if (isPlanned(file, [...locks.other])) seen.add(file);
+  }
+  return [...seen].map((path) => ({ path, owner }));
 }
 
 function weakenedOf(removed: AddedLine[], added: AddedLine[], nameStatus: string, scenarioTests: readonly { scenario: string; file: string }[], protectedPaths: readonly string[], inlineTests: readonly string[] = []): string[] {
@@ -194,12 +217,13 @@ function weakenedOf(removed: AddedLine[], added: AddedLine[], nameStatus: string
 
 /** The facts as issues, each with a severity: a blocker for an undeclared file, a removed, switched-off or weakened test and a secret; should_fix for a dependency the plan did not name and an unrelated refactor the check judged; a nit for a TODO. `judged` names what scope_check's answers found beyond the facts.
  *  An issue's text is redacted by `safe()` and cut at 120 characters (an added line can hold anything), and carries the path apart so a message can say where in fixed words. Pure. */
-export function scopeIssues(facts: ScopeFacts, judged: readonly string[]): ScopeIssue[] {
+export function scopeIssues(facts: Omit<ScopeFacts, "lockedTouched"> & Partial<Pick<ScopeFacts, "lockedTouched">>, judged: readonly string[]): ScopeIssue[] {
   const text = (value: string): string => safe(value).slice(0, ISSUE_CAP);
   const where = (entry: string): string => entry.split(": ")[0] ?? "";
   const issue = (severity: ScopeSeverity, kind: ScopeIssue["kind"], value: string, path?: string): ScopeIssue => ({ severity, kind, text: text(value), ...(path ? { path: text(path) } : {}) });
   return [
     ...facts.undeclared.map((p) => issue("blocker", "undeclared_file", `${p}: changed outside the plan and not declared`, p)),
+    ...(facts.lockedTouched ?? []).map((l) => issue("blocker", "locked_file", `${l.path}: held by ${l.owner === "implementer" ? "the implementer" : "the ui-designer"}, changed by a commit that is not the machine's pick`, l.path)),
     ...facts.removedTests.map((p) => issue("blocker", "test_removed", `${p}: test removed`, p)),
     ...facts.switchedOff.map((t) => issue("blocker", "switched_off_test", `test switched off: ${t}`, where(t))),
     ...facts.weakened.map((id) => (id.startsWith("file:") ? issue("blocker", "test_weakened", `${id.slice(5)}: a file of the tests commit was changed`, id.slice(5)) : issue("blocker", "test_weakened", `${id}: the scenario's tagged test was changed after the tests commit`))),
