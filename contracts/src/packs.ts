@@ -1160,7 +1160,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     writable: false,
     maxTurns: 30,
     timeoutMs: 10 * MINUTE,
-    // Claude only until Codex passes the admission eval (RFC 0013, phase 4); a blind engine is refused (visionProblem).
+    // Claude only. Codex sees images (probed, RFC 0013) but joins only after the admission eval; a blind engine is refused (visionProblem).
     engines: { default: "claude:sonnet", allowed: ["claude:sonnet", "claude:opus"] },
     vision: true,
     effort: "medium",
@@ -1320,7 +1320,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     writable: false,
     maxTurns: 40,
     timeoutMs: 15 * MINUTE,
-    // Claude only until eve reads images (phase 4 adds vision gating); codex joins after a parity eval on codex matches the Claude baseline.
+    // Claude only for now. Codex sees images (probed, RFC 0013) but joins after the admission eval matches the Claude baseline.
     engines: { default: "claude:opus", allowed: ["claude:opus", "claude:sonnet"] },
     vision: true,
     effort: "high",

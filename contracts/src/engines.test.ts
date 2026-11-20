@@ -60,15 +60,15 @@ describe("the model catalog and the engines", () => {
 });
 
 describe("the model catalog and vision", () => {
-  it("says which models read images: Claude's do, the OpenAI ones until the probe shows it (RFC 0013), Jev never", () => {
+  it("says which models read images: Claude's do, the probed OpenAI ones do (gpt-5.6-terra, gpt-6-luna), gpt-6-sol is unprobed, Jev never", () => {
     const vision = Object.fromEntries(Object.entries(MODELS).map(([key, m]) => [key, m.caps.vision]));
     expect(vision).toEqual({
       "anthropic/opus-5.5": true,
       "anthropic/sonnet-5.5": true,
       "anthropic/haiku-5.5": true,
       "openai/gpt-6-sol": false,
-      "openai/gpt-6-luna": false,
-      "openai/gpt-5.6-terra": false,
+      "openai/gpt-6-luna": true,
+      "openai/gpt-5.6-terra": true,
       "typesafe/jev": false,
     });
     expect(resolveEngine("claude:opus").caps.vision).toBe(true);
@@ -82,9 +82,9 @@ describe("the engines each pack may run on", () => {
 
   it("needs vision for the spec writer and the parity reviewer only, and names a blind engine", () => {
     expect(AGENT_PACKS.filter((p) => p.vision).map((p) => p.id).sort()).toEqual(["design_parity", "design_spec"]);
-    expect(visionProblem(PACKS.design_parity, "codex:sol")).toBe("codex:sol cannot read images, which design_parity needs");
+    expect(visionProblem(PACKS.design_parity, "openai:sol")).toBe("openai:sol cannot read images, which design_parity needs");
     expect(visionProblem(PACKS.design_parity, "claude:opus")).toBeNull();
-    expect(visionProblem(PACKS.implementing, "codex:sol")).toBeNull();
+    expect(visionProblem(PACKS.implementing, "openai:sol")).toBeNull();
   });
 
   // The real clock: the rule's point is to fail on the day a referenced model retires.

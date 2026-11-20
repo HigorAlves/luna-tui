@@ -1262,7 +1262,7 @@ describe("the engine a stage runs on", () => {
   it("refuses a handed engine that cannot read images for a pack that needs them, before any container starts (RFC 0013)", async () => {
     seen = undefined;
     const { credentials, log } = recordingCredentials();
-    await expect(runAgent({ ...deps(fakeSandbox(output())), credentials }, { ...context("e2e"), engine: "codex:sol" }, "design_parity")).rejects.toThrow("codex:sol cannot read images, which design_parity needs: refused before the container started");
+    await expect(runAgent({ ...deps(fakeSandbox(output())), credentials }, { ...context("e2e"), engine: "openai:sol" }, "design_parity")).rejects.toThrow("openai:sol cannot read images, which design_parity needs: refused before the container started");
     expect(seen).toBeUndefined();
     expect(log).toEqual([]);
   });

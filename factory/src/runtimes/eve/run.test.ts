@@ -163,13 +163,15 @@ describe("eveRuntime", () => {
 });
 
 describe("eveRuntime's dry run and vision (RFC 0013)", () => {
-  it("prints whether the engine's model reads images: not on codex:luna while the catalog says so", async () => {
+  it("prints whether the engine's model reads images: yes on codex:luna (probed), no on openai:sol (unprobed)", async () => {
     const agentsDir = mkdtempSync(join(tmpdir(), "eve-vision-"));
     const input = StageInput.parse({ schema: 3, stage: "implementing", pack: "implementing", attempt: 1, task: { id: "t", title: "x", description: "y", criteria: [], repoPath: "/r", branch: "task/x", source: null }, plan: null, decisions: [], priorFindings: [], context: { projectContext: null }, limits: { maxTurns: 3, timeoutMs: 10_000 }, env: {} });
-    const events: RunEvent[] = [];
-    await eveRuntime({ agentsDir }).run({ pack: PACKS.implementing, engine: resolveEngine("codex:luna"), input, prompt: "x", paths: { factoryRoot: "/f", work: agentsDir, out: agentsDir, input: agentsDir, scratch: agentsDir }, luna: { call: async () => null }, dry: true, emit: (e: RunEvent) => void events.push(e) });
-    const session = events.find((e) => e.kind === "session");
-    expect(JSON.parse((session!.payload as { text: string }).text)).toMatchObject({ vision: false });
+    for (const [engine, vision] of [["codex:luna", true], ["openai:sol", false]] as const) {
+      const events: RunEvent[] = [];
+      await eveRuntime({ agentsDir }).run({ pack: PACKS.implementing, engine: resolveEngine(engine), input, prompt: "x", paths: { factoryRoot: "/f", work: agentsDir, out: agentsDir, input: agentsDir, scratch: agentsDir }, luna: { call: async () => null }, dry: true, emit: (e: RunEvent) => void events.push(e) });
+      const session = events.find((e) => e.kind === "session");
+      expect(JSON.parse((session!.payload as { text: string }).text), engine).toMatchObject({ vision });
+    }
   });
 });
 

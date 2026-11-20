@@ -46,9 +46,9 @@ const CATALOG = {
   "anthropic/sonnet-5.5": { runtime: "claude", id: "claude-sonnet-5-5", status: "ga", caps: SEES },
   "anthropic/haiku-5.5": { runtime: "claude", id: "claude-haiku-5-5", status: "ga", caps: SEES },
   "openai/gpt-6-sol": { runtime: "eve", id: "gpt-6-sol", status: "preview", caps: BLIND },
-  "openai/gpt-6-luna": { runtime: "eve", id: "gpt-6-luna-fast", status: "preview", caps: BLIND },
+  "openai/gpt-6-luna": { runtime: "eve", id: "gpt-6-luna-fast", status: "preview", caps: SEES },
   // What a ChatGPT (Codex) login serves for the stronger engine: gpt-6-sol is API-only on it.
-  "openai/gpt-5.6-terra": { runtime: "eve", id: "gpt-5.6-terra", status: "preview", caps: BLIND },
+  "openai/gpt-5.6-terra": { runtime: "eve", id: "gpt-5.6-terra", status: "preview", caps: SEES },
   // A decision model: typed answers to typed questions, no tools and no effort setting. Billed per
   // input token only, through TypeSafe's API or the Vercel AI Gateway alike.
   "typesafe/jev": {

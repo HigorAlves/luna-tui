@@ -59,7 +59,7 @@ describe("effortProblems", () => {
 
 describe("visionProblems", () => {
   it("names the first engine that cannot read images for a pack that needs them", () => {
-    expect(visionProblems("design_parity", ["claude:opus", "codex:luna"])).toBe("codex:luna cannot read images, which design_parity needs");
+    expect(visionProblems("design_parity", ["claude:opus", "openai:sol"])).toBe("openai:sol cannot read images, which design_parity needs");
   });
   it("lets a pack that needs no images run on any engine", () => {
     expect(visionProblems("triage", ["codex:luna"])).toBeNull();

@@ -122,19 +122,19 @@ describe("chooseEffort", () => {
 
 describe("a pack that reads images", () => {
   // A pack that wrongly allows a blind engine: contracts' invariant keeps real packs from it; the machine still refuses.
-  const pack = { id: "design_parity" as const, vision: true, engines: { default: "claude:opus" as EngineId, allowed: ["claude:opus", "codex:sol"] as EngineId[], fallback: ["codex:sol"] as EngineId[] } };
-  const blind = "codex:sol cannot read images, which design_parity needs";
+  const pack = { id: "design_parity" as const, vision: true, engines: { default: "claude:opus" as EngineId, allowed: ["claude:opus", "openai:sol"] as EngineId[], fallback: ["openai:sol"] as EngineId[] } };
+  const blind = "openai:sol cannot read images, which design_parity needs";
 
   it("refuses a blind engine from luna.yaml as it refuses one outside allowed, and runs the default", () => {
-    expect(chooseEngine({ pack, config: { design_parity: "codex:sol" }, missing: everything })).toEqual({ engine: "claude:opus", source: "default", reason: `luna.yaml's ${blind}; ignored` });
+    expect(chooseEngine({ pack, config: { design_parity: "openai:sol" }, missing: everything })).toEqual({ engine: "claude:opus", source: "default", reason: `luna.yaml's ${blind}; ignored` });
   });
   it("refuses it from the task too", () => {
-    expect(chooseEngine({ pack, task: { design_parity: "codex:sol" }, missing: everything }).reason).toBe(`the task's ${blind}; ignored`);
+    expect(chooseEngine({ pack, task: { design_parity: "openai:sol" }, missing: everything }).reason).toBe(`the task's ${blind}; ignored`);
   });
   it("never falls back to it", () => {
     expect(fallbackCandidates(pack, ["claude:opus"])).toEqual([]);
   });
   it("still falls back to a blind engine for a pack that needs no images", () => {
-    expect(fallbackCandidates({ ...pack, id: "triage", vision: undefined }, ["claude:opus"])).toEqual(["codex:sol"]);
+    expect(fallbackCandidates({ ...pack, id: "triage", vision: undefined }, ["claude:opus"])).toEqual(["openai:sol"]);
   });
 });
