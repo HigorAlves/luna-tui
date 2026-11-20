@@ -438,6 +438,11 @@ describe("factory main (dry run)", () => {
     expect(run(stageInput("triage")).result.run).toMatchObject({ effort: PACKS.triage.effort });
   });
 
+  it("design_parity on a blind engine: refused before any model call", () => {
+    const { code, result } = run(stageInput("design_parity", { engine: "codex:sol" }));
+    expect(code).toBe(0);
+    expect(result).toMatchObject({ ok: false, outcome: "fail", error: "invalid stage input: codex:sol cannot read images, which design_parity needs" });
+  });
   it("fails the stage as invalid input on an effort the engine does not support", () => {
     // A decision engine supports no effort.
     const { code, result } = run(stageInput("triage", { engine: "jev", effort: "low" }));

@@ -511,6 +511,8 @@ export interface AgentPack extends PackBase {
   effort: Effort;
   /** The prompt template under factory/prompts/. */
   template: string;
+  /** It reads images (design frames, Verify's captures) and runs only on engines whose model has vision (RFC 0013). */
+  vision?: true;
   /** The hosts the stage may reach: `engine` its engines' (and the relay) only, `github` those and GitHub's (`gh`, issues, PRs), `full` also the repository's
    *  hosts, registries, the QA targets and the machine's private entries. A pack that needs less than `full` says so; a missing value does not compile. */
   network: PackNetwork;
@@ -1158,8 +1160,9 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     writable: false,
     maxTurns: 30,
     timeoutMs: 10 * MINUTE,
-    // Claude only until eve reads images (phase 4).
+    // Claude only until Codex passes the admission eval (RFC 0013, phase 4); a blind engine is refused (visionProblem).
     engines: { default: "claude:sonnet", allowed: ["claude:sonnet", "claude:opus"] },
+    vision: true,
     effort: "medium",
     answer: DesignSpec,
     template: "design_spec.md",
@@ -1319,6 +1322,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     timeoutMs: 15 * MINUTE,
     // Claude only until eve reads images (phase 4 adds vision gating); codex joins after a parity eval on codex matches the Claude baseline.
     engines: { default: "claude:opus", allowed: ["claude:opus", "claude:sonnet"] },
+    vision: true,
     effort: "high",
     answer: DesignParityAnswer,
     template: "design_parity.md",
@@ -2010,6 +2014,11 @@ export function effortProblem(pack: PackId, engine: EngineId, effort: Effort): s
   const supported = resolveEngine(engine).caps.effort;
   if (supported.includes(effort)) return null;
   return `${engine} does not support effort ${effort} (supports: ${supported.join(", ") || "none"})`;
+}
+
+/** Why `engine` cannot run `pack` for want of vision, or null: a pack that reads images on a model that cannot. */
+export function visionProblem(pack: { id: PackId; vision?: boolean }, engine: EngineId): string | null {
+  return pack.vision && !resolveEngine(engine).caps.vision ? `${engine} cannot read images, which ${pack.id} needs` : null;
 }
 
 /** A helper as the pack its child run is: the helper's role on its engine, the parent's access

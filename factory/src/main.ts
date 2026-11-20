@@ -10,7 +10,7 @@
 // A helper on another runtime runs as a child of the stage (core/delegate.ts), into /out/children/<n>/.
 // This file reads the input, renders the prompt and writes the result; the run itself is the
 // runtime's (src/runtimes/).
-import { PACKS, type RunEvent, type RunInfo, effortProblem, resolveEngine } from "@hardness/contracts";
+import { PACKS, type RunEvent, type RunInfo, effortProblem, resolveEngine, visionProblem } from "@hardness/contracts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -128,6 +128,9 @@ async function runStage(): Promise<RunOutcome> {
   const effort = input!.effort ?? (pack.kind === "agent" ? pack.effort : "low");
   const problem = input!.effort ? effortProblem(pack.id, engine.id, input!.effort) : null;
   if (problem) return { ...EMPTY_RUN, error: `invalid stage input: ${problem}` };
+  // A pack that reads images on a model that cannot: the machine never sends one (engine-choice.ts); refused here too, before any model call.
+  const blind = visionProblem(pack, engine.id);
+  if (blind) return { ...EMPTY_RUN, error: `invalid stage input: ${blind}` };
   info = runInfo(runtime, engine, pack, template, FACTORY_ROOT, input!.context.economy?.mask, effort);
   const paths = { factoryRoot: FACTORY_ROOT, work: WORK, out: OUT, input: dirname(IN), scratch, images: IMAGE_ROOTS.filter((root) => existsSync(root)) };
   // A helper the runtime does not run itself is a child run through `delegate`; the parent's turns
