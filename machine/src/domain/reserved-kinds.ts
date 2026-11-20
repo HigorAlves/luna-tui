@@ -13,10 +13,13 @@ export const CONTAINER_STAGE_KINDS = ["stage.slice.red", "stage.slice.green", "s
 /** What a stage-reported name (`pr.opened`, `build.checkpoint`, `ship.ready`...) is stored under: rows a machine stage reports, never a container. */
 const REPORTED = [...STAGE_REPORTS].map((name) => `stage.${name}`);
 
+/** The ui-designer's rows (`build.helper_picked`, `build.helper_refused`...): the machine trusts its own, so no container may write one (RFC 0013, risk 8). Reserved by prefix, whatever the name. */
+const HELPER_PREFIX = "stage.build.helper_";
+
 export const RESERVED_KINDS: readonly string[] = [...MACHINE_STAGE_KINDS, ...REPORTED];
 
 /** The kind a container's event is stored under. */
 export const finalKind = (kind: string): string => (kind.startsWith("stage.") ? kind : `stage.${kind}`);
 
 /** Whether a container's event of this kind would be stored as a row only the machine writes. */
-export const isReservedKind = (kind: string): boolean => RESERVED_KINDS.includes(finalKind(kind));
+export const isReservedKind = (kind: string): boolean => RESERVED_KINDS.includes(finalKind(kind)) || finalKind(kind).startsWith(HELPER_PREFIX);

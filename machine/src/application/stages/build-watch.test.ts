@@ -9,8 +9,8 @@ import { describe, expect, it } from "vitest";
 import type { CheckContext } from "@hardness/contracts";
 
 import { type Learned, tagged } from "../decision-truth.ts";
-import type { McpAnswer } from "./build-watch.ts";
-import { type Decide, MAX_CARD_SEARCHES, MAX_LOOP_REQUESTS, MAX_MAILBOX_BYTES, MAX_MCP_REQUESTS, MAX_REDS_PER_SLICE, MAX_SCOPE_REQUESTS, NOTE_TAIL, buildChecks, buildWatch, cardSearchAnswers, judgeRedCheck, loopAnswers, readMailbox, writeMailbox } from "./build-watch.ts";
+import type { HelperAnswer, McpAnswer, PickAnswer } from "./build-watch.ts";
+import { type Decide, MAX_CARD_SEARCHES, MAX_HELPER_REQUESTS, MAX_LOOP_REQUESTS, MAX_MAILBOX_BYTES, MAX_MCP_REQUESTS, MAX_PICK_REQUESTS, MAX_REDS_PER_SLICE, MAX_SCOPE_REQUESTS, NOTE_TAIL, buildChecks, buildWatch, cardSearchAnswers, judgeRedCheck, loopAnswers, readMailbox, writeMailbox, writeMailboxFile } from "./build-watch.ts";
 
 const ledger = (slices: Array<{ id: number; status: string; commit?: string | null }>) =>
   JSON.stringify({ schema: 1, slices: slices.map((s) => ({ id: s.id, title: `slice ${s.id}`, status: s.status, commit: s.commit ?? null })) });
@@ -705,5 +705,155 @@ describe("scope_check and the files another agent holds", () => {
     const c = checks(out, null, { planPresent: true, git: { nameStatus: async () => "M\tsrc/a.ts", diff: async () => "", commitFiles: async () => (read++, []) } });
     expect((await c.finalFacts([])).lockedTouched).toEqual([]);
     expect(read).toBe(0);
+  });
+});
+
+describe("the helper and pick mailbox", () => {
+  const NONCE = "a1b2c3d4";
+  const SHA = "f".repeat(40);
+  /** The three request kinds: file prefix, answer prefix, a valid body, and what the handler is called with. */
+  const KINDS = [
+    { kind: "helper", option: "onHelperRequest", req: "helper-request", ans: "helper-answer", body: { slice: 3, message: "match the frame" }, cap: MAX_HELPER_REQUESTS, capped: { ok: false, error: "too many helper requests in this run" } },
+    { kind: "pick", option: "onPickRequest", req: "pick-request", ans: "pick-answer", body: { slice: 3, head: SHA }, cap: MAX_PICK_REQUESTS, capped: { ok: false, error: "too many pick requests in this run" } },
+    { kind: "ack", option: "onPickAck", req: "pick-ack", ans: "pick-done", body: { slice: 3, head: SHA }, cap: MAX_PICK_REQUESTS, capped: { ok: false, reason: "too many pick acknowledgements in this run" } },
+  ] as const;
+  const file = (out: string, prefix: string, n: number, nonce = NONCE) => join(out, "checks", `${prefix}-${nonce}-${n}.json`);
+  const write = (out: string, k: (typeof KINDS)[number], n: number, nonce = NONCE, extra: object = {}) => {
+    mkdirSync(join(out, "checks"), { recursive: true });
+    writeFileSync(file(out, k.req, n, nonce), JSON.stringify({ n, ...k.body, ...extra }));
+  };
+  const watchOf = (out: string, k: (typeof KINDS)[number], handler: (r: Record<string, unknown>) => Promise<unknown>) =>
+    buildWatch({ outDir: out, every: 3, onCommitted: async () => {}, [k.option]: handler } as unknown as Parameters<typeof buildWatch>[0]);
+
+  for (const k of KINDS) {
+    describe(k.kind, () => {
+      it(`answers each ${k.req}-<nonce>-<n>.json in ${k.ans}-<nonce>-<n>.json, in order of n, one at a time`, async () => {
+        const out = mkdtempSync(join(tmpdir(), "helper-watch-"));
+        const seen: unknown[] = [];
+        let release: () => void = () => {};
+        const first = new Promise<void>((resolve) => (release = resolve));
+        const watch = watchOf(out, k, async (r) => (seen.push(r), r.n === 1 && (await first), { ok: true, n: r.n }));
+        write(out, k, 1);
+        await settle(30);
+        write(out, k, 3);
+        write(out, k, 2);
+        await settle(50);
+        expect(seen).toHaveLength(1);
+        release();
+        await waitFor(file(out, k.ans, 3));
+        await watch.stop();
+        expect(seen).toEqual([1, 2, 3].map((n) => ({ nonce: NONCE, n, ...k.body })));
+        expect(await waitFor(file(out, k.ans, 2))).toEqual({ ok: true, n: 2 });
+      });
+
+      it("never answers a request already there when the watch starts", async () => {
+        const out = mkdtempSync(join(tmpdir(), "helper-watch-"));
+        write(out, k, 1, "deadbeef");
+        const watch = watchOf(out, k, async () => ({ ok: true }));
+        write(out, k, 1);
+        await waitFor(file(out, k.ans, 1));
+        await settle(30);
+        await watch.stop();
+        expect(existsSync(file(out, k.ans, 1, "deadbeef"))).toBe(false);
+      });
+
+      it("skips a file that names another number than its own, is not JSON, or has a malformed body", async () => {
+        const out = mkdtempSync(join(tmpdir(), "helper-watch-"));
+        const seen: number[] = [];
+        const watch = watchOf(out, k, async (r) => (seen.push(r.n as number), { ok: true }));
+        mkdirSync(join(out, "checks"), { recursive: true });
+        write(out, k, 1, NONCE, { n: 9 });
+        writeFileSync(file(out, k.req, 2), "{ half");
+        write(out, k, 3, NONCE, { slice: "three" });
+        write(out, k, 4);
+        await waitFor(file(out, k.ans, 4));
+        await watch.stop();
+        expect(seen).toEqual([4]);
+        for (const n of [1, 2, 3]) expect(existsSync(file(out, k.ans, n))).toBe(false);
+      });
+
+      it(`answers past the cap of ${k.cap} itself, without calling the handler`, async () => {
+        const out = mkdtempSync(join(tmpdir(), "helper-watch-"));
+        const seen: number[] = [];
+        const watch = watchOf(out, k, async (r) => (seen.push(r.n as number), { ok: true }));
+        for (let n = 1; n <= k.cap + 2; n++) write(out, k, n);
+        await waitFor(file(out, k.ans, k.cap + 2));
+        await watch.stop();
+        expect(seen).toHaveLength(k.cap);
+        expect(await waitFor(file(out, k.ans, k.cap + 1))).toEqual(k.capped);
+      });
+    });
+  }
+
+  it("caps are four helpers and twelve picks", () => {
+    expect([MAX_HELPER_REQUESTS, MAX_PICK_REQUESTS]).toEqual([4, 12]);
+  });
+
+  it("keeps the three queues apart: a slow helper request does not hold up a pick", async () => {
+    const out = mkdtempSync(join(tmpdir(), "helper-watch-"));
+    const never = new Promise<never>(() => {});
+    const watch = buildWatch({ outDir: out, every: 3, onCommitted: async () => {}, onHelperRequest: () => never, onPickRequest: async (): Promise<PickAnswer> => ({ ok: false, retry: true }) });
+    write(out, KINDS[0], 1);
+    write(out, KINDS[1], 2);
+    expect(await waitFor(file(out, "pick-answer", 2))).toEqual({ ok: false, retry: true });
+    await watch.stop();
+    expect(existsSync(file(out, "helper-answer", 1))).toBe(false);
+  });
+
+  it("types: a helper answer carries the handle, branch, base and locks", async () => {
+    const out = mkdtempSync(join(tmpdir(), "helper-watch-"));
+    const answer: HelperAnswer = { ok: true, handle: "h", branch: "luna-helper-3", base: SHA, locks: ["a.ts"] };
+    const watch = buildWatch({ outDir: out, every: 3, onCommitted: async () => {}, onHelperRequest: async () => answer });
+    write(out, KINDS[0], 1);
+    expect(await waitFor(file(out, "helper-answer", 1))).toEqual(answer);
+    await watch.stop();
+  });
+});
+
+describe("writeMailboxFile", () => {
+  it("copies a file's bytes into checks/ through a new temporary file", async () => {
+    const out = mkdtempSync(join(tmpdir(), "mailbox-file-"));
+    const from = join(mkdtempSync(join(tmpdir(), "mailbox-src-")), "pick.bundle");
+    const bytes = Buffer.from([0, 1, 2, 255, 10, 13]);
+    writeFileSync(from, bytes);
+    await writeMailboxFile(out, "pick-1.bundle", from);
+    expect(readFileSync(join(out, "checks", "pick-1.bundle"))).toEqual(bytes);
+    expect(existsSync(join(out, "checks", ".pick-1.bundle.tmp"))).toBe(false);
+  });
+
+  it("replaces a link the container planted at the temporary or the final name, never following it", async () => {
+    const out = mkdtempSync(join(tmpdir(), "mailbox-file-"));
+    const elsewhere = join(mkdtempSync(join(tmpdir(), "mailbox-else-")), "target");
+    writeFileSync(elsewhere, "untouched");
+    mkdirSync(join(out, "checks"), { recursive: true });
+    symlinkSync(elsewhere, join(out, "checks", ".pick-1.bundle.tmp"));
+    symlinkSync(elsewhere, join(out, "checks", "pick-1.bundle"));
+    const from = join(mkdtempSync(join(tmpdir(), "mailbox-src-")), "pick.bundle");
+    writeFileSync(from, "bundle bytes");
+    await writeMailboxFile(out, "pick-1.bundle", from);
+    expect(readFileSync(elsewhere, "utf8")).toBe("untouched");
+    expect(lstatSync(join(out, "checks", "pick-1.bundle")).isSymbolicLink()).toBe(false);
+    expect(readFileSync(join(out, "checks", "pick-1.bundle"), "utf8")).toBe("bundle bytes");
+  });
+
+  it("refuses when checks/ is a link out of the run's folder", async () => {
+    const out = mkdtempSync(join(tmpdir(), "mailbox-file-"));
+    const outside = mkdtempSync(join(tmpdir(), "mailbox-outside-"));
+    symlinkSync(outside, join(out, "checks"));
+    const from = join(outside, "src");
+    writeFileSync(from, "x");
+    await expect(writeMailboxFile(out, "pick-1.bundle", from)).rejects.toThrow();
+    expect(existsSync(join(outside, "pick-1.bundle"))).toBe(false);
+  });
+
+  it("writeMailbox replaces a container-planted link at helper-state-3.json instead of following it", async () => {
+    const out = mkdtempSync(join(tmpdir(), "mailbox-state-"));
+    const elsewhere = join(mkdtempSync(join(tmpdir(), "mailbox-else-")), "target");
+    writeFileSync(elsewhere, "untouched");
+    mkdirSync(join(out, "checks"), { recursive: true });
+    symlinkSync(elsewhere, join(out, "checks", "helper-state-3.json"));
+    await writeMailbox(out, "helper-state-3.json", JSON.stringify({ state: "running", attempt: 1 }));
+    expect(readFileSync(elsewhere, "utf8")).toBe("untouched");
+    expect(JSON.parse(readFileSync(join(out, "checks", "helper-state-3.json"), "utf8"))).toEqual({ state: "running", attempt: 1 });
   });
 });
