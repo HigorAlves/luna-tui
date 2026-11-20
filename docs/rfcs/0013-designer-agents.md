@@ -282,3 +282,25 @@ Deviations from the design above:
 - The board gets `:spec` and `:audit`, a report popup (`:report` reopens it) and `c` to make a card. The report is held by the board; the machine keeps nothing of it.
 
 Not verified live: no Figma server was reached, so the Figma tool names are the documented ones and the eval fixtures are written by hand. The QA image was built locally once, by an implementer, and has not run an audit against a real app. No `pnpm eval` run on a model has happened, so no baseline exists for either pack.
+
+**Phase 3, design parity and the sign-off gate.**
+
+- *Contracts.* `design-parity.ts` (`CapturePlan`, `ParityCapture`, `DesignParityAnswer`, `DESIGN_STATES`), `VerifyDesignReport` (`design-report.ts`; `DesignReport` stays phase 2's on-demand report), `StageInput.context.parity` and `parityPlan`, the `awaiting_design` state, the `designGate` stage event, `luna.yaml` `design.parity.bar` and `.publish`, and `PrExtra.design`.
+- *Pack.* `design_parity` (role `parity-reviewer`), with its prompt, golden and bridged tool list. It drives no browser: it reads PNGs and styles from a mount.
+- *QA image.* `qa-capture` writes `/out/files/qa/parity/<scenario>/<viewport>-<state>.png`, a `.styles.json` beside it and a `captures.jsonl` line per capture. Measured: a median of 0.38 s per capture. A first capture right after `open` stalls about 10 s, so the e2e prompt says to capture once the page has settled.
+- *Machine.* The capture plan from the spec and the scenarios (`parity-plan.ts`), the captures collected into the run, parity as an `afterBrowser` step and a sub-run `<runId>-parity` (`design-parity.ts`), `settleParity` (findings, merge, cap, gate reasons), `pairImages` (`adapters/image/parity-pairs.ts`), the e2e design blocker set, `awaiting_design` in the transition table and the pipeline, `waiveDesignFinding` and its route, `reports.verify.design` (`designOf`), the PR block and the pairs as Evidence (`design-publish.ts`, `GitHub.repoPrivate`), and `design.waived` and ground truth under `ground-truth/design_parity/`.
+- *Board.* The `awaiting_design` gate (`a`, `r`), `:waive` and `:accept`, and a Design page that shows each frame beside its build.
+- *Evals.* Seven `design_parity` cases on drawn frames and captures (`make-fixtures.mjs`, pngjs), and `pnpm eval harvest --pack design_parity`, which turns each waiver into a case.
+
+Deviations from the design above:
+- Capture is a tool the e2e agent calls (`qa-capture`), not something the machine does around the run. Only the agent knows when the page has settled.
+- Parity is an e2e sub-run (`<runId>-parity`) behind the `afterBrowser` step, not a new task state. Only the gate is a state.
+- A waiver has two kinds: `not_a_difference` (the reviewer was wrong) and `accepted` (it is a difference, and fine). The first becomes a case that expects no finding on the node; the second one that expects no blocker, with the reason in the rubric.
+- The frame | build diff is made on the host with `pngjs` and `pixelmatch`, not by the model. A frame with no render, or a pair that fails, is `not compared`, never a pass.
+- `design.parity.publish: auto` publishes the pairs only on a private repository. An unknown visibility counts as public.
+- "Kept at sign-off" is derived (an approved gate and its findings that are not waived), not stored.
+- The harvest reads the waiver file and the sub-run's own folders (`in/stage.json`, the frame render in `design/`, the capture in the e2e run's `parity/`), not a bundle copied at waiver time. The case replays the render as a `get_screenshot` answer keyed by `{ fileKey, nodeId }`, because the machine records no bridged call outside `MCP_BRIDGE_MODE=record`. It holds the waived frame alone. The plan's `writeTruthBundle` and the `design_parity` recording in the pack runner were not built.
+
+Known gap: the ship monitor's restack rebuilds the PR body without the card's facts, so the Design & accessibility block drops, as the findings already did.
+
+Not verified live: no Figma account, so no real frame has been compared. No live parity run has happened (the tests use in-memory fixtures and drawn PNGs), and no saved eval baseline exists for `design_parity`, because `pnpm eval` needs a Claude login. The Figma tool names and answers in the eval fixtures are hand-written. The harvest ran only on synthetic waivers.

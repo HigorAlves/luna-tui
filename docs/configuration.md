@@ -197,6 +197,7 @@ design:                                   # the designer agents (RFC 0013); `des
   figma: { file: Qx7LmP2vR9sTa, page: Checkout }        # the fallback design reference when a card names no Figma link
   a11y: { level: AA, mode: gate }                        # WCAG 2.2 level (AA or AAA); gate blocks, advisory only advises
   budget: { max_tokens: 1000000, max_minutes: 45 }       # the designer agents' tokens and minutes for one card
+  parity: { bar: 0.75, publish: auto }                   # design parity: the confidence the sign-off gate wants, and whether the frame | build pairs go on the PR
 budget:
   engines: { openai:sol: 10, codex: 0 }   # monthly caps in USD on this repo's stage runs, by engine or credential (never Claude)
 evidence:
@@ -356,12 +357,24 @@ RFC 0013, phase 2. Two agent packs read a card's design: `design_spec` and `a11y
 | `design.figma.file`, `.page` | none | the fallback design reference: a Figma file key and an optional page name. It is used when the card names no Figma link |
 | `design.a11y.level` | `AA` | the WCAG 2.2 level the audit checks: `AA` or `AAA`. A criterion above the level is a `nit` |
 | `design.a11y.mode` | `gate` | `gate`: axe `critical` and `serious` findings and every judged failure block. `advisory`: every finding is `should_fix` and nothing blocks |
+| `design.parity.bar` | `0.75` | the confidence (0 to 1) under which the parity reviewer opens the `awaiting_design` gate. |
+| `design.parity.publish` | `auto` | whether the frame | build pair images go on the PR and into Evidence. `auto`: only when GitHub says the repository is private. A public repository, or one whose visibility cannot be read (no token, no GitHub remote), counts as public. `always`: publish. `never`: list the pairs on the board only |
 | `design.budget.max_tokens` | `1000000` | the tokens the designer agents may spend on one card |
 | `design.budget.max_minutes` | `45` | the minutes the designer agents may run on one card |
 
 The machine finds a card's design in the Figma links of the issue or ticket and its attachments. Else it uses `design.figma`.
 
 The spec runs in Plan, before the planner, on a card with a design reference or on a `frontend` card. A fast-lane card gets a spec only when it has a reference. A failed spec never stops the plan: the plan goes on without it and the gate says so. The audit runs in Verify's browser step, only when the browser run passed. It needs a QA target. With no `verify.e2e.start` and no deploy, the browser run boots its own server, so the audit is skipped and `detail.a11y` says so. Audit blockers send the card back to Build through the e2e loop, so they count against `verify.e2e_rounds`.
+
+### Design parity and the sign-off gate
+
+RFC 0013, phase 3. When a change touches rendered files and the card has a design reference, the browser run also captures each UI scenario, and a `design_parity` reviewer compares it with the Figma frame. Open findings, a frame that could not be compared, or a confidence under `design.parity.bar` stop the card at `awaiting_design`. It is a gate in Verify, and `design: off` turns it off with the other designer steps. See "Design parity and the sign-off gate" in [architecture.md](architecture.md).
+
+- **Waive.** `POST /tasks/:id/design/findings/:findingId/waive` takes `{ kind: "not_a_difference" | "accepted", reason }`, a reason of 3 to 500 characters. The board's `:waive <finding id> <reason>` and `:accept <finding id> <reason>` call it. The board's Design page, in the rail at the gate, shows each frame beside its build. Approve (`a`) and send back with a note (`r`) are the ordinary decision.
+- **Ground truth.** On a repo that keeps ground truth, a waiver is written to `<MACHINE_STATE_DIR>/ground-truth/design_parity/<task>-<finding>.json` and a sign-off to `<task>-<gate>.json`. The reasons pass the machine's text cap and escaping first. `pnpm eval harvest --pack design_parity [--since <date>]` turns the waivers into eval cases ([evals/README.md](../evals/README.md)).
+- **Kept at sign-off** is not stored. It is derived: the findings on an approved gate that are not waived.
+- **Publishing and visibility.** `publish: auto` asks the GitHub port, `GitHub.repoPrivate(slug)`. It answers `true`, `false` or null; the no-token adapter answers null, and null counts as public. So a machine with no GitHub token never publishes a pair under `auto`.
+- **Known gap.** The ship monitor's restack rebuilds the PR body without the card's facts. The Design & accessibility block drops then, as the findings already did.
 
 ### The design budget
 
