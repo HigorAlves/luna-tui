@@ -56,6 +56,14 @@ export const LUNA_TOOLS = {
     input: { scenario: z.string().min(1).max(40), output: z.string() },
   },
   slice_list: { description: "The slice ledger as it stands.", input: {} },
+  slice_delegate: {
+    description: "Hand one pending UI slice to the ui-designer, which builds it in its own container while you go on: { slice: 3, message: '...' }. Returns at once with the helper's handle and the files you must not touch, or the machine's refusal (then build the slice yourself).",
+    input: { slice: z.number().int(), message: z.string().max(2000).optional() },
+  },
+  slice_wait: {
+    description: "Wait for the ui-designer's slice: { slice: 3, waitSeconds: 120 }. Returns the helper's state after at most waitSeconds (240 at most); picks its commits onto your branch when it has returned.",
+    input: { slice: z.number().int(), waitSeconds: z.number().int().min(1).max(240).optional() },
+  },
   decision_get: {
     description: "A decision already settled for this task (by key, e.g. 'driver'), from the stage input's decisions; empty when nothing was settled.",
     input: { key: z.string() },
@@ -204,6 +212,9 @@ export function lunaHandlers(options: LunaToolsOptions) {
       return { recorded: true };
     },
     slice_list: () => state.ledger,
+    // Slice 75 builds these; until then a run that is offered them is told they do nothing.
+    slice_delegate: () => ({ error: "not available in this run" }),
+    slice_wait: () => ({ error: "not available in this run" }),
     decision_get: ({ key }) => {
       const hits = options.decisions.filter((d) => d.decision === key || key in (d.answers ?? {}));
       return hits.length > 0 ? hits : { decided: null };

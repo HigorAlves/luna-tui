@@ -31,8 +31,8 @@ describe("lunaHandlers", () => {
     expect(await luna.call("nope", {})).toMatchObject({ error: "no luna tool nope" });
   });
 
-  it("describes the six tools for any runtime to serve", () => {
-    expect(Object.keys(LUNA_TOOLS).sort()).toEqual(["card_search", "decision_get", "scenario_red", "scope_check", "slice_init", "slice_list", "slice_set", "step"]);
+  it("describes the ten tools for any runtime to serve", () => {
+    expect(Object.keys(LUNA_TOOLS).sort()).toEqual(["card_search", "decision_get", "scenario_red", "scope_check", "slice_delegate", "slice_init", "slice_list", "slice_set", "slice_wait", "step"]);
   });
 });
 

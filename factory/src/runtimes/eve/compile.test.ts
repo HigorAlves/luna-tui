@@ -23,7 +23,7 @@ describe("eveTools", () => {
     expect(eveTools(PACKS.slack_triage.access)).toEqual([]);
     expect(eveTools(PACKS.jira_intake.access)).toEqual(["read_file", "glob", "grep"]);
     expect(eveTools(PACKS.triage.access)).toEqual(["bash", "read_file", "glob", "grep", "web_fetch", "step", "decision_get", "card_search"]);
-    expect(eveTools(PACKS.implementing.access)).toEqual(["bash", "read_file", "glob", "grep", "write_file", "step", "slice_init", "slice_set", "slice_list", "decision_get", "scope_check"]);
+    expect(eveTools(PACKS.implementing.access)).toEqual(["bash", "read_file", "glob", "grep", "write_file", "step", "slice_init", "slice_set", "slice_list", "decision_get", "scope_check", "slice_delegate", "slice_wait"]);
   });
 });
 

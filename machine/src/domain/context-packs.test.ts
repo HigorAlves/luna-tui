@@ -40,6 +40,12 @@ describe("context-only packs", () => {
     expect(isContextPack("docs_drift")).toBe(false);
   });
 
+  it("never include ui_design: the machine starts it with the brief it composes", () => {
+    expect(packStates("ui_design")).toEqual([]);
+    expect(NOT_ON_DEMAND).toContain("ui_design");
+    expect(isContextPack("ui_design")).toBe(false);
+  });
+
   it("never include design_parity: it reads captures the browser run left, so a client has nothing to send it", () => {
     expect(packStates("design_parity")).toEqual([]);
     expect(NOT_ON_DEMAND).toContain("design_parity");

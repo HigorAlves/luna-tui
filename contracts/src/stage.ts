@@ -226,6 +226,8 @@ export const PackId = z.enum([
   "a11y_audit",
   // Compares the captured build with its Figma frames (RFC 0013, phase 3): a sub-run of the e2e stage after a passing browser run, read-only.
   "design_parity",
+  // The writable UI helper of the implementer (RFC 0013, phase 5): builds one pure UI slice in its own container and on its own branch, started and picked by the machine; never a subagent.
+  "ui_design",
   "council_security",
   "council_second",
   // The question council (run in triage before the person is asked): settles open questions from the code and the card, or says it cannot.
@@ -728,6 +730,8 @@ export const LedgerSlice = z.object({
   estLoc: z.number().int().nullable().optional(),
   actualLoc: z.number().int().nullable().optional(),
   note: z.string().nullable().optional(),
+  /** Who builds the slice (RFC 0013, phase 5); absent means the implementer. Only the machine's own `build.helper_picked` row makes a slice the ui-designer's. */
+  owner: z.enum(["implementer", "ui-designer"]).optional(),
 });
 export type LedgerSlice = z.infer<typeof LedgerSlice>;
 
@@ -940,8 +944,8 @@ export type ArchiveReason = z.infer<typeof ArchiveReason>;
 /** Why a stage stopped on purpose: `plan_wrong` the plan cannot be built as written (the planner runs again with the evidence),
  *  `env_broken` the sandbox or toolchain is, `flaky_tests` the tests do not hold still, `too_complex`
  *  the work is bigger than one stage, `undeclared_scope` it needs files or packages the plan did not name, `head_moved` the PR head moved after
- *  the evidence pack was made (Evidence runs again), `design_budget` the card's design budget is spent. */
-export const EscalationReason = z.enum(["plan_wrong", "env_broken", "flaky_tests", "too_complex", "undeclared_scope", "head_moved", "design_budget", "other"]);
+ *  the evidence pack was made (Evidence runs again), `design_budget` the card's design budget is spent, `merge_conflict` the ui-designer's commits conflicted with the implementer's twice. */
+export const EscalationReason = z.enum(["plan_wrong", "env_broken", "flaky_tests", "too_complex", "undeclared_scope", "head_moved", "design_budget", "merge_conflict", "other"]);
 export type EscalationReason = z.infer<typeof EscalationReason>;
 
 /** How risky a change or a ticket reads: on one scale for the triage record and the evidence pack. */
@@ -1539,6 +1543,19 @@ export const StageInput = z.object({
     projectContext: z.string().nullable(),
     /** For design_spec: the card's design reference, composed by the machine (RFC 0013). */
     design: DesignContext.nullable().optional(),
+    /** For implementing: whether it may hand a UI slice to the ui-designer, and why not (RFC 0013, phase 5). The machine's own composition. */
+    delegation: z.object({ available: z.boolean(), reason: z.string().max(300).optional(), helper: z.object({ role: z.string(), engine: z.string() }).optional() }).optional(),
+    /** For ui_design: the slice it builds, the implementer's message (data), the head it starts from, the files each side owns, and on attempt 2 the files that conflicted. The spec comes in `plan.designSpec`. The machine's own composition. */
+    helper: z
+      .object({
+        slice: z.object({ id: z.number().int(), title: z.string(), touchpoints: z.array(z.string()), acceptance: z.array(z.string()) }),
+        message: z.string().max(2000),
+        base: z.string(),
+        locks: z.object({ mine: z.array(z.string()), theirs: z.array(z.string()) }),
+        attempt: z.union([z.literal(1), z.literal(2)]),
+        conflict: z.object({ files: z.array(z.string()) }).optional(),
+      })
+      .optional(),
     /** For a11y_audit: the WCAG level the repo audits at; the machine's own value. */
     a11y: A11yContext.nullable().optional(),
     /** For design_parity: what the browser run captured for each cited frame, the plan it followed, and the approved spec. The machine's own composition. */

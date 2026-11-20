@@ -16,6 +16,8 @@ describe("bridged tool grants", () => {
       a11y_audit: [{ server: "mobbin", tools: MOBBIN }],
       design_parity: [{ server: "figma", tools: PARITY }, { server: "figma-desktop", tools: PARITY }],
       design_spec: [{ server: "figma", tools: FIGMA }, { server: "figma-desktop", tools: FIGMA }, { server: "mobbin", tools: MOBBIN }],
+      // The writable ui-designer reads the same design tools as the spec writer (DESIGN_READ_BRIDGE).
+      ui_design: [{ server: "figma", tools: FIGMA }, { server: "figma-desktop", tools: FIGMA }, { server: "mobbin", tools: MOBBIN }],
     });
   });
   it("grants no tool whose name reads as a write", () => {

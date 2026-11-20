@@ -78,6 +78,8 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   a11y_audit: [],
   // The parity reviewer, a sub-run of the e2e stage after a passing browser run; never a stage of its own.
   design_parity: [],
+  // The implementer's writable helper, started and picked by the machine from the implementing stage (RFC 0013, phase 5); never a stage of its own.
+  ui_design: [],
   // The ticket planner, run on demand by POST /ticket-chat.
   ticket_chat: [],
   // Change management's exception explainer, run on demand by the compliance job.

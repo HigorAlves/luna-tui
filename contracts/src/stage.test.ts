@@ -12,6 +12,12 @@ import {
   ChatTriageContext,
   CloneInput,
   EscalationReason,
+  LedgerSlice,
+  UiDesignAnswer,
+  DESIGN_READ_BRIDGE,
+  helperPack,
+  writableHelper,
+  type AgentPack,
   Finding,
   EvidenceContext,
   PrReplyAnswer,
@@ -245,11 +251,11 @@ describe("StageOutput", () => {
 describe("PackId", () => {
   it("has the eleven stage packs, each named after a task state, plus the Slack, chat and Jira intake triages, the issue classifier and the eval judge", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "build_tests", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "foreman", "design_spec", "a11y_audit", "design_parity", "ticket_chat", "change_exceptions", "compliance_review", "vuln_triage", "breach_assess", "capacity_check", "status_report", "release_notes", "access_review", "postmortem", "docs_drift", "questionnaire", "code_map", "council_second", "council_security", "question_council", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "ci_failure_class", "frame_privacy", "evidence_format", "size_estimate", "split_check", "decompose", "video_script", "recording", "video_qa", "video_fix", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "pr_reply", "loop_judge", "loop_redirect", "fact_propose", "conversation_assess", "conversation_relation", "conversation_reply", "pr_link"].sort(),
+      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "build_tests", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "foreman", "design_spec", "a11y_audit", "design_parity", "ui_design", "ticket_chat", "change_exceptions", "compliance_review", "vuln_triage", "breach_assess", "capacity_check", "status_report", "release_notes", "access_review", "postmortem", "docs_drift", "questionnaire", "code_map", "council_second", "council_security", "question_council", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "ci_failure_class", "frame_privacy", "evidence_format", "size_estimate", "split_check", "decompose", "video_script", "recording", "video_qa", "video_fix", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "pr_reply", "loop_judge", "loop_redirect", "fact_propose", "conversation_assess", "conversation_relation", "conversation_reply", "pr_link"].sort(),
     );
     const onDemand: string[] = ["slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "foreman", "design_spec", "a11y_audit", "design_parity", "ticket_chat", "change_exceptions", "compliance_review", "vuln_triage", "breach_assess", "capacity_check", "status_report", "release_notes", "access_review", "postmortem", "docs_drift", "questionnaire", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "ci_failure_class", "frame_privacy", "evidence_format", "size_estimate", "split_check", "decompose", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "loop_judge", "loop_redirect", "fact_propose", "conversation_assess", "conversation_relation", "conversation_reply", "pr_link"];
     // The planner runs in the test_design state (the machine's RUNS_IN), so it names no state of its own.
-    const runsInAnotherState: string[] = ["plan", "plan_fast", "test_design_fast", "build_tests", "code_map", "council_security", "council_second", "question_council", "video_script", "recording", "video_qa", "video_fix", "pr_reply"];
+    const runsInAnotherState: string[] = ["plan", "plan_fast", "test_design_fast", "build_tests", "code_map", "council_security", "council_second", "question_council", "video_script", "recording", "video_qa", "video_fix", "pr_reply", "ui_design"];
     for (const pack of PackId.options) {
       if (onDemand.includes(pack) || runsInAnotherState.includes(pack)) expect(TaskState.options).not.toContain(pack);
       else expect(TaskState.options).toContain(pack);
@@ -827,4 +833,47 @@ it("design_parity is a read-only agent pack on Claude with the Figma reading too
   const capture = { scenario: "S1", frame: "1:2", viewport: "desktop", state: "default", image: "/evidence/parity/S1/desktop-default.png", styles: null, elements: 3 };
   const ctx = StageInput.shape.context.parse({ projectContext: null, parity: { plan: { targets: [target], uncited: [], notes: [] }, captures: [capture], spec: null } });
   expect(ctx.parity?.captures[0]?.image).toBe("/evidence/parity/S1/desktop-default.png");
+});
+
+describe("the writable ui-designer helper (RFC 0013, phase 5)", () => {
+  it("has one writable helper, the implementer's ui-designer, run as its own pack", () => {
+    const writable = AGENT_PACKS.flatMap((p) => p.helpers.filter((h) => h.writes).map((h) => ({ parent: p.id, ...h })));
+    expect(writable).toEqual([{ parent: "implementing", role: "ui-designer", engine: "claude:sonnet", writes: true, pack: "ui_design" }]);
+  });
+  it("keeps a writable helper out of subagents, delegate and the parent's credentials", () => {
+    expect(helpersOn(PACKS.implementing, "claude").map((h) => h.role)).not.toContain("ui-designer");
+    expect(helpersOn(PACKS.implementing, "eve").map((h) => h.role)).not.toContain("ui-designer");
+    expect(writableHelper(PACKS.implementing)).toMatchObject({ role: "ui-designer", pack: "ui_design", writes: true });
+    expect(writableHelper(PACKS.verifying)).toBeNull();
+    expect(writableHelper(PACKS.triage_signals)).toBeNull();
+    expect(() => helperPack(PACKS.implementing as AgentPack, writableHelper(PACKS.implementing)!)).toThrow(/own pack/);
+  });
+  it("gives ui_design no helpers, no ledger install and no delegation, and the design tools through the bridge", () => {
+    const p = PACKS.ui_design as AgentPack;
+    expect(p).toMatchObject({ agent: "ui-designer", writable: true, helpers: [], network: "full", effort: "medium", maxTurns: 60, timeoutMs: 30 * 60_000, vision: true, template: "ui_design.md", answer: UiDesignAnswer });
+    expect(p.access.write).toBe(true);
+    expect(p.access.luna).toEqual(["step", "slice_set", "slice_list", "decision_get", "scope_check"]);
+    expect(p.access.bridge).toEqual(DESIGN_READ_BRIDGE);
+    expect(p.access.bridge).toEqual(PACKS.design_spec.access.bridge);
+    expect(p.engines).toEqual({ default: "claude:sonnet", allowed: ["claude:sonnet", "claude:opus"] });
+  });
+  it("lets the implementer delegate and wait, and the ledger record who owns a slice", () => {
+    expect(PACKS.implementing.access.luna).toEqual(expect.arrayContaining(["slice_delegate", "slice_wait"]));
+    const slice = { id: 3, title: "t", status: "pending", commit: null };
+    expect(LedgerSlice.parse({ ...slice, owner: "ui-designer" }).owner).toBe("ui-designer");
+    expect(LedgerSlice.parse(slice).owner).toBeUndefined();
+    expect(LedgerSlice.safeParse({ ...slice, owner: "someone" }).success).toBe(false);
+  });
+  it("answers with the commits and files, and carries the helper's brief in the stage input", () => {
+    expect(UiDesignAnswer.parse({ summary: "built", commits: ["abc1234"], files: ["src/ui/Card.tsx"] }).commits).toEqual(["abc1234"]);
+    expect(UiDesignAnswer.safeParse({ summary: "x", commits: Array(21).fill("a"), files: [] }).success).toBe(false);
+    const helper = { slice: { id: 3, title: "Card", touchpoints: ["src/ui/Card.tsx"], acceptance: ["renders"] }, message: "m", base: "abc", locks: { mine: ["src/ui/Card.tsx"], theirs: ["src/api.ts"] }, attempt: 2, conflict: { files: ["src/ui/Card.tsx"] } };
+    const ctx = StageInput.shape.context.parse({ projectContext: null, helper, delegation: { available: true, helper: { role: "ui-designer", engine: "claude:sonnet" } } });
+    expect(ctx.helper?.attempt).toBe(2);
+    expect(ctx.delegation?.available).toBe(true);
+    expect(StageInput.shape.context.safeParse({ projectContext: null, helper: { ...helper, attempt: 3 } }).success).toBe(false);
+  });
+  it("knows merge_conflict as an escalation reason", () => {
+    expect(EscalationReason.options).toContain("merge_conflict");
+  });
 });

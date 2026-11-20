@@ -19,6 +19,7 @@ import { ComplianceReviewAnswer } from "./compliance-review.ts";
 import { A11yAuditAnswer } from "./a11y.ts";
 import { DesignParityAnswer } from "./design-parity.ts";
 import { DesignSpec } from "./design-spec.ts";
+import type { BridgeGrant } from "./mcp.ts";
 import { DocsDriftAnswer } from "./docs-drift.ts";
 import { ForemanAnswer } from "./foreman.ts";
 import { TicketChatAnswer } from "./ticket-chat.ts";
@@ -73,6 +74,8 @@ export const AgentRole = z.enum([
   "second-opinion",
   // Reads a card's Figma design through the bridge and writes the spec the planner reads; read-only.
   "design-spec-writer",
+  // Builds one pure UI slice of a card from its design spec, in its own container; the implementer's writable helper (RFC 0013, phase 5).
+  "ui-designer",
   // Audits a rendered UI change for WCAG 2.2 with axe-core and judged checks, in the QA browser; read-only on the code.
   "a11y-auditor",
   "parity-reviewer",
@@ -248,6 +251,16 @@ export const ImplementingAnswer = z.object({
   outOfMap: z.array(z.object({ path: z.string(), reason: z.string() })).optional(),
 });
 
+/** ui_design: the helper's account of the slice it built. The commits are the ones it made on its own branch; the machine reads its own refs, never this list. `escalation` set means it could not build the slice. */
+export const UiDesignAnswer = z.object({
+  summary: z.string().max(1500),
+  commits: z.array(z.string()).max(20),
+  files: z.array(z.string()).max(60),
+  notes: z.string().max(1500).optional(),
+  escalation: EscalationReason.optional(),
+});
+export type UiDesignAnswer = z.infer<typeof UiDesignAnswer>;
+
 export const VerifyingAnswer = z.object({
   verdict: z.enum(["pass", "fail"]),
   summary: z.string(),
@@ -416,12 +429,21 @@ export interface Helper {
   engine: EngineId;
   /** The engine instead when the stage runs on that runtime: a second opinion stays in another family (D9), and a cheap helper on the stage's own subscription. */
   on?: Partial<Record<RuntimeId, EngineId>>;
+  /** A writable helper runs in its own container as the pack it names, through the machine (RFC 0013, phase 5); never a subagent or a `delegate` child. */
+  writes?: true;
+  pack?: PackId;
 }
 
 /** The helpers a stage on `runtime` has, each on the engine it runs on there. */
 export function helpersOn(pack: Pack, runtime: RuntimeId): Array<{ role: AgentRole; engine: EngineId }> {
   if (pack.kind !== "agent") return [];
-  return pack.helpers.map(({ role, engine, on }) => ({ role, engine: on?.[runtime] ?? engine }));
+  return pack.helpers.filter((h) => !h.writes).map(({ role, engine, on }) => ({ role, engine: on?.[runtime] ?? engine }));
+}
+
+/** The pack's writable helper, or null: the one the machine starts in its own container. */
+export function writableHelper(pack: Pack): (Helper & { writes: true; pack: PackId }) | null {
+  if (pack.kind !== "agent") return null;
+  return (pack.helpers.find((h): h is Helper & { writes: true; pack: PackId } => h.writes === true && h.pack !== undefined)) ?? null;
 }
 
 /** What a helper run through `delegate` answers: its reply to the agent that asked, and findings
@@ -458,7 +480,8 @@ export type ConversationReplyAnswer = z.infer<typeof ConversationReplyAnswer>;
 const FIGMA_READ = ["get_metadata", "get_design_context", "get_variable_defs", "get_code_connect_map", "get_screenshot"];
 const MOBBIN_READ = ["search_screens", "search_flows", "search_sections"];
 /** The design tools a designer pack may call (RFC 0013): Figma's reading tools on either server, Mobbin's searches. A golden test pins them. */
-const DESIGN_READ: Partial<Access> = { bridge: [{ server: "figma", tools: FIGMA_READ }, { server: "figma-desktop", tools: FIGMA_READ }, { server: "mobbin", tools: MOBBIN_READ }] };
+export const DESIGN_READ_BRIDGE: BridgeGrant[] = [{ server: "figma", tools: FIGMA_READ }, { server: "figma-desktop", tools: FIGMA_READ }, { server: "mobbin", tools: MOBBIN_READ }];
+const DESIGN_READ: Partial<Access> = { bridge: DESIGN_READ_BRIDGE };
 
 /** The parity reviewer reads frames and tokens only (RFC 0013, phase 3): no Code Connect, no Mobbin. A golden test pins the list. */
 const PARITY_READ = ["get_design_context", "get_metadata", "get_screenshot", "get_variable_defs"];
@@ -540,6 +563,8 @@ export type Pack = AgentPack | DecisionPack;
 const READ_ONLY: Partial<Access> = { read: true, skills: true, luna: ["step"], commands: ["cat", "ls", "head", "tail", "wc", "pwd", "echo", "git branch --show-current", "git rev-parse", "git status", "git show", "git log", "git diff", "git ls-files", "graphify query", "graphify explain", "graphify path", "graphify affected", "graphify god-nodes"] };
 const CHECK_COMMANDS = ["npm", "pnpm", "yarn", "npx", "go", "cargo", "pip", "pytest", "make"];
 const LEDGER_TOOLS: LunaTool[] = ["slice_init", "slice_set", "slice_list", "decision_get"];
+/** The implementer's commands: what a pack that builds code may run beside reading. */
+const BUILD_COMMANDS = ["git add", "git commit", "git mv", "git rm", "git restore", "mv", "rm", "git diff", "git status", "git log", ...CHECK_COMMANDS];
 
 /** What the setup planner may run to learn a repo: version prints and listings, nothing that builds. */
 const PROBE_COMMANDS = ["which", "command -v", "find", "node", "npm", "pnpm", "yarn", "go", "cargo", "rustc", "python", "python3", "pip", "make", "docker", "git log", "git ls-files"];
@@ -1221,9 +1246,10 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     id: "implementing",
     kind: "agent",
     agent: "implementer",
-    helpers: [],
+    // The one writable helper (RFC 0013, phase 5): a pure UI slice goes to the ui-designer in its own container, started and picked by the machine. Never a subagent or a `delegate` child.
+    helpers: [{ role: "ui-designer", engine: "claude:sonnet", writes: true, pack: "ui_design" }],
     skills: ["tdd", "verification-before-completion", "code-discovery"],
-    access: access(READ_ONLY, { write: true, luna: [...LEDGER_TOOLS, "scope_check"], commands: ["git add", "git commit", "git mv", "git rm", "git restore", "mv", "rm", "git diff", "git status", "git log", ...CHECK_COMMANDS] }),
+    access: access(READ_ONLY, { write: true, luna: [...LEDGER_TOOLS, "scope_check", "slice_delegate", "slice_wait"], commands: BUILD_COMMANDS }),
     writable: true,
     maxTurns: 80,
     timeoutMs: 30 * MINUTE,
@@ -1232,6 +1258,25 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: ImplementingAnswer,
     template: "implementing.md",
+    network: "full",
+  },
+  // The implementer's writable helper (RFC 0013, phase 5): builds one pure UI slice from the design spec, in its own container on its own branch. The machine starts it and picks its commits; it has no helpers and cannot delegate.
+  ui_design: {
+    id: "ui_design",
+    kind: "agent",
+    agent: "ui-designer",
+    helpers: [],
+    skills: ["tdd", "verification-before-completion", "code-discovery"],
+    access: access(READ_ONLY, { write: true, luna: ["slice_set", "slice_list", "decision_get", "scope_check"], commands: BUILD_COMMANDS }, { bridge: DESIGN_READ_BRIDGE }),
+    writable: true,
+    maxTurns: 60,
+    timeoutMs: 30 * MINUTE,
+    // Claude only. It reads frames, so it needs vision; Codex sees images (probed) but joins only after the admission eval.
+    engines: { default: "claude:sonnet", allowed: ["claude:sonnet", "claude:opus"] },
+    vision: true,
+    effort: "medium",
+    answer: UiDesignAnswer,
+    template: "ui_design.md",
     network: "full",
   },
   build_tests: {
@@ -2024,7 +2069,8 @@ export function visionProblem(pack: { id: PackId; vision?: boolean }, engine: En
 /** A helper as the pack its child run is: the helper's role on its engine, the parent's access
  *  narrowed to reading, no helpers of its own (delegation has depth 1), no skills, the parent's
  *  effort, and the helper's reply as its answer. Its id stays the parent's: it has no pack of its own. */
-export function helperPack(parent: AgentPack, helper: { role: AgentRole; engine: EngineId }): AgentPack {
+export function helperPack(parent: AgentPack, helper: { role: AgentRole; engine: EngineId; writes?: true }): AgentPack {
+  if (helper.writes) throw new Error(`${helper.role}: a writable helper runs as its own pack, through the machine`);
   return {
     id: parent.id,
     kind: "agent",
