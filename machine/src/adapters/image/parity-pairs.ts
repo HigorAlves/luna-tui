@@ -8,6 +8,8 @@ import { readRegularBytes } from "../fs/bounded.ts";
 const MAX_BYTES = 8 * 1024 * 1024;
 const MAX_WIDTH = 4000;
 const MAX_HEIGHT = 8000;
+/** Keeps a pair's composite, diff and decode copies to a few hundred MB on the machine. */
+const MAX_PIXELS = 16_000_000;
 const GAP = 16;
 const NAME = /^[A-Za-z0-9_-]{1,80}$/;
 const MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -31,12 +33,19 @@ async function load(path: string, label: string): Promise<{ png: PNG } | { note:
   } catch (e) {
     return { note: `${label} unreadable: ${e instanceof Error ? e.message : String(e)}` };
   }
-  if (bytes.length < 24 || !bytes.subarray(0, 8).equals(MAGIC)) return { note: `${label} is not a PNG` };
+  if (bytes.length < 33 || !bytes.subarray(0, 8).equals(MAGIC) || bytes.toString("latin1", 12, 16) !== "IHDR" || bytes.readUInt32BE(8) !== 13) return { note: `${label} is not a PNG` };
   const width = bytes.readUInt32BE(16);
   const height = bytes.readUInt32BE(20);
   if (width > MAX_WIDTH || height > MAX_HEIGHT) return { note: `${label} is ${width}x${height}, over the ${MAX_WIDTH}x${MAX_HEIGHT} cap` };
+  if (width * height > MAX_PIXELS) return { note: `${label} is ${width}x${height}, over ${MAX_PIXELS} pixels` };
+  // pngjs inflates an interlaced image without a length cap, and takes its size from the last IHDR, so either would decode past the size checked above.
+  if (bytes[28] !== 0) return { note: `${label} is interlaced` };
+  for (let at = 33; at + 8 <= bytes.length; at += 12 + bytes.readUInt32BE(at)) {
+    if (bytes.toString("latin1", at + 4, at + 8) === "IHDR") return { note: `${label} has more than one IHDR` };
+  }
   try {
-    return { png: PNG.sync.read(bytes) };
+    const png = PNG.sync.read(bytes);
+    return png.width === width && png.height === height ? { png } : { note: `${label} decoded at a size its header does not give` };
   } catch {
     return { note: `${label} is not a PNG that can be read` };
   }

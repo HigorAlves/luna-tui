@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { crc32 } from "node:zlib";
 import { PNG } from "pngjs";
 import { afterAll, describe, expect, it } from "vitest";
 
@@ -51,5 +52,30 @@ describe("pairImages", () => {
     const tall = png("tall.png", 10, 8001, () => [0, 0, 0]);
     expect(await pairImages({ render: tall, capture: ok, outDir: dir, name: "z" })).toMatchObject({ pair: null, note: expect.stringMatching(/4000x8000/) });
     expect(await pairImages({ render: ok, capture: ok, outDir: dir, name: "../evil" })).toMatchObject({ pair: null, note: expect.stringMatching(/name/) });
+  });
+  it("refuses a header pngjs would not honour: interlaced, a second IHDR, or over the pixel budget", async () => {
+    const ok = png("ok2.png", 10, 10, () => [1, 2, 3]);
+    const bytes = readFileSync(ok);
+    const ihdr = bytes.subarray(8, 33);
+    const withIhdr = (data: Buffer) => {
+      const chunk = Buffer.from(ihdr);
+      data.copy(chunk, 8);
+      chunk.writeUInt32BE(crc32(chunk.subarray(4, 21)), 21);
+      return chunk;
+    };
+    const interlaced = Buffer.from(ihdr.subarray(8, 21));
+    interlaced[12] = 1;
+    writeFileSync(join(dir, "interlaced.png"), Buffer.concat([bytes.subarray(0, 8), withIhdr(interlaced), bytes.subarray(33)]));
+    expect(await pairImages({ render: join(dir, "interlaced.png"), capture: ok, outDir: dir, name: "i" })).toMatchObject({ pair: null, note: "frame is interlaced" });
+    const huge = Buffer.from(ihdr.subarray(8, 21));
+    huge.writeUInt32BE(10000, 0);
+    huge.writeUInt32BE(10000, 4);
+    writeFileSync(join(dir, "twice.png"), Buffer.concat([bytes.subarray(0, 33), withIhdr(huge), bytes.subarray(33)]));
+    expect(await pairImages({ render: ok, capture: join(dir, "twice.png"), outDir: dir, name: "t" })).toMatchObject({ pair: null, note: "build has more than one IHDR" });
+    const big = Buffer.from(ihdr.subarray(8, 21));
+    big.writeUInt32BE(4000, 0);
+    big.writeUInt32BE(4001, 4);
+    writeFileSync(join(dir, "big.png"), Buffer.concat([bytes.subarray(0, 8), withIhdr(big), bytes.subarray(33)]));
+    expect(await pairImages({ render: join(dir, "big.png"), capture: ok, outDir: dir, name: "b" })).toMatchObject({ pair: null, note: expect.stringMatching(/16000000 pixels/) });
   });
 });
