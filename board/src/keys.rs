@@ -278,6 +278,8 @@ pub(crate) fn sendable_back(t: &Task) -> bool {
         // A config proposal is approved or rejected: the machine refuses to send it back.
         "awaiting_setup" => t.route != "config",
         "awaiting_approval" | "awaiting_test_check" => true,
+        // The design sign-off goes back to Build with the note, as the machine counts it.
+        "awaiting_design" => t.route == "feature",
         // An escalated feature card sent back is planned again (`a` retries the stage that stopped, on the same plan).
         "escalated" => t.route == "feature",
         // Only while the machine waits on you: otherwise it is watching the PR, and a send-back has nothing to stop.
@@ -495,6 +497,7 @@ const GATE_STATES: &[&str] = &[
     "awaiting_answers",
     "awaiting_approval",
     "awaiting_test_check",
+    "awaiting_design",
     "awaiting_ship",
     "escalated",
     "paused_rate_limit",
@@ -1512,6 +1515,28 @@ const BOARD: &[Binding] = &[
             0,
         ),
         "dismiss",
+    ),
+    cmd(
+        b(
+            ":waive <finding id> <reason>",
+            "waive a design finding: not a difference",
+            Group::Commands,
+            Scope::Board,
+            on,
+            0,
+        ),
+        "waive",
+    ),
+    cmd(
+        b(
+            ":accept <finding id> <reason>",
+            "accept a design difference as it is",
+            Group::Commands,
+            Scope::Board,
+            on,
+            0,
+        ),
+        "accept",
     ),
     cmd(
         b(
@@ -3554,6 +3579,13 @@ mod tests {
             "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}}"#
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn the_design_sign_off_is_a_gate_that_approves_and_sends_back() {
+        let t = task("t1", "awaiting_design", true, false, true);
+        assert!(at_gate(&t));
+        assert!(sendable_back(&t));
     }
 
     fn app_with(tasks: Vec<Task>) -> App {

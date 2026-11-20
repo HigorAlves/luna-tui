@@ -995,6 +995,7 @@ pub fn gate_question(task: &Task, detail: Option<&TaskDetail>) -> Option<String>
     Some(match task.state.as_str() {
         "awaiting_approval" => plan,
         "awaiting_test_check" => "approve the tests?".to_string(),
+        "awaiting_design" => format!("sign off the design?{}", design_counts(open)),
         "awaiting_setup" => "approve the setup?".to_string(),
         "awaiting_answers" => match open.map(|a| questions_of(a).len()) {
             Some(n) if n > 0 => format!("answer {n} question{}", if n == 1 { "" } else { "s" }),
@@ -1012,6 +1013,32 @@ pub fn gate_question(task: &Task, detail: Option<&TaskDetail>) -> Option<String>
         "reviewing_memory" => "apply the memory rules?".to_string(),
         _ => return None,
     })
+}
+
+/// `· 3 open, 1 not compared`: what the design sign-off still holds, read from the gate's design block; empty when nothing is open or unplaced.
+fn design_counts(open: Option<&Approval>) -> String {
+    let design = open.map_or(&serde_json::Value::Null, |a| &a.requested["design"]);
+    let counts = &design["parity"]["counts"];
+    let opened: u64 = ["blocker", "should_fix", "nit"]
+        .iter()
+        .filter_map(|level| counts[level].as_u64())
+        .sum();
+    let unplaced = design["parity"]["frames"].as_array().map_or(0, |frames| {
+        frames
+            .iter()
+            .filter(|f| f["status"].as_str() == Some("not_compared"))
+            .count()
+    });
+    let parts: Vec<String> = [(opened as usize, "open"), (unplaced, "not compared")]
+        .iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, what)| format!("{n} {what}"))
+        .collect();
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" · {}", parts.join(", "))
+    }
 }
 
 /// What the decision bar says: the state's glyph and words in the state's role style, and the
@@ -4532,6 +4559,28 @@ mod tests {
         "risk":{"level":"high","scores":{"blast_radius":2,"reversibility":1,"data_sensitivity":0}},
         "verdicts":{"coverage":"proceed","plan":"flag","risk":"proceed"},"approvers":["ana"],
         "cases":[{"title":"j on empty","criterion":"no panic","approach":"cargo test keys::empty"}]}"#;
+
+    #[test]
+    fn the_design_sign_off_asks_and_counts_what_is_open_and_not_compared() {
+        let (task, mut detail) = at_gate("{}", "awaiting_design");
+        let sign_off = |requested: serde_json::Value| -> Vec<Approval> {
+            vec![serde_json::from_value(serde_json::json!({"id": "g1", "kind": "awaiting_design", "requested": requested, "decision": null})).unwrap()]
+        };
+        detail.approvals = sign_off(
+            serde_json::json!({"design": {"gate": {"fires": true, "why": ["open_findings"]}, "findings": [],
+            "parity": {"counts": {"blocker": 0, "should_fix": 2, "nit": 1, "waived": 1},
+            "frames": [{"status": "compared"}, {"status": "not_compared", "reason": "no capture"}]}}}),
+        );
+        assert_eq!(
+            gate_question(&task, Some(&detail)).as_deref(),
+            Some("sign off the design? · 3 open, 1 not compared")
+        );
+        detail.approvals = sign_off(serde_json::json!({"design": {"gate": {"fires": true}}}));
+        assert_eq!(
+            gate_question(&task, Some(&detail)).as_deref(),
+            Some("sign off the design?")
+        );
+    }
 
     #[test]
     fn the_gate_shows_its_approval_rule_and_a_risk_a_person_set() {

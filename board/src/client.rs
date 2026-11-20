@@ -609,6 +609,23 @@ impl Machine {
         )
     }
 
+    /// Waives a design finding at the sign-off: `kind` is `not_a_difference` or `accepted`, and the reason (3 to 500 characters) is kept as ground truth.
+    pub fn waive_design_finding(
+        &self,
+        id: &str,
+        finding: &str,
+        kind: &str,
+        reason: &str,
+    ) -> Result<Task, String> {
+        self.post(
+            &format!(
+                "/tasks/{id}/design/findings/{}/waive",
+                path_segment(finding)
+            ),
+            json!({ "kind": kind, "reason": reason }),
+        )
+    }
+
     /// Adds a finding Verify missed, with a severity (`blocker`, `should_fix`, `nit`) and a title.
     pub fn add_finding(&self, id: &str, severity: &str, title: &str) -> Result<Task, String> {
         self.post(

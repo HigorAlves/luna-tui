@@ -49,9 +49,11 @@ impl Split {
     /// Which split a ticket belongs to, if it needs you at all.
     pub fn of(task: &Task, now: u64) -> Option<Split> {
         match task.state.as_str() {
-            "awaiting_setup" | "awaiting_approval" | "awaiting_test_check" | "awaiting_ship" => {
-                Some(Split::Approve)
-            }
+            "awaiting_setup"
+            | "awaiting_approval"
+            | "awaiting_test_check"
+            | "awaiting_design"
+            | "awaiting_ship" => Some(Split::Approve),
             "awaiting_answers" | "reviewing_memory" => Some(Split::Review),
             "escalated" => Some(Split::Failed),
             "paused_rate_limit" => Some(Split::Stale),
@@ -93,6 +95,17 @@ mod tests {
             "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"{updated}"}}"#
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn the_design_sign_off_waits_in_approve() {
+        let t = |state, waiting, running| {
+            task("a", state, waiting, running, "2026-10-22T23:24:22.089Z")
+        };
+        assert_eq!(
+            Split::of(&t("awaiting_design", true, false), 0),
+            Some(Split::Approve)
+        );
     }
 
     #[test]

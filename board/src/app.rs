@@ -249,6 +249,8 @@ const CARD_COMMANDS: &[&str] = &[
     "start",
     "whole",
     "dismiss",
+    "waive",
+    "accept",
     "finding",
     "dedup",
     "context",
@@ -375,7 +377,7 @@ const MOVED_ON: &str = "the card moved on; nothing was approved";
 const MOVED_ON_UNSENT: &str = "the card moved on; nothing was sent";
 /// `approve 3 cards? 2 plans · 1 ship`: the count and the kinds, for the box over the marked cards.
 fn approve_many_question(ids: &[(String, &'static str)]) -> String {
-    let parts: Vec<String> = ["plan", "split", "ship", "release"]
+    let parts: Vec<String> = ["plan", "split", "ship", "release", "design"]
         .iter()
         .filter_map(|kind| {
             let n = ids.iter().filter(|(_, k)| k == kind).count();
@@ -5687,6 +5689,8 @@ impl App {
             "release"
         } else if question.starts_with("ship") {
             "ship"
+        } else if question.starts_with("sign off") {
+            "design"
         } else {
             "plan"
         })
@@ -6508,6 +6512,8 @@ impl App {
         "setup",
         "whole",
         "dismiss",
+        "waive",
+        "accept",
         "finding",
         "slots",
         "drain",
@@ -6622,6 +6628,21 @@ impl App {
                     |m| m.dismiss_finding(&id, &finding, reason.as_deref()),
                     "finding dismissed",
                 ),
+            },
+            "waive" | "accept" => match (self.card_target(), parse_waiver(rest)) {
+                (None, _) => self.notify("no ticket selected", true),
+                (_, Err(error)) => self.notify(error, true),
+                (Some(id), Ok((finding, reason))) => {
+                    let kind = if name == "waive" {
+                        "not_a_difference"
+                    } else {
+                        "accepted"
+                    };
+                    self.act(
+                        |m| m.waive_design_finding(&id, &finding, kind, &reason),
+                        "finding waived",
+                    )
+                }
             },
             "finding" => match (self.card_target(), parse_finding(rest)) {
                 (None, _) => self.notify("no ticket selected", true),
@@ -7643,7 +7664,12 @@ impl App {
     /// the card waits at a gate that commits something; None at the gates and states that do not.
     pub fn approval_question(&self, task: &Task) -> Option<String> {
         self.approval_gate(task)
-            .filter(|gate| matches!(gate.kind, "plan" | "split" | "ship" | "release" | "memory"))
+            .filter(|gate| {
+                matches!(
+                    gate.kind,
+                    "plan" | "split" | "ship" | "release" | "memory" | "design"
+                )
+            })
             .map(|gate| gate.question)
     }
 
@@ -7680,6 +7706,7 @@ impl App {
                 format!("write the proposed luna.yaml for #{short}?"),
             ),
             "awaiting_test_check" => ("tests", format!("approve the test cases of #{short}?")),
+            "awaiting_design" => ("design", format!("sign off the design of #{short}?")),
             "draft" | "awaiting_answers" | "escalated" | "paused_rate_limit" | "closed"
             | "archived" => return None,
             _ => ("approval", format!("approve #{short}?")),
@@ -7951,6 +7978,22 @@ pub(crate) fn parse_dismiss(arg: &str) -> Result<(String, Option<String>), Strin
             Some(reason.chars().take(500).collect())
         },
     ))
+}
+
+/// `:waive <finding id> <reason>` and `:accept <finding id> <reason>` at the design sign-off: the reason is 3 to 500 characters.
+pub(crate) fn parse_waiver(arg: &str) -> Result<(String, String), String> {
+    let arg = arg.trim();
+    let (id, reason) = arg
+        .split_once(char::is_whitespace)
+        .map_or((arg, ""), |(i, r)| (i, r.trim()));
+    let length = reason.chars().count();
+    if id.is_empty() || !(3..=500).contains(&length) {
+        return Err(
+            "waive takes a finding id and a reason, e.g. :waive D1a2b3c4 same token, anti-aliasing"
+                .to_string(),
+        );
+    }
+    Ok((id.to_string(), reason.to_string()))
 }
 
 /// `:finding <blocker|should_fix|nit> <title>`.
@@ -12317,11 +12360,72 @@ mod task_view_command_tests {
     }
 
     #[test]
+    fn waive_and_accept_need_an_id_and_a_reason() {
+        assert_eq!(
+            parse_waiver("D1a2b3c4 same token, anti-aliasing"),
+            Ok((
+                "D1a2b3c4".to_string(),
+                "same token, anti-aliasing".to_string()
+            ))
+        );
+        assert!(parse_waiver("D1a2b3c4").is_err());
+        assert!(parse_waiver("").is_err());
+        assert!(
+            parse_waiver("D1 ab").is_err(),
+            "a reason is 3 characters or more"
+        );
+        assert!(parse_waiver(&format!("D1 {}", "x".repeat(501))).is_err());
+        assert_eq!(
+            parse_waiver("D1 abc").unwrap().1,
+            "abc",
+            "three characters is enough"
+        );
+    }
+
+    #[test]
+    fn a_waiver_without_a_reason_is_refused_locally() {
+        let (mut app, _, _, seen) = two_cards();
+        command(&mut app, "waive D1a2b3c4");
+        assert_eq!(
+            app.toast.as_ref().map(|t| t.text.as_str()),
+            Some(
+                "waive takes a finding id and a reason, e.g. :waive D1a2b3c4 same token, anti-aliasing"
+            )
+        );
+        assert!(posts(&seen).is_empty());
+    }
+
+    #[test]
+    fn approving_the_design_sign_off_asks_what_it_commits() {
+        use crate::testkit::{open_card, task_json};
+        use serde_json::json;
+        let app = open_card(
+            task_json(
+                "aaaaaaaa1",
+                "Checkout",
+                "awaiting_design",
+                "Verify",
+                json!({"waitingOnYou": true}),
+            ),
+            json!({"approvals": [{"id": "g1", "kind": "awaiting_design", "requested": {"design": {"gate": {"fires": true, "why": ["open_findings"]}, "findings": []}}, "decision": null}]}),
+        );
+        let task = app.tasks[0].clone();
+        assert_eq!(
+            app.approval_question(&task).as_deref(),
+            Some("sign off the design of #aaaaaaaa?")
+        );
+        assert_eq!(app.approval_gate(&task).map(|g| g.kind), Some("design"));
+        assert_eq!(app.committing_kind(&task), Some("design"));
+    }
+
+    #[test]
     fn every_card_command_in_the_task_goes_to_the_open_card() {
         let (_, open, other, _) = two_cards();
         for line in [
             "whole",
             "dismiss F1",
+            "waive D1 same token",
+            "accept D1 brand allows it",
             "finding nit rename x",
             "dup bbbbbbbb9",
             "undup",

@@ -201,6 +201,8 @@ generates the tables below. A test fails when they drift from the registry.
 | `:setup <repo>` | propose the repo's luna.yaml |
 | `:whole` | keep a split card whole (recorded) |
 | `:dismiss <finding id> [reason]` | dismiss a finding Verify reported |
+| `:waive <finding id> <reason>` | waive a design finding: not a difference |
+| `:accept <finding id> <reason>` | accept a design difference as it is |
 | `:finding <blocker\|should_fix\|nit> <title>` | add a finding Verify missed |
 | `:spec <figma link>` | read a design into a spec |
 | `:audit <qa target>` | audit a QA target (WCAG) |

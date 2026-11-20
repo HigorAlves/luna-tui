@@ -832,6 +832,8 @@ impl Approval {
             "awaiting_setup"
         } else if !r["rules"].is_null() {
             "reviewing_memory"
+        } else if !r["design"]["gate"].is_null() {
+            "awaiting_design"
         } else if !r["prUrl"].is_null() || !r["evidence"].is_null() {
             "awaiting_ship"
         } else {
@@ -2730,6 +2732,7 @@ impl Task {
             "awaiting_answers" => "answer questions".to_string(),
             "awaiting_approval" => "approve plan".to_string(),
             "awaiting_test_check" => "check tests".to_string(),
+            "awaiting_design" => "sign off design".to_string(),
             "awaiting_ship" if self.route == "review" => "post the verdict".to_string(),
             // Not a gate unless the machine says it waits on you: otherwise it is watching the PR.
             "awaiting_ship" if !self.waiting_on_you => "watching the PR".to_string(),
@@ -3227,6 +3230,18 @@ pub(crate) mod tests {
         )
         .expect("null cases is an empty list");
         assert!(run.cases.is_empty());
+    }
+
+    #[test]
+    fn an_approval_with_a_design_gate_reads_as_the_sign_off() {
+        let a: Approval = serde_json::from_value(
+            serde_json::json!({"requested": {"design": {"gate": {"fires": true}}}}),
+        )
+        .unwrap();
+        assert_eq!(a.kind_or_guess(), "awaiting_design");
+        let json = task_json("").replace(r#""state":"draft""#, r#""state":"awaiting_design""#);
+        let task: Task = serde_json::from_str(&json).unwrap();
+        assert_eq!(task.status_label(), "sign off design");
     }
 
     #[test]
