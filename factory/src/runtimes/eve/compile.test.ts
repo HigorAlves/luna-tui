@@ -171,6 +171,13 @@ describe("agentFiles", () => {
     expect(JSON.parse(files["package.json"]!).name).toBe("luna-triage--security-reviewer");
   });
 
+  it("gives the implementer no delegate tool and no ui-designer subagent: the writable helper runs as its own pack", () => {
+    const impl = agentFiles(PACKS.implementing, options());
+    expect(Object.keys(impl).filter((f) => f.endsWith("tools/delegate.ts"))).toEqual([]);
+    expect(eveSubagents(PACKS.implementing)).toEqual([]);
+    expect(JSON.stringify(impl)).not.toContain("ui-designer");
+  });
+
   it("appends the role's eve addendum when it has one", () => {
     const root = mkdtempSync(join(tmpdir(), "eve-compile-"));
     mkdirSync(join(root, "roles", "slack-triager"), { recursive: true });

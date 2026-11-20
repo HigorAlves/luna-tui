@@ -697,6 +697,24 @@ const DOCS_ONLY =
 const DOCS_ONLY_SCENARIOS =
   "This plan touches only documentation (the machine read it off the plan's files). Every scenario is a check a reviewer makes by reading the files or the diff, or the repo's existing command that already covers them: never a new test or test file, and never a command the repo does not have.";
 
+/** Said to the implementer when the machine says a UI slice may go to the ui-designer. The machine's own words; the slice and the answer's text are data. */
+const DELEGATION = `## A UI slice can go to the ui-designer
+- \`slice_delegate {slice, message}\` hands one slice to the ui-designer, a helper that builds it in its own worktree while you go on. Use it only for a slice whose planned files are all UI files: the machine refuses anything else, so take the refusal and build the slice yourself.
+- Go on with your other slices. Never touch a delegated slice's files; \`scope_check\` flags them.
+- Call \`slice_wait {slice}\` before \`scope_check\`: it returns the helper's state and brings its commits onto your branch when it has finished.
+- A \`merge_conflict\` state means its commits conflicted with yours twice: finish your own slices and answer; the machine escalates the card.`;
+
+const helperText = (helper: StageInput["context"]["helper"]) => {
+  const list = (files: readonly string[]) => (files.length > 0 ? files.map((f) => `- ${f}`).join("\n") : NONE);
+  return {
+    slice: helper ? [`Slice ${helper.slice.id}: ${helper.slice.title}`, "Planned files:", list(helper.slice.touchpoints), "Acceptance:", list(helper.slice.acceptance)].join("\n") : NONE,
+    message: helper?.message ? helper.message : NONE,
+    locks: helper ? ["Yours (this slice's files):", list(helper.locks.mine), "The implementer's (never touch):", list(helper.locks.theirs)].join("\n") : NONE,
+    base: helper ? txt(helper.base) : NONE,
+    conflict: helper?.conflict ? list(helper.conflict.files) : NONE,
+  };
+};
+
 /** Criteria with the ids the machine gives them (C1, C2, ... in order), one per line. */
 const criteriaIdsText = (criteria: readonly string[] | undefined): string => (criteria?.length ? criteriaOf(criteria).map((c) => `${c.id}: ${c.text}`).join("\n") : NONE);
 
@@ -714,6 +732,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
   const foreman = foremanText(input.context.foreman);
   const design = designText(input.context.design);
   const parity = parityText(input.context.parity);
+  const helper = helperText(input.context.helper);
   const ticketChat = ticketChatText(input.context.ticketChat);
   const exceptions = exceptionsText(input.context.exceptions);
   const status = statusText(input.context.status);
@@ -782,6 +801,12 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     ),
     "{{context.baseCommit}}": txt(input.context.baseCommit),
     // The machine's fact, from the plan's files: a documentation change is checked by reading it, never by a new test.
+    "{{context.delegation}}": input.context.delegation?.available ? DELEGATION : "",
+    "{{context.helper.slice}}": helper.slice,
+    "{{context.helper.message}}": helper.message,
+    "{{context.helper.locks}}": helper.locks,
+    "{{context.helper.base}}": helper.base,
+    "{{context.helper.conflict}}": helper.conflict,
     "{{context.docsOnly}}": input.context.docsOnly ? DOCS_ONLY : "",
     "{{context.plan.docsOnly}}": input.context.plan?.docsOnly ? DOCS_ONLY_SCENARIOS : "",
     // The machine's own words around a hex sha it checked; the files are the writer's, so they go in as data.

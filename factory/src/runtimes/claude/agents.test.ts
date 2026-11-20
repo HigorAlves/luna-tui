@@ -58,4 +58,10 @@ describe("agent definitions", () => {
   it("a pack without helpers defines only its own role", () => {
     expect(Object.keys(agentDefinitions(PACKS.implementing, ROLES, "claude-sonnet-5-5"))).toEqual(["implementer"]);
   });
+
+  it("never defines the implementer's writable ui-designer as a subagent: it runs as its own pack, in its own container", () => {
+    expect(PACKS.implementing.helpers.map((h) => h.role)).toContain("ui-designer");
+    expect(Object.keys(agentDefinitions(PACKS.implementing, ROLES, "claude-sonnet-5-5"))).not.toContain("ui-designer");
+    expect(Object.keys(agentDefinitions(PACKS.ui_design, ROLES, "claude-sonnet-5-5"))).toEqual(["ui-designer"]);
+  });
 });
