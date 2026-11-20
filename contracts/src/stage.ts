@@ -1543,6 +1543,8 @@ export const StageInput = z.object({
     a11y: A11yContext.nullable().optional(),
     /** For design_parity: what the browser run captured for each cited frame, the plan it followed, and the approved spec. The machine's own composition. */
     parity: z.object({ plan: CapturePlan, captures: z.array(ParityCapture), spec: DesignSpec.nullable() }).optional(),
+    /** For e2e: the captures the browser run is asked to take for the frames its scenarios cite (RFC 0013, phase 3), one `qa-capture` command each. The machine's own plan. */
+    parityPlan: CapturePlan.optional(),
     /** What the token economy hands this run (RFC 0007): the loop guard's settings, the facts learned in this repository, the approved tool mask. Absent with `MACHINE_ECONOMY=off`. */
     economy: EconomyInput.optional(),
     /** For fact_propose: the repository's name, the digests of its last runs and the texts of the facts it holds. */

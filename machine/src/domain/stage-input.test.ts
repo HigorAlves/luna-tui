@@ -2,7 +2,7 @@ import { PACKS, type PackId, StageInput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { ApprovalRow, TaskRow } from "./task.ts";
-import { PACK_LIMITS, browserCases, withoutBrowserCases, buildJiraIntakeInput, buildSlackTriageInput, buildStageInput } from "./stage-input.ts";
+import { PACK_LIMITS, designSpecOf, browserCases, withoutBrowserCases, buildJiraIntakeInput, buildSlackTriageInput, buildStageInput } from "./stage-input.ts";
 
 const task = {
   id: "t1",
@@ -555,5 +555,23 @@ describe("buildStageInput's accessibility audit", () => {
     expect(build("e2e", { a11yLevel: "AAA" }).context.a11y).toBeUndefined();
     expect(build("verifying", { a11yLevel: "AAA" }).context.a11y).toBeUndefined();
     expect(build("verifying").context.qaTargets).toBeUndefined();
+  });
+});
+
+describe("designSpecOf and the e2e capture plan", () => {
+  const spec = { frames: [{ id: "1:2", name: "Checkout", viewport: { width: 1440, height: 900 }, states: [] }], tokens: { color: [], type: [], spacing: [], radius: [] }, components: [], a11yNotes: [], missing: [], confidence: 0.8 };
+  const approved = (requested: Record<string, unknown>) => approval({ kind: "awaiting_approval", decision: "approved", requested });
+  it("reads the approved spec off the plan gate, and nothing when there is none, it is malformed, or the gate is not approved", () => {
+    expect(designSpecOf([approved({ design: { ref: null, spec } })])).toEqual(spec);
+    expect(designSpecOf([])).toBeNull();
+    expect(designSpecOf([approved({ design: { ref: null, spec: null, note: "planned without a design spec: x" } })])).toBeNull();
+    expect(designSpecOf([approved({ design: { ref: null, spec: { frames: "no" } } })])).toBeNull();
+    expect(designSpecOf([approval({ kind: "awaiting_approval", decision: "rejected", requested: { design: { ref: null, spec } } })])).toBeNull();
+  });
+  it("hands the capture plan to the e2e pack only", () => {
+    const parityPlan = { targets: [], uncited: ["1:2"], notes: [] };
+    const base = { task, attempt: 1, approvals: [], priorFindings: [] as never[], parityPlan };
+    expect(buildStageInput({ ...base, stage: "e2e", pack: "e2e" }).context.parityPlan).toEqual(parityPlan);
+    expect(buildStageInput({ ...base, stage: "e2e", pack: "a11y_audit" }).context.parityPlan).toBeUndefined();
   });
 });

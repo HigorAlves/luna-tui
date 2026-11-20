@@ -140,6 +140,8 @@ const ticketChatText = (chat: StageInput["context"]["ticketChat"]) => {
 };
 
 /** The audit's level as the machine's own text; WCAG 2.2 AA when the run carries none. */
+/** One `qa-capture` command per planned capture, with the frame it is for: every part is the machine's own (a pattern-checked scenario id and viewport name, a node id), so the block is not quoted as data. */
+const parityPlanText = (plan: StageInput["context"]["parityPlan"]) => (plan && plan.targets.length > 0 ? plan.targets.map((t) => `- qa-capture ${t.scenario} ${t.viewport.name} ${t.state} ${t.viewport.width} ${t.viewport.height}  (frame ${t.frame})`).join("\n") : NONE);
 const a11yLevelText = (a11y: StageInput["context"]["a11y"]) => `WCAG 2.2 ${a11y?.level ?? "AA"}`;
 
 /** The card's design reference (the machine's own text, pattern-checked by `DesignRef`): one line per reference. */
@@ -837,6 +839,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.ticketChat.draft}}": ticketChat.draft,
     "{{context.design.refs}}": design.refs,
     "{{context.a11y.level}}": a11yLevelText(input.context.a11y),
+    "{{context.parityPlan}}": parityPlanText(input.context.parityPlan),
     "{{context.parityCaptures}}": parity.captures,
     "{{context.parityUncited}}": parity.uncited,
     "{{context.designSpec}}": parity.spec,

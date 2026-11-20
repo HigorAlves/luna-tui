@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type A11yContext, type DesignContext, type AccessReviewContext, ReleaseNotesContext, type PostmortemContext, type BreachAssessContext, type BridgedTool, type CapacityContext, type StatusReportContext, QuestionnaireContext, VulnTriageContext, type ChangeExceptionsContext, type ComplianceReviewContext, type DocsDriftContext, type ChatTriageContext, type ForemanContext, type TicketChatContext, type QuestionsContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type Effort, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type PrLinkContext, type ProposeContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
+import { type A11yContext, type CapturePlan, DesignSpec, type DesignContext, type AccessReviewContext, ReleaseNotesContext, type PostmortemContext, type BreachAssessContext, type BridgedTool, type CapacityContext, type StatusReportContext, QuestionnaireContext, VulnTriageContext, type ChangeExceptionsContext, type ComplianceReviewContext, type DocsDriftContext, type ChatTriageContext, type ForemanContext, type TicketChatContext, type QuestionsContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type Effort, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type PrLinkContext, type ProposeContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
 import { isDocsOnly } from "./docs-only.ts";
 
 export { PACK_LIMITS };
@@ -111,6 +111,13 @@ export function approvedScenarios(approvals: ApprovalRow[]): Scenario[] {
   return approvedCases(approvals).map((c, i) => scenarioOf(c, i, plan.success ? plan.data.acceptance_criteria : criteria));
 }
 
+/** The design spec the plan gate was approved with (`requested.design.spec`, which the plan stage writes); null when there was none, it did not parse, or no plan gate was approved. */
+export function designSpecOf(approvals: ApprovalRow[]): DesignSpec | null {
+  const approved = approvals.findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
+  const spec = DesignSpec.safeParse((approved?.requested.design as { spec?: unknown } | undefined)?.spec);
+  return spec.success ? spec.data : null;
+}
+
 /** What Intake gathered, as triage reads it: each stranger's text flattened again and capped, every list bounded, attachments as references only. */
 export function intakeOf(task: TaskRow): IntakeContext {
   const card = cardOf(task);
@@ -167,6 +174,8 @@ export function buildStageInput(opts: {
   design?: DesignContext | null;
   /** For a11y_audit: the WCAG level to audit against; AA when absent. */
   a11yLevel?: "AA" | "AAA";
+  /** e2e: the captures the browser run is asked to take for the frames its scenarios cite. */
+  parityPlan?: CapturePlan;
   /** The MCP tools the machine bridged for this run (RFC 0013); none by default. */
   bridge?: BridgedTool[];
   /** For reviewing_memory: the last implementing ledger and every earlier run of the task. */
@@ -265,6 +274,7 @@ export function buildStageInput(opts: {
       graph: opts.graph ?? null,
       ...(opts.plan ? { plan: reviewed ?? opts.plan } : {}),
       ...(pack === "a11y_audit" ? { a11y: { level: opts.a11yLevel ?? "AA" } } : {}),
+      ...(pack === "e2e" && opts.parityPlan ? { parityPlan: opts.parityPlan } : {}),
       ...(pack === "design_spec" && opts.design ? { design: opts.design } : {}),
       ...(pack === "question_council" && opts.questions ? { questions: opts.questions } : {}),
       ...(pack === "verifying" && opts.blastRadius?.length ? { blastRadius: opts.blastRadius } : {}),

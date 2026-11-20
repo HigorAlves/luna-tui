@@ -653,3 +653,76 @@ describe("the accessibility audit after the browser run", () => {
     expect(result.usage?.turns).toBe(16);
   });
 });
+
+describe("parity captures (RFC 0013)", () => {
+  const start = parseLunaConfig("verify:\n  e2e:\n    start:\n      command: npm start\n      port: 4000\n");
+  const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+  const spec = { frames: [{ id: "12:34", name: "Checkout", viewport: { width: 1440, height: 900 }, states: [{ state: "default", nodeId: "12:35", suggestion: null }] }], tokens: { color: [], type: [], spacing: [], radius: [] }, components: [], a11yNotes: [], missing: [], confidence: 0.9 };
+  const cases = [{ id: "S1", title: "pay", criterion: null, approach: "x", layer: "e2e", frame_ref: "12:34" }];
+  const approvals = (withSpec: boolean) => [{ id: "a1", taskId: "t1", kind: "awaiting_approval", requested: { criteria: [], cases, ...(withSpec ? { design: { ref: null, spec } } : {}) }, decision: "approved" }];
+  const pass: StageResult = { outcome: "pass", detail: { answer: { verdict: "pass", summary: "ok", criteria: [{ text: "pay", result: "pass", evidence: [] }] } } };
+  const on = { off: false, cardOff: false, level: "AA" as const, mode: "gate" as const };
+
+  function harness(opts: { withSpec?: boolean; policy?: unknown; settings?: typeof on; browser?: StageResult[]; capture?: boolean; decide?: unknown } = {}) {
+    const stateDir = mkdtempSync(join(tmpdir(), "e2e-parity-"));
+    const seen: Array<Record<string, unknown> | undefined> = [];
+    const runs = [...(opts.browser ?? [pass])];
+    const runner = e2eRunner({
+      stateDir,
+      runPack: async (c: StageContext, extra?: Record<string, unknown>) => {
+        seen.push(extra);
+        if (opts.capture !== false) {
+          const dir = join(stateDir, "runs", c.runId, "files", "qa", "parity", "S1");
+          mkdirSync(dir, { recursive: true });
+          writeFileSync(join(dir, "1440x900-default.png"), PNG);
+        }
+        return runs.shift() ?? pass;
+      },
+      detectWeb: async () => true,
+      changedFiles: async () => null,
+      policy: async () => opts.policy ?? start,
+      headCommit: async () => "c".repeat(40),
+      openApp: async () => ({ ok: true as const, target: { name: "app" as const, baseUrl: "http://luna-app:4000" }, network: "net", aliases: [], close: async () => {}, redactValues: {} }),
+      design: { settings: async () => opts.settings ?? on },
+      ...(opts.decide ? { decide: opts.decide, overrides: async () => ({}) } : {}),
+    } as never);
+    const ctx = { task: { id: "t1", repoPath: "/repo", worktreePath: dir, branch: "task/x" }, stage: "e2e", attempt: 1, runId: "r1", approvals: approvals(opts.withSpec ?? true), signal: new AbortController().signal, emit: async () => {} } as unknown as StageContext;
+    return { run: () => runner(ctx), seen, stateDir };
+  }
+
+  it("hands the plan to the browser run and takes the captures in after it", async () => {
+    const h = harness();
+    const result = await h.run();
+    expect(h.seen[0]).toMatchObject({ parityPlan: { targets: [expect.objectContaining({ scenario: "S1", frame: "12:34", state: "default" })] } });
+    expect(result.detail?.parity).toMatchObject({ captures: [expect.objectContaining({ image: "/evidence/parity/S1/1440x900-default.png" })], missing: [], dir: join(h.stateDir, "runs", "r1", "parity") });
+    expect(existsSync(join(h.stateDir, "runs", "r1", "parity", "S1", "1440x900-default.png"))).toBe(true);
+  });
+  it("plans nothing and leaves the run and its detail as they were without a design spec, or with design off for the card or the repo", async () => {
+    for (const h of [harness({ withSpec: false }), harness({ settings: { ...on, cardOff: true } }), harness({ settings: { ...on, off: true } })]) {
+      const result = await h.run();
+      expect(h.seen[0]).not.toHaveProperty("parityPlan");
+      expect(result.detail).not.toHaveProperty("parity");
+    }
+  });
+  it("skips parity in agent mode, where there is no app URL, and plans no capture", async () => {
+    const h = harness({ policy: parseLunaConfig("") });
+    const result = await h.run();
+    expect(h.seen[0]).toBeUndefined();
+    expect(result.detail).toMatchObject({ parity: { skipped: "no app URL in agent mode" } });
+  });
+  it("takes in nothing from a failed browser run", async () => {
+    const failed: StageResult = { outcome: "pass", detail: { answer: { verdict: "fail", summary: "x", criteria: [{ text: "pay", result: "fail", evidence: [] }] } } };
+    const result = await harness({ browser: [failed] }).run();
+    expect(result.detail).not.toHaveProperty("parity");
+  });
+  it("clears the parity folders before the re-run after a flake, so a first attempt's captures are never the second's", async () => {
+    const flake: StageResult = { outcome: "pass", detail: { answer: { verdict: "fail", summary: "x", criteria: [{ text: "pay", result: "fail", evidence: [] }] } } };
+    const h = harness({ browser: [flake, pass], decide: async () => ({ cause: { choice: "env_flake", confidence: 0.9 } }) });
+    mkdirSync(join(h.stateDir, "runs", "r1", "parity", "S1"), { recursive: true });
+    writeFileSync(join(h.stateDir, "runs", "r1", "parity", "S1", "stale.png"), PNG);
+    const result = await h.run();
+    expect(result).toMatchObject({ outcome: "pass", detail: { rerun: true } });
+    expect(existsSync(join(h.stateDir, "runs", "r1", "parity", "S1", "stale.png"))).toBe(false);
+    expect((result.detail?.parity as { captures: unknown[] }).captures).toHaveLength(1);
+  });
+});

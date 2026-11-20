@@ -213,6 +213,16 @@ describe("renderPrompt", () => {
     expect(prompt).not.toContain("{{");
   });
 
+  it("gives the e2e agent one qa-capture command per planned capture, or none", () => {
+    const template = readFileSync(new URL("../../prompts/e2e.md", import.meta.url), "utf8");
+    const plan = { targets: [{ scenario: "S1", frame: "12:34", viewport: { name: "1440x900", width: 1440, height: 900 }, state: "hover" as const }], uncited: [], notes: [] };
+    const e2e = (parityPlan?: typeof plan) => renderPrompt({ pack: PACKS.e2e, input: { ...input, pack: "e2e", stage: "e2e", context: { projectContext: null, testCases: [], qaTargets: [], ...(parityPlan ? { parityPlan } : {}) } } as never, template });
+    expect(e2e(plan)).toContain("qa-capture S1 1440x900 hover 1440 900  (frame 12:34)");
+    expect(e2e(plan)).toContain("## Design captures");
+    expect(e2e()).toContain("## Design captures\n(none)");
+    expect(e2e(plan)).not.toContain("{{");
+  });
+
   it("renders the video context, the evidence pack as text, and leaves no placeholder in any video template", () => {
     const video = {
       scenarios: [{ title: "A coupon counts once", criterion: "c1", approach: "apply twice" }],
