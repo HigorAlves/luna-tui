@@ -15,21 +15,23 @@
 //   pnpm eval baseline-plan [--engines a,b,c] [--efforts a,b] prints the baseline commands and runs none; --efforts adds the agent packs
 //   pnpm eval prune-runs [--older-than 30]                    removes run folders under evals/.runs older than that many days
 //   pnpm eval propose --repo <abs path> [--machine <url>] [--dry-run]   posts the scorecards to the machine, which drafts a luna.yaml proposal card for the repo
+//   pnpm eval admit --pack <p> --engine <e> --against <claude:*> [--write]   whether the engine may join a pack that reads images: its saved baseline against Claude's; exits 0 on a pass, 1 on a fail, 2 on a missing baseline
 //   pnpm eval scorecard                    evals/scorecard.md over every decision baseline
 //   pnpm eval defaults [--write] [--except <pack>...]              the default per slot by the scorecard's rule; --write updates contracts/src/decision-defaults.json
-import { DECISION_DEFAULTS, PACKS, PackId, decisionEngines } from "@hardness/contracts";
+import { DECISION_DEFAULTS, EngineId, PACKS, PackId, decisionEngines } from "@hardness/contracts";
 import { machineCredentials } from "@hardness/machine/credentials";
 import { imageExists } from "@hardness/machine/docker";
 import { DecisionLog, machineStateDir } from "@hardness/machine/decisions";
 import { buildTelemetry, tracesFromEnv } from "@hardness/machine/telemetry";
 import { collectorGate } from "./src/collector.ts";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import { type DefaultsEntry, proposalCandidates } from "./src/candidates.ts";
+import { admission, admissionPath } from "./src/admission.ts";
 import { decisionPack } from "./src/labels.ts";
 import { baselineHashes, changedLines, readLedger, writeLedger } from "./src/baseline-ledger.ts";
 import { labelFor, nextToLabel, renderNext, setLabel } from "./src/label.ts";
@@ -221,6 +223,20 @@ if (command === "harvest") {
     for (const c of out.changes) console.log(stripUnsafe(`${c.pack}: ${[c.engine && `engine ${c.engine.from} -> ${c.engine.to}`, c.effort && `effort ${c.effort.from} -> ${c.effort.to}`].filter(Boolean).join(", ")}; ${c.why}`));
     if (out.taskId) console.log(`card ${out.taskId}: approve or reject it on the board`);
   }
+} else if (command === "admit") {
+  const { values } = parseArgs({ args: process.argv.slice(3), options: { pack: { type: "string" }, engine: { type: "string" }, against: { type: "string" }, write: { type: "boolean", default: false } } });
+  const pack = PackId.safeParse(values.pack).data ?? fail(`--pack must be one of ${PackId.options.join(", ")}`);
+  const engine = EngineId.safeParse(values.engine).data ?? fail(`--engine must be one of ${EngineId.options.join(", ")}`);
+  const against = EngineId.safeParse(values.against).data ?? fail(`--against must be one of ${EngineId.options.join(", ")}`);
+  const verdict = admission(EVALS, { pack, engine, against });
+  for (const line of verdict.lines) console.log(line);
+  if (verdict.record && values.write) {
+    const file = admissionPath(EVALS, engine, pack);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `${JSON.stringify(verdict.record, null, 2)}\n`);
+    console.log(`admission record written: ${file.slice(EVALS.length + 1)}`);
+  }
+  process.exit(verdict.code);
 } else if (command === "scorecard" || command === "defaults") {
   const { values } = parseArgs({ args: process.argv.slice(3), options: { write: { type: "boolean", default: false }, except: { type: "string", multiple: true, default: [] } } });
   const cards = loadBaselines(EVALS);
