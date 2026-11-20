@@ -196,6 +196,8 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
         LUNA_EVE_MAX_TURNS: String(maxTurns),
         LUNA_EVE_WORKSPACE: paths.work,
         LUNA_EVE_SCRATCH: paths.scratch,
+        // eve's attachments (images a tool returned) live with its own store in the per-run /tmp folder, never in the worktree (sandbox.ts).
+        LUNA_EVE_ATTACHMENTS: join(state, "attachments"),
         LUNA_EVE_GUARD: JSON.stringify(guard),
         LUNA_EVE_BRIDGE_URL: served.url,
         // The tools report to the economy's tap only when there is one: no call, no wait, without it.
