@@ -8,7 +8,7 @@ import { type EngineChoice, chooseEngine } from "../domain/engine-choice.ts";
 
 export async function pickEngine(
   credentials: Pick<Credentials, "check">,
-  pack: Pick<Pack, "id" | "engines">,
+  pack: Pick<Pack, "id" | "engines"> & { vision?: boolean },
   task: StageEngines | null,
   config: StageEngines | null,
   /** The repo the run is for: its luna.yaml may cap an engine there. */

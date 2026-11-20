@@ -1259,6 +1259,14 @@ describe("the engine a stage runs on", () => {
     expect(result.events?.find((e) => e.kind === "engine")?.payload).toMatchObject({ engine: "claude:opus", reason: expect.stringMatching(/^codex:sol has no credential/) });
   });
 
+  it("refuses a handed engine that cannot read images for a pack that needs them, before any container starts (RFC 0013)", async () => {
+    seen = undefined;
+    const { credentials, log } = recordingCredentials();
+    await expect(runAgent({ ...deps(fakeSandbox(output())), credentials }, { ...context("e2e"), engine: "codex:sol" }, "design_parity")).rejects.toThrow("codex:sol cannot read images, which design_parity needs: refused before the container started");
+    expect(seen).toBeUndefined();
+    expect(log).toEqual([]);
+  });
+
   it("runs the default and says so on the task when the engine asked for is on a runtime MACHINE_DISABLE_RUNTIMES turned off", async () => {
     const { credentials: inner, log } = recordingCredentials();
     const credentials = gatedCredentials(inner, [runtimeKillSwitch(["eve"])]);

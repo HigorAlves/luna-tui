@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { AnswerScenario, AnswerStep, type CapturePlan, type DesignSpec, type ParityCapture, type CiContext, type ComplianceReviewContext, type CoverageSummary, type DesignContext, type DocsDriftContext, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
+import { AnswerScenario, AnswerStep, type CapturePlan, type DesignSpec, type ParityCapture, type CiContext, type ComplianceReviewContext, type CoverageSummary, type DesignContext, type DocsDriftContext, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, visionProblem, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -425,6 +425,9 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     const other = reviewerEngine(PACKS.verifying, implementer, (e) => ready.has(e));
     if (other) choice = { engine: other.engine, reason: other.reason };
   }
+  // A resumed or handed engine is not re-chosen: a pack that reads images is still never started on a model that cannot (RFC 0013).
+  const blind = visionProblem(PACKS[pack], choice.engine);
+  if (blind) throw new Error(`${blind}: refused before the container started`);
   // The repo's effort for the pack, when the engine that runs can serve it; else the pack's own, with why.
   const effortChoice = chooseEffort({ pack: PACKS[pack], engine: choice.engine, config: policy.effort });
   const engineEvents = [

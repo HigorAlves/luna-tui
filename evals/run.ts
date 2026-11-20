@@ -33,7 +33,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import { type EvalCase, baselinePath, bridgeGrantsOf, caseInput, datasetCases, engineSlug, judgeInput, loadCases, mcpServersOf, mountsOf, parseEffort, parseTrials, prepareWorktree, verdictOf } from "./src/cases.ts";
-import { IGNORED_EFFORT, effortProblems, honourEffort } from "./src/effort-check.ts";
+import { IGNORED_EFFORT, effortProblems, honourEffort, visionProblems } from "./src/effort-check.ts";
 import { formatDiff, formatScorecard } from "./src/format.ts";
 import { type CaseResult, type JudgeVerdict, type Scorecard, caseResult, diffScorecards, gradeAnswer, scorecard } from "./src/grade.ts";
 import { evalDatapoint } from "./src/report.ts";
@@ -85,6 +85,9 @@ const effort = (() => {
 // An effort a pack or an engine cannot run is refused here, before any case runs or any baseline is written.
 const unrunnable = effortProblems(pack, engines, effort);
 if (unrunnable) fail(unrunnable);
+// A pack that reads images on a model that cannot is refused here too, before any case runs or any baseline is written.
+const blind = visionProblems(pack, engines);
+if (blind) fail(blind);
 const image = values.image!;
 // A browser pack runs in the QA image (as the machine runs it); every other pack, and the judge, in the stage image.
 const qaImage = process.env.RUNNER_QA_IMAGE ?? "hardness-runner-qa:dev";

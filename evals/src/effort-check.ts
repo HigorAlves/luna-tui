@@ -1,6 +1,6 @@
 // A run asked for an effort must report that effort back. A runner image built before `StageInput.effort` strips the unknown key,
 // runs at the pack's own effort, and reports none or that one: a scorecard of those runs would be filed under the wrong effort.
-import { type Effort, type EngineId, type PackId, type StageOutput, effortProblem } from "@hardness/contracts";
+import { type Effort, type EngineId, type PackId, type StageOutput, effortProblem, PACKS, visionProblem } from "@hardness/contracts";
 
 import type { CaseResult } from "./grade.ts";
 
@@ -21,6 +21,15 @@ export function effortProblems(pack: PackId, engines: EngineId[], asked: Effort 
   for (const engine of engines) {
     const problem = effortProblem(pack, engine, asked);
     if (problem) return `${engine}: ${problem}`;
+  }
+  return null;
+}
+
+/** Why an engine cannot run a pack that reads images, for the first such engine, or null (RFC 0013). */
+export function visionProblems(pack: PackId, engines: EngineId[]): string | null {
+  for (const engine of engines) {
+    const problem = visionProblem(PACKS[pack], engine);
+    if (problem) return problem;
   }
   return null;
 }
