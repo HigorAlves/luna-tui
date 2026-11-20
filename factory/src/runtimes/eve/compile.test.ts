@@ -124,8 +124,8 @@ describe("agentFiles", () => {
     expect(Object.keys(files).filter((f) => f.startsWith(`${dir}/tools/`)).sort()).toEqual(["bash", "glob", "grep", "read_file", "web_fetch"].map((t) => `${dir}/tools/${t}.ts`));
     // The guarded tools approve against the child run's read-only policy, not the stage's: its own commands, nothing to write.
     const commands = JSON.stringify(readOnly(PACKS.triage.access).commands);
-    expect(files[`${dir}/tools/read_file.ts`]).toBe(`import { readOnlyTools } from "../../../../../../src/runtimes/eve/agent/tools.ts";\n\nexport default readOnlyTools(${commands}).read_file;\n`);
-    expect(files[`${dir}/tools/bash.ts`]).toContain(`readOnlyTools(${commands}).bash`);
+    expect(files[`${dir}/tools/read_file.ts`]).toBe(`import { readOnlyTools } from "../../../../../../src/runtimes/eve/agent/tools.ts";\n\nexport default readOnlyTools(${commands}, undefined, false).read_file;\n`);
+    expect(files[`${dir}/tools/bash.ts`]).toContain(`readOnlyTools(${commands}, undefined, false).bash`);
     expect(agentFiles(PACKS.triage, options({ model: "scripted" }))[`${dir}/agent.ts`]).toContain('model: scriptedModel("reply-drafter")');
   });
 
