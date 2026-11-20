@@ -145,6 +145,12 @@ export class SplitNotValidError extends Error {
 /** A size bucket for a child's estimate, as a hint for triage (weighed, never trusted). */
 const sizeBucketOf = (estLoc: number): string => (estLoc <= 100 ? "XS" : estLoc <= 400 ? "S" : estLoc <= 1000 ? "M" : estLoc <= 2000 ? "L" : "XL");
 
+/** Whether the browser run's design block (`detail.design`) says the parity review leaves something for a person. */
+const designGateFires = (design: unknown): boolean => {
+  const gate = (design as { gate?: { fires?: unknown } } | null | undefined)?.gate;
+  return gate?.fires === true;
+};
+
 const isSplitOutcome = (outcome: unknown): outcome is "split" | "split_failed" => outcome === "split" || outcome === "split_failed";
 
 /** What the duplicate check needs from outside: the one decision call, and the backlog (to list its items and to bump one). */
@@ -3000,6 +3006,8 @@ export class Pipeline {
                 // The retro has something for a person (rules, prompt updates, graph misses): it waits for an answer; otherwise the card closes.
                 ...(stage === "reviewing_memory" && result.outcome === "pass" && result.detail?.rules != null ? { proposals: true as const } : {}),
                 ...(result.detail?.refresh === "media" || result.detail?.refresh === "verify" ? { refresh: result.detail.refresh } : {}),
+                // The design parity review left something for a person (open findings, or it was not sure): the card waits at the design sign-off.
+                ...(stage === "e2e" && result.outcome === "pass" && designGateFires(result.detail?.design) ? { designGate: true as const } : {}),
                 ...(stage === "evidence" ? { preview: (await this.policyFor((await this.get(id)).repoPath)).factory.ship.preview === "on" } : {}),
               };
         // An escalation from Build, the machine's own included, carries a decided reason: a fact where one decides, else the typed decision.

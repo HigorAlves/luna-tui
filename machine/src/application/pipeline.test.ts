@@ -4558,3 +4558,22 @@ describe("the design budget", () => {
     expect((await p.events(task.id)).some((e) => e.kind === "design.budget_reset")).toBe(false);
   });
 });
+
+describe("the design sign-off gate (RFC 0013 phase 3)", () => {
+  it("opens the design gate with the e2e report as what it asks, and delivers on approval", async () => {
+    stubs.plan("e2e", { outcome: "pass", detail: { step: "e2e", verdict: "pass", design: { wcag: "AA", a11y: null, parity: null, findings: [], gate: { fires: true, why: ["low_confidence"] } } } });
+    const task = await newTask();
+    expect(await startAndApprove(task.id)).toMatchObject({ state: "awaiting_design" });
+    const gate = (await pipeline.approvals(task.id)).find((a) => a.decision === null)!;
+    expect(gate).toMatchObject({ kind: "awaiting_design", requested: { design: { gate: { fires: true } } } });
+    expect((await pipeline.decide(task.id, "approved")).state).not.toBe("awaiting_design");
+    expect(await stagesRun(task.id)).toContain("delivering");
+  });
+  it("goes on to delivering with no gate when the review leaves nothing for a person", async () => {
+    stubs.plan("e2e", { outcome: "pass", detail: { design: { gate: { fires: false, why: [] } } } });
+    const task = await newTask();
+    await startAndApprove(task.id);
+    expect(await stagesRun(task.id)).toContain("delivering");
+    expect((await pipeline.approvals(task.id)).map((a) => a.kind)).not.toContain("awaiting_design");
+  });
+});

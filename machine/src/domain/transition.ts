@@ -63,7 +63,7 @@ export type PipelineEvent =
   /** The card is a report of another card (or of a backlog item): it closes, with nothing left to run. */
   | { type: "merged" }
   /** `triage` is the outcome triage picked; absent means `plan`. */
-  | { type: "stage_done"; outcome: StageOutcome; /** Verify itself failed without an answer (the run errored, nothing was found in the code): it runs again, and Build is not asked to fix what nobody found. */ unanswered?: boolean; /** What this failed run was, kept for the escalation that names the loop's failures. */ failure?: Failure; /** For delivering and ci_watch: the card's own PR is already merged, so the card shipped. */ merged?: boolean; /** Verify's blocker set (`blockerSetKey`) and `verify.build_rounds`: the same set back after that many rounds escalates. */ findingSet?: string; buildRounds?: number; /** The failures the loop of this stage may have before a person is asked (`verify.e2e_rounds`, `verify.ci_rounds`); `LOOP_CAP` when absent. */ loopCap?: number; /** For evidence: the repository keeps the preview gate (`ship.preview: on`). */ preview?: boolean; /** For shipping: the merge did not happen because the PR is not ready; the watch runs again. */ notReady?: boolean; /** For reviewing_memory: the retro has proposals a person is asked about. */ proposals?: boolean; /** For a head_moved escalation: the media are made again from a new browser run. */ refresh?: "media" | "verify"; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
+  | { type: "stage_done"; outcome: StageOutcome; /** Verify itself failed without an answer (the run errored, nothing was found in the code): it runs again, and Build is not asked to fix what nobody found. */ unanswered?: boolean; /** What this failed run was, kept for the escalation that names the loop's failures. */ failure?: Failure; /** For delivering and ci_watch: the card's own PR is already merged, so the card shipped. */ merged?: boolean; /** Verify's blocker set (`blockerSetKey`) and `verify.build_rounds`: the same set back after that many rounds escalates. */ findingSet?: string; buildRounds?: number; /** For e2e: the design parity review leaves something for a person (open findings, or it was not sure), so the card waits at the design sign-off; `design` marks a failure that is a design blocker set. */ designGate?: boolean; design?: boolean; /** The failures the loop of this stage may have before a person is asked (`verify.e2e_rounds`, `verify.ci_rounds`); `LOOP_CAP` when absent. */ loopCap?: number; /** For evidence: the repository keeps the preview gate (`ship.preview: on`). */ preview?: boolean; /** For shipping: the merge did not happen because the PR is not ready; the watch runs again. */ notReady?: boolean; /** For reviewing_memory: the retro has proposals a person is asked about. */ proposals?: boolean; /** For a head_moved escalation: the media are made again from a new browser run. */ refresh?: "media" | "verify"; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
   /** Ends the task without shipping or closing it: from any state that has not ended. */
   | { type: "archive"; reason: ArchiveReason }
   | { type: "answered" }
@@ -256,6 +256,8 @@ function next(task: Snapshot, event: PipelineEvent): Move {
       if (state === "awaiting_ship") return event.gate === "ship_approval" ? run("awaiting_ship", retries) : run("evidence", retries);
       if (state === "awaiting_approval") return run(event.from === "triage" ? "triage" : "test_design", retries);
       if (state === "awaiting_test_check") return run("test_design", retries);
+      // A note at the design sign-off builds again, on the implementer's runs (as a test-change request counts), not the browser loop's.
+      if (state === "awaiting_design") return enterImplementing(retries);
       // An escalation a person sends back is a plan they judge wrong: the card is planned again (the reason rides on the decision), rather than
       // only approved, which reruns the stage that stopped on the same plan.
       if (state === "escalated") return run("test_design", NO_RETRIES);
@@ -276,6 +278,8 @@ function gateStage(task: Snapshot): TaskState | null {
     case "awaiting_approval":
     case "awaiting_test_check":
       return "test_design";
+    case "awaiting_design":
+      return "e2e";
     case "awaiting_ship":
       return task.route === "review" ? "reviewing" : "evidence";
     default:
@@ -312,6 +316,8 @@ function approved(task: Snapshot, event: PipelineEvent): Move {
     case "awaiting_ship":
       // The ship approval (the release question the watch asked) starts the merge; the preview gate publishes the pack and starts the watch.
       return run(event.type === "approved" && event.gate === "ship_approval" ? "shipping" : "awaiting_ship", retries);
+    case "awaiting_design":
+      return run("delivering", retries);
     case "reviewing_memory":
       return done(retries);
     default:
@@ -433,7 +439,12 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
       if (outcome === "fail") return loopFailed(task, "verify", event.findingSet ? { key: event.findingSet, buildRounds: event.buildRounds ?? FACTORY_DEFAULTS.verify.build_rounds } : undefined, LOOP_CAP, event.failure);
       break;
     case "e2e":
-      if (outcome === "pass") return run("delivering", retries);
+      if (outcome === "pass") return event.designGate === true ? wait("awaiting_design", retries) : run("delivering", retries);
+      if (outcome === "fail" && event.design === true) {
+        // A design blocker set that keeps coming back, or the browser loop's cap on design failures, is a person's call at the sign-off, not an escalation.
+        const moved = loopFailed(task, "e2e", event.findingSet ? { key: event.findingSet, buildRounds: event.buildRounds ?? FACTORY_DEFAULTS.verify.build_rounds } : undefined, event.loopCap, event.failure);
+        return moved.state === "escalated" ? { ...wait("awaiting_design", moved.retries), reason: moved.reason } : moved;
+      }
       if (outcome === "fail") return loopFailed(task, "e2e", undefined, event.loopCap, event.failure);
       break;
     case "delivering":
