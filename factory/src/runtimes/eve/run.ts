@@ -45,6 +45,8 @@ export interface EveOptions {
   agentsDir?: string;
   /** Extra environment for the server (the conformance fake's script). */
   serverEnv?: Record<string, string>;
+  /** Shows image parts whatever the engine's catalog entry says (the conformance table's seam, and the live probe's); used only when set. */
+  vision?: boolean;
 }
 
 /** The eve runtime over the agents in `options.agentsDir`. */
@@ -199,7 +201,7 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
         LUNA_EVE_SCRATCH: paths.scratch,
         // eve's attachments (images a tool returned) live with its own store in the per-run /tmp folder, never in the worktree (sandbox.ts).
         // Image parts only reach a model that reads them (agent/tools.ts visionGate).
-        LUNA_EVE_VISION: engine.caps.vision ? "1" : "0",
+        LUNA_EVE_VISION: (options.vision ?? engine.caps.vision) ? "1" : "0",
         LUNA_EVE_ATTACHMENTS: join(state, "attachments"),
         LUNA_EVE_GUARD: JSON.stringify(guard),
         LUNA_EVE_BRIDGE_URL: served.url,
