@@ -17,13 +17,33 @@ describe("admit", () => {
     expect(admit(card(10, 0.7), card(10, 0.8))).toEqual({ pass: false, reasons: ["pass rate 70% is more than 2 points under 80%"] });
   });
   it("refuses too few cases", () => {
-    expect(admit(card(6, 1), card(6, 1)).reasons).toContain("n 6, 8 are needed");
+    expect(admit(card(6, 1), card(6, 1))).toMatchObject({ pass: false, reasons: ["the baseline has n 6, 8 are needed"] });
   });
   it("holds recall and false blockers to the baseline when both cards have them", () => {
     expect(admit(card(8, 0.9, { recall: 0.7, falseBlockerRate: 0.2 }), card(8, 0.9, { recall: 0.8, falseBlockerRate: 0.1 })).reasons).toEqual(["recall 70% is more than 2 points under 80%", "false blockers 20% are more than 2 points over 10%"]);
   });
-  it("skips recall and false blockers when one side has none", () => {
+  it("skips recall and false blockers when only the candidate has them", () => {
     expect(admit(card(8, 0.9, { recall: 0.1 }), card(8, 0.9)).pass).toBe(true);
+  });
+  it("admits an exact two-point gap (9/50 against 2/10) on every comparison", () => {
+    expect(admit(card(50, 9 / 50), card(50, 2 / 10)).pass).toBe(true);
+    expect(admit(card(50, 0.9, { recall: 9 / 50 }), card(50, 0.9, { recall: 2 / 10 })).pass).toBe(true);
+    expect(admit(card(50, 0.9, { falseBlockerRate: 2 / 10 }), card(50, 0.9, { falseBlockerRate: 9 / 50 })).pass).toBe(true);
+  });
+  it("cannot compare when the baseline has a metric the candidate lacks", () => {
+    const recall = admit(card(8, 0.9), card(8, 0.9, { recall: 0.8 }));
+    expect(recall).toMatchObject({ pass: false, incomparable: true });
+    expect(recall.reasons).toEqual(["the baseline records recall and the candidate does not"]);
+    expect(admit(card(8, 0.9), card(8, 0.9, { falseBlockerRate: 0.1 })).reasons).toEqual(["the baseline records the false-blocker rate and the candidate does not"]);
+  });
+  it("cannot compare against a baseline under eight cases, or of another size", () => {
+    expect(admit(card(10, 1), card(6, 1))).toMatchObject({ pass: false, incomparable: true, reasons: ["the baseline has n 6, 8 are needed"] });
+    expect(admit(card(10, 1), card(9, 1))).toMatchObject({ pass: false, incomparable: true, reasons: ["the candidate has n 10 and the baseline n 9: they must run the same cases"] });
+  });
+  it("cannot compare when both record case ids and they differ", () => {
+    expect(admit({ ...card(8, 1), ids: ["a", "b"] }, { ...card(8, 1), ids: ["a", "c"] })).toMatchObject({ pass: false, incomparable: true, reasons: ["the two baselines ran different cases: b, c"] });
+    expect(admit({ ...card(8, 1), ids: ["b", "a"] }, { ...card(8, 1), ids: ["a", "b"] }).pass).toBe(true);
+    expect(admit({ ...card(8, 1), ids: ["a"] }, card(8, 1)).pass).toBe(true);
   });
 });
 
@@ -31,6 +51,9 @@ describe("cardOf", () => {
   it("reads a saved baseline's summary", () => {
     expect(cardOf({ summary: { cases: 9, passRate: 0.75 } })).toEqual({ n: 9, passRate: 0.75 });
     expect(cardOf({ summary: { cases: 9, passRate: 0.75, recall: 0.5, falseBlockerRate: 0.1 } })).toEqual({ n: 9, passRate: 0.75, recall: 0.5, falseBlockerRate: 0.1 });
+  });
+  it("records the case ids once each, when the baseline lists its cases", () => {
+    expect(cardOf({ summary: { cases: 2, passRate: 1 }, cases: [{ id: "b" }, { id: "a" }, { id: "a" }] })).toEqual({ n: 2, passRate: 1, ids: ["a", "b"] });
   });
 });
 
@@ -57,11 +80,16 @@ describe("admission", () => {
   it("refuses an --against that is not Claude", () => {
     expect(admission(dir, { ...ask, against: "codex:luna" }).code).toBe(2);
   });
+  it("exits 2 and says why when the baselines cannot be compared", () => {
+    save("claude-opus", 10, 0.9);
+    save("codex-sol", 9, 0.9);
+    expect(admission(dir, ask)).toMatchObject({ code: 2, lines: ["cannot compare codex:sol on design_parity: the candidate has n 9 and the baseline n 10: they must run the same cases"] });
+  });
   it("exits 1 with each reason, and 0 on a pass, with the record to write", () => {
     save("codex-sol", 10, 0.7);
-    expect(admission(dir, ask)).toMatchObject({ code: 1, lines: ["refused: codex:sol on design_parity: pass rate 70% is more than 2 points under 90%"], record: { pass: false } });
+    expect(admission(dir, ask)).toMatchObject({ code: 1, lines: ["refused: codex:sol on design_parity: pass rate 70% is more than 2 points under 90% (decided on pass rate alone, no recall or false-blocker rate in both baselines)"], record: { pass: false } });
     save("codex-sol", 10, 0.9);
-    expect(admission(dir, ask)).toEqual({ code: 0, lines: ["admitted: codex:sol on design_parity (n 10, pass 90% against claude:opus 90%)"], record: { ...ask, pass: true, reasons: [], candidate: { n: 10, passRate: 0.9 }, baseline: { n: 10, passRate: 0.9 } } });
+    expect(admission(dir, ask)).toEqual({ code: 0, lines: ["admitted: codex:sol on design_parity (n 10, pass 90% against claude:opus 90%; decided on pass rate alone, no recall or false-blocker rate in both baselines)"], record: { ...ask, pass: true, reasons: [], candidate: { n: 10, passRate: 0.9 }, baseline: { n: 10, passRate: 0.9 } } });
   });
 });
 
