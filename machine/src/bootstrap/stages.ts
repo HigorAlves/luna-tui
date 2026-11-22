@@ -53,6 +53,7 @@ import { homedir } from "node:os";
 import { repoSecrets } from "../adapters/credentials/repo-secrets.ts";
 import { PACKAGE_MANAGER_CONFIG, configFilesChanged } from "../application/install.ts";
 import { InstallFailedError, type InstallInput, type InstallOutcome, ensureInstalled } from "../application/install.ts";
+import { checkGit } from "../adapters/git/helper.ts";
 import { removeNestedRepositories } from "../adapters/git/machine-repo.ts";
 import { ensureClone, isClone, removeClone } from "../adapters/git/clone.ts";
 import { type ProofRig, proofAppDeps } from "../application/config-proof.ts";
@@ -361,6 +362,8 @@ export async function buildRealStages(
     mcpUntrusted: config.mcp.untrusted,
     // The implementer's ui-designer helper reads the design budget, a card's "design off" and the earlier picks at call time (bound late in main.ts).
     design: designDecisions,
+    // The helper's pick needs git 2.40: the check runs once, the first time a run asks.
+    gitProblem: (() => { let problem: Promise<string | null> | undefined; return () => (problem ??= checkGit()); })(),
     watcher,
     exec: checksExec,
     hostExec: exec,

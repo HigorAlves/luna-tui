@@ -103,6 +103,8 @@ export interface AgentDeps {
   mcpUntrusted?: "allow" | "deny";
   /** The designer agents' budget, a card's "design off" and the shas the machine picked for the card on earlier runs (RFC 0013); read at call time, bound late. Absent, no budget applies. */
   design?: { budget?: (taskId: string) => Promise<DesignBudget>; cardOff?: (taskId: string) => Promise<boolean>; picked?: (taskId: string) => Promise<string[]> };
+  /** What is wrong with the host's git for the helper's pick (older than 2.40), or null; absent, nothing is. Delegation is unavailable while it says something. */
+  gitProblem?: () => Promise<string | null>;
   /** The coordinator of the ui-designer helper (tests pass their own). */
   helperRuns?: typeof helperRuns;
   /** Replaces the docker sandbox; tests pass a fake. */
@@ -574,6 +576,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const designRef = delegating ? (extra.design ?? designRefOf({ text: `${task.title}\n${task.description}`, attachments: cardOf(task).attachments, settings: designSettingsOf })) : null;
   if (delegating) {
     const reason = await (async (): Promise<string | null> => {
+      const gitProblem = await deps.gitProblem?.().catch(() => null);
+      if (gitProblem) return `git is too old for the helper's pick: ${gitProblem}`;
       if (designSettingsOf.off) return "design is off for this repo";
       if (await deps.design?.cardOff?.(task.id).catch(() => false)) return "design is off for this card";
       if (!designRef) return "the card has no design reference";

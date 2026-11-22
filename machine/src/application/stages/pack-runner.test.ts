@@ -2253,6 +2253,14 @@ describe("the implementer's side of the ui-designer (RFC 0013, phase 5)", () => 
     expect(c.built).toHaveLength(0);
   });
 
+  it("says no and builds nothing when the host's git is older than 2.40 (L7-6)", async () => {
+    commitWeb();
+    const c = coordinator();
+    await run({ helperRuns: c.factory, gitProblem: async () => "git 2.39 is older than 2.40: the helper's pick is not available" }, withPlan(uiPlan));
+    expect(input().context.delegation).toEqual({ available: false, reason: "git is too old for the helper's pick: git 2.39 is older than 2.40: the helper's pick is not available" });
+    expect(c.built).toHaveLength(0);
+  });
+
   it("says no when the design budget is spent", async () => {
     commitWeb();
     const c = coordinator();
