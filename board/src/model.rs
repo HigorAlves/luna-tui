@@ -2595,6 +2595,29 @@ pub struct BuildProgress {
     pub budget: BuildBudget,
     #[serde(default)]
     pub last_checkpoint: Option<BuildCheckpoint>,
+    /// Who builds each slice, from a machine that has the ui-designer helper (RFC 0013); absent from older ones.
+    #[serde(default)]
+    pub slices: Vec<SliceOwner>,
+    /// The latest ui-designer helper, while one runs or after the last one ended.
+    #[serde(default)]
+    pub helper: Option<HelperRun>,
+}
+
+/// One slice and who builds it; `picked` are the shas the machine put on the branch from the helper's work.
+#[derive(Deserialize, Clone, Debug)]
+pub struct SliceOwner {
+    pub slice: u64,
+    pub owner: String,
+    #[serde(default)]
+    pub picked: Vec<String>,
+}
+
+/// Where the ui-designer helper stands: its slice, its state (kept a string, so a state this board does not know still loads) and its attempt.
+#[derive(Deserialize, Clone, Debug)]
+pub struct HelperRun {
+    pub slice: u64,
+    pub state: String,
+    pub attempt: u64,
 }
 
 /// The first 8 characters of a task id: what cards and watch-tab labels show.

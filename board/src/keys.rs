@@ -839,7 +839,9 @@ const SHARED: &[Binding] = &[
             Some(t) if config_proposal(t) => {
                 Avail::Off("a config proposal is approved or rejected, not sent back")
             }
-            Some(_) => Avail::Off("only a setup, plan, tests, design sign-off or escalation go back"),
+            Some(_) => {
+                Avail::Off("only a setup, plan, tests, design sign-off or escalation go back")
+            }
         },
         85,
     ),

@@ -1392,6 +1392,10 @@ pub(crate) fn escalation_words(reason: &str) -> String {
         "undeclared_scope" => "it changed files outside its scope".to_string(),
         "head_moved" => "the branch moved under it".to_string(),
         "design_budget" => "the design budget is spent".to_string(),
+        "merge_conflict" => {
+            "the designer's work and the implementer's do not merge: merge them yourself, or send it back"
+                .to_string()
+        }
         "other" => "it needs a person".to_string(),
         unknown => plain(unknown).replace('_', " "),
     }
@@ -5878,6 +5882,32 @@ mod tests {
             text.contains("bbbbbbb") && text.contains("after a green"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn build_progress_names_the_slices_the_ui_designer_holds_and_the_helper_s_state() {
+        let mut detail: TaskDetail = serde_json::from_str(&detail_json(TASK)).unwrap();
+        detail.build_progress = Some(serde_json::from_str(r#"{"scenarios":[],
+            "budget":{"iterations":1,"tokens":null,"minutes":1.0,"limits":{"max_iterations":15,"max_tokens":2000000,"max_minutes":90}},"lastCheckpoint":null,
+            "slices":[{"slice":1,"owner":"implementer"},{"slice":2,"owner":"ui-designer"},{"slice":3,"owner":"implementer","picked":["aaaaaaaa1111","bbbbbbbb2222"]}],
+            "helper":{"slice":2,"state":"conflict_rerun","attempt":2,"branch":"b","startedAt":"2026-10-22T10:00:00Z"}}"#).unwrap());
+        let text = lines_text(&build_progress_lines(&detail))
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(text.contains("slice 2 ui-designer"), "{text}");
+        assert!(text.contains("slice 3 picked 2 commits"), "{text}");
+        assert!(!text.contains("slice 1"), "{text}");
+        assert!(
+            text.contains("slice 2 conflict rerun") && text.contains("attempt 2"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_merge_conflict_escalation_says_what_a_person_does() {
+        let words = escalation_words("merge_conflict");
+        assert!(words.contains("merge") && words.contains("send"), "{words}");
     }
 
     #[test]

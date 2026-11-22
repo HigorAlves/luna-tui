@@ -12453,7 +12453,10 @@ mod task_view_command_tests {
     #[test]
     fn waive_posts_not_a_difference_and_accept_posts_accepted_to_the_findings_path() {
         for (line, kind) in [
-            ("waive D1a2b3c4 same token, anti-aliasing", "not_a_difference"),
+            (
+                "waive D1a2b3c4 same token, anti-aliasing",
+                "not_a_difference",
+            ),
             ("accept D1a2b3c4 brand allows it", "accepted"),
         ] {
             let (mut app, open, _, _) = two_cards();

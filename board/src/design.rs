@@ -341,8 +341,16 @@ mod tests {
             "kind": "audit", "target": "staging", "level": "AA", "mode": "gate", "notes": [],
             "findings": [{ "severity": "blocker", "title": "t", "body": "b", "suggested_fix": "give the modal an Escape handler" }]
         })).unwrap();
-        assert!(report_lines(&report).join("\n").contains("give the modal an Escape handler"));
-        assert!(card_text(&report, None).description.contains("give the modal an Escape handler"));
+        assert!(
+            report_lines(&report)
+                .join("\n")
+                .contains("give the modal an Escape handler")
+        );
+        assert!(
+            card_text(&report, None)
+                .description
+                .contains("give the modal an Escape handler")
+        );
     }
 
     #[test]
