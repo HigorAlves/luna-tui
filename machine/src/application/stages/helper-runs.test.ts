@@ -469,6 +469,7 @@ describe("helperRuns: the pick", () => {
     const t = await returned();
     await pickReq(t);
     expect(await ackReq(t)).toEqual({ ok: true });
+    expect(await stateOf(2)).toEqual({ state: "committed", attempt: 1, commit: PICKED });
     expect(named(t, "advanceBranch")).toEqual([["advanceBranch", "/cards/w", "luna/card", BASE, PICKED]]);
     expect(t.rows.at(-1)).toEqual({ kind: "build.helper_picked", payload: { slice: 2, base: BASE, helperTip: TIP, onto: BASE, picked: [PICKED], tip: PICKED } });
     expect(named(t, "publish")).toHaveLength(1);
@@ -701,6 +702,7 @@ describe("helperRuns: the end of the run, after a pass", () => {
   it("lands a helper that already returned the same way", async () => {
     const t = await returned();
     expect(await t.coordinator.afterRun("pass")).toBeNull();
+    expect(await stateOf(2)).toMatchObject({ state: "committed", commit: PICKED });
     // L7-4: the files stay locked once landed, for the scope checks that run after the end of the run.
     expect(t.coordinator.delegatedLocks()).toEqual(["src/ui/Card.tsx", "src/ui/Card.test.tsx"]);
     expect(named(t, "landInWorktree")).toHaveLength(1);

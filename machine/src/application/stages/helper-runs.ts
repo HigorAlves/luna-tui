@@ -167,9 +167,9 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
     await Promise.resolve(deps.emit(kind, { ...payload })).catch(() => {});
   };
 
-  const setState = async (h: Helper, state: HelperState, summary?: string): Promise<void> => {
+  const setState = async (h: Helper, state: HelperState, summary?: string, commit?: string): Promise<void> => {
     h.state = state;
-    const file = JSON.stringify({ state, attempt: h.attempt, ...(summary ? { summary } : {}) });
+    const file = JSON.stringify({ state, attempt: h.attempt, ...(summary ? { summary } : {}), ...(commit ? { commit } : {}) });
     await writeMailbox(deps.outDir, `helper-state-${h.slice}.json`, file).catch((error) => deps.log?.(`helper state not written: ${error instanceof Error ? error.message : String(error)}`));
   };
 
@@ -511,14 +511,14 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
         const head = await deps.importer.sync().then((r) => (r.ok ? r.head : null)).catch(() => null);
         if (head && (await deps.git.isAncestor(deps.cardPath, pending.tip, head).catch(() => false))) {
           await landed(h, pending.P, pending.tip, pending.picked);
-          await setState(h, "committed");
+          await setState(h, "committed", undefined, pending.tip);
           await release(h);
           return { ok: true };
         }
         return drop(`the card's branch ${moved.reason === "moved" ? "moved" : "could not move"} since the pick (${moved.reason}); bundle again and call slice_wait`);
       }
       await landed(h, pending.P, pending.tip, pending.picked);
-      await setState(h, "committed");
+      await setState(h, "committed", undefined, pending.tip);
       await release(h);
       return { ok: true };
     });
@@ -544,8 +544,9 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
       const P = synced.head;
       // The factory merged the picked tip and its last bundle came in (the branch may have moved on since): the pick is there already.
       if (h.pending && (P === h.pending.tip || (await deps.git.isAncestor(deps.cardPath, h.pending.tip, P).catch(() => false)))) {
-        await landed(h, h.pending.P, h.pending.tip, h.pending.picked);
-        await setState(h, "committed");
+        const { P: onto, tip, picked } = h.pending;
+        await landed(h, onto, tip, picked);
+        await setState(h, "committed", undefined, tip);
         return release(h);
       }
       h.pending = undefined;
@@ -560,7 +561,7 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
         const reason = line(`the ui-designer's slice ${h.slice} is on the branch, but your folder has local changes in ${filesOf(folder.files)}; a person merges them`);
         escalation ??= { escalate: "merge_conflict", reason };
         await setState(h, "merge_conflict", reason);
-      } else await setState(h, "committed");
+      } else await setState(h, "committed", undefined, made.tip);
       await release(h);
     });
   }
