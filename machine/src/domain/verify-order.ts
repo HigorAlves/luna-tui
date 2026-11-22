@@ -21,7 +21,7 @@ export function verifySteps(state: VerifyProgress): VerifyStep {
   return state.checks === "green" ? "report" : "fail";
 }
 
-/** What runs after the browser run (RFC 0013, Routing). Phase 3 adds `design_parity` when the card has a design reference. */
+/** What runs after the browser run (RFC 0013, Routing): the accessibility audit. The parity review is not routed here: the e2e stage runs it when the browser run took captures, which only a spec and an app URL give. */
 export type DesignStep = "a11y_audit";
 
 export interface DesignProgress {
@@ -29,7 +29,6 @@ export interface DesignProgress {
   cardOff: boolean;
   qa: "web" | "none";
   touchesRendered: boolean;
-  hasDesignRef: boolean;
   browserRun: "pass" | "fail" | "skipped";
 }
 

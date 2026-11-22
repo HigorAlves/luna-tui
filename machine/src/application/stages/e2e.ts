@@ -283,7 +283,7 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
     const auditStep: AfterBrowserStep = async ({ extra, browserRun }) => {
       const settings = deps.design ? await deps.design.settings(context.task.repoPath ?? null, context.task.id) : null;
       if (!settings) return null;
-      const steps = designSteps({ off: settings.off, cardOff: settings.cardOff, qa: repoPolicy?.qa ?? "web", touchesRendered: true, hasDesignRef: false, browserRun });
+      const steps = designSteps({ off: settings.off, cardOff: settings.cardOff, qa: repoPolicy?.qa ?? "web", touchesRendered: true, browserRun });
       if (!steps.includes("a11y_audit")) return null;
       // Agent mode (no `verify.e2e.start`, no deploy): the browser run boots its own server, so there is no app URL to audit.
       if (e2eMode === "agent") return { key: "a11y", detail: { skipped: "no app URL in agent mode" } };

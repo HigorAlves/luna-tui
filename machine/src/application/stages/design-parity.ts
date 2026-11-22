@@ -39,8 +39,6 @@ export interface DesignParityOutcome {
   report: NonNullable<VerifyDesignReport["parity"]>;
   /** The parity findings, as review Findings. */
   findings: Finding[];
-  /** The confident blockers, which go back to Build. */
-  blockers: number;
   gate: SettledParity["gate"];
   notes: string[];
   usage?: StageResult["usage"];
@@ -129,7 +127,6 @@ export async function runDesignParity(deps: DesignParityDeps, context: StageCont
   return {
     report: { ran, runId: ran ? subId : null, confidence: answer ? settled.confidence : ran ? 0 : null, bar, designInput: settled.designInput, frames, counts, summary: answer?.summary ?? "" },
     findings: settled.findings,
-    blockers: settled.blockers,
     gate: { fires: why.length > 0, why },
     notes,
     ...(usage ? { usage } : {}),

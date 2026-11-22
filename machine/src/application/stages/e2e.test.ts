@@ -782,7 +782,7 @@ describe("the design parity review after the browser run (RFC 0013)", () => {
   const on = { off: false, cardOff: false, level: "AA" as const, mode: "gate" as const };
   const designFinding = (severity: string, confidence = 0.9) => ({ id: `D-${severity}`, path: "figma:12:34/12:35", line: 0, severity, title: "Pay colour", body: "b", confidence, category: "design", design: { source: "parity", frame: "12:34", node: "12:35", element: "button.pay", kind: "token", expected: "#1A73E8", actual: "#1B74E9" } });
   const report = { ran: true, runId: "r1-parity", confidence: 0.9, bar: 0.75, designInput: "complete", frames: [], counts: { blocker: 0, should_fix: 0, nit: 0, waived: 0 }, summary: "s" };
-  const reviewed = (over: Record<string, unknown> = {}) => ({ report, findings: [], blockers: 0, gate: { fires: false, why: [] }, notes: [], spentAfter: false, ...over });
+  const reviewed = (over: Record<string, unknown> = {}) => ({ report, findings: [], gate: { fires: false, why: [] }, notes: [], spentAfter: false, ...over });
   const a11yBlocker = { criterion: "2.1.2", level: "A", source: "judged", rule: null, impact: null, page: "/checkout", state: "modal", selector: "div.modal", summary: "trap", evidence: [], fix: null, confidence: 0.9 };
 
   function harness(opts: { review?: unknown; withSpec?: boolean; extraScenarios?: unknown[]; policy?: unknown; decide?: unknown; budgets?: unknown[]; audit?: StageResult; waived?: string[] } = {}) {
@@ -817,7 +817,7 @@ describe("the design parity review after the browser run (RFC 0013)", () => {
 
   it("fails the browser run on a confident design blocker, with the design findings for Build and the report beside", async () => {
     const f = designFinding("blocker");
-    const h = harness({ review: reviewed({ findings: [f], blockers: 1, report: { ...report, counts: { ...report.counts, blocker: 1 } } }) });
+    const h = harness({ review: reviewed({ findings: [f], report: { ...report, counts: { ...report.counts, blocker: 1 } } }) });
     const r = await h.run();
     expect(r).toMatchObject({ outcome: "fail", detail: { step: "design", verdict: "parity", design: { findings: [expect.objectContaining({ id: "D-blocker" })], gate: { fires: false } } }, findings: [expect.objectContaining({ category: "design", id: "D-blocker" })] });
   });
@@ -857,7 +857,7 @@ describe("the design parity review after the browser run (RFC 0013)", () => {
 
   it("merges the accessibility findings into the design report, and the design findings go to Build beside the blockers of the audit", async () => {
     const audit: StageResult = { outcome: "pass", detail: { answer: { summary: "a", pages: [], findings: [a11yBlocker] } } };
-    const h = harness({ audit, review: reviewed({ findings: [designFinding("blocker")], blockers: 1 }) });
+    const h = harness({ audit, review: reviewed({ findings: [designFinding("blocker")] }) });
     const r = await h.run();
     expect(r.outcome).toBe("fail");
     const design = r.detail?.design as { wcag: string; a11y: { mode: string; counts: Record<string, number> }; findings: Array<{ category: string }> };
@@ -897,7 +897,7 @@ describe("the design parity review after the browser run (RFC 0013)", () => {
     const spent = { tokens: 9, tokensCounted: true, minutes: 1, spent: "tokens", limits: { max_tokens: 5, max_minutes: 60 } };
     const fine = { ...spent, tokens: 1, spent: null };
     // The audit reads the budget before and after its run; the review's own read comes third.
-    const h = harness({ budgets: [fine, fine, spent], review: reviewed({ findings: [designFinding("blocker")], blockers: 1, spentAfter: true }) });
+    const h = harness({ budgets: [fine, fine, spent], review: reviewed({ findings: [designFinding("blocker")], spentAfter: true }) });
     expect(await h.run()).toMatchObject({ outcome: "escalated", detail: { escalation: "design_budget" } });
   });
 });

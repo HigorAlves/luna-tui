@@ -24,7 +24,7 @@ describe("the order of Verify", () => {
 });
 
 describe("designSteps", () => {
-  const on = { off: false, cardOff: false, qa: "web" as const, touchesRendered: true, hasDesignRef: false, browserRun: "pass" as const };
+  const on = { off: false, cardOff: false, qa: "web" as const, touchesRendered: true, browserRun: "pass" as const };
   it("audits accessibility after a passing browser run on a rendered change", () => {
     expect(designSteps(on)).toEqual(["a11y_audit"]);
   });

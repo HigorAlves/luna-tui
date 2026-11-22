@@ -49,7 +49,7 @@ function walk(scenarios: Cited[], spec: DesignSpec | null): { plan: CapturePlan;
     }
   }
   plan.uncited = spec.frames.filter((f) => !cited.has(f.id)).map((f) => f.id);
-  if (over.length > 0) plan.notes.push(`${over.length} captures over the cap of ${MAX_CAPTURES} were not planned`);
+  if (over.length > 0) plan.notes.push(`${over.length} captures over the cap of ${MAX_CAPTURES} are listed as not compared`);
   return { plan, over };
 }
 
