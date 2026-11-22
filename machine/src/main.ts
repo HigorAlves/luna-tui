@@ -213,7 +213,7 @@ async function sweep(): Promise<void> {
   });
   await step("workspace leftovers", async () => {
     const removed = await removeLeftovers(config.worktreesDir);
-    return removed.length > 0 ? `removed ${removed.length} leftover scratch folder(s) and bundle copy(ies)` : null;
+    return removed.length > 0 ? `removed ${removed.length} leftover scratch folder(s), helper clone(s) and bundle copy(ies)` : null;
   });
   await step("kept sandboxes", async () => {
     const removed = await expireKept({ stateDir: config.stateDir, keepHours: FACTORY_DEFAULTS.sandbox.keep_hours });
