@@ -82,6 +82,10 @@ const canonical = (value: unknown): string =>
 
 const TOOLS = ["get_metadata", "get_design_context", "get_variable_defs", "get_screenshot"].map((tool) => ({ server: "figma", tool, description: `Figma ${tool}`, inputSchema: { type: "object", properties: { fileKey: { type: "string" }, nodeId: { type: "string" } } } }));
 
+/** Committed fixtures carry this in place of the card's Figma file key (the replay is keyed by the arguments' hash, so it is hashed with the stand-in too). */
+export const FILE_KEY_STAND_IN = "EvalFigmaFileKey";
+const hideKey = (text: string, key: string): string => text.split(key).join(FILE_KEY_STAND_IN);
+
 const FRAME_IMAGE = /^\/evidence\/parity\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)\.png$/;
 const STYLES_NAME = /^[A-Za-z0-9._-]+\.styles\.json$/;
 
@@ -150,11 +154,14 @@ function buildCase(stateDir: string, waiver: Waiver): Built {
 
   const files = new Map<string, Buffer | string>();
   const json = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
-  files.set("stage.json", json(scrubbed.value));
-  files.set("expect.json", json(expect));
+  // Every other distinct key of the card's design refs gets its own stand-in, so refs to different files stay different.
+  const others = [...new Set((parsed.context.design?.refs ?? []).map((r) => r.fileKey).filter((k): k is string => !!k && k !== fileKey))];
+  const hide = (text: string): string => others.reduce((t, k, i) => t.split(k).join(`${FILE_KEY_STAND_IN}${i + 1}`), hideKey(text, fileKey));
+  files.set("stage.json", hide(json(scrubbed.value)));
+  files.set("expect.json", hide(json(expect)));
   files.set(`mounts/evidence/parity/${matched[1]}/${matched[2]}.png`, png);
-  if (scrubbedStyles?.ok) files.set(`mounts/evidence/parity/${matched[1]}/${matched[2]}.styles.json`, json(scrubbedStyles.value.styles));
-  const args = { fileKey, nodeId: node };
+  if (scrubbedStyles?.ok) files.set(`mounts/evidence/parity/${matched[1]}/${matched[2]}.styles.json`, hide(json(scrubbedStyles.value.styles)));
+  const args = { fileKey: FILE_KEY_STAND_IN, nodeId: node };
   files.set(`mcp/figma/get_screenshot/${createHash("sha256").update(canonical(args)).digest("hex")}.json`, json({ ok: true, text: `Screenshot of ${node}`, images: [{ mime: "image/png", base64: render.toString("base64") }], truncated: false }));
   files.set("mcp/figma/tools.json", json(TOOLS));
   return { ok: true, id: caseId, files };
@@ -168,9 +175,13 @@ function safeJson(text: string): unknown {
   }
 }
 
-/** Turns each waiver file under `<stateDir>/ground-truth/design_parity/` (from `since` on) into a case under `<out>/design_parity/cases/`. */
-export function harvestParity(options: { stateDir: string; out: string; since?: Date }): HarvestReport {
-  const report: HarvestReport = { written: [], kept: [], refused: [] };
+/** What the person is told when a case would copy images and `includeImages` is off. */
+const IMAGES_REFUSAL = "a parity case copies a screenshot of the user's app and a render of their Figma frame, byte for byte, into a folder meant to be committed; pass --include-images to write it, then look at every image before committing";
+
+/** Turns each waiver file under `<stateDir>/ground-truth/design_parity/` (from `since` on) into a case under `<out>/design_parity/cases/`.
+ *  A case holds images of the user's app and design, so none is written unless `includeImages`; `images` lists each file written that holds one. */
+export function harvestParity(options: { stateDir: string; out: string; since?: Date; includeImages?: boolean }): HarvestReport & { images: string[] } {
+  const report: HarvestReport & { images: string[] } = { written: [], kept: [], refused: [], images: [] };
   const truth = join(options.stateDir, "ground-truth", "design_parity");
   const names = existsSync(truth) ? readdirSync(truth).filter((n) => n.endsWith(".json") && !n.startsWith(".")).sort() : [];
   for (const name of names) {
@@ -200,9 +211,14 @@ export function harvestParity(options: { stateDir: string; out: string; since?: 
       report.kept.push(built.id);
       continue;
     }
+    if (!options.includeImages) {
+      report.refused.push({ id: name, reason: IMAGES_REFUSAL });
+      continue;
+    }
     for (const [file, content] of built.files) {
       mkdirSync(dirname(join(dir, file)), { recursive: true });
       writeFileSync(join(dir, file), content);
+      if (file.endsWith(".png") || file.startsWith("mcp/figma/get_screenshot/")) report.images.push(join(dir, file));
     }
     report.written.push(built.id);
   }

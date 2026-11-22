@@ -1,7 +1,7 @@
 // `pnpm eval` entry: the subcommands of the ground-truth loop and the scorecard, and the replay run by default.
 //
 //   pnpm eval --pack <p> --engine <e> ...                    replay a pack's cases (run.ts)
-//   pnpm eval harvest --pack <decision> [--since <date>] [--with-truth] [--all]
+//   pnpm eval harvest --pack <decision> [--since <date>] [--with-truth] [--all] [--include-images]   (--include-images: design_parity only)
 //   pnpm eval dataset push --pack <decision> [--queue <id or name>] [--records]
 //   pnpm eval dataset pull --pack <decision> [--write-labels]
 //   pnpm eval records [--task <id>] [--pack <p>] [--since <date>] [--sizes]   one line per decision record: what the machine did, its state, its truth
@@ -81,14 +81,16 @@ async function telemetry() {
 }
 
 if (command === "harvest") {
-  const { values } = parseArgs({ args: process.argv.slice(3), options: { pack: { type: "string" }, since: { type: "string" }, "with-truth": { type: "boolean", default: false }, all: { type: "boolean", default: false } } });
+  const { values } = parseArgs({ args: process.argv.slice(3), options: { pack: { type: "string" }, since: { type: "string" }, "with-truth": { type: "boolean", default: false }, all: { type: "boolean", default: false }, "include-images": { type: "boolean", default: false } } });
   const since = values.since ? new Date(values.since) : undefined;
   if (since && Number.isNaN(since.getTime())) fail("--since must be a date, like 2026-11-01");
   if (values.pack === "design_parity") {
     // Waivers are not decision records: they come from the machine's ground-truth folder, and make cases with their own frame and capture (RFC 0013).
-    const parity = harvestParity({ stateDir: machineStateDir(), out: EVALS, ...(since ? { since } : {}) });
+    const parity = harvestParity({ stateDir: machineStateDir(), out: EVALS, ...(since ? { since } : {}), includeImages: values["include-images"] });
     console.log(`wrote ${parity.written.length}: ${parity.written.join(", ") || "-"}\nkept (already cases) ${parity.kept.length}`);
     for (const r of parity.refused) console.log(`refused ${printable(r.id)}: ${printable(r.reason)}`);
+    for (const image of parity.images) console.log(`image written: ${printable(image)}`);
+    if (parity.images.length > 0) console.log("each image above holds the user's app or design: look at every one before committing it");
     process.exit(0);
   }
   const pack = decisionOf(values.pack);

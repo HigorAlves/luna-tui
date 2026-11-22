@@ -24,6 +24,7 @@ describe("caseFromWaiver", () => {
   });
 });
 
+const STAND_IN = "EvalFigmaFileKey";
 const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
 const canonical = (a: Record<string, string>) => `{${Object.keys(a).sort().map((k) => `${JSON.stringify(k)}:${JSON.stringify(a[k])}`).join(",")}}`;
 const sha = (a: Record<string, string>) => createHash("sha256").update(canonical(a)).digest("hex");
@@ -74,14 +75,16 @@ function world(over: { reason?: string; at?: string; stage?: object } = {}) {
 describe("harvestParity", () => {
   it("writes a case with the sub-run's render as the replayed get_screenshot, the waived frame's capture mounted, and a stage that loads", () => {
     const w = world();
-    const report = harvestParity({ stateDir: w.state, out: w.out });
+    const report = harvestParity({ stateDir: w.state, out: w.out, includeImages: true });
     const id = `waiver-${createHash("sha256").update("t1D1").digest("hex").slice(0, 8)}`;
-    expect(report).toEqual({ written: [id], kept: [], refused: [] });
+    const png0 = join(w.out, "design_parity", "cases", id, "mounts", "evidence", "parity", "S1", "1440x900-default.png");
+    const shot0 = join(w.out, "design_parity", "cases", id, "mcp", "figma", "get_screenshot", `${sha({ fileKey: STAND_IN, nodeId: "12:34" })}.json`);
+    expect(report).toEqual({ written: [id], kept: [], refused: [], images: [png0, shot0] });
     const dir = join(w.out, "design_parity", "cases", id);
     const png = join(dir, "mounts", "evidence", "parity", "S1", "1440x900-default.png");
     expect(readFileSync(png)).toEqual(PNG);
     expect(existsSync(join(dir, "mounts", "evidence", "parity", "S2"))).toBe(false);
-    const shot = JSON.parse(readFileSync(join(dir, "mcp", "figma", "get_screenshot", `${sha({ fileKey: "Qx7LmP2vR9sTa", nodeId: "12:34" })}.json`), "utf8"));
+    const shot = JSON.parse(readFileSync(join(dir, "mcp", "figma", "get_screenshot", `${sha({ fileKey: STAND_IN, nodeId: "12:34" })}.json`), "utf8"));
     expect(shot).toMatchObject({ ok: true, images: [{ mime: "image/png", base64: PNG.toString("base64") }] });
     expect(existsSync(join(dir, "mcp", "figma", "tools.json"))).toBe(true);
     const [loaded] = loadCases(w.out, "design_parity");
@@ -95,19 +98,31 @@ describe("harvestParity", () => {
     expect(readFileSync(join(dir, "stage.json"), "utf8")).not.toContain("/Users/ana");
     expect(loaded!.expect.checks).toContainEqual({ kind: "count", path: "findings[node=12:40]", max: 0 });
     expect(statSync(png).isFile()).toBe(true);
+    // The card's real Figma file key is not committed, in the stage or beside it.
+    expect(readFileSync(join(dir, "stage.json"), "utf8")).not.toContain("Qx7LmP2vR9sTa");
+    expect(loaded!.input.context.design?.refs[0]?.fileKey).toBe(STAND_IN);
+  });
+
+  it("writes nothing without --include-images, and says why", () => {
+    const w = world();
+    const report = harvestParity({ stateDir: w.state, out: w.out });
+    expect(report.written).toEqual([]);
+    expect(report.images).toEqual([]);
+    expect(report.refused).toEqual([{ id: "t1-D1.json", reason: expect.stringMatching(/screenshot.*Figma.*--include-images/) }]);
+    expect(existsSync(join(w.out, "design_parity"))).toBe(false);
   });
 
   it("does not write a case twice, and reads only waivers since the date", () => {
     const w = world();
-    harvestParity({ stateDir: w.state, out: w.out });
-    expect(harvestParity({ stateDir: w.state, out: w.out }).kept).toHaveLength(1);
+    harvestParity({ stateDir: w.state, out: w.out, includeImages: true });
+    expect(harvestParity({ stateDir: w.state, out: w.out, includeImages: true }).kept).toHaveLength(1);
     const later = mkdtempSync(join(tmpdir(), "hp-out-"));
-    expect(harvestParity({ stateDir: w.state, out: later, since: new Date("2026-12-01") })).toEqual({ written: [], kept: [], refused: [] });
+    expect(harvestParity({ stateDir: w.state, out: later, since: new Date("2026-12-01"), includeImages: true })).toEqual({ written: [], kept: [], refused: [], images: [] });
   });
 
   it("refuses a bundle with a token-shaped reason, names it, and writes nothing", () => {
     const w = world({ reason: "see ghp_abcdefghijklmnopqrstuvwxyz0123456789" });
-    const report = harvestParity({ stateDir: w.state, out: w.out });
+    const report = harvestParity({ stateDir: w.state, out: w.out, includeImages: true });
     expect(report.written).toEqual([]);
     expect(report.refused).toEqual([{ id: "t1-D1.json", reason: expect.stringMatching(/token-shaped/) }]);
     expect(existsSync(join(w.out, "design_parity"))).toBe(false);
@@ -116,7 +131,7 @@ describe("harvestParity", () => {
   it("refuses a waiver whose render is not a plain file in the sub-run's design folder", () => {
     const w = world();
     writeFileSync(join(w.truth, "t1-D1.json"), JSON.stringify({ ...w.body, frame: { ...w.body.frame, render: "/etc/passwd" } }));
-    const report = harvestParity({ stateDir: w.state, out: w.out });
+    const report = harvestParity({ stateDir: w.state, out: w.out, includeImages: true });
     expect(report.written).toEqual([]);
     expect(report.refused[0]).toMatchObject({ id: "t1-D1.json", reason: expect.stringMatching(/render/) });
   });
