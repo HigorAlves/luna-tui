@@ -78,12 +78,17 @@ export function settleParity(answer: DesignParityAnswer | null, { plan, spec, ca
       continue;
     }
     // A finding stands only where the machine holds the capture and the reviewer compared it: otherwise it is a claim about a build nobody looked at.
-    if (!frames.some((r) => r.scenario !== null && r.status === "compared" && r.frame === f.frame && r.viewport === f.viewport && r.state === f.state)) {
+    // It is put on a compared row of its frame by the machine's own plan, not by the reviewer's words for the viewport and the state.
+    const rows = frames.filter((r) => r.scenario !== null && r.status === "compared" && r.frame === f.frame);
+    const exact = rows.find((r) => r.viewport === f.viewport && r.state === f.state);
+    const row = exact ?? (rows.length === 1 ? rows[0] : (rows.find((r) => r.state === f.state) ?? rows[0]));
+    if (!row) {
       notes.push(`dropped a finding on frame ${f.frame} (${f.viewport}, ${f.state}), which was not compared`);
       continue;
     }
+    if (!exact) notes.push(`put a finding on frame ${f.frame} (${f.viewport}, ${f.state}) on its compared row ${row.viewport}, ${row.state}`);
     const base = {
-      path: `figma:${f.frame}/${f.node}`,
+      path: `figma:${f.frame}/${row.node}`,
       line: 0,
       severity: f.level,
       title: f.title,
@@ -92,9 +97,9 @@ export function settleParity(answer: DesignParityAnswer | null, { plan, spec, ca
       category: "design" as const,
       criterion_ref: null,
       suggested_fix: null,
-      design: { source: "parity" as const, frame: f.frame, node: f.node, element: f.element, viewport: f.viewport, state: f.state, kind: f.kind, expected: f.expected, actual: f.actual },
+      design: { source: "parity" as const, frame: f.frame, node: row.node, element: f.element, viewport: row.viewport, state: row.state, kind: f.kind, expected: f.expected, actual: f.actual },
     };
-    mapped.push(normaliseFinding({ ...base, id: parityFindingId(f) }));
+    mapped.push(normaliseFinding({ ...base, id: parityFindingId({ frame: f.frame, node: row.node, kind: f.kind, element: f.element }) }));
   }
   // The same difference twice is one finding, at the higher severity; the most severe come first, and the list is capped.
   const findings = mergeDuplicateFindings(mapped)

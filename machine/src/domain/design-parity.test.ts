@@ -33,12 +33,38 @@ describe("settleParity", () => {
     expect(s.findings).toEqual([expect.objectContaining({ path: "figma:12:34/12:35", line: 0, severity: "should_fix", category: "design", id: expect.stringMatching(/^D[0-9a-f]{8}$/), body: "Off token. Expected #1A73E8; built #1B74E9 (button.pay).", design: expect.objectContaining({ source: "parity", element: "button.pay", frame: "12:34", node: "12:35" }) })]);
     expect(s.notes).toEqual([expect.stringContaining("99:9")]);
   });
-  it("keeps a finding only on a row it compared: one on a frame with no capture is dropped with a note", () => {
+  it("a finding on the hover state, which has no capture, goes to the frame's one compared row with a note, not to a row nobody looked at", () => {
     const hover = { ...finding("blocker", 0.95), state: "hover" as const };
-    const s = settle(answer({ frames: [frame("default"), frame("hover")], findings: [hover, finding("should_fix")] }));
-    expect(s.findings.map((f) => f.severity)).toEqual(["should_fix"]);
-    expect(s.blockers).toBe(0);
+    const s = settle(answer({ frames: [frame("default"), frame("hover")], findings: [hover] }));
+    expect(s.findings).toEqual([expect.objectContaining({ design: expect.objectContaining({ state: "default" }) })]);
     expect(s.notes).toEqual([expect.stringContaining("12:34")]);
+  });
+  it("takes a finding that names the viewport by a word, to the one compared row of its frame, and writes the row's own viewport and state", () => {
+    const s = settleDefault(answer({ findings: [{ ...finding("blocker"), viewport: "desktop", state: "hover" }] }));
+    expect(s.findings).toEqual([expect.objectContaining({ severity: "blocker", design: expect.objectContaining({ viewport: "1440x900", state: "default", node: "12:35" }) })]);
+    expect(s.blockers).toBe(1);
+  });
+  it("gives a finding of the model's own words the same id as one in the plan's words, and a drifting node does not change it", () => {
+    const plain = settleDefault(answer({ findings: [finding("should_fix")] })).findings[0]!.id;
+    const worded = settleDefault(answer({ findings: [{ ...finding("should_fix"), viewport: "desktop", state: "focus", node: "made-up" }] })).findings[0]!.id;
+    expect(worded).toBe(plain);
+  });
+  it("with several compared rows and no exact match, takes the row whose state matches, else the first, and says so", () => {
+    const both = [frame("default"), frame("hover")];
+    const taken = [...captures, { ...captures[0]!, state: "hover" as const, image: "/evidence/parity/S1/1440x900-hover.png" }];
+    const run = (over: Record<string, unknown>) => settleParity(answer({ frames: both, findings: [{ ...finding("should_fix"), viewport: "desktop", ...over }] }) as never, { plan, spec, captures: taken, bar: 0.75 });
+    const byState = run({ state: "hover" });
+    expect(byState.findings[0]!.design).toMatchObject({ viewport: "1440x900", state: "hover", node: "12:36" });
+    expect(byState.notes).toEqual([expect.stringContaining("12:34")]);
+    const first = run({ state: "focus" });
+    expect(first.findings[0]!.design).toMatchObject({ state: "default", node: "12:35" });
+    expect(first.notes).toHaveLength(1);
+    expect(run({ viewport: "1440x900", state: "hover" }).notes).toEqual([]);
+  });
+  it("drops a finding only when its frame has no compared row at all", () => {
+    const s = settle(answer({ frames: [frame("default", "not_compared")], findings: [{ ...finding("blocker"), viewport: "desktop" }] }));
+    expect(s.findings).toEqual([]);
+    expect(s.notes).toEqual([expect.stringContaining("not compared")]);
   });
   it("gives the same id to the same difference in every round, whatever its title says", () => {
     const a = settle(answer({ findings: [finding("should_fix")] })).findings[0]!.id;
@@ -46,8 +72,8 @@ describe("settleParity", () => {
     expect(a).toBe(b);
   });
   it("lists the most severe findings first and keeps at most 40", () => {
-    const many = Array.from({ length: 45 }, (_, i) => ({ ...finding("nit"), node: `1:${i}` }));
-    const s = settle(answer({ findings: [...many, { ...finding("blocker"), node: "7:7" }] }));
+    const many = Array.from({ length: 45 }, (_, i) => ({ ...finding("nit"), element: `li.row-${i}`, title: `Row ${i}` }));
+    const s = settle(answer({ findings: [...many, { ...finding("blocker"), element: "li.last", title: "Last" }] }));
     expect(s.findings).toHaveLength(40);
     expect(s.findings[0]!.severity).toBe("blocker");
   });
