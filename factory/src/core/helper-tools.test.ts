@@ -383,6 +383,29 @@ describe("the pick handshake", () => {
   });
 });
 
+describe("delegation the machine says is unavailable", () => {
+  const unavailable = () => {
+    const s = scratch(60);
+    const luna = lunaHandlers({ ledgerPath: join(s.root, "l2.json"), ledger: s.luna.state.ledger, decisions: [], emit: () => {}, checksDir: s.checks, checkWaitMs: 60, work: s.work, delegation: { available: false, reason: "design is off for this repo" } });
+    return { ...s, luna };
+  };
+
+  it("answers slice_delegate at once with the machine's reason, and writes no request", async () => {
+    const s = unavailable();
+    const t = Date.now();
+    expect(await s.luna.call("slice_delegate", { slice: 3 })).toEqual({ ok: false, error: "design is off for this repo" });
+    expect(Date.now() - t).toBeLessThan(40);
+    expect(readdirSync(s.checks)).toEqual([]);
+    expect(s.luna.state.ledger.slices[2]!.owner).toBeUndefined();
+  });
+
+  it("answers slice_wait at once the same way", async () => {
+    const s = unavailable();
+    expect(await s.luna.call("slice_wait", { slice: 3, waitSeconds: 5 })).toEqual({ ok: false, error: "design is off for this repo" });
+    expect(readdirSync(s.checks)).toEqual([]);
+  });
+});
+
 describe("a slice the machine hands back", () => {
   for (const ending of ["refused", "failed", "cancelled", "merge_conflict"]) {
     it(`goes back to the implementer, pending, with the machine's summary, when the helper ended ${ending}`, async () => {

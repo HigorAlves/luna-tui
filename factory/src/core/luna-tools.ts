@@ -91,6 +91,8 @@ export interface LunaToolsOptions {
   bridge?: BridgedTool[];
   /** The implementer's repository (`/work`): with `checksDir` it switches the ui-designer tools on (RFC 0013, phase 5). */
   work?: string;
+  /** What the machine says about delegation for this run (`input.context.delegation`): when it is unavailable the helper tools answer at once with its reason. */
+  delegation?: { available: boolean; reason?: string | undefined } | undefined;
   /** Writes the run's commits as a bundle for the machine now; the pick handshake sends it before it asks for the helper's. */
   bundleNow?: () => void;
 }
@@ -140,6 +142,7 @@ export function lunaHandlers(options: LunaToolsOptions) {
   const helper = options.checksDir && options.work
     ? helperTools({ checksDir: options.checksDir, work: options.work, ledger: () => state.ledger, persist, emit: options.emit, bundleNow: options.bundleNow ?? (() => {}), checkWaitMs: options.checkWaitMs ?? 0 })
     : null;
+  const refusal = options.delegation && !options.delegation.available ? { ok: false, error: options.delegation.reason ?? "delegation is not available in this run" } : null;
   /** A returned helper slice is picked before the tool answers; an error of the pick rides on the answer. */
   const picked = async <T>(result: () => T | Promise<T>): Promise<T | (T & { pickError: string })> => {
     const problem = (await helper?.syncPicks()) ?? null;
@@ -229,8 +232,8 @@ export function lunaHandlers(options: LunaToolsOptions) {
       return { recorded: true };
     },
     slice_list: () => picked(() => state.ledger),
-    slice_delegate: (args) => (helper ? helper.delegate(args) : { error: "not available in this run" }),
-    slice_wait: (args) => (helper ? helper.wait(args) : { error: "not available in this run" }),
+    slice_delegate: (args) => (refusal ?? (helper ? helper.delegate(args) : { error: "not available in this run" })),
+    slice_wait: (args) => (refusal ?? (helper ? helper.wait(args) : { error: "not available in this run" })),
     decision_get: ({ key }) => {
       const hits = options.decisions.filter((d) => d.decision === key || key in (d.answers ?? {}));
       return hits.length > 0 ? hits : { decided: null };
