@@ -109,15 +109,13 @@ export function settleParity(answer: DesignParityAnswer | null, { plan, spec, ca
       continue;
     }
     // A finding stands only where the machine holds the capture and the reviewer compared it: otherwise it is a claim about a build nobody looked at.
-    // It is put on a compared row of its frame by the machine's own plan, not by the reviewer's words for the viewport and the state.
+    // A spec frame has one viewport, so the machine's own plan picks the row by frame and state (an enum); the model's words for the viewport are not read.
     const rows = frames.filter((r) => r.scenario !== null && r.status === "compared" && r.frame === f.frame);
-    const exact = rows.find((r) => r.viewport === f.viewport && r.state === f.state);
-    const row = exact ?? (rows.length === 1 ? rows[0] : (rows.find((r) => r.state === f.state) ?? rows[0]));
+    const row = rows.find((r) => r.state === f.state);
     if (!row) {
-      notes.push(`dropped a finding on frame ${f.frame} (${f.viewport}, ${f.state}), which was not compared`);
+      notes.push(rows.length === 0 ? `dropped a finding on frame ${f.frame} (${f.state}), which was not compared` : `dropped a finding on frame ${f.frame}, state ${f.state}, which nobody compared`);
       continue;
     }
-    if (!exact) notes.push(`put a finding on frame ${f.frame} (${f.viewport}, ${f.state}) on its compared row ${row.viewport}, ${row.state}`);
     const base = {
       path: `figma:${f.frame}/${row.node}`,
       line: 0,
