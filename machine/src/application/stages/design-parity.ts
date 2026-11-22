@@ -9,7 +9,7 @@ import { DesignParityAnswer, type DesignSpec, type Finding, type PairRow, type V
 import type { CredentialMount } from "../../adapters/credentials/index.ts";
 import type { PairResult } from "../../adapters/image/parity-pairs.ts";
 import type { DesignBudget } from "../../domain/design-budget.ts";
-import { type SettledParity, type Unplaced, isWaived, settleParity } from "../../domain/design-parity.ts";
+import { type SettledParity, type Unplaced, type Waiver, isWaived, settleParity } from "../../domain/design-parity.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 import { designRun } from "./design-run.ts";
 import type { ParityRun } from "./e2e.ts";
@@ -26,8 +26,8 @@ export interface DesignParityDeps {
   bar: (repoPath: string | null) => Promise<number>;
   /** Puts a frame render beside its capture (`pairImages`); absent, no pair is made and the rows keep what the reviewer said. */
   pair?: (input: { render: string; capture: string; outDir: string; name: string }) => Promise<PairResult>;
-  /** The ids of the findings a person waived on this card in an earlier round (its `design.waived` rows); they stay waived. */
-  waived?: (taskId: string) => Promise<string[]>;
+  /** The findings a person waived on this card in an earlier round (their `design.waived` rows: id and hash); they stay waived while the difference is the same. */
+  waived?: (taskId: string) => Promise<Waiver[]>;
   /** The card's design budget; a spent budget starts no run. */
   budget?: (taskId: string) => Promise<DesignBudget>;
   /** The machine's state dir: the sub-run's folder is `<stateDir>/runs/<runId>-parity`. */
@@ -90,7 +90,7 @@ export async function runDesignParity(deps: DesignParityDeps, context: StageCont
     if (parsed?.success) answer = parsed.data;
     else notes.push(`the design review gave no usable answer: ${result.outcome !== "pass" ? String(result.detail?.reason ?? result.detail?.error ?? result.outcome) : "its answer did not parse"}`);
   }
-  const waived = new Set(deps.waived ? await deps.waived(context.task.id) : []);
+  const waived = deps.waived ? await deps.waived(context.task.id) : [];
   const settled = settleParity(answer, { plan: parity.plan, spec, captures: parity.captures, bar, unplaced, waived });
   notes.push(...settled.notes);
 

@@ -33,15 +33,38 @@ export interface Unplaced {
   reason?: string;
 }
 
-/** A finding a person already waived on this card stays waived in the next round: it is marked, and the rules below never count it as open. */
-export function markWaived(findings: readonly Finding[], waived: ReadonlySet<string> | undefined): Finding[] {
-  if (!waived || waived.size === 0) return [...findings];
-  return findings.map((f) => (f.id !== undefined && waived.has(f.id) ? { ...f, resolution: { status: "waived" as const, by: "person" } } : f));
+/** A waiver as the `design.waived` rows keep it: the finding's id and a short hash of what it said, so a waiver covers that difference and no other. */
+export interface Waiver {
+  id: string;
+  hash: string;
+}
+
+const normalised = (text: unknown): string => (typeof text === "string" ? text.trim().toLowerCase().replace(/\s+/g, " ") : "");
+
+/**
+ * A short hash (eight hex digits, FNV-1a) of what defines the difference, normalised (trimmed, lower-cased, whitespace collapsed): a parity finding's expected and built values;
+ * an accessibility finding's body (its summary, state and rule), less the evidence file names, which differ from round to round.
+ */
+export function waiverHash(f: { design?: unknown; body?: unknown }): string {
+  const at = f.design && typeof f.design === "object" ? (f.design as { expected?: unknown; actual?: unknown }) : null;
+  const text = at && (typeof at.expected === "string" || typeof at.actual === "string") ? [normalised(at.expected), normalised(at.actual)] : [normalised(typeof f.body === "string" ? f.body.replace(/; evidence [^)]*\)$/, ")") : "")];
+  let h = 0x811c9dc5;
+  for (const ch of text.join("\n")) {
+    h ^= ch.codePointAt(0) ?? 0;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}
+
+/** A finding a person already waived on this card stays waived in the next round: it is marked, and the rules below never count it as open. It must match a waiver by id and by hash; a waiver with no hash covers nothing. */
+export function markWaived(findings: readonly Finding[], waived: readonly Waiver[] | undefined): Finding[] {
+  if (!waived || waived.length === 0) return [...findings];
+  return findings.map((f) => (f.id !== undefined && waived.some((w) => w.id === f.id && w.hash !== "" && w.hash === waiverHash(f)) ? { ...f, resolution: { status: "waived" as const, by: "person" } } : f));
 }
 
 export const isWaived = (f: Finding): boolean => f.resolution?.status === "waived";
 
-export function settleParity(answer: DesignParityAnswer | null, { plan, spec, captures, bar, unplaced = [], waived }: { plan: CapturePlan; spec: DesignSpec | null; captures: ParityCapture[]; bar: number; unplaced?: Unplaced[]; waived?: ReadonlySet<string> }): SettledParity {
+export function settleParity(answer: DesignParityAnswer | null, { plan, spec, captures, bar, unplaced = [], waived }: { plan: CapturePlan; spec: DesignSpec | null; captures: ParityCapture[]; bar: number; unplaced?: Unplaced[]; waived?: readonly Waiver[] }): SettledParity {
   const notes: string[] = [];
   const frameOf = (id: string) => spec?.frames.find((f) => f.id === id);
   const frames: PairRow[] = plan.targets.map((t) => {

@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Learned } from "../decision-truth.ts";
 import { tagged } from "../decision-truth.ts";
+import { waiverHash } from "../../domain/design-parity.ts";
 import type { Decide } from "./check-decide.ts";
 import { detectWeb, e2eRunner, missingQaImageRunner, touchesRenderedSurface, webRoots } from "./e2e.ts";
 import type { StageContext, StageResult } from "../ports.ts";
@@ -547,7 +548,7 @@ describe("the accessibility audit after the browser run", () => {
   type Settings = { off: boolean; cardOff: boolean; level: "AA" | "AAA"; mode: "gate" | "advisory" };
   const on: Settings = { off: false, cardOff: false, level: "AA", mode: "gate" };
 
-  function harness(opts: { browser?: StageResult | StageResult[]; audit?: StageResult; settings?: Settings; budgets?: Array<ReturnType<typeof budget>>; decide?: unknown; afterBrowser?: unknown[]; policy?: unknown; waived?: string[] } = {}) {
+  function harness(opts: { browser?: StageResult | StageResult[]; audit?: StageResult; settings?: Settings; budgets?: Array<ReturnType<typeof budget>>; decide?: unknown; afterBrowser?: unknown[]; policy?: unknown; waived?: Array<{ id: string; hash: string }> } = {}) {
     const events: string[] = [];
     const calls: Array<{ pack?: string; runId: string; extra?: Record<string, unknown> }> = [];
     const reads = [...(opts.budgets ?? [])];
@@ -615,10 +616,20 @@ describe("the accessibility audit after the browser run", () => {
     const first = await harness({ audit: audit([blocker, minor]) }).run();
     expect(first.outcome).toBe("fail");
     const waivedId = first.findings!.find((f) => f.severity === "blocker")!.id!;
-    const again = await harness({ audit: audit([blocker, minor]), waived: [waivedId] }).run();
+    const waivedFinding = first.findings!.find((f) => f.id === waivedId)!;
+    const again = await harness({ audit: audit([blocker, minor]), waived: [{ id: waivedId, hash: waiverHash(waivedFinding) }] }).run();
     const shown = (again.detail as { a11y: { findings: Array<{ id: string; resolution?: unknown }> } }).a11y.findings;
     expect(shown.find((f) => f.id === waivedId)).toMatchObject({ resolution: { status: "waived", by: "person" } });
     expect(again.outcome).toBe("pass");
+  });
+
+  it("a waiver lapses when the accessibility finding's summary changed: the same id, a different problem, fails the stage again", async () => {
+    const first = await harness({ audit: audit([blocker, minor]) }).run();
+    const waivedFinding = first.findings!.find((f) => f.severity === "blocker")!;
+    const waived = [{ id: waivedFinding.id!, hash: waiverHash(waivedFinding) }];
+    const changed = await harness({ audit: audit([{ ...blocker, summary: "now it traps focus for good" }, minor]), waived }).run();
+    expect(changed.outcome).toBe("fail");
+    expect(changed.findings!.map((f) => f.id)).toContain(waivedFinding.id);
   });
 
   it("merges two rules on the same criterion, selector and page into one finding, on purpose, keeping the higher severity", async () => {
@@ -785,7 +796,7 @@ describe("the design parity review after the browser run (RFC 0013)", () => {
   const reviewed = (over: Record<string, unknown> = {}) => ({ report, findings: [], gate: { fires: false, why: [] }, notes: [], spentAfter: false, ...over });
   const a11yBlocker = { criterion: "2.1.2", level: "A", source: "judged", rule: null, impact: null, page: "/checkout", state: "modal", selector: "div.modal", summary: "trap", evidence: [], fix: null, confidence: 0.9 };
 
-  function harness(opts: { review?: unknown; withSpec?: boolean; extraScenarios?: unknown[]; policy?: unknown; decide?: unknown; budgets?: unknown[]; audit?: StageResult; waived?: string[] } = {}) {
+  function harness(opts: { review?: unknown; withSpec?: boolean; extraScenarios?: unknown[]; policy?: unknown; decide?: unknown; budgets?: unknown[]; audit?: StageResult; waived?: Array<{ id: string; hash: string }> } = {}) {
     const stateDir = mkdtempSync(join(tmpdir(), "e2e-design-"));
     const reviews: unknown[][] = [];
     const reads = [...((opts.budgets as Array<Record<string, unknown>>) ?? [])];
@@ -871,7 +882,7 @@ describe("the design parity review after the browser run (RFC 0013)", () => {
     const audit: StageResult = { outcome: "pass", detail: { answer: { summary: "a", pages: [], findings: [a11yBlocker] } } };
     const first = await harness({ audit }).run();
     const id = (first.findings ?? [])[0]!.id!;
-    const r = await harness({ audit, waived: [id], review: reviewed({ findings: [designFinding("should_fix")] }) }).run();
+    const r = await harness({ audit, waived: [{ id, hash: waiverHash(first.findings![0]!) }], review: reviewed({ findings: [designFinding("should_fix")] }) }).run();
     expect(r.outcome).toBe("pass");
     const design = r.detail?.design as { a11y: { counts: Record<string, number> }; findings: Array<{ id: string; resolution?: unknown }> };
     expect(design.a11y.counts).toEqual({ blocker: 0, should_fix: 0, nit: 0, waived: 1 });

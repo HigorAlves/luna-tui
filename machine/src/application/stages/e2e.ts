@@ -15,7 +15,7 @@ import type { DesignBudget } from "../../domain/design-budget.ts";
 import { designSteps } from "../../domain/verify-order.ts";
 import { type ManifestRow, boundedArtifacts, manifestRows } from "../../domain/e2e-manifest.ts";
 import { blockerSetKey } from "../../domain/finding-sets.ts";
-import { type Unplaced, isWaived, markWaived } from "../../domain/design-parity.ts";
+import { type Unplaced, type Waiver, isWaived, markWaived } from "../../domain/design-parity.ts";
 import { capturePlan, citedWithoutViewport, overCap } from "../../domain/parity-plan.ts";
 import { approvedScenarios, designSpecOf } from "../../domain/stage-input.ts";
 import { type ScenarioRow, scenarioFindings } from "../../domain/send-back.ts";
@@ -70,8 +70,8 @@ export interface E2eDeps {
   design?: {
     settings: (repoPath: string | null, taskId: string) => Promise<{ off: boolean; cardOff: boolean; level: "AA" | "AAA"; mode: "gate" | "advisory" }>;
     budget?: (taskId: string) => Promise<DesignBudget>;
-    /** The ids of the findings a person waived on this card in an earlier round (its `design.waived` rows); a finding raised again with one of them stays waived. */
-    waived?: (taskId: string) => Promise<string[]>;
+    /** The findings a person waived on this card in an earlier round (their `design.waived` rows: id and hash); a finding raised again with the same id and the same hash stays waived. */
+    waived?: (taskId: string) => Promise<Waiver[]>;
   };
   /**
    * The design parity review (RFC 0013, phase 3), run after the audit when the browser run took captures: the captures the plan asked for and the cited frames with
@@ -302,7 +302,7 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
       const mapped = a11yFindings(parsed.data.findings, settings);
       // Two rules or two states on one criterion, selector and page are one problem for Build: they merge, at the higher severity.
       // A finding a person already waived on this card stays waived: it is shown, never counted, never sent back.
-      const waived = new Set(deps.design?.waived ? await deps.design.waived(context.task.id) : []);
+      const waived = deps.design?.waived ? await deps.design.waived(context.task.id) : [];
       const findings = markWaived(mergeDuplicateFindings(mapped.findings), waived);
       const open = findings.filter((f) => !isWaived(f));
       const blocking = verdictOf(open) === "fail";

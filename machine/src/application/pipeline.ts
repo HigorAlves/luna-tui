@@ -39,6 +39,7 @@ import { pickEngine } from "./engine.ts";
 import type { TaskUsage } from "./task-store.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
 import { blockerSetKey } from "../domain/finding-sets.ts";
+import { type Waiver, waiverHash } from "../domain/design-parity.ts";
 import { type RetroOutputs, acceptedMisses, appendAddedFinding, appendDismissedFinding, retroTruthOf, writeRetroTruth } from "./retro-outputs.ts";
 import { EMITTABLE, type StageContext, type StageResult, type StageRunner } from "./ports.ts";
 import { shippedEvent } from "./ship-loop.ts";
@@ -1014,7 +1015,7 @@ export class Pipeline {
       return { task, gate, finding, frame, parityRunId: typeof parity?.runId === "string" ? parity.runId : null, recordId: typeof record === "string" ? record : null };
     });
     if (!waived) return;
-    await this.log(id, "design.waived", { id: findingId, kind: input.kind });
+    await this.log(id, "design.waived", { id: findingId, kind: input.kind, hash: waiverHash(waived.finding) });
     if (this.designTruth && (await this.truthKept(waived.task))) {
       try {
         const path = await this.designTruth(waived.task, `${truthName(id)}-${truthName(findingId)}.json`, { taskId: id, gate: waived.gate.id, finding: waived.finding, frame: waived.frame, kind: input.kind, reason: safe(input.reason).slice(0, 500), parityRunId: waived.parityRunId, at: new Date().toISOString() });
@@ -3569,9 +3570,10 @@ export class Pipeline {
     return (await this.events(id)).filter((e) => e.kind === "build.helper_picked").flatMap((e) => (Array.isArray(e.payload.picked) ? e.payload.picked.filter((sha): sha is string => typeof sha === "string") : []));
   }
 
-  /** The ids of the design findings a person waived on this card, from its own `design.waived` rows: a later round that raises one again keeps it waived. */
-  async designWaived(id: string): Promise<string[]> {
-    return [...new Set((await this.events(id)).filter((e) => e.kind === "design.waived").flatMap((e) => (typeof e.payload.id === "string" ? [e.payload.id] : [])))];
+  /** The design findings a person waived on this card (id and a hash of what each said), from its own `design.waived` rows: a later round that raises the same difference again keeps it waived. A row with no hash is left out. */
+  async designWaived(id: string): Promise<Waiver[]> {
+    const rows = (await this.events(id)).filter((e) => e.kind === "design.waived").flatMap((e) => (typeof e.payload.id === "string" && typeof e.payload.hash === "string" && e.payload.hash !== "" ? [{ id: e.payload.id, hash: e.payload.hash }] : []));
+    return rows.filter((r, i) => rows.findIndex((o) => o.id === r.id && o.hash === r.hash) === i);
   }
 
   /** Whether a person turned the designer agents off for this card (approving a `design_budget` escalation with design off). */

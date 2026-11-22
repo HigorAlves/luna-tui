@@ -58,6 +58,7 @@ import { removeNestedRepositories } from "../adapters/git/machine-repo.ts";
 import { ensureClone, isClone, removeClone } from "../adapters/git/clone.ts";
 import { type ProofRig, proofAppDeps } from "../application/config-proof.ts";
 import type { DesignBudget } from "../domain/design-budget.ts";
+import type { Waiver } from "../domain/design-parity.ts";
 import { sandboxSizeOf } from "../domain/sandbox-bounds.ts";
 import { type Trust, trustOf } from "../domain/trust.ts";
 import { runtimeChecker } from "../adapters/docker/runtimes.ts";
@@ -99,8 +100,8 @@ import { type ShipGateProbe, shipGateProbe } from "../application/ship-gate-prob
 export interface DesignDecisions {
   budget?: (taskId: string) => Promise<DesignBudget>;
   cardOff?: (taskId: string) => Promise<boolean>;
-  /** The ids of the findings a person waived on a card (its `design.waived` rows): a later round that raises one again keeps it waived. */
-  waived?: (taskId: string) => Promise<string[]>;
+  /** The findings a person waived on a card (their `design.waived` rows: id and hash): a later round that raises the same difference again keeps it waived. */
+  waived?: (taskId: string) => Promise<Waiver[]>;
   /** The shas the machine picked onto a card's branch for the ui-designer on earlier runs (its own `build.helper_picked` rows). */
   picked?: (taskId: string) => Promise<string[]>;
 }

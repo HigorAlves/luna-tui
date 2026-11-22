@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { settleParity } from "./design-parity.ts";
+import { settleParity, waiverHash } from "./design-parity.ts";
 
 const desktop = { name: "1440x900", width: 1440, height: 900 };
 const target = (state: "default" | "hover") => ({ scenario: "S1", frame: "12:34", viewport: desktop, state });
@@ -72,13 +72,29 @@ describe("settleParity", () => {
     expect(a).toBe(b);
   });
   it("keeps a waived finding marked, out of the blockers and the gate's reasons", () => {
-    const id = settleDefault(answer({ findings: [finding("blocker")] })).findings[0]!.id!;
-    const s = settleParity(answer({ findings: [finding("blocker"), { ...finding("should_fix"), element: "a.cancel", title: "Cancel" }] }) as never, { plan: onlyDefault, spec, captures, bar: 0.75, waived: new Set([id]) });
+    const first = settleDefault(answer({ findings: [finding("blocker")] })).findings[0]!;
+    const waived = [{ id: first.id!, hash: waiverHash(first) }];
+    const s = settleParity(answer({ findings: [finding("blocker"), { ...finding("should_fix"), element: "a.cancel", title: "Cancel" }] }) as never, { plan: onlyDefault, spec, captures, bar: 0.75, waived });
     expect(s.findings.map((f) => [f.severity, f.resolution ?? null])).toEqual([["blocker", { status: "waived", by: "person" }], ["should_fix", null]]);
     expect(s.blockers).toBe(0);
     expect(s.gate.why).toEqual(["open_findings"]);
-    const only = settleParity(answer({ findings: [finding("blocker")] }) as never, { plan: onlyDefault, spec, captures, bar: 0.75, waived: new Set([id]) });
+    const only = settleParity(answer({ findings: [finding("blocker")] }) as never, { plan: onlyDefault, spec, captures, bar: 0.75, waived });
     expect(only.gate).toEqual({ fires: false, why: [] });
+  });
+  it("lapses a waiver when the built value changed: the same id with a different actual is open again and counts as a blocker", () => {
+    const first = settleDefault(answer({ findings: [finding("blocker")] })).findings[0]!;
+    const waived = [{ id: first.id!, hash: waiverHash(first) }];
+    const worse = settleParity(answer({ findings: [{ ...finding("blocker"), actual: "#FF0000" }] }) as never, { plan: onlyDefault, spec, captures, bar: 0.75, waived });
+    expect(worse.findings[0]!.id).toBe(first.id);
+    expect(worse.findings[0]!.resolution).toBeUndefined();
+    expect(worse.blockers).toBe(1);
+    const same = settleParity(answer({ findings: [{ ...finding("blocker"), actual: "  #1b74e9 ", title: "other words" }] }) as never, { plan: onlyDefault, spec, captures, bar: 0.75, waived });
+    expect(same.blockers).toBe(0);
+  });
+  it("a waiver row with no hash waives nothing", () => {
+    const first = settleDefault(answer({ findings: [finding("blocker")] })).findings[0]!;
+    const s = settleParity(answer({ findings: [finding("blocker")] }) as never, { plan: onlyDefault, spec, captures, bar: 0.75, waived: [{ id: first.id!, hash: "" }] });
+    expect(s.blockers).toBe(1);
   });
   it("lists the most severe findings first and keeps at most 40", () => {
     const many = Array.from({ length: 45 }, (_, i) => ({ ...finding("nit"), element: `li.row-${i}`, title: `Row ${i}` }));
