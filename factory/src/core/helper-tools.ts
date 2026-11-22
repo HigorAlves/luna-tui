@@ -158,12 +158,20 @@ export function helperTools(options: HelperToolsOptions) {
     }
     if (done.ok !== true) {
       // The machine's branch did not move: take the merge back, so /work holds no commit the machine never recorded.
+      // Only while HEAD is still the picked tip: a commit made on top since is the implementer's, and stays.
+      pending.delete(slice.id);
+      let head = "";
+      try {
+        head = git(options.work, ["rev-parse", "HEAD"]);
+      } catch {
+        // unreadable HEAD: leave the branch as it is
+      }
+      if (head !== tip) return { error: `the machine could not move the card's branch, so it did not record slice ${slice.id}'s pick, but the pick is in your branch under your later commits; do not reset, stop and report this to the person` };
       try {
         git(options.work, ["reset", "--keep", before]);
       } catch (error) {
         return { error: `the machine could not move the card's branch, and your branch could not be put back: ${failure(error)}` };
       }
-      pending.delete(slice.id);
       return { error: typeof done.reason === "string" ? `the machine could not move the card's branch: ${done.reason}` : "the machine could not move the card's branch" };
     }
     finish(slice, tip, note);

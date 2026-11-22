@@ -266,6 +266,59 @@ describe("the pick handshake", () => {
     expect(s.luna.state.ledger.slices[2]).toMatchObject({ status: "committed", owner: "ui-designer", commit: second.tip() });
   });
 
+  /** The ack is lost, then re-sent and refused: the state a refusal finds in /work. */
+  async function refusedOnResend(s: ReturnType<typeof scratch>, mutate: (tip: string) => void) {
+    await delegated(s);
+    state(s.checks, 3, { state: "returned", attempt: 1 });
+    const first = pickHandlers(s.root, s.work, s.checks, { "page.tsx": "page v2\n" }, null);
+    await s.luna.call("slice_wait", { slice: 3, waitSeconds: 1 });
+    await first.run;
+    for (const f of readdirSync(s.checks).filter((x) => /^pick-/.test(x))) execFileSync("rm", [join(s.checks, f)]);
+    mutate(first.tip());
+    const ack = answer(s.checks, /^pick-ack-([0-9a-f]{8})-(\d+)\.json$/, () => ({ ok: false, reason: "the branch moved" }), (m) => `pick-done-${m[1]}-${m[2]}.json`);
+    const got = (await s.luna.call("slice_wait", { slice: 3, waitSeconds: 2 })) as { error?: string };
+    await ack;
+    return { got, tip: first.tip() };
+  }
+
+  it("on a refused re-sent ack with HEAD still at the tip, resets to where the branch was", async () => {
+    const s = scratch(300);
+    const before = git(s.work, "rev-parse", "HEAD");
+    const { got } = await refusedOnResend(s, () => {});
+    expect(got.error).toContain("the branch moved");
+    expect(git(s.work, "rev-parse", "HEAD")).toBe(before);
+  });
+
+  it("on a refused re-sent ack after the implementer committed on top, keeps the branch, forgets the pick and says it is unrecorded", async () => {
+    const s = scratch(300);
+    const { got, tip } = await refusedOnResend(s, () => {
+      writeFileSync(join(s.work, "api.ts"), "api on top\n");
+      git(s.work, "add", "-A");
+      git(s.work, "commit", "-q", "-m", "implementer on top");
+    });
+    expect(got.error).toContain("in your branch");
+    expect(got.error).toContain("did not record");
+    expect(git(s.work, "log", "--format=%s", "-1")).toBe("implementer on top");
+    expect(git(s.work, "merge-base", "--is-ancestor", tip, "HEAD") ?? "").toBe("");
+    // no pending pick: the next call asks the machine afresh instead of re-sending the ack
+    state(s.checks, 3, { state: "returned", attempt: 1 });
+    for (const f of readdirSync(s.checks).filter((x) => /^pick-/.test(x))) execFileSync("rm", [join(s.checks, f)]);
+    const asked = answer(s.checks, /^pick-request-([0-9a-f]{8})-(\d+)\.json$/, () => ({ ok: false, error: "stop" }), (m) => `pick-answer-${m[1]}-${m[2]}.json`);
+    await s.luna.call("slice_wait", { slice: 3, waitSeconds: 1 });
+    await asked;
+  });
+
+  it("when the reset itself fails, says so and forgets the pick", async () => {
+    const s = scratch(300);
+    const { got } = await refusedOnResend(s, () => writeFileSync(join(s.work, "page.tsx"), "uncommitted over the pick\n"));
+    expect(got.error).toContain("could not be put back");
+    state(s.checks, 3, { state: "returned", attempt: 1 });
+    for (const f of readdirSync(s.checks).filter((x) => /^pick-/.test(x))) execFileSync("rm", [join(s.checks, f)]);
+    const asked = answer(s.checks, /^pick-request-([0-9a-f]{8})-(\d+)\.json$/, () => ({ ok: false, error: "stop" }), (m) => `pick-answer-${m[1]}-${m[2]}.json`);
+    await s.luna.call("slice_wait", { slice: 3, waitSeconds: 1 });
+    await asked;
+  });
+
   it("keeps the merge when the machine never confirms, says to call slice_wait, and finishes once the state file says committed", async () => {
     const s = scratch(300);
     await delegated(s);
