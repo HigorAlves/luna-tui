@@ -6752,6 +6752,20 @@ impl App {
         Outcome::Continue
     }
 
+    /// Whether the open escalation of `id` was decided with `design_budget`: from the loaded detail, else a read of the card.
+    fn escalation_is_design_budget(&self, id: &str) -> Result<bool, String> {
+        if self.shows_detail_of(id) {
+            return Ok(
+                crate::detail::escalation_reason(self.detail.as_ref()) == Some("design_budget")
+            );
+        }
+        let detail = self
+            .machine
+            .detail(id)
+            .map_err(|e| format!("could not read the card to learn why it escalated: {e}"))?;
+        Ok(crate::detail::escalation_reason(Some(&detail)) == Some("design_budget"))
+    }
+
     fn handle_reason(&mut self, key: KeyEvent) -> Outcome {
         let Mode::Reason { id, approve, text } = &mut self.mode else {
             return Outcome::Continue;
@@ -6774,12 +6788,20 @@ impl App {
                     return Outcome::Continue;
                 }
                 let reason = (!reason.is_empty()).then_some(reason);
-                // A spent design budget asks once: a fresh budget, or design off for this card.
-                if approve
-                    && self.detail.as_ref().is_some_and(|d| d.task.id == id)
-                    && crate::detail::escalation_reason(self.detail.as_ref())
-                        == Some("design_budget")
-                {
+                // A spent design budget asks once: a fresh budget, or design off for this card. The reason is read from
+                // the card's detail; a card whose detail is not loaded is read first, so the person is never given a default.
+                let asks = if approve {
+                    match self.escalation_is_design_budget(&id) {
+                        Ok(asks) => asks,
+                        Err(error) => {
+                            self.notify(error, true);
+                            return Outcome::Continue;
+                        }
+                    }
+                } else {
+                    false
+                };
+                if asks {
                     self.mode = Mode::DesignBudget {
                         id,
                         guidance: reason,
@@ -12206,7 +12228,7 @@ pub fn record_changes(record: &TriageRecord, picks: &[usize; 5]) -> Vec<(String,
 
 #[cfg(test)]
 mod task_view_command_tests {
-    use super::confirm_tests::{posts, recording_machine};
+    use super::confirm_tests::{machine_answering, posts, recording_machine};
     use super::*;
     use crate::testkit::{plan_gate_app, running_build_app};
 
@@ -12450,39 +12472,6 @@ mod task_view_command_tests {
                 serde_json::json!({ "kind": kind, "reason": reason })
             );
         }
-    }
-
-    /// A machine that answers every call with this task.
-    fn machine_answering(task: serde_json::Value) -> Machine {
-        use std::io::{BufRead, BufReader, Read, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                let mut reader = BufReader::new(stream);
-                let mut length = 0usize;
-                loop {
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
-                        break;
-                    }
-                    if let Some(v) = line.to_lowercase().strip_prefix("content-length:") {
-                        length = v.trim().parse().unwrap_or(0);
-                    }
-                }
-                let mut raw = vec![0; length];
-                let _ = reader.read_exact(&mut raw);
-                let body = task.to_string();
-                let _ = reader.into_inner().write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                        body.len()
-                    )
-                    .as_bytes(),
-                );
-            }
-        });
-        Machine::at(&format!("http://{addr}"))
     }
 
     #[test]
@@ -13909,6 +13898,39 @@ mod confirm_tests {
 
     pub(super) fn posts(seen: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
         seen.lock().unwrap().clone()
+    }
+
+    /// A machine that answers every call with this JSON.
+    pub(super) fn machine_answering(task: serde_json::Value) -> Machine {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(v) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = v.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut raw = vec![0; length];
+                let _ = reader.read_exact(&mut raw);
+                let body = task.to_string();
+                let _ = reader.into_inner().write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        Machine::at(&format!("http://{addr}"))
     }
 
     pub(super) type PostBodies = Arc<Mutex<Vec<(String, serde_json::Value)>>>;
@@ -16927,6 +16949,48 @@ mod design_tests {
         assert_eq!(calls[0].0, format!("/tasks/{id}/decision"));
         assert_eq!(calls[0].1["decision"], "approved");
         assert_eq!(calls[0].1["design"], "off");
+    }
+
+    #[test]
+    fn a_design_budget_escalation_asks_even_when_the_card_was_not_loaded() {
+        let mut app = escalated_app();
+        let id = app.tasks[0].id.clone();
+        let mut detail = serde_json::json!({"task": crate::testkit::task_json(&id, "t", "escalated", "Build", serde_json::json!({})),
+            "stageRuns": [], "events": [], "artifacts": [],
+            "approvals": [{"id": "e1", "kind": "escalated", "decision": null, "requested": {"escalationDecision": {"reason": "design_budget"}}}]});
+        detail["task"]["id"] = id.clone().into();
+        app.machine = super::confirm_tests::machine_answering(detail);
+        app.detail = None;
+        app.mode = Mode::Reason {
+            id: id.clone(),
+            approve: true,
+            text: String::new(),
+        };
+        press(&mut app, KeyCode::Enter);
+        assert!(
+            matches!(&app.mode, Mode::DesignBudget { id: asked, .. } if *asked == id),
+            "asked nothing: {:?}",
+            app.toast.as_ref().map(|t| &t.text)
+        );
+    }
+
+    #[test]
+    fn approval_is_not_posted_when_the_card_cannot_be_read_to_learn_its_reason() {
+        let (machine, seen) = body_recording_machine();
+        let mut app = escalated_app();
+        app.machine = machine;
+        app.detail = None;
+        let id = app.tasks[0].id.clone();
+        app.mode = Mode::Reason {
+            id,
+            approve: true,
+            text: String::new(),
+        };
+        press(&mut app, KeyCode::Enter);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(seen.lock().unwrap().is_empty(), "posted a default");
+        assert!(matches!(app.mode, Mode::Reason { .. }));
+        assert!(app.toast.as_ref().is_some_and(|t| t.error));
     }
 
     #[test]
