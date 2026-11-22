@@ -6,7 +6,7 @@ import { looksLikeTestPath } from "../domain/locked-files.ts";
 import { trustOf } from "../domain/trust.ts";
 import { z } from "zod";
 
-import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, TERMINAL, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, SplitChild, coverageOf, criteriaOf, sizeLimits, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type CardSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, maxRisk, reviseCriteria, stepOf, stepsOfAnswer, stronger, RUN_OR_GATE, designSettings } from "@hardness/contracts";
+import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, TERMINAL, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, SplitChild, coverageOf, criteriaOf, sizeLimits, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type CardSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, maxRisk, reviseCriteria, stepOf, stepsOfAnswer, stronger, RUN_OR_GATE, designSettings, severityOf } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -993,20 +993,25 @@ export class Pipeline {
       const at = findings.findIndex((f) => objectOf(f)?.id === findingId);
       if (!design || at < 0) throw new FindingNotFoundError(findingId);
       const finding = objectOf(findings[at])!;
-      const already = objectOf(finding.resolution)?.status === "waived";
+      // Waived once is waived: a second answer changes nothing and leaves no row, truth file or label.
+      if (objectOf(finding.resolution)?.status === "waived") return null;
       const next = findings.map((f, i) => (i === at ? { ...finding, resolution: { status: "waived", by: "person" } } : f));
-      // The counts are of what is still open: a waiver moves one finding from its level to `waived`.
+      // The counts are of what is still open: a waiver moves one finding from its level to `waived`, in the counts of the part that raised it.
       const parity = objectOf(design.parity);
-      const counts = objectOf(parity?.counts);
-      const level = typeof finding.severity === "string" ? finding.severity : "";
-      const moved = parity && counts && !already && typeof counts.waived === "number" && typeof counts[level] === "number" ? { ...counts, [level]: Math.max(0, (counts[level] as number) - 1), waived: counts.waived + 1 } : counts;
-      await tx.updateApprovalRequested(gate, { ...gate.requested, design: { ...design, findings: next, ...(parity ? { parity: { ...parity, ...(moved ? { counts: moved } : {}) } } : {}) } });
+      const a11y = objectOf(design.a11y);
+      const source = objectOf(finding.design)?.source ?? (finding.category === "accessibility" ? "a11y" : "parity");
+      const part = source === "a11y" ? a11y : parity;
+      const counts = objectOf(part?.counts);
+      const level = severityOf(typeof finding.severity === "string" ? finding.severity : "");
+      const moved = part && counts && typeof counts.waived === "number" && typeof counts[level] === "number" ? { ...counts, [level]: Math.max(0, (counts[level] as number) - 1), waived: counts.waived + 1 } : counts;
+      await tx.updateApprovalRequested(gate, { ...gate.requested, design: { ...design, findings: next, ...(source === "a11y" && a11y ? { a11y: { ...a11y, ...(moved ? { counts: moved } : {}) } } : {}), ...(source !== "a11y" && parity ? { parity: { ...parity, ...(moved ? { counts: moved } : {}) } } : {}) } });
       const frames = Array.isArray(parity?.frames) ? parity.frames : [];
       const loc = objectOf(finding.design);
       const frame = frames.find((f) => objectOf(f)?.frame === loc?.frame && (loc?.viewport === undefined || objectOf(f)?.viewport === loc.viewport) && (loc?.state === undefined || objectOf(f)?.state === loc.state)) ?? frames.find((f) => objectOf(f)?.frame === loc?.frame) ?? null;
       const record = (Array.isArray(design.classified) ? design.classified : []).map(objectOf).find((c) => c?.id === findingId)?.recordId;
       return { task, gate, finding, frame, parityRunId: typeof parity?.runId === "string" ? parity.runId : null, recordId: typeof record === "string" ? record : null };
     });
+    if (!waived) return;
     await this.log(id, "design.waived", { id: findingId, kind: input.kind });
     if (this.designTruth && (await this.truthKept(waived.task))) {
       try {

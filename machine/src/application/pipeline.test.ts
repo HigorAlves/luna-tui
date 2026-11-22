@@ -4659,6 +4659,31 @@ describe("the design sign-off's answers (RFC 0013 phase 3)", () => {
     expect(learned).toEqual([expect.objectContaining({ pack: "finding_classify", recordId: "rec-1", label: { severity: { choice: "nit" } }, kind: "person", source: "design_waived", taskId: id })]);
   });
 
+  it("a second waiver of the same finding changes nothing: no second row, truth file or label", async () => {
+    const p = make();
+    const id = await atGate(p);
+    await p.waiveDesignFinding(id, "D1", { kind: "not_a_difference", reason: "anti-aliasing, same token" });
+    await p.waiveDesignFinding(id, "D1", { kind: "accepted", reason: "changed my mind" });
+    expect((await p.events(id)).filter((e) => e.kind === "design.waived")).toHaveLength(1);
+    expect(truths).toHaveLength(1);
+    expect(learned).toHaveLength(1);
+    expect((((await p.approvals(id)).find((a) => a.decision === null)!.requested.design) as { parity: { counts: unknown } }).parity.counts).toEqual({ blocker: 0, should_fix: 1, nit: 0, waived: 1 });
+  });
+
+  it("waiving an accessibility finding moves the accessibility counts, by the severity's level, and leaves the parity counts alone", async () => {
+    const p = make();
+    stubs.plan("e2e", { outcome: "pass", detail: { step: "e2e", verdict: "pass", design: { ...design, a11y: { mode: "gate", counts: { blocker: 1, should_fix: 0, nit: 0, waived: 0 } }, findings: [finding("D1", "warning"), { id: "A1", path: "/checkout", line: 0, severity: "error", title: "WCAG 2.1.2", body: "b", confidence: 0.9, category: "accessibility" }] } } });
+    const task = await p.createTask({ title: "Checkout", criteria: ["pay works"] });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    await p.waiveDesignFinding(task.id, "A1", { kind: "accepted", reason: "known" });
+    const counts = (await p.approvals(task.id)).find((a) => a.decision === null)!.requested.design as { a11y: { counts: unknown }; parity: { counts: unknown } };
+    expect(counts.a11y.counts).toEqual({ blocker: 0, should_fix: 0, nit: 0, waived: 1 });
+    expect(counts.parity.counts).toEqual({ blocker: 0, should_fix: 2, nit: 0, waived: 0 });
+    await p.waiveDesignFinding(task.id, "D1", { kind: "accepted", reason: "known" });
+    expect((await p.approvals(task.id)).find((a) => a.decision === null)!.requested.design).toMatchObject({ parity: { counts: { blocker: 0, should_fix: 1, nit: 0, waived: 1 } }, a11y: { counts: { waived: 1 } } });
+  });
+
   it("remembers a waiver for the card's next round: the ids a person waived come back from the machine's own rows", async () => {
     const p = make();
     const id = await atGate(p);
