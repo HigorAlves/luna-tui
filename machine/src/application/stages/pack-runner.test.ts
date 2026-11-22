@@ -1950,6 +1950,15 @@ describe("the MCP bridge in a stage (RFC 0013)", () => {
     expect(existed).toBe(true);
   });
 
+  it("closes the run's client when the /design folder cannot be made", async () => {
+    const { mcp, closed } = await fixtureMcp();
+    const { deps: d, ctx } = mcpDeps(fakeSandbox(output()), mcp);
+    // a file where the folder should go: the machine's mkdir fails after the client is open
+    const blocked = { ...d, mcpFor: () => (mkdirSync(join(d.stateDir, "runs", ctx.runId), { recursive: true }), writeFileSync(join(d.stateDir, "runs", ctx.runId, "design"), ""), mcp) } as AgentDeps;
+    await withBridge(grant(["echo"]), () => runAgent(blocked, ctx, "triage").catch(() => {}));
+    expect(closed()).toBe(1);
+  });
+
   it("writes an image under <runDir>/design and names it by its /design path", async () => {
     const { mcp } = await fixtureMcp();
     const answers: unknown[] = [];
