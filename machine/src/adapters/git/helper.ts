@@ -12,7 +12,7 @@ import { renameSync, rmSync } from "node:fs";
 import picomatch from "picomatch";
 
 import { exec } from "../process/exec.ts";
-import { freshClone, removeClone } from "./clone.ts";
+import { freshClone, inUseClones, removeClone } from "./clone.ts";
 import { machineGitDir } from "./machine-repo.ts";
 import { MANIFEST } from "../../domain/delegation.ts";
 import { HOST_GIT } from "./worktree.ts";
@@ -66,13 +66,20 @@ export const helperWorkspace = {
     const path = `${cardPath}.helper-${slice}-${attempt}`;
     const branch = helperBranch(slice);
     removeClone(path);
-    await freshClone(cardPath, base, branch, path);
-    const set = await exec("git", [...HOST_GIT, "--git-dir=" + machineGitDir(cardPath), "update-ref", ref, base]);
-    if (set.code !== 0) throw new Error(`could not record ${ref}: ${firstLine(set)}`);
+    inUseClones.add(path);
+    try {
+      await freshClone(cardPath, base, branch, path);
+      const set = await exec("git", [...HOST_GIT, "--git-dir=" + machineGitDir(cardPath), "update-ref", ref, base]);
+      if (set.code !== 0) throw new Error(`could not record ${ref}: ${firstLine(set)}`);
+    } catch (error) {
+      inUseClones.delete(path);
+      throw error;
+    }
     return { path, branch, ref };
   },
   async remove(path: string): Promise<void> {
     removeClone(path);
+    inUseClones.delete(path);
   },
 };
 

@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { bringBack, copiedSettings, hostBaselineWorkspace, removeLeftovers, ensureClone, ensurePrClone, freshClone, isClone, isFreshWorkspace, moveToClone, publishBranch, readCopy, removeClone, unpushedCommits } from "./clone.ts";
+import { bringBack, copiedSettings, hostBaselineWorkspace, inUseClones, removeLeftovers, ensureClone, ensurePrClone, freshClone, isClone, isFreshWorkspace, moveToClone, publishBranch, readCopy, removeClone, unpushedCommits } from "./clone.ts";
 import { configureMachineRepos, machineGitDir, machineRepoRoot } from "./machine-repo.ts";
 import { branchBase, changedPaths, commitAll, ensureWorktree, nestedLockfilesAt, removeWorktree, scopeStartOf, workspaceFor } from "./worktree.ts";
 
@@ -441,6 +441,34 @@ describe("what a card's workspace leaves behind", () => {
     expect(existsSync(workspace.path)).toBe(true);
     expect(existsSync(`${workspace.path}.verify-run-1`)).toBe(true);
     expect(machineRepoRoot()).toBe(stateRoot);
+  });
+});
+
+describe("removeLeftovers: a helper's clones (L7-7)", () => {
+  it("removes a leftover <card>.helper-<slice>-<attempt> clone and its repository, never one a run of this process holds, never the card's own", async () => {
+    const { repo, dir, root } = repository("left-helper-");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureClone(repo, workspace);
+    configureMachineRepos(join(root, "state-repos"));
+    const leftover = `${workspace.path}.helper-2-1`;
+    const live = `${workspace.path}.helper-3-1`;
+    for (const path of [leftover, live]) {
+      mkdirSync(path, { recursive: true });
+      writeFileSync(join(path, "f"), "x");
+      mkdirSync(machineGitDir(path), { recursive: true });
+    }
+    inUseClones.add(live);
+    try {
+      const removed = await removeLeftovers(dir);
+      expect(removed).toEqual([leftover]);
+    } finally {
+      inUseClones.delete(live);
+    }
+    expect(existsSync(leftover)).toBe(false);
+    expect(existsSync(machineGitDir(leftover))).toBe(false);
+    expect(existsSync(live)).toBe(true);
+    expect(existsSync(machineGitDir(live))).toBe(true);
+    expect(existsSync(workspace.path)).toBe(true);
   });
 });
 
