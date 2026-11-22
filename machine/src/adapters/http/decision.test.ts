@@ -123,10 +123,12 @@ describe("POST /tasks/:id/decision at a split gate", () => {
     expect(first).toMatchObject({ decision: "approved", reason: "one change", response: { keepWhole: true } });
   });
 
-  it("takes `design: off` as the person's answer, for the pipeline to turn design off for the card (RFC 0013, D10)", async () => {
+  it("accepts `design: off`, and the pipeline drops it at a gate that is not a design_budget escalation (RFC 0013, D10)", async () => {
     const id = await atPlanGate("low");
     expect((await decide(id, { decision: "approved", design: "off" })).status).toBe(200);
-    expect((await pipeline.approvals(id)).find((a) => a.kind === "awaiting_approval")).toMatchObject({ decision: "approved", response: { design: "off" } });
+    const gate = (await pipeline.approvals(id)).find((a) => a.kind === "awaiting_approval")!;
+    expect(gate.decision).toBe("approved");
+    expect(gate.response ?? {}).not.toHaveProperty("design");
   });
 
   it("refuses a `design` answer that is not off", async () => {
