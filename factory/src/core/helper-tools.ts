@@ -23,6 +23,8 @@ export interface HelperState {
   state: string;
   attempt: number;
   summary?: string;
+  /** The picked tip, when the machine writes one with `committed`. */
+  commit?: string;
 }
 
 export interface HelperToolsOptions {
@@ -82,11 +84,13 @@ export function helperTools(options: HelperToolsOptions) {
     try {
       const parsed = JSON.parse(readFileSync(join(options.checksDir, `helper-state-${slice}.json`), "utf8")) as Partial<HelperState> | null;
       if (!parsed || typeof parsed.state !== "string") return null;
-      return { state: parsed.state, attempt: Number.isInteger(parsed.attempt) ? Number(parsed.attempt) : 1, ...(typeof parsed.summary === "string" ? { summary: parsed.summary } : {}) };
+      return { state: parsed.state, attempt: Number.isInteger(parsed.attempt) ? Number(parsed.attempt) : 1, ...(typeof parsed.summary === "string" ? { summary: parsed.summary } : {}), ...(typeof parsed.commit === "string" ? { commit: parsed.commit } : {}) };
     } catch {
       return null;
     }
   };
+  /** The tip of a pick merged into /work whose confirmation has not come: finished by `syncPicks` once the machine says committed. */
+  const pending = new Map<number, { tip: string; note: string }>();
   const held = (): LedgerSlice[] => slices().filter((s) => s.owner === "ui-designer" && s.status !== "committed");
   /** A request file `<kind>-<nonce>-<n>.json` and the path its answer is read from. */
   const request = (kind: string, answered: string, body: Record<string, unknown>): { n: number; answer: string } => {
@@ -100,8 +104,10 @@ export function helperTools(options: HelperToolsOptions) {
   const pickOnce = async (slice: LedgerSlice): Promise<{ retry: true } | { error: string } | null> => {
     options.bundleNow();
     let head: string;
+    let before: string;
     try {
       head = git(options.work, ["rev-parse", "--verify", "HEAD"]);
+      before = head;
     } catch (error) {
       return { error: `cannot read your HEAD: ${failure(error)}` };
     }
@@ -136,15 +142,48 @@ export function helperTools(options: HelperToolsOptions) {
       return { error: `the pick of slice ${slice.id} does not fast-forward your branch: ${failure(error)}; git restore the slice's files, then call slice_wait` };
     }
     const shas = Array.isArray(picked) ? picked.filter((p): p is string => typeof p === "string" && SHA.test(p)) : [];
+    const note = `picked by the machine: ${shas.map((s) => s.slice(0, 8)).join(", ") || tip.slice(0, 8)}`;
+    const ack = request("pick-ack", "pick-done", { slice: slice.id, head: tip });
+    const done = await awaitJson(ack.answer, options.checkWaitMs);
+    if (!done) {
+      pending.set(slice.id, { tip, note });
+      return { error: `the machine has not confirmed the pick of slice ${slice.id} yet; call slice_wait` };
+    }
+    if (done.ok !== true) {
+      // The machine's branch did not move: take the merge back, so /work holds no commit the machine never recorded.
+      try {
+        git(options.work, ["reset", "--keep", before]);
+      } catch (error) {
+        return { error: `the machine could not move the card's branch, and your branch could not be put back: ${failure(error)}` };
+      }
+      pending.delete(slice.id);
+      return { error: typeof done.reason === "string" ? `the machine could not move the card's branch: ${done.reason}` : "the machine could not move the card's branch" };
+    }
+    finish(slice, tip, note);
+    return null;
+  };
+
+  const finish = (slice: LedgerSlice, tip: string, note: string): void => {
+    pending.delete(slice.id);
     slice.status = "committed";
     slice.commit = tip;
     slice.owner = "ui-designer";
-    slice.note = `picked by the machine: ${shas.map((s) => s.slice(0, 8)).join(", ") || tip.slice(0, 8)}`;
+    slice.note = note;
     options.persist();
     options.emit({ kind: "slice.committed", payload: { id: slice.id, title: slice.title, commit: tip } });
-    const ack = request("pick-ack", "pick-done", { slice: slice.id, head: tip });
-    const done = await awaitJson(ack.answer, options.checkWaitMs);
-    if (done && done.ok === false) return { error: typeof done.reason === "string" ? `the machine could not move the card's branch: ${done.reason}` : "the machine could not move the card's branch" };
+  };
+
+  /** A held slice the machine reports committed, whose confirmation this run never saw: done when HEAD holds the picked tip. */
+  const settle = (slice: LedgerSlice): string | null => {
+    const known = pending.get(slice.id);
+    const tip = known?.tip ?? stateOf(slice.id)?.commit;
+    if (!tip || !SHA.test(tip)) return `the machine holds slice ${slice.id} as committed, but its tip is unknown here; call slice_list again, or git log to see whether the pick is in your branch`;
+    try {
+      git(options.work, ["merge-base", "--is-ancestor", tip, "HEAD"]);
+    } catch {
+      return `the machine holds slice ${slice.id} as committed at ${tip.slice(0, 8)}, which your branch does not contain; do not reset or rewrite your branch, and tell the person`;
+    }
+    finish(slice, tip, known?.note ?? `picked by the machine: ${tip.slice(0, 8)}`);
     return null;
   };
 
@@ -152,7 +191,13 @@ export function helperTools(options: HelperToolsOptions) {
   const syncPicks = async (): Promise<string | null> => {
     let problem: string | null = null;
     for (const slice of held()) {
-      if (stateOf(slice.id)?.state !== "returned") continue;
+      const now = stateOf(slice.id)?.state;
+      if (now === "committed") {
+        const unsettled = settle(slice);
+        if (unsettled && !problem) problem = unsettled;
+        continue;
+      }
+      if (now !== "returned") continue;
       let outcome = await pickOnce(slice);
       if (outcome && "retry" in outcome) outcome = await pickOnce(slice);
       if (outcome && "retry" in outcome) outcome = { error: `the machine could not pick slice ${slice.id} twice; call slice_wait again` };

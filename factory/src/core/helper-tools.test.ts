@@ -67,7 +67,7 @@ function pickedBundle(root: string, work: string, dest: string, files: Record<st
   execFileSync("git", ["-C", clone, "bundle", "create", "--quiet", dest, "refs/luna/helper/t1/3-picked", `^${p}`]);
   return { tip, p };
 }
-const pickHandlers = (root: string, work: string, checks: string, files: Record<string, string>) => {
+const pickHandlers = (root: string, work: string, checks: string, files: Record<string, string>, ackReply: Record<string, unknown> | null = { ok: true }) => {
   const acks: unknown[] = [];
   const asked: Record<string, unknown>[] = [];
   let tip = "";
@@ -80,7 +80,7 @@ const pickHandlers = (root: string, work: string, checks: string, files: Record<
     }, (m) => `pick-answer-${m[1]}-${m[2]}.json`);
     await answer(checks, /^pick-ack-([0-9a-f]{8})-(\d+)\.json$/, (_m, body) => {
       acks.push(body);
-      return { ok: true };
+      return ackReply;
     }, (m) => `pick-done-${m[1]}-${m[2]}.json`);
   })();
   return { run, acks, asked, tip: () => tip };
@@ -177,6 +177,86 @@ describe("the pick handshake", () => {
     expect(got).toMatchObject({ state: "committed" });
   });
 
+  it("marks the slice committed only after the machine confirms: nothing is written before pick-done", async () => {
+    const s = scratch();
+    await delegated(s);
+    state(s.checks, 3, { state: "returned", attempt: 1 });
+    let atAck: string | undefined;
+    let eventsAtAck = 0;
+    const run = (async () => {
+      await answer(s.checks, /^pick-request-([0-9a-f]{8})-(\d+)\.json$/, () => {
+        const made = pickedBundle(s.root, s.work, join(s.checks, "pick-1.bundle"), { "page.tsx": "page v2\n" });
+        return { ok: true, tip: made.tip, picked: [made.tip], bundle: "pick-1.bundle" };
+      }, (m) => `pick-answer-${m[1]}-${m[2]}.json`);
+      await answer(s.checks, /^pick-ack-([0-9a-f]{8})-(\d+)\.json$/, () => {
+        atAck = JSON.parse(readFileSync(join(s.root, "ledger.json"), "utf8")).slices?.[2]?.status ?? "none";
+        eventsAtAck = s.events.filter((e) => e.kind === "slice.committed").length;
+        return { ok: true };
+      }, (m) => `pick-done-${m[1]}-${m[2]}.json`);
+    })();
+    await s.luna.call("slice_wait", { slice: 3, waitSeconds: 5 });
+    await run;
+    expect(atAck).not.toBe("committed");
+    expect(eventsAtAck).toBe(0);
+    expect(s.luna.state.ledger.slices[2]!.status).toBe("committed");
+  });
+
+  it("puts HEAD back when the machine refuses the ack: the slice stays held and not committed, and the next call picks again", async () => {
+    const s = scratch();
+    await delegated(s);
+    state(s.checks, 3, { state: "returned", attempt: 1 });
+    const before = git(s.work, "rev-parse", "HEAD");
+    writeFileSync(join(s.work, "api.ts"), "api edited, uncommitted\n");
+    const first = pickHandlers(s.root, s.work, s.checks, { "page.tsx": "page v2\n" }, { ok: false, reason: "the branch moved" });
+    const got = (await s.luna.call("slice_wait", { slice: 3, waitSeconds: 1 })) as { error?: string };
+    await first.run;
+    expect(got.error).toContain("the branch moved");
+    expect(git(s.work, "rev-parse", "HEAD")).toBe(before);
+    expect(readFileSync(join(s.work, "page.tsx"), "utf8")).toBe("page\n");
+    expect(readFileSync(join(s.work, "api.ts"), "utf8")).toBe("api edited, uncommitted\n");
+    expect(s.luna.state.ledger.slices[2]).toMatchObject({ status: "pending", owner: "ui-designer" });
+    expect(s.events.map((e) => e.kind)).not.toContain("slice.committed");
+    // the machine is back at `returned`; the next call picks again
+    for (const f of readdirSync(s.checks).filter((x) => /^pick-/.test(x))) execFileSync("rm", [join(s.checks, f)]);
+    const second = pickHandlers(s.root, s.work, s.checks, { "page.tsx": "page v3\n" });
+    await s.luna.call("slice_wait", { slice: 3, waitSeconds: 1 });
+    await second.run;
+    expect(s.luna.state.ledger.slices[2]).toMatchObject({ status: "committed", owner: "ui-designer", commit: second.tip() });
+  });
+
+  it("keeps the merge when the machine never confirms, says to call slice_wait, and finishes once the state file says committed", async () => {
+    const s = scratch(300);
+    await delegated(s);
+    state(s.checks, 3, { state: "returned", attempt: 1 });
+    const machine = pickHandlers(s.root, s.work, s.checks, { "page.tsx": "page v2\n" }, null);
+    const got = (await s.luna.call("slice_wait", { slice: 3, waitSeconds: 1 })) as { error?: string };
+    await machine.run;
+    expect(got.error).toContain("has not confirmed the pick of slice 3");
+    expect(got.error).toContain("slice_wait");
+    expect(git(s.work, "rev-parse", "HEAD")).toBe(machine.tip());
+    expect(s.luna.state.ledger.slices[2]!.status).toBe("pending");
+    // the machine's CAS went through after all
+    state(s.checks, 3, { state: "committed", attempt: 1 });
+    const listed = (await s.luna.call("slice_list", {})) as Ledger;
+    expect(listed.slices[2]).toMatchObject({ status: "committed", owner: "ui-designer", commit: machine.tip() });
+    expect(JSON.parse(readFileSync(join(s.root, "ledger.json"), "utf8")).slices[2].status).toBe("committed");
+    expect(s.events.filter((e) => e.kind === "slice.committed")).toHaveLength(1);
+  });
+
+  it("reports a slice the machine holds as committed when HEAD does not contain the picked tip", async () => {
+    const s = scratch(300);
+    await delegated(s);
+    state(s.checks, 3, { state: "returned", attempt: 1 });
+    const machine = pickHandlers(s.root, s.work, s.checks, { "page.tsx": "page v2\n" }, null);
+    await s.luna.call("slice_wait", { slice: 3, waitSeconds: 1 });
+    await machine.run;
+    git(s.work, "reset", "--hard", "-q", "HEAD~1");
+    state(s.checks, 3, { state: "committed", attempt: 1 });
+    const got = (await s.luna.call("slice_wait", { slice: 3, waitSeconds: 1 })) as { error?: string };
+    expect(got.error).toContain("slice 3");
+    expect(s.luna.state.ledger.slices[2]!.status).toBe("pending");
+  });
+
   it("runs first in slice_list, so the slice shows as committed", async () => {
     const s = scratch();
     await delegated(s);
@@ -207,7 +287,7 @@ describe("the pick handshake", () => {
     await s.luna.call("slice_wait", { slice: 3, waitSeconds: 1 });
     await second.run;
     expect(s.luna.state.ledger.slices[2]).toMatchObject({ status: "committed", owner: "ui-designer" });
-  });
+  }, 15000);
 
   it("tries once more within the call when the machine says retry", async () => {
     const s = scratch();
