@@ -413,7 +413,7 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
     if (closed || h.state === "cancelled") {
       // The run ended while the workspace was being made: nobody would cancel a helper started now.
       await deps.helperWorkspace.remove(workspace.path).catch((error) => deps.log?.(`helper workspace not removed: ${msg(error)}`));
-      return ENDED.error;
+      return "the run has ended: build the slice yourself";
     }
     Object.assign(h, { attempt, base: P, ref: workspace.ref, workspace: workspace.path, branch: workspace.branch, removed: false, tip: undefined, commits: undefined, controller: linkedController(), deadline: now() + minutes * 60_000 });
     await setState(h, "conflict_rerun");
