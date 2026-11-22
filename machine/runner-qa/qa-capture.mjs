@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // qa-capture <scenario> <viewport> <state> <width> <height>: captures the open page at a frame's viewport and state (RFC 0013, phase 3). Writes the screenshot, the
-// computed styles and one line in captures.jsonl under /out/files/qa/parity (QA_PARITY_DIR overrides it), through agent-browser (QA_CAPTURE_DRIVER overrides the binary).
+// computed styles under /out/files/qa/parity (QA_PARITY_DIR overrides it), through agent-browser (QA_CAPTURE_DRIVER overrides the binary).
 // Exit 0 on success, 2 on a bad argument (nothing written), and a failing driver's own exit code (no styles written).
 // agent-browser commands used: `set viewport W H`, `screenshot <path>` (never --annotate: the reviewer compares pixels) and `eval --stdin` (the script on stdin, so its size and quotes never meet a shell), whose stdout is the value as pretty-printed JSON (probed on agent-browser 0.39.2), so the whole stdout is parsed.
 import { spawnSync } from "node:child_process";
@@ -22,8 +22,14 @@ class DriverFailure extends Error {
     this.status = status;
   }
 }
+// A driver that hangs would hold the e2e run until its own deadline: each call is killed after this long (QA_CAPTURE_TIMEOUT_MS lets a test shorten it).
+const TIMEOUT_MS = Number(process.env.QA_CAPTURE_TIMEOUT_MS) || 60_000;
 const drive = (argv, input) => {
-  const r = spawnSync(driver, argv, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, ...(input === undefined ? {} : { input }) });
+  const r = spawnSync(driver, argv, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: TIMEOUT_MS, killSignal: "SIGKILL", ...(input === undefined ? {} : { input }) });
+  if (r.error?.code === "ETIMEDOUT") {
+    process.stderr.write(`qa-capture: the driver timed out after ${TIMEOUT_MS} ms\n`);
+    throw new DriverFailure(124);
+  }
   if (r.error || r.status !== 0) {
     process.stderr.write(r.stderr ?? "");
     throw new DriverFailure(r.status ?? 1);

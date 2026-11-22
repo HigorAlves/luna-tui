@@ -10,6 +10,8 @@ import { z } from "zod";
 import { copyRegularFile, readRegularFile } from "../adapters/fs/bounded.ts";
 
 const PNG_MAGIC = Buffer.from("89504e470d0a1a0a", "hex");
+/** The PNG magic, then the IHDR chunk's length and type (8 bytes), its width (4) and its height (4). */
+const IHDR_END = 24;
 const MOUNT = "/evidence/parity";
 const Styles = z.array(StyleRow).max(300);
 
@@ -75,8 +77,15 @@ export async function collectCaptures(qaDir: string, plan: CapturePlan, outDir: 
       continue;
     }
     try {
-      if (!(await head(from, PNG_MAGIC.length)).equals(PNG_MAGIC)) {
+      const header = await head(from, IHDR_END);
+      if (!header.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)) {
         refuse("not a PNG");
+        continue;
+      }
+      // The file name is the container's word for what it shows: the image's own width must agree with the viewport, or be a whole multiple of it (device pixel ratio).
+      const width = header.length >= IHDR_END ? header.readUInt32BE(IHDR_END - 8) : 0;
+      if (width === 0 || width % target.viewport.width !== 0) {
+        refuse(`its width ${width} does not fit the viewport width ${target.viewport.width}`);
         continue;
       }
       await mkdir(dirname(to), { recursive: true });

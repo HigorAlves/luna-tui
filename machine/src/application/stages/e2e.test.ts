@@ -691,7 +691,7 @@ describe("the accessibility audit after the browser run", () => {
 
 describe("parity captures (RFC 0013)", () => {
   const start = parseLunaConfig("verify:\n  e2e:\n    start:\n      command: npm start\n      port: 4000\n");
-  const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+  const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452000005a000000384", "hex");
   const spec = { frames: [{ id: "12:34", name: "Checkout", viewport: { width: 1440, height: 900 }, states: [{ state: "default", nodeId: "12:35", suggestion: null }] }], tokens: { color: [], type: [], spacing: [], radius: [] }, components: [], a11yNotes: [], missing: [], confidence: 0.9 };
   const cases = [{ id: "S1", title: "pay", criterion: null, approach: "x", layer: "e2e", frame_ref: "12:34" }];
   const approvals = (withSpec: boolean) => [{ id: "a1", taskId: "t1", kind: "awaiting_approval", requested: { criteria: [], cases, ...(withSpec ? { design: { ref: null, spec } } : {}) }, decision: "approved" }];
@@ -764,7 +764,7 @@ describe("parity captures (RFC 0013)", () => {
 
 describe("the design parity review after the browser run (RFC 0013)", () => {
   const start = parseLunaConfig("verify:\n  e2e:\n    start:\n      command: npm start\n      port: 4000\n");
-  const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+  const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452000005a000000384", "hex");
   const designed = { state: "default", nodeId: "12:35", suggestion: null };
   const spec = { frames: [{ id: "12:34", name: "Checkout", viewport: { width: 1440, height: 900 }, states: [designed] }, { id: "40:1", name: "Modal", viewport: null, states: [designed] }], tokens: { color: [], type: [], spacing: [], radius: [] }, components: [], a11yNotes: [], missing: [], confidence: 0.9 };
   const scenarios = (extra: unknown[] = []) => [{ id: "S1", title: "pay", criterion: null, approach: "x", layer: "e2e", frame_ref: "12:34" }, ...extra];
