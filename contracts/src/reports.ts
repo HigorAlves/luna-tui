@@ -78,6 +78,8 @@ export const BuildReport = z.object({
   testsStep: z.object({ status: z.string(), why: z.string().optional(), commit: z.string().optional(), redCheck: z.string().optional() }).nullable().optional(),
   /** What the regression sweep did: passed, failed, or skipped (a repo with no checks). */
   sweep: z.object({ status: z.string(), ran: z.array(z.string()), note: z.string().optional(), failed: z.array(z.string()).optional() }).nullable().optional(),
+  /** The slices the ui-designer built (RFC 0013, phase 5): the shas the machine put on the branch, from its own `build.helper_picked` rows; absent when no helper's commits landed. */
+  picked: z.array(z.object({ slice: z.number().int(), shas: z.array(z.string()), tip: z.string() })).optional(),
 });
 export type BuildReport = z.infer<typeof BuildReport>;
 

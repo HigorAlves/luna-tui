@@ -1,7 +1,7 @@
 // The v2.2 Build Report and Verify Report, assembled from what the stages already leave: the stage runs,
 // the `stage.finished` details, the task's counters. Pure; the caller reads the rows. Reads only the
 // machine's own events, never anything a model or a ticket wrote beyond what a stage detail already holds.
-import { type FactoryConfig, type BuildProgress, type BuildReport, CoverageSummary, DiffSummary, Finding, VerifyDesignReport, type VerifyReport, credentialOwner, mergeDuplicateFindings, normaliseFinding, severityOf } from "@hardness/contracts";
+import { type FactoryConfig, type BuildProgress, type BuildReport, type HelperState, CoverageSummary, DiffSummary, Finding, VerifyDesignReport, type VerifyReport, credentialOwner, mergeDuplicateFindings, normaliseFinding, severityOf } from "@hardness/contracts";
 
 import { safe } from "../domain/evidence-markdown.ts";
 import { budgetRowsOf, buildBudget } from "../domain/build-budget.ts";
@@ -101,6 +101,7 @@ export function buildReportOf(task: TaskRow, runs: readonly StageRunRow[], event
     limits: limits ? { max_iterations: limits.max_iterations, max_tokens: limits.max_tokens, max_minutes: limits.max_minutes } : null,
     testsStep: step && typeof step.status === "string" ? { status: step.status, ...(typeof step.why === "string" ? { why: step.why } : {}), ...(typeof step.commit === "string" ? { commit: step.commit } : {}), ...(typeof step.redCheck === "string" ? { redCheck: step.redCheck } : {}) } : null,
     sweep: sweep && typeof sweep.status === "string" ? { status: sweep.status, ran: stringsOf(sweep.ran), ...(typeof sweep.note === "string" ? { note: sweep.note } : {}), ...(stringsOf(sweep.failed).length ? { failed: stringsOf(sweep.failed) } : {}) } : null,
+    ...(pickedOf(events).length > 0 ? { picked: pickedOf(events).map((p) => ({ slice: p.slice, shas: p.shas, tip: p.tip })) } : {}),
   };
 }
 
@@ -213,6 +214,69 @@ const mutationOf = (value: unknown): { score: number; min: number } | null => {
   return typeof m?.score === "number" && typeof m.min === "number" ? { score: m.score, min: m.min } : null;
 };
 
+const SHA = /^[0-9a-f]{40,64}$/;
+
+/** The slices the machine put on the branch: its own `build.helper_picked` rows, the last one per slice, with a well-formed slice, shas and tip. A container cannot write one (the kind is reserved). */
+function pickedOf(events: readonly EventRow[]): Array<{ slice: number; shas: string[]; tip: string }> {
+  const bySlice = new Map<number, { slice: number; shas: string[]; tip: string }>();
+  for (const { kind, payload } of events) {
+    if (kind !== "build.helper_picked") continue;
+    const { slice, picked, tip } = payload;
+    if (typeof slice !== "number" || !Number.isInteger(slice) || slice < 1 || !Array.isArray(picked) || picked.length === 0 || !picked.every((p) => typeof p === "string" && SHA.test(p)) || typeof tip !== "string" || !SHA.test(tip)) continue;
+    bySlice.set(slice, { slice, shas: picked as string[], tip });
+  }
+  return [...bySlice.values()].sort((a, b) => a.slice - b.slice);
+}
+
+type HelperRow = { kind: string; payload: Record<string, unknown>; at: Date };
+
+/** Where one slice's latest helper stands, from the machine's rows after the newest start: a pick is `committed`, a second conflict `merge_conflict`, a first one waits for its re-run, a refusal is `refused`, a pass nobody took yet is `returned`, anything else that ended is `failed` (or `cancelled` when the run said so). */
+function helperStateOf(rows: readonly HelperRow[]): HelperState {
+  if (rows.some((r) => r.kind === "build.helper_picked")) return "committed";
+  const last = rows.findLast((r) => r.kind !== "build.helper_ended" && r.kind !== "build.helper_started");
+  if (last?.kind === "build.helper_refused") return "refused";
+  if (last?.kind === "build.helper_conflict") return typeof last.payload.attempt === "number" && last.payload.attempt >= 2 ? "merge_conflict" : "conflict_rerun";
+  const ended = rows.findLast((r) => r.kind === "build.helper_ended");
+  if (!ended) return "running";
+  if (ended.payload.outcome === "pass") return "returned";
+  return ended.payload.outcome === "cancelled" ? "cancelled" : "failed";
+}
+
+/** Each slice's owner and the latest helper, from the machine's own rows. A slice is the ui-designer's while its helper is out, when its commits are waiting to be picked and once they landed; any other end gives it back to the implementer. */
+function helpersOf(events: readonly EventRow[]): { slices: NonNullable<BuildProgress["slices"]>; helper: BuildProgress["helper"] } {
+  const owned = new Map<number, HelperRow[]>();
+  const sliceIds = new Set<number>();
+  let latest: { slice: number; at: Date; branch: string; attempt: number } | null = null;
+  for (const { kind, payload, at } of events) {
+    // A container's own ledger rows name the slices; whoever wrote them, they never say who owns one.
+    if ((kind === "stage.slice.red" || kind === "stage.slice.green" || kind === "stage.slice.committed") && payload.by !== "ui-designer") {
+      const id = payload.id;
+      if (typeof id === "number" && Number.isInteger(id) && id >= 1) sliceIds.add(id);
+      continue;
+    }
+    if (!kind.startsWith("build.helper_")) continue;
+    const slice = payload.slice;
+    if (typeof slice !== "number" || !Number.isInteger(slice) || slice < 1) continue;
+    sliceIds.add(slice);
+    if (kind === "build.helper_started") {
+      owned.set(slice, [{ kind, payload, at }]);
+      const branch = typeof payload.branch === "string" ? payload.branch : "";
+      const attempt = typeof payload.attempt === "number" ? payload.attempt : 1;
+      latest = { slice, at, branch, attempt };
+    } else if (owned.has(slice) || kind === "build.helper_picked") (owned.get(slice) ?? owned.set(slice, []).get(slice)!).push({ kind, payload, at });
+  }
+  const states = new Map([...owned].filter(([, rows]) => rows.length > 0).map(([slice, rows]) => [slice, helperStateOf(rows)] as const));
+  const picked = new Map(pickedOf(events).map((p) => [p.slice, p.shas]));
+  const slices = [...sliceIds].sort((a, b) => a - b).map((slice) => {
+    const state = states.get(slice);
+    const shas = picked.get(slice);
+    const owner = state === "running" || state === "returned" || state === "conflict_rerun" || state === "committed" || shas ? ("ui-designer" as const) : ("implementer" as const);
+    return { slice, owner, ...(shas ? { picked: shas } : {}) };
+  });
+  const state = latest ? states.get(latest.slice) : undefined;
+  return { slices, helper: latest && state ? { slice: latest.slice, state, attempt: latest.attempt, branch: latest.branch, startedAt: latest.at.toISOString() } : null };
+}
+
 const SCENE_ID = /^[A-Za-z0-9_-]{1,40}$/;
 
 /** Build while it runs: each scenario red or green (from the `scenario.red` and `scenario.green` rows), the budget used against its limits, the last checkpoint pushed. Null for a card that has not begun to build. */
@@ -230,5 +294,6 @@ export function buildProgressOf(runs: readonly StageRunRow[], events: readonly E
     scenarios: [...state].map(([id, s]) => ({ id, state: s })),
     budget: { iterations: budget.iterations, tokens: budget.tokens, minutes: budget.minutes, limits: { max_iterations: limits.max_iterations, max_tokens: limits.max_tokens, max_minutes: limits.max_minutes } },
     lastCheckpoint: checkpoint ? { sha: checkpoint.payload.sha as string, follows: checkpoint.payload.follows as "red" | "green", at: checkpoint.at.toISOString() } : null,
+    ...helpersOf(events),
   };
 }

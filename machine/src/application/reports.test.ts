@@ -236,6 +236,70 @@ describe("buildProgressOf", () => {
   });
 });
 
+describe("buildProgressOf: the ui-designer helper (RFC 0013, phase 5)", () => {
+  const limits = { max_iterations: 15, max_tokens: 2_000_000, max_minutes: 90, backoff_minutes: [1, 30] as [number, number], regression_full_suite_minutes: 10 };
+  const runs = [run("implementing", 1, { status: "running", endedAt: null as never })];
+  const started = (slice: number, attempt = 1) => event("build.helper_started", { slice, base: "b".repeat(40), branch: `refs/luna/helper/t/${slice}`, engine: "claude:sonnet", attempt, locks: { helper: [], implementer: [] } });
+  const progress = (events: EventRow[]) => buildProgressOf(runs, events, limits, new Date("2026-11-01T10:05:00Z"))!;
+
+  it("has no helper and no owner for a card the helper never touched, whatever the ledger rows say", () => {
+    const p = progress([event("stage.slice.committed", { id: 1, owner: "ui-designer" })]);
+    expect(p.helper).toBeNull();
+    expect(p.slices).toEqual([{ slice: 1, owner: "implementer" }]);
+  });
+
+  it("shows the running helper with its slice, state, attempt, branch and start, and the slice as the ui-designer's", () => {
+    const p = progress([event("stage.slice.red", { id: 1 }), started(2)]);
+    expect(p.helper).toEqual({ slice: 2, state: "running", attempt: 1, branch: "refs/luna/helper/t/2", startedAt: "2026-11-01T10:00:00.000Z" });
+    expect(p.slices).toEqual([{ slice: 1, owner: "implementer" }, { slice: 2, owner: "ui-designer" }]);
+  });
+
+  it("owns a picked slice by the machine's picked row, with its shas, and ignores a forged ledger owner", () => {
+    const picked = ["c".repeat(40), "d".repeat(40)];
+    const p = progress([started(2), event("build.helper_ended", { slice: 2, attempt: 1, outcome: "pass", tokens: 5, minutes: 1 }), event("build.helper_picked", { slice: 2, base: "b".repeat(40), helperTip: "e".repeat(40), onto: "f".repeat(40), picked, tip: "d".repeat(40) }), event("stage.slice.committed", { id: 1, owner: "ui-designer" })]);
+    expect(p.helper).toMatchObject({ slice: 2, state: "committed", attempt: 1 });
+    expect(p.slices).toEqual([{ slice: 1, owner: "implementer" }, { slice: 2, owner: "ui-designer", picked }]);
+  });
+
+  it.each([
+    ["refused", [event("build.helper_refused", { slice: 2, reason: "r" })]],
+    ["failed", [event("build.helper_ended", { slice: 2, attempt: 1, outcome: "fail", tokens: null, minutes: 1 })]],
+    ["cancelled", [event("build.helper_ended", { slice: 2, attempt: 1, outcome: "cancelled", tokens: null, minutes: 1 })]],
+    ["merge_conflict", [event("build.helper_conflict", { slice: 2, attempt: 1 }), started(2, 2), event("build.helper_conflict", { slice: 2, attempt: 2 })]],
+  ] as const)("shows %s and gives the slice back to the implementer", (state, rest) => {
+    const p = progress([started(2), ...rest]);
+    expect(p.helper?.state).toBe(state);
+    expect(p.slices).toContainEqual({ slice: 2, owner: "implementer" });
+  });
+
+  it("shows a pass that is not picked yet as returned, and a first conflict with no re-run yet as conflict_rerun, both still the ui-designer's", () => {
+    const ended = event("build.helper_ended", { slice: 2, attempt: 1, outcome: "pass", tokens: 1, minutes: 1 });
+    expect(progress([started(2), ended]).helper?.state).toBe("returned");
+    const rerun = progress([started(2), ended, event("build.helper_conflict", { slice: 2, attempt: 1 })]);
+    expect(rerun.helper?.state).toBe("conflict_rerun");
+    expect(rerun.slices).toContainEqual({ slice: 2, owner: "ui-designer" });
+  });
+
+  it("follows the second attempt of a re-run", () => {
+    const p = progress([started(2), event("build.helper_conflict", { slice: 2, attempt: 1 }), started(2, 2)]);
+    expect(p.helper).toMatchObject({ slice: 2, state: "running", attempt: 2 });
+  });
+});
+
+describe("buildReportOf: picked slices", () => {
+  const runs = [run("implementing", 1, { outputCommit: "abc123" })];
+  it("lists each picked slice with its shas, and nothing for a card with no pick", () => {
+    expect(buildReportOf(task, runs, [finished("implementing", 1, "passed")])).not.toHaveProperty("picked");
+    const events = [event("build.helper_picked", { slice: 2, base: "b".repeat(40), helperTip: "e".repeat(40), onto: "f".repeat(40), picked: ["c".repeat(40), "d".repeat(40)], tip: "d".repeat(40) }), finished("implementing", 1, "passed")];
+    expect(buildReportOf(task, runs, events)?.picked).toEqual([{ slice: 2, shas: ["c".repeat(40), "d".repeat(40)], tip: "d".repeat(40) }]);
+  });
+
+  it("drops a picked row whose fields are malformed", () => {
+    const events = [event("build.helper_picked", { slice: 2, picked: ["not a sha"], tip: 5 }), finished("implementing", 1, "passed")];
+    expect(buildReportOf(task, runs, events)).not.toHaveProperty("picked");
+  });
+});
+
 describe("the environment in the reports", () => {
   it("puts the hash Build recorded in the Build Report, and null when none was", () => {
     const runs = [run("implementing", 1, { outputCommit: "abc" })];

@@ -503,7 +503,14 @@ export interface BuildProgress {
   scenarios: Array<{ id: string; state: "red" | "green" }>;
   budget: { iterations: number; tokens: number | null; minutes: number; limits: { max_iterations: number; max_tokens: number; max_minutes: number } };
   lastCheckpoint: { sha: string; follows: "red" | "green"; at: string } | null;
+  /** Who builds each slice the card's rows name (RFC 0013, phase 5). `owner` is the machine's own call, from its `build.helper_*` rows and never from the ledger the container writes; `picked` are the shas the machine put on the branch. */
+  slices?: Array<{ slice: number; owner: "implementer" | "ui-designer"; picked?: string[] }>;
+  /** The latest ui-designer helper, while one runs or after the last one ended; null when none ran. */
+  helper?: { slice: number; state: HelperState; attempt: number; branch: string; startedAt: string } | null;
 }
+
+/** Where a ui-designer helper stands, as the machine's rows tell it (the factory's mailbox has the same words, and `picking` besides). */
+export type HelperState = "running" | "returned" | "conflict_rerun" | "committed" | "refused" | "failed" | "cancelled" | "merge_conflict";
 
 /** What a watched PR looks like from the board: the readiness checklist, why the machine will or will not merge, the clocks. Facts and fixed words only: no reviewer text, no thread. Every field read from a stored view is optional on the way back in. */
 export interface ShipView {
