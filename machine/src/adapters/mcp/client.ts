@@ -6,6 +6,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { ErrorCode, McpError as RpcError } from "@modelcontextprotocol/sdk/types.js";
 
 import { type ListedTool, type Mcp, McpError, type ShapedResult, shapeResult } from "../../application/mcp.ts";
 
@@ -56,24 +57,39 @@ export function createMcp(servers: readonly McpServerConfig[], deps: McpDeps): M
     }
     return c;
   };
+  /** A transport failure: anything that is not a JSON-RPC error from the server, or a closed connection or a timeout. A JSON-RPC error (`InvalidParams`) is the server answering over a healthy connection. */
+  const transportFailure = (error: unknown): boolean => !(error instanceof RpcError) || error.code === ErrorCode.ConnectionClosed || error.code === ErrorCode.RequestTimeout;
+  /** After a transport failure the cached client is dropped and closed, so the next call connects again; only if it is still the client that threw, never one a later call made. */
+  const evict = (name: string, used: Promise<Client> | undefined, error: unknown): void => {
+    if (!used || !transportFailure(error) || clients.get(name) !== used) return;
+    clients.delete(name);
+    void used.then((c) => c.close()).catch(() => {});
+  };
   return {
     servers: () => servers,
     async listTools(name): Promise<ListedTool[]> {
       const server = declared(name);
-      const { tools } = await (await clientOf(name)).listTools();
+      const used = clientOf(name);
+      let tools;
+      try {
+        ({ tools } = await (await used).listTools());
+      } catch (error) {
+        evict(name, used, error);
+        throw error;
+      }
       return tools
         .filter((t) => server.tools.includes(t.name))
         .map((t) => ({ server: name, tool: t.name, description: (t.description ?? "").slice(0, 2000), inputSchema: t.inputSchema as Record<string, unknown> }));
     },
     async callTool(name, tool, args): Promise<ShapedResult> {
+      let used: Promise<Client> | undefined;
       try {
         if (!declared(name).tools.includes(tool)) return { ok: false, error: `${name}: ${tool} is not bridged` };
-        const r = await (await clientOf(name)).callTool({ name: tool, arguments: (args ?? {}) as Record<string, unknown> });
+        used = clientOf(name);
+        const r = await (await used).callTool({ name: tool, arguments: (args ?? {}) as Record<string, unknown> });
         return shapeResult((r.content ?? []) as never, r.isError === true);
       } catch (error) {
-        const dead = clients.get(name);
-        clients.delete(name);
-        void dead?.then((c) => c.close()).catch(() => {});
+        evict(name, used, error);
         return { ok: false, error: `${name}: ${(error as Error).message}`.slice(0, 2000) };
       }
     },
