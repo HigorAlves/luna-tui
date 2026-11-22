@@ -90,10 +90,6 @@ describe("lunaOAuthProvider", () => {
     await p.redirectToAuthorization(new URL("https://auth.example/authorize?state=s1"));
     expect(p.pendingAuthorization()?.href).toBe("https://auth.example/authorize?state=s1");
   });
-  it("registers with token_endpoint_auth_method none when asked", () => {
-    const p = lunaOAuthProvider(fileTokenStore(dir()), "x", "http://localhost/cb", { authMethod: "none" });
-    expect(p.clientMetadata.token_endpoint_auth_method).toBe("none");
-  });
 });
 
 describe("credential refs and redaction", () => {

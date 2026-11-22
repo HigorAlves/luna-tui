@@ -57,7 +57,7 @@ export interface OAuthProvider extends OAuthClientProvider {
   pendingAuthorization(): URL | null;
 }
 
-export function lunaOAuthProvider(store: TokenStore, server: string, redirectUrl: string, options: { scope?: string; authMethod?: "client_secret_post" | "none" } = {}): OAuthProvider {
+export function lunaOAuthProvider(store: TokenStore, server: string, redirectUrl: string, options: { scope?: string } = {}): OAuthProvider {
   let verifier = "";
   let pending: URL | null = null;
   return {
@@ -70,7 +70,7 @@ export function lunaOAuthProvider(store: TokenStore, server: string, redirectUrl
         redirect_uris: [redirectUrl],
         grant_types: ["authorization_code", "refresh_token"],
         response_types: ["code"],
-        token_endpoint_auth_method: options.authMethod ?? "client_secret_post",
+        token_endpoint_auth_method: "client_secret_post",
         ...(options.scope ? { scope: options.scope } : {}),
       };
     },
