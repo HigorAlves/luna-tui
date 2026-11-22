@@ -2516,7 +2516,6 @@ fn render_design_report(frame: &mut Frame, report: &crate::design::DesignReport,
         frame.area().height * 8 / 10,
     );
     frame.render_widget(Clear, area);
-    let width = (area.width as usize).saturating_sub(6);
     let title = match report {
         crate::design::DesignReport::Spec { .. } => " Design spec ",
         crate::design::DesignReport::Audit { .. } => " Accessibility audit ",
@@ -2524,19 +2523,20 @@ fn render_design_report(frame: &mut Frame, report: &crate::design::DesignReport,
     let lines: Vec<Line> = crate::design::report_lines(report)
         .into_iter()
         .skip(scroll)
-        .map(|l| {
-            Line::from(Span::from(truncate(
-                &crate::text::sanitize(&l, false),
-                width,
-            )))
-        })
+        .map(|l| Line::from(Span::from(crate::text::sanitize(&l, false))))
         .collect();
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(c(ACCENT)))
         .padding(Padding::horizontal(2))
         .title(Line::from(title).fg(c(ACCENT)).bold());
-    frame.render_widget(Paragraph::new(lines).block(block), area);
+    // A long finding wraps; the scroll is by line, so the last line can always be brought to the top.
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false }),
+        area,
+    );
 }
 
 pub(crate) fn render_foreman(frame: &mut Frame, app: &App, state: &crate::foreman::State) {
@@ -6174,6 +6174,29 @@ mod tests {
             selected.contains("Ticket"),
             "the highlight sits on a card, not a separator: {selected}"
         );
+    }
+
+    #[test]
+    fn the_design_report_wraps_long_findings_so_their_whole_text_can_be_read() {
+        let tail = "THE-END-OF-A-LONG-BODY";
+        let report: crate::design::DesignReport = serde_json::from_value(serde_json::json!({
+            "kind": "audit", "target": "staging", "level": "AA", "mode": "gate", "notes": [],
+            "findings": [{ "severity": "blocker", "title": "a title", "body": format!("{} {tail}", "word ".repeat(40)) }]
+        })).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(50, 20)).unwrap();
+        terminal
+            .draw(|f| render_design_report(f, &report, 0))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let text: String = (0..20)
+            .map(|y| {
+                (0..50)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains(tail), "{text}");
     }
 
     #[test]
