@@ -4572,6 +4572,37 @@ describe("the design budget", () => {
     expect(await p.designCardOff(task.id)).toBe(true);
   });
 
+  it("writes the design rows only once the decision has gone through: a decision that throws leaves the card undecided and design on", async () => {
+    const ran: string[] = [];
+    const p = new Pipeline(db, escalating(ran), { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    const spy = vi.spyOn(p as unknown as { apply: () => Promise<unknown> }, "apply").mockRejectedValueOnce(new Error("boom"));
+    await expect(p.decide(task.id, "approved", undefined, { design: "off" })).rejects.toThrow("boom");
+    spy.mockRestore();
+    expect((await p.get(task.id)).state).toBe("escalated");
+    expect((await p.events(task.id)).filter((e) => e.kind === "design.budget_reset" || e.kind === "design.card_off")).toEqual([]);
+    expect(await p.designCardOff(task.id)).toBe(false);
+  });
+
+  it("does not store or learn a `design: off` given at any gate but a design_budget escalation", async () => {
+    const p = new Pipeline(db, (stage) => (stage === "test_design" ? async () => ({ outcome: "escalated" as const, detail: { escalation: "plan_wrong", reason: "x" } }) : stubs.runnerFor(stage)), { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved", undefined, { design: "off" });
+    const gate = (await p.approvals(task.id)).find((a) => a.kind === "escalated")!;
+    expect(gate.response ?? {}).not.toHaveProperty("design");
+    expect(await p.designCardOff(task.id)).toBe(false);
+  });
+
+  it("keeps `design: off` on the approval of a design_budget escalation, where it is the person's answer", async () => {
+    const p = new Pipeline(db, escalating([]), { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved", undefined, { design: "off" });
+    expect((await p.approvals(task.id)).find((a) => a.kind === "escalated")!.response).toMatchObject({ design: "off" });
+  });
+
   it("leaves a Build-budget escalation without a design reset", async () => {
     const p = new Pipeline(db, (stage) => (stage === "test_design" ? async () => ({ outcome: "escalated" as const, detail: { escalation: "plan_wrong", reason: "x" } }) : stubs.runnerFor(stage)), { inline: true, policies: previewOn, hasConfig: () => true });
     const task = await p.createTask({ title: "Login" });

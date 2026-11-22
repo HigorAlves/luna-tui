@@ -351,6 +351,8 @@ interface Extra {
   onlyFrom?: ReadonlySet<TaskState>;
   /** Checked under the row lock against the gate as it is now, before anything moves; throws to refuse. */
   guard?: (open: ApprovalRow | null) => Promise<void>;
+  /** Events written in the same transaction as the move, after it: they exist only if the decision went through, and before the next stage reads them. */
+  record?: Array<{ kind: string; payload: Record<string, unknown> }>;
 }
 
 /** A stage run a restart found still running in its container: drive it from where it is. */
@@ -1817,10 +1819,13 @@ export class Pipeline {
     // Without one, the next Build reads the same spent budget and escalates again, and approving can never move the card.
     if (escalated && wanted === "approved" && budgetWasSpent(escalated.requested)) await this.log(id, "build.budget_reset", { reason: "a person approved the card past its spent budget" });
     // "The design budget is spent: a person decides": approving gives a fresh design budget; approving with design off also skips the designer agents for this card.
-    if (escalated && wanted === "approved" && escalated.requested.escalation === "design_budget") {
-      await this.log(id, "design.budget_reset", { reason: "a person approved the card past its spent design budget" });
-      if (response?.design === "off") await this.log(id, "design.card_off", { reason: "a person turned design off for this card" });
+    // The rows are written with the move itself, so a decision that does not go through leaves neither. `design: "off"` is that approval's answer alone: at any other gate it is dropped.
+    const atBudget = escalated !== undefined && wanted === "approved" && escalated.requested.escalation === "design_budget";
+    if (response && "design" in response && !atBudget) {
+      const { design: _dropped, ...rest } = response;
+      response = Object.keys(rest).length > 0 ? rest : undefined;
     }
+    const designRows = atBudget ? [{ kind: "design.budget_reset", payload: { reason: "a person approved the card past its spent design budget" } }, ...(response?.design === "off" ? [{ kind: "design.card_off", payload: { reason: "a person turned design off for this card" } }] : [])] : [];
     // A person approving a plan made after Build already ran has decided the card builds that plan: its Build counts from a fresh budget.
     // Otherwise the runs spent on the old plan (and its bounces) escalate the new one before it starts, and the stronger model's one run is burnt.
     if (before.state === "awaiting_approval" && wanted === "approved" && !options.auto && (await this.events(id)).some((e) => e.kind === "stage.finished" && e.payload.stage === "implementing")) {
@@ -1828,7 +1833,7 @@ export class Pipeline {
     }
     // The design sign-off: what a person answered there (and what they left open) is ground truth, written once the decision has gone through.
     const signoff = before.state === "awaiting_design" && !options.auto ? (await this.approvals(id)).find((a) => a.kind === "awaiting_design" && a.decision === null) : undefined;
-    const moved = await this.decideNow(id, wanted, reason, response, options);
+    const moved = await this.decideNow(id, wanted, reason, response, { ...options, ...(designRows.length > 0 ? { record: designRows } : {}) });
     if (signoff) await this.keepDesignSignoff(moved, signoff, wanted === "changes_requested" ? "sent_back" : wanted, reason);
     if (escalated) await this.keepEscalationTruth(moved, escalated.id);
     if (escalated) await this.confirmEscalationReason(id, escalated);
@@ -1840,7 +1845,7 @@ export class Pipeline {
     wanted: "approved" | "changes_requested" | "rejected" | "sent_back",
     reason?: string,
     response?: Record<string, unknown>,
-    options: { approver?: string; auto?: boolean } = {},
+    options: { approver?: string; auto?: boolean; record?: Extra["record"] } = {},
   ): Promise<TaskRow> {
     const { approver } = options;
     const decision: "approved" | "sent_back" | "rejected" = wanted === "changes_requested" ? "sent_back" : wanted;
@@ -1942,7 +1947,7 @@ export class Pipeline {
     // The watch's release question says so on its approval; the preview gate (and a gate stored before this wave) has no such word.
     const shipGate = task.state === "awaiting_ship" && (await this.approvals(id)).find((a) => a.kind === "awaiting_ship" && a.decision === null)?.requested.gate === "ship_approval" ? ({ gate: "ship_approval" } as const) : {};
     const event: PipelineEvent = decision === "approved" ? { type: "approved", ...shipGate } : { type: "sent_back", from: outcome === undefined || isSplitOutcome(outcome) ? "plan" : "triage", ...shipGate };
-    const moved = await this.dispatch(id, event, { decision: record, ...(guard ? { guard } : {}) });
+    const moved = await this.dispatch(id, event, { decision: record, ...(guard ? { guard } : {}), ...(options.record ? { record: options.record } : {}) });
     if (decision === "approved" && open && outcome === undefined) await this.keepGroundTruth(moved, open.id);
     // A split gate sent back leaves no half-made children behind: they were never started and are not wanted.
     if (decision === "sent_back" && open && isSplitOutcome(outcome)) await this.archiveSplitLeftovers(id, open);
@@ -3238,7 +3243,7 @@ export class Pipeline {
   }
 
   private async apply(id: string, event: PipelineEvent, extra: Extra): Promise<Step> {
-    const { step, logged } = await this.store.withTaskLock(id, async (task, tx) => {
+    const { step, logged, recorded } = await this.store.withTaskLock(id, async (task, tx) => {
       if (extra.onlyFrom && !extra.onlyFrom.has(task.state)) throw new TaskMovedError(id, task.state, extra.onlyFrom);
       const step = transition(task, event);
       const open = extra.decision ? await tx.findOpenApproval(id) : null;
@@ -3273,6 +3278,8 @@ export class Pipeline {
         ...(criteria ? { criteria } : {}),
       });
 
+      const recorded: Awaited<ReturnType<typeof tx.recordEvent>>[] = [];
+      for (const row of extra.record ?? []) recorded.push(await tx.recordEvent({ taskId: id, kind: row.kind, stageRunId: null, payload: row.payload }));
       if (open && extra.decision) {
         await tx.decideApproval(open, {
           decision: extra.decision.decision,
@@ -3287,10 +3294,11 @@ export class Pipeline {
           requested: { ...extra.detail, ...(BEFORE_BUILD.has(step.effect.gate as TaskState) && cardOf(task).ticketChanged ? { ticketChanged: cardOf(task).ticketChanged } : {}), ...(step.reason ? { reason: step.reason } : {}), ...(step.escalation ? { escalation: step.escalation } : {}), ...(step.failures ? { failures: step.failures } : {}) },
         });
       }
-      return { step, logged };
+      return { step, logged, recorded };
     });
 
     this.onEvent(logged);
+    for (const row of recorded) this.onEvent(row);
     // The questions the machine built from the signals (fixed text, enum values, numbers) go out by themselves as one comment for the card's
     // own source. A question an agent wrote stays on the board until a person taps `p` (`postQuestions`): it may quote what the agent read.
     const asked = extra.detail?.questions;
