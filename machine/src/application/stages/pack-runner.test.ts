@@ -1941,6 +1941,15 @@ describe("the MCP bridge in a stage (RFC 0013)", () => {
     expect(closed()).toBe(1);
   });
 
+  it("makes the /design folder before the container starts, so the daemon does not create it as root (L1-5)", async () => {
+    const { mcp } = await fixtureMcp();
+    let existed: boolean | undefined;
+    const sandbox = async (run: SandboxRun) => ((existed = existsSync(join(run.runDir, "design"))), fakeSandbox(output())(run));
+    const { deps: d, ctx } = mcpDeps(sandbox, mcp);
+    await withBridge(grant(["echo"]), () => runAgent(d, ctx, "triage"));
+    expect(existed).toBe(true);
+  });
+
   it("writes an image under <runDir>/design and names it by its /design path", async () => {
     const { mcp } = await fixtureMcp();
     const answers: unknown[] = [];

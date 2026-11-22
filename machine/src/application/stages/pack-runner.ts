@@ -862,6 +862,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       throw error;
     }
     if (input.bridge.length > 0) {
+      // The container mounts it read-only: made here, it is the machine's, not a root-owned folder the daemon creates.
+      await mkdir(designDir, { recursive: true });
       design = { mcp, answer: mcpAnswers({ mcp, bridge: input.bridge, designDir, log }), log };
     } else {
       await mcp.close().catch(() => {});
