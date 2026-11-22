@@ -32,7 +32,12 @@ export function designRefOf(input: { link?: string; text: string; attachments: r
     ...input.attachments.flatMap((a) => figmaRefsIn(a.url, "attachment")),
   ];
   const refs: DesignRef[] = [];
-  for (const ref of found) if (!refs.some((r) => r.fileKey === ref.fileKey) && refs.length < MAX_FILES) refs.push(ref);
+  for (const ref of found) {
+    // The same file named by two sources is one reference: its first origin, the node ids of all.
+    const same = refs.find((r) => r.fileKey === ref.fileKey);
+    if (same) same.nodeIds = [...new Set([...same.nodeIds, ...ref.nodeIds])].slice(0, MAX_NODES);
+    else if (refs.length < MAX_FILES) refs.push(ref);
+  }
   if (refs.length > 0) return { refs };
   const fallback = input.settings.figma;
   return fallback ? { refs: [{ fileKey: fallback.file, nodeIds: [], page: fallback.page, from: "luna.yaml" }] } : null;
