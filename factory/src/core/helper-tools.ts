@@ -90,7 +90,7 @@ export function helperTools(options: HelperToolsOptions) {
     }
   };
   /** The tip of a pick merged into /work whose confirmation has not come: finished by `syncPicks` once the machine says committed. */
-  const pending = new Map<number, { tip: string; note: string }>();
+  const pending = new Map<number, { tip: string; note: string; before: string }>();
   const held = (): LedgerSlice[] => slices().filter((s) => s.owner === "ui-designer" && s.status !== "committed");
   /** A request file `<kind>-<nonce>-<n>.json` and the path its answer is read from. */
   const request = (kind: string, answered: string, body: Record<string, unknown>): { n: number; answer: string } => {
@@ -143,10 +143,15 @@ export function helperTools(options: HelperToolsOptions) {
     }
     const shas = Array.isArray(picked) ? picked.filter((p): p is string => typeof p === "string" && SHA.test(p)) : [];
     const note = `picked by the machine: ${shas.map((s) => s.slice(0, 8)).join(", ") || tip.slice(0, 8)}`;
+    return acknowledge(slice, tip, note, before);
+  };
+
+  /** Tells the machine the tip is merged and finishes the slice on its word; a refusal takes the merge back. Null: done. */
+  const acknowledge = async (slice: LedgerSlice, tip: string, note: string, before: string): Promise<{ error: string } | null> => {
     const ack = request("pick-ack", "pick-done", { slice: slice.id, head: tip });
     const done = await awaitJson(ack.answer, options.checkWaitMs);
     if (!done) {
-      pending.set(slice.id, { tip, note });
+      pending.set(slice.id, { tip, note, before });
       return { error: `the machine has not confirmed the pick of slice ${slice.id} yet; call slice_wait` };
     }
     if (done.ok !== true) {
@@ -197,7 +202,14 @@ export function helperTools(options: HelperToolsOptions) {
         if (unsettled && !problem) problem = unsettled;
         continue;
       }
-      if (now !== "returned") continue;
+      if (now !== "returned" && now !== "picking") continue;
+      // A pick merged here whose confirmation was lost: the ack goes again before anything new is asked.
+      const lost = pending.get(slice.id);
+      if (lost) {
+        const again = await acknowledge(slice, lost.tip, lost.note, lost.before);
+        if (again && !problem) problem = again.error;
+        continue;
+      }
       let outcome = await pickOnce(slice);
       if (outcome && "retry" in outcome) outcome = await pickOnce(slice);
       if (outcome && "retry" in outcome) outcome = { error: `the machine could not pick slice ${slice.id} twice; call slice_wait again` };

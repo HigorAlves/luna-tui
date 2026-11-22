@@ -76,10 +76,14 @@ const pickHandlers = (root: string, work: string, checks: string, files: Record<
       asked.push(body);
       const made = pickedBundle(root, work, join(checks, "pick-1.bundle"), files);
       tip = made.tip;
+      // the real machine is at `picking` from here until it hears the ack
+      state(checks, 3, { state: "picking", attempt: 1 });
       return { ok: true, tip: made.tip, picked: [made.tip], bundle: "pick-1.bundle" };
     }, (m) => `pick-answer-${m[1]}-${m[2]}.json`);
     await answer(checks, /^pick-ack-([0-9a-f]{8})-(\d+)\.json$/, (_m, body) => {
       acks.push(body);
+      if (ackReply?.ok === true) state(checks, 3, { state: "committed", attempt: 1, commit: tip });
+      else if (ackReply) state(checks, 3, { state: "returned", attempt: 1 });
       return ackReply;
     }, (m) => `pick-done-${m[1]}-${m[2]}.json`);
   })();
@@ -255,6 +259,29 @@ describe("the pick handshake", () => {
     expect(listed.slices[2]).toMatchObject({ status: "committed", owner: "ui-designer", commit: machine.tip() });
     expect(JSON.parse(readFileSync(join(s.root, "ledger.json"), "utf8")).slices[2].status).toBe("committed");
     expect(s.events.filter((e) => e.kind === "slice.committed")).toHaveLength(1);
+  });
+
+  it("re-sends the ack, not a new pick request, when the machine stays at picking after a lost ack", async () => {
+    const s = scratch(300);
+    await delegated(s);
+    state(s.checks, 3, { state: "returned", attempt: 1 });
+    const first = pickHandlers(s.root, s.work, s.checks, { "page.tsx": "page v2\n" }, null);
+    await s.luna.call("slice_wait", { slice: 3, waitSeconds: 1 });
+    await first.run;
+    expect(readFileSync(join(s.work, "page.tsx"), "utf8")).toBe("page v2\n");
+    for (const f of readdirSync(s.checks).filter((x) => /^pick-/.test(x))) execFileSync("rm", [join(s.checks, f)]);
+    const acks: unknown[] = [];
+    const ack = answer(s.checks, /^pick-ack-([0-9a-f]{8})-(\d+)\.json$/, (_m, body) => {
+      acks.push(body);
+      state(s.checks, 3, { state: "committed", attempt: 1, commit: first.tip() });
+      return { ok: true };
+    }, (m) => `pick-done-${m[1]}-${m[2]}.json`);
+    const got = await s.luna.call("slice_wait", { slice: 3, waitSeconds: 2 });
+    await ack;
+    expect(acks).toEqual([{ n: expect.any(Number), slice: 3, head: first.tip() }]);
+    expect(readdirSync(s.checks).some((f) => f.startsWith("pick-request-"))).toBe(false);
+    expect(got).toMatchObject({ state: "committed" });
+    expect(s.luna.state.ledger.slices[2]).toMatchObject({ status: "committed", commit: first.tip() });
   });
 
   it("reports a slice the machine holds as committed when HEAD does not contain the picked tip", async () => {
