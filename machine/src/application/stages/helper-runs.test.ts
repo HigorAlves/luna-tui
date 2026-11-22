@@ -169,15 +169,15 @@ describe("helperRuns: starting a helper", () => {
 });
 
 describe("helperRuns: a start that comes too late for the factory (L8-5)", () => {
-  const slowMake = (clock: { t: number }, took: number) => ({
+  const slowMake = (clock: { t: number }, took: number): HelperRunsDeps["helperWorkspace"] => ({
     make: async (...a: unknown[]) => ((clock.t += took), { path: `/cards/w.helper-${a[3]}-${a[4]}`, branch: `luna-helper-${a[3]}`, ref: `refs/luna/helper/task1/${a[3]}` }),
     remove: async () => {},
-  }) as never;
+  });
 
   it("gives a slow clone up: the workspace is removed, no run starts, the answer is ok:false", async () => {
     const clock = { t: 1_000_000 };
     const removedPaths: string[] = [];
-    const t = setup({ clock: () => clock.t, helperWorkspace: { ...slowMake(clock, HELPER_START_LIMIT_MS + 1_000), remove: async (path: string) => void removedPaths.push(path) } as never });
+    const t = setup({ clock: () => clock.t, helperWorkspace: { ...slowMake(clock, HELPER_START_LIMIT_MS + 1_000), remove: async (path) => void removedPaths.push(path) } });
     expect(await ask(t.coordinator)).toEqual({ ok: false, error: expect.stringContaining("too long") });
     expect(removedPaths).toEqual(["/cards/w.helper-2-1"]);
     expect(t.c.calls).toEqual([]);
