@@ -378,6 +378,31 @@ RFC 0013, phase 3. When a change touches rendered files and the card has a desig
 - **Publishing and visibility.** `publish: auto` asks the GitHub port, `GitHub.repoPrivate(slug)`. It answers `true`, `false` or null; the no-token adapter answers null, and null counts as public. So a machine with no GitHub token never publishes a pair under `auto`.
 - **Known gap.** The ship monitor's restack rebuilds the PR body without the card's facts. The Design & accessibility block drops then, as the findings already did.
 
+### The ui-designer helper
+
+RFC 0013, phase 5. On a card with a design reference, `implementing` may hand a pure UI slice to a writable helper in its own container (see [architecture](architecture.md#pipeline), Build step 4). Nothing here is an environment variable. The limits are fixed in the machine's code:
+
+| Limit | Value | What it does |
+|---|---|---|
+| `MIN_HELPER_MINUTES` | `8` | the machine refuses to delegate when the helper would get fewer minutes than this: the smaller of the design budget's minutes left and the implementer's minutes left, less its reserve |
+| `IMPLEMENTER_RESERVE_MINUTES` | `3` | minutes of the implementer's budget that the helper's limit never takes |
+| helper requests | `4` per run | `slice_delegate` calls the build watch answers; past this the watch answers with an error itself |
+| pick requests, pick acks | `12` per run each | the pick handshake's own cap |
+| helper commits | `20` | the most commits the machine takes from one helper |
+| `slice_wait` | `240` s at most | one wait; it returns `running` after that and the agent asks again |
+
+The helper runs at `effort.implementing` of the repo's `luna.yaml` (there is no per-task effort), on `claude:sonnet` or the repo's `engines.ui_design`. Its tokens and minutes count against `design.budget`, not Build's budget.
+
+Delegation is off, with the reason given to the implementer, when:
+
+- `design: off` is set for the repo (the helper is a designer step);
+- the card's design is off (`design.card_off`, from an approved `design_budget` escalation with `response.design = "off"`);
+- the card has no design reference;
+- the design budget is spent;
+- no slice of the plan is a pure UI slice.
+
+A merge conflict that survives the one re-run escalates the card as `merge_conflict`.
+
 ### The design budget
 
 The designer runs of a card (the spec, the audit) count against `design.budget`. The machine reads the runtime's own token count and the run's minutes, never a model's text. When a run spends the budget, the next designer step escalates the card with the reason `design_budget`. A person answers it at the escalated gate:
