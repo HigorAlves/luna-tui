@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { advanceBranch } from "./bundles.ts";
 import { ensureClone } from "./clone.ts";
-import { MAX_HELPER_COMMITS, gitVersionProblem, landInWorktree, helperRef, helperWorkspace, pickBundle, pickOnto, pickedRef, takeHelperCommits } from "./helper.ts";
+import { MAX_HELPER_COMMITS, gitVersionProblem, landInWorktree, helperRef, helperWorkspace, pickBundle, pickOnto, pickedRef, takeHelperCommits, dropHelperRefs } from "./helper.ts";
 import { machineGitDir } from "./machine-repo.ts";
 import { workspaceFor } from "./worktree.ts";
 
@@ -71,6 +71,18 @@ describe("helperWorkspace", () => {
     await expect(helperWorkspace.make(f.card, "main", TASK, 3, 2)).rejects.toThrow();
     await expect(helperWorkspace.make(f.card, f.tests, "../x", 3, 2)).rejects.toThrow();
     await expect(helperWorkspace.make(f.card, f.tests, TASK, 0, 2)).rejects.toThrow();
+  });
+});
+
+describe("dropHelperRefs (L7-7)", () => {
+  it("deletes the helper's ref and its picked ref, and no other slice's", async () => {
+    const f = await fixture();
+    mgit(f.card, "update-ref", pickedRef(TASK, 3), f.tests);
+    mgit(f.card, "update-ref", helperRef(TASK, 4), f.tests);
+    await dropHelperRefs(f.card, TASK, 3);
+    expect(mgit(f.card, "for-each-ref", "--format=%(refname)", "refs/luna/helper/")).toBe(helperRef(TASK, 4));
+    // Nothing there any more: no error.
+    await dropHelperRefs(f.card, TASK, 3);
   });
 });
 

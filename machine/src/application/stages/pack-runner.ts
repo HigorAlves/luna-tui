@@ -9,7 +9,7 @@ import { basename, join, relative } from "node:path";
 import { readRegularFile } from "../../adapters/fs/bounded.ts";
 import { removeNestedRepositories } from "../../adapters/git/machine-repo.ts";
 import { bundleImporter } from "../../adapters/git/bundles.ts";
-import { advanceBranch, helperWorkspace, isAncestor, landInWorktree, pickBundle, pickOnto, takeHelperCommits } from "../../adapters/git/helper.ts";
+import { advanceBranch, dropHelperRefs, helperWorkspace, isAncestor, landInWorktree, pickBundle, pickOnto, takeHelperCommits } from "../../adapters/git/helper.ts";
 import { cardOf } from "../../domain/card-fields.ts";
 import { isUiSlice } from "../../domain/delegation.ts";
 import type { DesignBudget } from "../../domain/design-budget.ts";
@@ -684,7 +684,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
           takeHelperCommits,
           branch: workspace.branch,
           identity: identity ?? { name: "Luna Machine", email: "luna@localhost" },
-          git: { pickOnto, pickBundle, advanceBranch, landInWorktree, isAncestor },
+          git: { pickOnto, pickBundle, advanceBranch, landInWorktree, isAncestor, dropHelperRefs },
           publish: async () => {
             const shown = await publishBranch(task.repoPath!, workspace.path, workspace.branch);
             return shown.ok ? { ok: true } : { ok: false, note: shown.note };

@@ -17,7 +17,7 @@ import { type EngineId, Ledger, type StageInput, oneLine } from "@hardness/contr
 
 import { readRegularFile } from "../../adapters/fs/bounded.ts";
 import type { ImportResult } from "../../adapters/git/bundles.ts";
-import { type advanceBranch, type helperWorkspace, type isAncestor, type landInWorktree, type pickBundle, type pickOnto, pickedRef, type takeHelperCommits } from "../../adapters/git/helper.ts";
+import { type advanceBranch, type helperWorkspace, type dropHelperRefs, type isAncestor, type landInWorktree, type pickBundle, type pickOnto, pickedRef, type takeHelperCommits } from "../../adapters/git/helper.ts";
 import { type DelegationFacts, type Locks, MIN_HELPER_MINUTES, delegable, helperMinutes } from "../../domain/delegation.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { type HelperEventKind, type HelperPayloads, helperEnded } from "../../domain/helper-events.ts";
@@ -75,6 +75,8 @@ export interface HelperRunsDeps {
     advanceBranch: typeof advanceBranch;
     landInWorktree: typeof landInWorktree;
     isAncestor: typeof isAncestor;
+    /** Deletes the helper's refs in the card's repository. */
+    dropHelperRefs: typeof dropHelperRefs;
   };
   /** Shows the card's branch in the user's repository after the machine moved it (the pack runner's `publishBranch`); a refusal is a note. */
   publish?: () => Promise<{ ok: true } | { ok: false; note: string }>;
@@ -458,6 +460,8 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
     const shown = await deps.publish?.().catch((error): { ok: false; note: string } => ({ ok: false, note: `the branch could not be shown: ${msg(error)}` }));
     if (shown && !shown.ok) await deps.note?.(`slice ${h.slice}: ${shown.note}`).catch(() => {});
     h.pending = undefined;
+    // The machine's picks are on the branch: the helper's refs have done their work. A helper that did not land keeps its ref, for a person to read.
+    await deps.git.dropHelperRefs(deps.cardPath, deps.taskId, h.slice).catch((error) => deps.log?.(`helper refs not deleted: ${msg(error)}`));
   }
 
   async function onPickRequest(request: PickRequest): Promise<PickAnswer> {

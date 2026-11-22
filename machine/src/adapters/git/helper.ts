@@ -212,6 +212,11 @@ export async function isAncestor(cardPath: string, ancestor: string, descendant:
   return (await exec("git", [...HOST_GIT, "--git-dir=" + machineGitDir(cardPath), "merge-base", "--is-ancestor", ancestor, descendant])).code === 0;
 }
 
+/** Deletes the helper's ref and its picked ref once its pick has landed or it is released for good; nothing there is no error. */
+export async function dropHelperRefs(cardPath: string, task: string, slice: number): Promise<void> {
+  for (const ref of [helperRef(task, slice), pickedRef(task, slice)]) await exec("git", [...HOST_GIT, "--git-dir=" + machineGitDir(cardPath), "update-ref", "-d", ref]);
+}
+
 /** A bundle of `tipRef` over `from` (what the implementer's container fetches), written to a temporary name beside `dest` and renamed into place. */
 export async function pickBundle(cardPath: string, from: string, tipRef: string, dest: string): Promise<{ ok: true } | { ok: false; reason: string }> {
   if (!SHA.test(from) || !tipRef.startsWith(REF_PREFIX) || tipRef.includes("..") || tipRef.startsWith("-")) return { ok: false, reason: "not a commit id or a helper ref" };

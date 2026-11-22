@@ -69,6 +69,7 @@ function setup(over: Partial<HelperRunsDeps> = {}) {
       advanceBranch: async (...a) => (log.push("advance"), calls.push(["advanceBranch", ...a]), await hold, advance),
       landInWorktree: async (...a) => (calls.push(["landInWorktree", ...a]), land),
       isAncestor: async (_card, a, b) => a === b || descends,
+      dropHelperRefs: async (...a) => void calls.push(["dropHelperRefs", ...a]),
     },
     publish: async () => (calls.push(["publish"]), { ok: true as const }),
     note: async (text) => void calls.push(["note", text]),
@@ -593,6 +594,38 @@ describe("helperRuns: a pick that landed", () => {
     expect(await stateOf(2)).toMatchObject({ state: "committed" });
     expect(t.rows.filter((r) => r.kind === "build.helper_picked")).toHaveLength(1);
     expect(t.coordinator.picked().has(PICKED)).toBe(true);
+  });
+});
+
+describe("helperRuns: the helper's refs (L7-7)", () => {
+  const dropped = ["dropHelperRefs", "/cards/w", "task1", 2];
+
+  it("deletes them once the pick has landed, by the ack and at the end of the run", async () => {
+    const acked = await returned();
+    await pickReq(acked);
+    expect(named(acked, "dropHelperRefs")).toEqual([]);
+    await ackReq(acked);
+    expect(named(acked, "dropHelperRefs")).toEqual([dropped]);
+    const ended = await returned();
+    await ended.coordinator.afterRun("pass");
+    expect(named(ended, "dropHelperRefs")).toEqual([dropped]);
+  });
+
+  it("keeps them for a helper that did not land (failed, cancelled, a re-run), so a person can read its commits", async () => {
+    const failed = setup();
+    await ask(failed.coordinator);
+    failed.c.settle({ outcome: "fail", detail: { error: "boom" } });
+    await tick();
+    expect(named(failed, "dropHelperRefs")).toEqual([]);
+    const cancelled = setup();
+    await ask(cancelled.coordinator);
+    await cancelled.coordinator.cancel();
+    expect(named(cancelled, "dropHelperRefs")).toEqual([]);
+    const conflict = await returned();
+    conflict.setPick({ ok: false, conflict: true, files: ["src/ui/Card.tsx"] });
+    await pickReq(conflict);
+    expect(await stateOf(2)).toMatchObject({ state: "conflict_rerun" });
+    expect(named(conflict, "dropHelperRefs")).toEqual([]);
   });
 });
 
