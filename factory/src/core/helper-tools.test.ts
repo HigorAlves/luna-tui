@@ -152,8 +152,11 @@ describe("slice_wait", () => {
     expect(await luna.call("slice_wait", { slice: 3, waitSeconds: 5 })).toEqual({ state: "refused", attempt: 2, summary: "no" });
     expect(Date.now() - t).toBeGreaterThanOrEqual(250);
     // and when the time is up it says so, in the machine's own word
-    state(checks, 3, { state: "conflict_rerun", attempt: 2 });
-    expect(await luna.call("slice_wait", { slice: 3, waitSeconds: 1 })).toEqual({ state: "conflict_rerun", attempt: 2 });
+    const again = scratch();
+    void delegateOk(again.checks);
+    await again.luna.call("slice_delegate", { slice: 3 });
+    state(again.checks, 3, { state: "conflict_rerun", attempt: 2 });
+    expect(await again.luna.call("slice_wait", { slice: 3, waitSeconds: 1 })).toEqual({ state: "conflict_rerun", attempt: 2 });
   });
 
   it("caps the wait at 240 seconds by its input", async () => {
@@ -377,6 +380,31 @@ describe("the pick handshake", () => {
     await machine.run;
     expect(s.luna.state.ledger.slices[2]!.status).toBe("committed");
     expect(existsSync(join(s.root, "hook-ran"))).toBe(false);
+  });
+});
+
+describe("a slice the machine hands back", () => {
+  for (const ending of ["refused", "failed", "cancelled", "merge_conflict"]) {
+    it(`goes back to the implementer, pending, with the machine's summary, when the helper ended ${ending}`, async () => {
+      const s = scratch();
+      void delegateOk(s.checks);
+      await s.luna.call("slice_delegate", { slice: 3 });
+      state(s.checks, 3, { state: ending, attempt: 1, summary: "it went wrong" });
+      expect(await s.luna.call("slice_wait", { slice: 3, waitSeconds: 2 })).toEqual({ state: ending, attempt: 1, summary: "it went wrong" });
+      expect(s.luna.state.ledger.slices[2]).toMatchObject({ owner: "implementer", status: "pending", note: expect.stringContaining("it went wrong") });
+      expect(JSON.parse(readFileSync(join(s.root, "ledger.json"), "utf8")).slices[2]).toMatchObject({ owner: "implementer", status: "pending" });
+      expect(await s.luna.call("slice_set", { id: 3, status: "green" })).toMatchObject({ id: 3, status: "green" });
+    });
+  }
+
+  it("keeps a committed slice the ui-designer's", async () => {
+    const s = scratch(50);
+    void delegateOk(s.checks);
+    await s.luna.call("slice_delegate", { slice: 3 });
+    s.luna.state.ledger.slices[2]!.status = "committed";
+    state(s.checks, 3, { state: "cancelled", attempt: 1, summary: "late" });
+    await s.luna.call("slice_list", {});
+    expect(s.luna.state.ledger.slices[2]).toMatchObject({ owner: "ui-designer", status: "committed" });
   });
 });
 

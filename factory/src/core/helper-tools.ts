@@ -15,6 +15,8 @@ const BUNDLE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,100}\.bundle$/;
 const PICKED_REF = /^refs\/luna\/helper\/[A-Za-z0-9._/-]+-picked$/;
 /** Where the picked tip is fetched to, so the fast-forward names a commit and never a branch the bundle chose. */
 const PICK_REF = "refs/luna/pick";
+/** The endings after which the machine no longer holds the slice for the helper. */
+const HANDED_BACK = new Set(["refused", "failed", "cancelled", "merge_conflict"]);
 const HOLDING = new Set(["running", "returned", "picking", "conflict_rerun"]);
 /** Git for a repository the agent wrote in: no hook, no replaced objects, no external helper, no submodule recursion. */
 const HARD = ["--no-optional-locks", "--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=", "-c", "diff.external=", "-c", "submodule.recurse=false", "-c", "protocol.ext.allow=never"];
@@ -196,7 +198,16 @@ export function helperTools(options: HelperToolsOptions) {
   const syncPicks = async (): Promise<string | null> => {
     let problem: string | null = null;
     for (const slice of held()) {
-      const now = stateOf(slice.id)?.state;
+      const seen = stateOf(slice.id);
+      const now = seen?.state;
+      if (now && HANDED_BACK.has(now)) {
+        // The machine gave the slice up: it is the implementer's again, and slice_set works on it.
+        slice.owner = "implementer";
+        slice.status = "pending";
+        slice.note = `the ui-designer's slice, handed back (${now}): ${seen.summary ?? "no summary"}`.slice(0, 300);
+        options.persist();
+        continue;
+      }
       if (now === "committed") {
         const unsettled = settle(slice);
         if (unsettled && !problem) problem = unsettled;
