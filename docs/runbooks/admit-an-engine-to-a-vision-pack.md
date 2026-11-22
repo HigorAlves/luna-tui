@@ -1,6 +1,6 @@
 # Admit an engine to a vision pack
 
-A vision pack reads images. Today these are `design_spec` and `design_parity` (`vision: true` in `contracts/src/packs.ts`). An engine joins one only when its model reads images and its eval matches Claude's ([RFC 0013](../rfcs/0013-designer-agents.md), phase 4). This runbook is that path, in order.
+A vision pack reads images. Today these are `design_spec`, `ui_design` and `design_parity` (`vision: true` in `contracts/src/packs.ts`). An engine joins one only when its model reads images and its eval matches Claude's ([RFC 0013](../rfcs/0013-designer-agents.md), phase 4). This runbook is that path, in order.
 
 Everything here runs on your machine. The probe and the evals need a model credential, so none of it runs in CI. You need the rebuilt stage image, the login or key of the candidate, and the Claude token for the baseline.
 
@@ -39,7 +39,15 @@ pnpm eval --pack design_parity --engine claude:opus --save-baseline
 pnpm eval --pack design_parity --engine codex:sol --save-baseline
 ```
 
-An engine outside `allowed` runs as a candidate, so the pack needs no change for this. Keep a laptop awake for the run (`caffeinate -s` on macOS). Do the same for `design_spec` with its own cases.
+An engine outside `allowed` runs as a candidate, so the pack needs no change for this. Keep a laptop awake for the run (`caffeinate -s` on macOS). Do the same for each other vision pack, on its own cases (`evals/<pack>/cases/`):
+
+| Pack | Cases that back its admission |
+| --- | --- |
+| `design_parity` | `clean-desktop`, `clean-mobile`, `layout-wrap`, `missing-hover`, `radius`, `spacing-drift`, `token-swap`, `type-size` (8) |
+| `design_spec` | `checkout-tokens`, `injected-layer-name`, `missing-states` (3) |
+| `ui_design` | `card-hover-focus`, `panel-empty-error`, `field-a11y` (3) |
+
+Admission needs eight cases (step 4), and both baselines must hold the same ones. `design_spec` and `ui_design` have three each today, so write five more cases for either before an engine can be admitted to it. `ui_design` runs the helper's pack on its own, with the spec in `context.plan.designSpec`; its cases are regenerated with `node evals/ui_design/make-fixtures.mjs`.
 
 ## 4. Admit
 
@@ -49,11 +57,11 @@ pnpm eval admit --pack design_parity --engine codex:sol --against claude:opus --
 
 The command reads both baselines. It passes when all of these hold:
 
-- the candidate graded at least eight cases (`MIN_CASES_TO_MOVE`);
+- both baselines graded at least eight cases (`MIN_CASES_TO_MOVE`), the same number each, and the same case ids where both saved scorecards list them;
 - its pass rate is at least Claude's minus 2 points (`TIE_POINTS = 0.02`, `evals/src/scorecard.ts`);
-- where both baselines carry them, its recall is at least Claude's minus 2 points, and its false-blocker rate at most Claude's plus 2 points.
+- where the baseline carries recall or a false-blocker rate, so does the candidate, and its recall is at least Claude's minus 2 points and its false-blocker rate at most Claude's plus 2 points.
 
-It exits 0 on a pass, 1 on a fail and 2 when a baseline is missing (or `--against` is not a Claude engine). `--write` records the verdict in `evals/baselines/<engine>/<pack>.admission.json`, a pass or a fail.
+It exits 0 on a pass, 1 on a fail and 2 when it cannot decide: a baseline is missing, `--against` is not a Claude engine, or the two baselines cannot be compared (too few cases, another number of cases or other cases, or a metric only the baseline has). A verdict line says "decided on pass rate alone" when neither baseline carries recall or a false-blocker rate. `--write` records the verdict in `evals/baselines/<engine>/<pack>.admission.json`, a pass or a fail.
 
 The parity grader does not record `recall` or `falseBlockerRate` yet, so today the gate rests on the pass rate. Confirm what the baselines carry before you read a pass as more than that.
 
