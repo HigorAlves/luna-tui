@@ -77,6 +77,11 @@ export function settleParity(answer: DesignParityAnswer | null, { plan, spec, ca
       notes.push(`dropped a finding on frame ${f.frame}, which the capture plan does not hold`);
       continue;
     }
+    // A finding stands only where the machine holds the capture and the reviewer compared it: otherwise it is a claim about a build nobody looked at.
+    if (!frames.some((r) => r.scenario !== null && r.status === "compared" && r.frame === f.frame && r.viewport === f.viewport && r.state === f.state)) {
+      notes.push(`dropped a finding on frame ${f.frame} (${f.viewport}, ${f.state}), which was not compared`);
+      continue;
+    }
     const base = {
       path: `figma:${f.frame}/${f.node}`,
       line: 0,

@@ -31,6 +31,12 @@ describe("runDesignParity", () => {
     expect((out as { report: { frames: unknown[] } }).report.frames).toEqual([expect.objectContaining({ status: "compared", capture: "/state/runs/r1/parity/S1/1440x900-default.png", render: "/state/runs/r1-parity/design/1-0.png", pair: null })]);
   });
 
+  it("starts no sub-run when the machine holds no capture: every planned row is not compared, no capture", async () => {
+    const none = { ...parity, captures: [] };
+    const out = await runDesignParity(deps({ run: async () => { throw new Error("ran"); } }), ctx, none);
+    expect(out).toMatchObject({ report: { ran: false, runId: null, frames: [{ frame: "F1", status: "not_compared", reason: "no capture" }] }, gate: { fires: true, why: expect.arrayContaining(["not_compared"]) } });
+  });
+
   it("pairs each compared frame from host paths: the container paths are mapped", async () => {
     const state = mkdtempSync(join(tmpdir(), "parity-"));
     const here = { ...parity, dir: join(state, "runs", "r1", "parity") };

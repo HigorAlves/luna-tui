@@ -33,6 +33,13 @@ describe("settleParity", () => {
     expect(s.findings).toEqual([expect.objectContaining({ path: "figma:12:34/12:35", line: 0, severity: "should_fix", category: "design", id: expect.stringMatching(/^D[0-9a-f]{8}$/), body: "Off token. Expected #1A73E8; built #1B74E9 (button.pay).", design: expect.objectContaining({ source: "parity", element: "button.pay", frame: "12:34", node: "12:35" }) })]);
     expect(s.notes).toEqual([expect.stringContaining("99:9")]);
   });
+  it("keeps a finding only on a row it compared: one on a frame with no capture is dropped with a note", () => {
+    const hover = { ...finding("blocker", 0.95), state: "hover" as const };
+    const s = settle(answer({ frames: [frame("default"), frame("hover")], findings: [hover, finding("should_fix")] }));
+    expect(s.findings.map((f) => f.severity)).toEqual(["should_fix"]);
+    expect(s.blockers).toBe(0);
+    expect(s.notes).toEqual([expect.stringContaining("12:34")]);
+  });
   it("gives the same id to the same difference in every round, whatever its title says", () => {
     const a = settle(answer({ findings: [finding("should_fix")] })).findings[0]!.id;
     const b = settle(answer({ findings: [{ ...finding("should_fix"), title: "Colour of pay is off" }] })).findings[0]!.id;

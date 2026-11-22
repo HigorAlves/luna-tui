@@ -65,7 +65,8 @@ export async function runDesignParity(deps: DesignParityDeps, context: StageCont
   let spentAfter = false;
   const notes: string[] = [];
   let ran = false;
-  if (parity.plan.targets.length > 0) {
+  // With no capture in the machine's hands there is nothing to review: the planned rows settle as `no capture` without a sub-run.
+  if (parity.plan.targets.length > 0 && parity.captures.length > 0) {
     const { result, spentAfter: after } = await designRun(
       { ...(deps.budget ? { budget: deps.budget } : {}) },
       context,
