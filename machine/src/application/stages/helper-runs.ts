@@ -103,7 +103,7 @@ export interface HelperRuns extends HelperCoordinator {
   cancel(): Promise<void>;
   /** The shas the machine picked onto the card's branch: earlier runs' and this one's. Read when asked. */
   picked(): ReadonlySet<string>;
-  /** The files the helper holds while it has its slice: the implementer must not touch them. */
+  /** The files of every slice the helper holds or has had picked in this run: the implementer must not touch them. */
   delegatedLocks(): string[];
   /** Where the run's latest helper stands, for the run's `detail.helper`; null when none was started. `picked` is what the machine put on the branch for it. */
   status(): { slice: number; state: HelperState; attempt: number; picked?: string[] } | null;
@@ -570,7 +570,8 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
     },
     cancel,
     picked: () => pickedShas,
-    delegatedLocks: () => [...new Set([...helpers.values()].filter((h) => LIVE.has(h.state)).flatMap((h) => h.locks.helper))],
+    // A slice the helper has (live) or had picked onto the branch (committed) is its for the whole run; one handed back to the implementer is not.
+    delegatedLocks: () => [...new Set([...helpers.values()].filter((h) => LIVE.has(h.state) || h.state === "committed").flatMap((h) => h.locks.helper))],
     status() {
       const h = [...helpers.values()].at(-1);
       return h ? { slice: h.slice, state: h.state, attempt: h.attempt, ...(h.pickedShas?.length ? { picked: [...h.pickedShas] } : {}) } : null;

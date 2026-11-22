@@ -437,7 +437,8 @@ describe("helperRuns: the pick", () => {
     expect(t.rows.at(-1)).toEqual({ kind: "build.helper_picked", payload: { slice: 2, base: BASE, helperTip: TIP, onto: BASE, picked: [PICKED], tip: PICKED } });
     expect(named(t, "publish")).toHaveLength(1);
     expect(await stateOf(2)).toMatchObject({ state: "committed" });
-    expect(t.coordinator.delegatedLocks()).toEqual([]);
+    // L7-4: a slice the helper built and the machine picked stays the helper's for the whole run.
+    expect(t.coordinator.delegatedLocks()).toEqual(["src/ui/Card.tsx", "src/ui/Card.test.tsx"]);
     expect(t.removed).toEqual(["/cards/w.helper-2-1"]);
     expect([...t.coordinator.picked()]).toEqual([PICKED]);
     // No folder update inside the run: the container did its own merge.
@@ -664,6 +665,8 @@ describe("helperRuns: the end of the run, after a pass", () => {
   it("lands a helper that already returned the same way", async () => {
     const t = await returned();
     expect(await t.coordinator.afterRun("pass")).toBeNull();
+    // L7-4: the files stay locked once landed, for the scope checks that run after the end of the run.
+    expect(t.coordinator.delegatedLocks()).toEqual(["src/ui/Card.tsx", "src/ui/Card.test.tsx"]);
     expect(named(t, "landInWorktree")).toHaveLength(1);
     expect(await stateOf(2)).toMatchObject({ state: "committed" });
   });
