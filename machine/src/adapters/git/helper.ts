@@ -199,6 +199,12 @@ export async function pickOnto(cardPath: string, onto: string, commits: readonly
   return { ok: true, picked, tip };
 }
 
+/** Whether `ancestor` is `descendant` or one of its ancestors in the card's repository; false on anything else, a bad id included. */
+export async function isAncestor(cardPath: string, ancestor: string, descendant: string): Promise<boolean> {
+  if (!SHA.test(ancestor) || !SHA.test(descendant)) return false;
+  return (await exec("git", [...HOST_GIT, "--git-dir=" + machineGitDir(cardPath), "merge-base", "--is-ancestor", ancestor, descendant])).code === 0;
+}
+
 /** A bundle of `tipRef` over `from` (what the implementer's container fetches), written to a temporary name beside `dest` and renamed into place. */
 export async function pickBundle(cardPath: string, from: string, tipRef: string, dest: string): Promise<{ ok: true } | { ok: false; reason: string }> {
   if (!SHA.test(from) || !tipRef.startsWith(REF_PREFIX) || tipRef.includes("..") || tipRef.startsWith("-")) return { ok: false, reason: "not a commit id or a helper ref" };

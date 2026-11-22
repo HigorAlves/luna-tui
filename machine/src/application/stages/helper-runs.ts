@@ -17,7 +17,7 @@ import { type EngineId, Ledger, type StageInput, oneLine } from "@hardness/contr
 
 import { readRegularFile } from "../../adapters/fs/bounded.ts";
 import type { ImportResult } from "../../adapters/git/bundles.ts";
-import { type advanceBranch, type helperWorkspace, type landInWorktree, type pickBundle, type pickOnto, pickedRef, type takeHelperCommits } from "../../adapters/git/helper.ts";
+import { type advanceBranch, type helperWorkspace, type isAncestor, type landInWorktree, type pickBundle, type pickOnto, pickedRef, type takeHelperCommits } from "../../adapters/git/helper.ts";
 import { type DelegationFacts, type Locks, MIN_HELPER_MINUTES, delegable, helperMinutes } from "../../domain/delegation.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { type HelperEventKind, type HelperPayloads, helperEnded } from "../../domain/helper-events.ts";
@@ -72,6 +72,7 @@ export interface HelperRunsDeps {
     pickBundle: typeof pickBundle;
     advanceBranch: typeof advanceBranch;
     landInWorktree: typeof landInWorktree;
+    isAncestor: typeof isAncestor;
   };
   /** Shows the card's branch in the user's repository after the machine moved it (the pack runner's `publishBranch`); a refusal is a note. */
   publish?: () => Promise<{ ok: true } | { ok: false; note: string }>;
@@ -493,7 +494,17 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
       };
       if (request.head !== pending.tip) return drop("your head is not the picked tip");
       const moved = await deps.git.advanceBranch(deps.cardPath, deps.branch, pending.P, pending.tip).catch((error): { ok: false; reason: string } => ({ ok: false, reason: msg(error) }));
-      if (!moved.ok) return drop(`the card's branch ${moved.reason === "moved" ? "moved" : "could not move"} since the pick (${moved.reason}); bundle again and call slice_wait`);
+      if (!moved.ok) {
+        // The factory merged the tip and the implementer committed on top of it: the pick is on the branch already.
+        const head = await deps.importer.sync().then((r) => (r.ok ? r.head : null)).catch(() => null);
+        if (head && (await deps.git.isAncestor(deps.cardPath, pending.tip, head).catch(() => false))) {
+          await landed(h, pending.P, pending.tip, pending.picked);
+          await setState(h, "committed");
+          await release(h);
+          return { ok: true };
+        }
+        return drop(`the card's branch ${moved.reason === "moved" ? "moved" : "could not move"} since the pick (${moved.reason}); bundle again and call slice_wait`);
+      }
       await landed(h, pending.P, pending.tip, pending.picked);
       await setState(h, "committed");
       await release(h);
@@ -514,11 +525,13 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
       return;
     }
     await serial(async () => {
+      // An ack may have landed this pick while the call waited its turn.
+      if (h.state !== "returned" && h.state !== "picking") return;
       const synced = await deps.importer.sync();
       if (!synced.ok) return fail(h, `the card's commits could not be taken in: ${synced.reason}`);
       const P = synced.head;
-      // The factory merged the picked tip and its last bundle came in: the branch is there already.
-      if (h.pending && P === h.pending.tip) {
+      // The factory merged the picked tip and its last bundle came in (the branch may have moved on since): the pick is there already.
+      if (h.pending && (P === h.pending.tip || (await deps.git.isAncestor(deps.cardPath, h.pending.tip, P).catch(() => false)))) {
         await landed(h, h.pending.P, h.pending.tip, h.pending.picked);
         await setState(h, "committed");
         return release(h);

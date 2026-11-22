@@ -50,6 +50,7 @@ function setup(over: Partial<HelperRunsDeps> = {}) {
   let advance: Awaited<ReturnType<HelperRunsDeps["git"]["advanceBranch"]>> = { ok: true };
   let land: Awaited<ReturnType<HelperRunsDeps["git"]["landInWorktree"]>> = { ok: true };
   let hold: Promise<void> = Promise.resolve();
+  let descends = false;
   const calls: unknown[][] = [];
   const log: string[] = [];
   const abort = new AbortController();
@@ -67,6 +68,7 @@ function setup(over: Partial<HelperRunsDeps> = {}) {
       pickBundle: async (...a) => (calls.push(["pickBundle", ...a]), await writeFile(a[3], "bundle bytes"), { ok: true as const }),
       advanceBranch: async (...a) => (log.push("advance"), calls.push(["advanceBranch", ...a]), await hold, advance),
       landInWorktree: async (...a) => (calls.push(["landInWorktree", ...a]), land),
+      isAncestor: async (_card, a, b) => a === b || descends,
     },
     publish: async () => (calls.push(["publish"]), { ok: true as const }),
     note: async (text) => void calls.push(["note", text]),
@@ -86,6 +88,7 @@ function setup(over: Partial<HelperRunsDeps> = {}) {
   return {
     deps, rows, removed, made, taken, c, abort, calls, log,
     setTake: (t: typeof take) => (take = t), spend: () => (spent = true),
+    setDescends: (d: boolean) => (descends = d),
     setHead: (h: string) => (head = h), setPick: (p: typeof pick) => (pick = p), setAdvance: (a: typeof advance) => (advance = a), setLand: (l: typeof land) => (land = l),
     holdAdvance: () => { let release!: () => void; hold = new Promise<void>((r) => (release = r)); return () => { release(); hold = Promise.resolve(); }; },
     coordinator: helperRuns(deps),
@@ -509,6 +512,49 @@ describe("helperRuns: the pick", () => {
     await tick();
     expect(await stateOf(2)).toMatchObject({ state: "failed", summary: expect.stringContaining("no commits") });
     expect(t.removed).toEqual(["/cards/w.helper-2-1"]);
+  });
+});
+
+describe("helperRuns: a pick that landed", () => {
+  it("is not picked again when an ack lands while the end of the run waits its turn (L7-2)", async () => {
+    const t = await returned();
+    await pickReq(t);
+    const release = t.holdAdvance();
+    const ack = ackReq(t);
+    await tick();
+    const end = t.coordinator.afterRun("pass");
+    await tick();
+    release();
+    expect(await ack).toEqual({ ok: true });
+    expect(await end).toBeNull();
+    expect(named(t, "pickOnto")).toHaveLength(1);
+    expect(named(t, "advanceBranch")).toHaveLength(1);
+    expect(t.rows.filter((r) => r.kind === "build.helper_picked")).toHaveLength(1);
+    expect(await stateOf(2)).toMatchObject({ state: "committed" });
+  });
+
+  it("is not picked again at the end of the run when the card's tip descends from the picked tip (L7-3)", async () => {
+    const t = await returned();
+    await pickReq(t);
+    // The ack was lost; the factory merged the picked tip and the implementer committed on top of it.
+    t.setHead("7".repeat(40));
+    t.setDescends(true);
+    expect(await t.coordinator.afterRun("pass")).toBeNull();
+    expect(named(t, "pickOnto")).toHaveLength(1);
+    expect(t.rows.filter((r) => r.kind === "build.helper_picked")).toEqual([{ kind: "build.helper_picked", payload: { slice: 2, base: BASE, helperTip: TIP, onto: BASE, picked: [PICKED], tip: PICKED } }]);
+    expect(await stateOf(2)).toMatchObject({ state: "committed" });
+  });
+
+  it("counts an ack as landed when the branch moved on past the picked tip (L7-3)", async () => {
+    const t = await returned();
+    await pickReq(t);
+    t.setAdvance({ ok: false, reason: "moved" });
+    t.setHead("7".repeat(40));
+    t.setDescends(true);
+    expect(await ackReq(t)).toEqual({ ok: true });
+    expect(await stateOf(2)).toMatchObject({ state: "committed" });
+    expect(t.rows.filter((r) => r.kind === "build.helper_picked")).toHaveLength(1);
+    expect(t.coordinator.picked().has(PICKED)).toBe(true);
   });
 });
 
