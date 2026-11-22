@@ -97,6 +97,8 @@ export interface TrialReport {
   conflicts: number;
   /** The helper ran at all (a `build.helper_started` row). */
   delegated: boolean;
+  /** The engine the helper ran on, from the `build.helper_started` row; null when no helper started or the row names none. */
+  helperEngine: string | null;
   escalation: string | null;
 }
 
@@ -117,6 +119,7 @@ export function trialReport(c: LoadedBuildCase, trial: BuildTrial): TrialReport 
     picks: count("build.helper_picked"),
     conflicts: count("build.helper_conflict"),
     delegated: count("build.helper_started") > 0,
+    helperEngine: (trial.rows.find((r) => r.kind === "build.helper_started")?.payload.engine as string | undefined) ?? null,
     escalation: trial.escalation ?? null,
   };
 }
@@ -161,6 +164,7 @@ export function renderReport(engine: string, reports: CaseReport[]): string {
       `  both slices committed: ${yes(d.committed.logic && d.committed.ui)} (logic ${yes(d.committed.logic)}, ui ${yes(d.committed.ui)})`,
       `  scope clean: ${yes(d.scopeClean)}${d.strays.length ? ` (${d.strays.join(", ")})` : ""}`,
       `  picks: ${d.picks}, conflicts: ${d.conflicts}${d.delegated ? "" : " (no helper ran)"}`,
+      ...(d.helperEngine ? [`  helper engine: ${d.helperEngine}`] : []),
       `  wall clock: ${minutes(d.wallMs)} with the helper${r.baseline ? `, ${minutes(r.baseline.wallMs)} with delegation off${r.ratio !== null ? ` (${r.ratio}x)` : ""}` : ", no run with delegation off"}`,
     );
     for (const p of r.problems) lines.push(`  problem: ${p}`);
@@ -176,4 +180,15 @@ export function renderDry(cases: LoadedBuildCase[], baseline: boolean): string {
     `${cases.length} build-helper cases (${baseline ? "each with the helper on and with delegation off" : "each with the helper on"}); nothing runs`,
     ...cases.map((c) => `  ${c.id}: ${c.slices.map((s) => `"${s.title}" [${s.touchpoints.join(", ")}]`).join(" + ")} · design ${c.fileKey} ${c.nodeId} · replay ${c.uiCase}`),
   ].join("\n");
+}
+
+/** Runs `run` with Ctrl-C wired to `abort` (the run stops its containers on the signal), and takes the handler off afterwards, whatever `run` does. */
+export async function untilInterrupted<T>(abort: AbortController, run: () => Promise<T>): Promise<T> {
+  const onSigint = () => abort.abort();
+  process.once("SIGINT", onSigint);
+  try {
+    return await run();
+  } finally {
+    process.removeListener("SIGINT", onSigint);
+  }
 }

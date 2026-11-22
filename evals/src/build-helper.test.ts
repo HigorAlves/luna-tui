@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { type BuildTrial, type LoadedBuildCase, caseReport, loadBuildCases, renderDry, renderReport, trialReport } from "./build-helper.ts";
+import { type BuildTrial, type LoadedBuildCase, caseReport, loadBuildCases, renderDry, renderReport, trialReport, untilInterrupted } from "./build-helper.ts";
 
 const EVALS = resolve(import.meta.dirname, "..");
 const cases = loadBuildCases(EVALS);
@@ -85,6 +85,13 @@ describe("the report of a run", () => {
     expect(caseReport(c, trial(), trial({ delegation: "off" })).problems).toContain("the baseline run delegated: delegation was not off");
   });
 
+  it("names the engine the helper ran on, from the machine's helper_started row", () => {
+    const on = trial({ rows: [{ kind: "build.helper_started", payload: { slice: 2, engine: "claude:sonnet" } }, { kind: "build.helper_picked", payload: { slice: 2 } }] });
+    expect(trialReport(c, on).helperEngine).toBe("claude:sonnet");
+    expect(trialReport(c, trial()).helperEngine).toBeNull();
+    expect(renderReport("claude:opus", [caseReport(c, on, null)])).toContain("helper engine: claude:sonnet");
+  });
+
   it("prints each case's four facts and the tally", () => {
     const text = renderReport("claude:sonnet", [caseReport(c, trial(), trial({ delegation: "off", wallMs: 10 * 60_000, rows: [] })), caseReport(cases[1]!, trial({ changed: [] }), null)]);
     expect(text).toContain("build-helper on claude:sonnet");
@@ -93,5 +100,32 @@ describe("the report of a run", () => {
     expect(text).toContain("wall clock: 6.0 min with the helper, 10.0 min with delegation off (0.6x)");
     expect(text).toContain("FAIL field-rounds-total");
     expect(text).toContain("1/2 cases passed");
+  });
+});
+
+describe("untilInterrupted", () => {
+  const added = (before: Function[]) => process.listeners("SIGINT").filter((l) => !before.includes(l));
+
+  it("aborts the controller on SIGINT while the run is going, and leaves no handler after it", async () => {
+    const before = process.listeners("SIGINT");
+    const abort = new AbortController();
+    let inside: Function[] = [];
+    const out = await untilInterrupted(abort, async () => {
+      inside = added(before);
+      expect(inside).toHaveLength(1);
+      (inside[0] as () => void)();
+      return "done";
+    });
+    expect(out).toBe("done");
+    expect(abort.signal.aborted).toBe(true);
+    expect(process.listeners("SIGINT")).toEqual(before);
+  });
+
+  it("removes the handler when the run throws, and does not abort", async () => {
+    const before = process.listeners("SIGINT");
+    const abort = new AbortController();
+    await expect(untilInterrupted(abort, async () => { throw new Error("boom"); })).rejects.toThrow("boom");
+    expect(process.listeners("SIGINT")).toEqual(before);
+    expect(abort.signal.aborted).toBe(false);
   });
 });
