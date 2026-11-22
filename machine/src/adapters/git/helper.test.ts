@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { advanceBranch } from "./bundles.ts";
 import { ensureClone } from "./clone.ts";
-import { MAX_HELPER_COMMITS, gitVersionProblem, helperRef, helperWorkspace, pickBundle, pickOnto, pickedRef, takeHelperCommits } from "./helper.ts";
+import { MAX_HELPER_COMMITS, gitVersionProblem, landInWorktree, helperRef, helperWorkspace, pickBundle, pickOnto, pickedRef, takeHelperCommits } from "./helper.ts";
 import { machineGitDir } from "./machine-repo.ts";
 import { workspaceFor } from "./worktree.ts";
 
@@ -325,6 +325,43 @@ describe("advanceBranch: only forward", () => {
     expect(await advanceBranch(f.card, f.branch, p2, f.tests)).toEqual({ ok: false, reason: "invalid" });
     expect(await advanceBranch(f.card, f.branch, p2, sibling)).toEqual({ ok: false, reason: "invalid" });
     expect(mgit(f.card, "rev-parse", `refs/heads/${f.branch}`)).toBe(p2);
+  });
+});
+
+describe("landInWorktree", () => {
+  /** The card at P, the picked tip T on the branch (the index at T, as advanceBranch leaves it) and the folder still at P. */
+  async function landed(files: Record<string, string>) {
+    const f = await fixture();
+    const one = commit(f.helper, files, "feat: card");
+    await takeHelperCommits(f.card, f.helper, TASK, 3, f.tests);
+    const picked = await pickOnto(f.card, f.tests, [one], machine, trailer, { task: TASK, slice: 3 });
+    if (!picked.ok) throw new Error("not picked");
+    expect(await advanceBranch(f.card, f.branch, f.tests, picked.tip)).toEqual({ ok: true });
+    return { f, tip: picked.tip };
+  }
+
+  it("brings the folder to the picked tip: new and changed files appear, other local edits stay", async () => {
+    const { f, tip } = await landed({ "src/ui/Card.tsx": "card\n", "src/api.ts": "api2\n" });
+    writeFileSync(join(f.card, "src/index.ts"), "my edit\n");
+    expect(existsSync(join(f.card, "src/ui/Card.tsx"))).toBe(false);
+    expect(await landInWorktree(f.card, f.tests, tip)).toEqual({ ok: true });
+    expect(readFileSync(join(f.card, "src/ui/Card.tsx"), "utf8")).toBe("card\n");
+    expect(readFileSync(join(f.card, "src/api.ts"), "utf8")).toBe("api2\n");
+    expect(readFileSync(join(f.card, "src/index.ts"), "utf8")).toBe("my edit\n");
+    expect(mgit(f.card, "rev-parse", `refs/heads/${f.branch}`)).toBe(tip);
+  });
+
+  it("refuses, naming the files, when local edits sit on a file the pick changes, and leaves the folder as it was", async () => {
+    const { f, tip } = await landed({ "src/api.ts": "api2\n" });
+    writeFileSync(join(f.card, "src/api.ts"), "my edit\n");
+    expect(await landInWorktree(f.card, f.tests, tip)).toEqual({ ok: false, files: ["src/api.ts"] });
+    expect(readFileSync(join(f.card, "src/api.ts"), "utf8")).toBe("my edit\n");
+    expect(mgit(f.card, "rev-parse", `refs/heads/${f.branch}`)).toBe(tip);
+  });
+
+  it("refuses a from or to that is not a commit id", async () => {
+    const f = await fixture();
+    expect(await landInWorktree(f.card, "HEAD", f.tests)).toMatchObject({ ok: false });
   });
 });
 

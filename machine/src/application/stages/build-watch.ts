@@ -114,8 +114,8 @@ export interface PickRequest {
   slice: number;
   head: string;
 }
-/** The pick: `bundle` is a file in `checks/` holding one ref, the picked one, over the implementer's head; `retry` asks the factory to bundle and ask again. */
-export type PickAnswer = { ok: true; tip: string; picked: string[]; bundle: string } | { ok: false; retry?: true; error?: string };
+/** The pick: `bundle` is a file in `checks/` holding one ref, the picked one, over the implementer's head; `retry` asks the factory to bundle and ask again; `conflict` says the pick conflicted (the `error` has the words the agent sees). */
+export type PickAnswer = { ok: true; tip: string; picked: string[]; bundle: string } | { ok: false; retry?: true; conflict?: true; error?: string };
 
 /** The factory's acknowledgement that its own HEAD is now the picked tip. */
 export interface PickAck {

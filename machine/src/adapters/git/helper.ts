@@ -212,3 +212,21 @@ export async function pickBundle(cardPath: string, from: string, tipRef: string,
     rmSync(temp, { force: true });
   }
 }
+
+/**
+ * Brings the card's folder `W` from `from` to `to` after the branch moved there (the implementer's container is gone): the index is put back at `from`
+ * (`advanceBranch` set it at `to`, and `read-tree -m` from there would leave the folder alone), then `read-tree -m -u from to` writes the changed files.
+ * A file the pick changes that holds local edits (or an untracked file in its way) refuses it: `{ ok: false, files }`, the folder untouched and the index back at `to`.
+ */
+export async function landInWorktree(cardPath: string, from: string, to: string): Promise<{ ok: true } | { ok: false; files: string[] }> {
+  if (!SHA.test(from) || !SHA.test(to)) return { ok: false, files: [] };
+  const git = (...args: string[]) => exec("git", [...HOST_GIT, "--git-dir=" + machineGitDir(cardPath), "--work-tree=" + cardPath, ...args]);
+  if ((await git("read-tree", from)).code !== 0) return { ok: false, files: [] };
+  // A freshly read index has no stat data, so every entry would be "not uptodate": refresh it (a file with local edits stays modified, and `read-tree -m` then names it).
+  await git("update-index", "-q", "--refresh");
+  const merged = await git("read-tree", "-m", "-u", from, to);
+  if (merged.code === 0) return { ok: true };
+  await git("read-tree", to);
+  const files = [...new Set([...merged.stderr.matchAll(/(?:Entry|file) '([^']+)'/g)].map((m) => m[1]!))];
+  return { ok: false, files };
+}
