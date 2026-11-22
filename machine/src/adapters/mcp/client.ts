@@ -44,6 +44,10 @@ export function createMcp(servers: readonly McpServerConfig[], deps: McpDeps): M
       const server = declared(name);
       c = (async () => {
         const client = new Client({ name: "luna-machine", version: "1.0.0" });
+        // A transport that closes under us is not reused: the next call connects again.
+        client.onclose = () => {
+          if (clients.get(name) === c) clients.delete(name);
+        };
         await client.connect((deps.transportFor ?? ((sv, t) => defaultTransport(sv, t, deps.authProvider?.(sv))))(server, await deps.token(server)));
         return client;
       })();
@@ -67,6 +71,9 @@ export function createMcp(servers: readonly McpServerConfig[], deps: McpDeps): M
         const r = await (await clientOf(name)).callTool({ name: tool, arguments: (args ?? {}) as Record<string, unknown> });
         return shapeResult((r.content ?? []) as never, r.isError === true);
       } catch (error) {
+        const dead = clients.get(name);
+        clients.delete(name);
+        void dead?.then((c) => c.close()).catch(() => {});
         return { ok: false, error: `${name}: ${(error as Error).message}`.slice(0, 2000) };
       }
     },
