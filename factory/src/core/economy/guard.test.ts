@@ -335,3 +335,13 @@ describe("LoopGuard events", () => {
     for (const e of events.filter((x) => x.kind === "economy.guard")) expect(EconomyGuardEvent.safeParse(e.payload).success, JSON.stringify(e.payload)).toBe(true);
   });
 });
+
+describe("an implementer that polls slice_wait while a helper works", () => {
+  it("is never asked about, redirected or stopped: a luna call carries no edit, error or failure, so no gate opens", () => {
+    const { guard, events } = setup();
+    const wait = { tool: "mcp__luna__slice_wait", target: "" };
+    const steps = Array.from({ length: 300 }, () => guard.fold({}, wait));
+    expect(steps.every((s) => s.kind === "none")).toBe(true);
+    expect(events).toEqual([]);
+  });
+});
