@@ -12429,6 +12429,30 @@ mod task_view_command_tests {
     }
 
     #[test]
+    fn waive_posts_not_a_difference_and_accept_posts_accepted_to_the_findings_path() {
+        for (line, kind) in [
+            ("waive D1a2b3c4 same token, anti-aliasing", "not_a_difference"),
+            ("accept D1a2b3c4 brand allows it", "accepted"),
+        ] {
+            let (mut app, open, _, _) = two_cards();
+            let (machine, seen) = super::confirm_tests::body_recording_machine();
+            app.machine = machine;
+            command(&mut app, line);
+            let calls = seen.lock().unwrap().clone();
+            assert_eq!(calls.len(), 1, "{line}");
+            assert_eq!(
+                calls[0].0,
+                format!("/tasks/{open}/design/findings/D1a2b3c4/waive")
+            );
+            let reason = line.split_once(' ').unwrap().1.split_once(' ').unwrap().1;
+            assert_eq!(
+                calls[0].1,
+                serde_json::json!({ "kind": kind, "reason": reason })
+            );
+        }
+    }
+
+    #[test]
     fn approving_the_design_sign_off_asks_what_it_commits() {
         use crate::testkit::{open_card, task_json};
         use serde_json::json;
