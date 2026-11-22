@@ -448,7 +448,20 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
             None,
         ),
         Section::Design => {
-            let (lines, row) = design_section_lines(detail, view.cursor);
+            let (lines, line) = design_section_lines(detail, view.cursor);
+            // The pane wraps long finding lines, so the cursor's place is counted in rows, not lines.
+            let row = line.map(|line| {
+                lines
+                    .iter()
+                    .take(line)
+                    .map(|l| {
+                        Paragraph::new(l.clone())
+                            .wrap(Wrap { trim: false })
+                            .line_count(pane_area.width)
+                            .max(1)
+                    })
+                    .sum::<usize>()
+            });
             (Page::of(lines), row)
         }
         Section::Now => (
@@ -4911,6 +4924,58 @@ mod tests {
         assert!(text.contains("should_fix  D1a2b3c4  token  Pay colour  expected #1A73E8  built #1B74E9  button.pay"), "{text}");
         assert!(text.contains("not compared: no capture"), "{text}");
         assert!(text.contains("open findings"), "why the gate fired: {text}");
+    }
+
+    #[test]
+    fn the_design_cursor_stays_in_view_when_finding_lines_wrap() {
+        let (task, mut detail) = design_gate();
+        let long = "a long title that wraps over several rows of a narrow pane ".repeat(3);
+        let frames: Vec<_> = (0..6)
+            .map(|i| serde_json::json!({"frame": format!("F{i}"), "name": format!("Frame{i}x"), "node": format!("1:{i}"), "scenario": "S1", "viewport": "desktop", "state": "default", "status": "compared", "capture": null, "render": null, "diff": null, "pair": null, "diffRatio": 0.01}))
+            .collect();
+        let findings: Vec<_> = (0..6)
+            .map(|i| serde_json::json!({"id": format!("D{i}"), "path": "p", "line": 0, "severity": "should_fix", "title": long, "body": "b", "confidence": 0.9,
+                "design": {"source": "parity", "frame": format!("F{i}"), "node": format!("1:{i}"), "viewport": "desktop", "state": "default", "kind": "token"}}))
+            .collect();
+        detail.approvals[0].requested = serde_json::json!({"design": {"gate": {"fires": true, "why": ["open_findings"]},
+            "parity": {"frames": frames}, "findings": findings}});
+        for last in 0..6 {
+            let scroll = Cell::new(0);
+            let view = DetailView {
+                task: &task,
+                detail: Some(&detail),
+                section: Section::Design,
+                cursor: last,
+                scroll: &scroll,
+                prs: &[],
+                diff: None,
+                viewport: &Cell::new(0),
+                follow: &Cell::new(true),
+                engines: None,
+                tasks: &[],
+                actions: &[],
+                can: &[],
+                refs: &RefState::default(),
+                hits: &RefCell::new(Vec::new()),
+            };
+            let mut terminal = Terminal::new(TestBackend::new(50, 14)).unwrap();
+            terminal
+                .draw(|f| super::render(f, f.area(), &view))
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let screen: String = (0..14)
+                .map(|y| {
+                    (0..50)
+                        .map(|x| buffer[(x, y)].symbol().to_string())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                screen.contains(&format!("Frame{last}x")),
+                "cursor {last} is off screen:\n{screen}"
+            );
+        }
     }
 
     #[test]
