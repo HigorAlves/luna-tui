@@ -219,7 +219,8 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
 
   /** The helper's run has ended: log it, then follow where it goes. */
   async function settle(h: Helper, result: StageResult, minutes: number): Promise<void> {
-    await row("build.helper_ended", helperEnded(h.slice, h.attempt, result, minutes));
+    // A helper its own controller stopped (`cancel`, the implementer's abort) ends as cancelled, whatever the aborted run reported.
+    await row("build.helper_ended", helperEnded(h.slice, h.attempt, h.controller.signal.aborted ? { ...result, outcome: "cancelled" } : result, minutes));
     // The helper's own spending can spend the design budget: the run ends in `design_budget`, whatever the agent answers.
     const budget = await deps.facts().then((f) => f.designBudget.spent).catch(() => false);
     if (budget && !escalation) escalation = { escalate: "design_budget", reason: `the design budget is spent: the ui-designer's run on slice ${h.slice} used the last of it; a person decides` };

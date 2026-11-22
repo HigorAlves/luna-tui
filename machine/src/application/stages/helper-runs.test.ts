@@ -272,6 +272,24 @@ describe("helperRuns: cancelling", () => {
     expect(t.taken).toEqual([]);
   });
 
+  it("records the helper's end as cancelled, not failed, when its own signal was aborted", async () => {
+    const t = setup();
+    await ask(t.coordinator);
+    const done = t.coordinator.cancel();
+    t.c.settle({ outcome: "fail", detail: { error: "aborted" } });
+    await done;
+    expect(t.rows.at(-1)).toEqual({ kind: "build.helper_ended", payload: expect.objectContaining({ slice: 2, outcome: "cancelled" }) });
+  });
+
+  it("records the helper's end as cancelled when the implementer's abort stopped it", async () => {
+    const t = setup();
+    await ask(t.coordinator);
+    t.abort.abort();
+    t.c.settle({ outcome: "fail", detail: { error: "aborted" } });
+    await tick();
+    expect(t.rows.at(-1)).toEqual({ kind: "build.helper_ended", payload: expect.objectContaining({ outcome: "cancelled" }) });
+  });
+
   it("stops waiting after cancelWaitMs for a run that never settles, and still frees everything", async () => {
     const t = setup();
     await ask(t.coordinator);
