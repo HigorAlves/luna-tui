@@ -3,15 +3,19 @@
 // /in, the container run by the docker sandbox like every stage, /out/result.json read back and
 // validated. The Slack triage runner, Jira intake and the replay evals (evals/run.ts) run a pack this way.
 import { type EngineId, type StageInput, StageOutput, credentialOwner } from "@hardness/contracts";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { CredentialWaitError, type Credentials } from "../../adapters/credentials/index.ts";
 import { type SandboxResult, type SandboxRun, runSandbox } from "../../adapters/docker/docker.ts";
+import type { BridgedTool } from "@hardness/contracts";
 import type { Trust } from "../../domain/trust.ts";
 import { sandboxSizeOf } from "../../domain/sandbox-bounds.ts";
 import type { EgressPolicy } from "../egress-policy.ts";
+import type { Mcp } from "../mcp.ts";
 import type { PolicyStore } from "../policy.ts";
+import { buildWatch } from "./build-watch.ts";
+import { DESIGN_MOUNT, type McpCallRow, cappedRow, mcpAnswers } from "./design-bridge.ts";
 
 const MINUTE = 60_000;
 
@@ -36,6 +40,16 @@ export interface OneRun {
   /** Whose input the pack reads: `untrusted` (the default) for text from Slack, Jira, a client or a GitHub source with no trusted association; it picks the runtime and the cache. */
   trust?: Trust;
   signal?: AbortSignal;
+  /** Host folders mounted read-only in the container (the parity reviewer's captures at /evidence/parity; an eval case's `mounts/`). Absent or empty adds nothing. */
+  mounts?: Array<{ host: string; container: string; readOnly: true }>;
+  /** The bridged tools of the run (RFC 0013): `input.bridge` is set to `tools`, `designDir` is mounted read-only at /design, and the machine answers the container's calls through `mcp` while it runs. The client is closed when the run ends. */
+  bridge?: { tools: BridgedTool[]; mcp: Mcp; designDir: string; log: (row: McpCallRow) => void | Promise<void> };
+  /** A browser pack's run: the hosts of its QA target for the egress list, the secret values it is handed (its target's credential), the app's network, the names it reaches directly, and values its output is cleaned of. */
+  egressTargets?: string[];
+  secrets?: Record<string, string>;
+  alsoJoin?: string[];
+  noProxy?: string[];
+  redactValues?: Record<string, string>;
 }
 
 export interface OneRunDeps {
@@ -61,10 +75,11 @@ export async function runPackOnce(run: OneRun, deps: OneRunDeps): Promise<OneRun
     if (error instanceof CredentialWaitError) return { output: null, error: error.message, ...(run.signal?.aborted ? {} : { credentialBusy: true as const }) };
     throw error;
   }
-  const egress = deps.egress ? await deps.egress.for({ repoPath: null, kind: run.egressKind ?? "pack", owners: [credentialOwner(run.engine)], ...(credential.relay ? { relayed: ["claude" as const] } : {}) }).catch((error) => credential.release().then(() => Promise.reject(error))) : undefined;
+  const egress = deps.egress ? await deps.egress.for({ repoPath: null, kind: run.egressKind ?? "pack", owners: [credentialOwner(run.engine)], ...(credential.relay ? { relayed: ["claude" as const] } : {}), ...(run.egressTargets?.length ? { targets: run.egressTargets } : {}) }).catch((error) => credential.release().then(() => Promise.reject(error))) : undefined;
   // The container is sized by the machine's sandbox policy (cpu, memory, process limit, seccomp, runtime, which also run the daemon's start checks); the input is text a stranger may have written.
   const size = deps.policies ? sandboxSizeOf(await deps.policies.for(null).catch((error) => credential.release().then(() => Promise.reject(error))), run.trust ?? "untrusted") : undefined;
-  const result = await (deps.sandbox ?? runSandbox)({
+  const bridge = run.bridge;
+  const spec: SandboxRun = {
     ...(egress ? { egress } : {}),
     ...(size ? { limits: size } : {}),
     name: run.name,
@@ -73,13 +88,40 @@ export async function runPackOnce(run: OneRun, deps: OneRunDeps): Promise<OneRun
     worktree: run.worktree,
     writable: false,
     gitDir: null,
-    input: run.input as unknown as Record<string, unknown>,
+    input: (bridge ? { ...run.input, bridge: bridge.tools } : run.input) as unknown as Record<string, unknown>,
     timeoutMs: run.input.limits.timeoutMs,
     credential: { env: credential.env, mounts: credential.mounts, ...(credential.relay ? { relay: credential.relay } : {}) },
     labels: run.labels,
     extraEnv: run.extraEnv ?? {},
     signal: run.signal,
-  }).finally(() => credential.release());
+    ...(bridge || run.mounts?.length ? { mounts: [...(bridge ? [{ host: bridge.designDir, container: DESIGN_MOUNT, readOnly: true as const }] : []), ...(run.mounts ?? [])] } : {}),
+    ...(run.secrets ? { secrets: run.secrets } : {}),
+    ...(run.redactValues ? { redactValues: run.redactValues } : {}),
+    ...(run.alsoJoin?.length ? { alsoJoin: run.alsoJoin } : {}),
+    ...(run.noProxy?.length ? { noProxy: run.noProxy } : {}),
+  };
+  // The bridged tools are answered while the container runs, from its own mailbox; nothing else is watched.
+  let watch: ReturnType<typeof buildWatch> | null = null;
+  const result = await Promise.resolve()
+    .then(async () => {
+      if (bridge) {
+        await mkdir(bridge.designDir, { recursive: true });
+        watch = buildWatch({
+          outDir: join(run.runDir, "out"),
+          every: 500,
+          log: () => {},
+          onCommitted: async () => {},
+          onMcpRequest: mcpAnswers({ mcp: bridge.mcp, bridge: bridge.tools, designDir: bridge.designDir, log: bridge.log }),
+          onMcpCapped: (request) => void Promise.resolve(bridge.log(cappedRow(request))).catch(() => {}),
+        });
+      }
+      return (deps.sandbox ?? runSandbox)(spec);
+    })
+    .finally(async () => {
+      await (watch as ReturnType<typeof buildWatch> | null)?.stop();
+      await bridge?.mcp.close().catch(() => {});
+      await credential.release();
+    });
   if (result.aborted) return { output: null, error: "aborted" };
   if (result.timedOut) return { output: null, error: `timed out after ${run.input.limits.timeoutMs / MINUTE} minutes` };
   const raw = await readFile(join(run.runDir, "out", "result.json"), "utf8").catch(() => null);

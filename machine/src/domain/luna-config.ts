@@ -51,7 +51,7 @@ function legacyEgress(raw: unknown, warn: Warn): unknown {
 /** The file text for a config, sections in the order people read them, empty ones left out. */
 export function renderLunaConfig(config: LunaConfig): string {
   const ordered: Record<string, unknown> = {};
-  for (const key of ["checks", "services", "toolchains", "policy", "qa_targets", "jira", "sla", "engines", "effort", "compliance", "budget", "evidence", "freeze", "dedup", "backlog", "tickets", "conversation", "triage", "scoring", "fast_lane", "plan", "size", "build", "sandbox", "verify", "ship"] as const) {
+  for (const key of ["checks", "services", "toolchains", "policy", "qa_targets", "jira", "sla", "engines", "effort", "compliance", "design", "budget", "evidence", "freeze", "dedup", "backlog", "tickets", "conversation", "triage", "scoring", "fast_lane", "plan", "size", "build", "sandbox", "verify", "ship"] as const) {
     const value = config[key];
     if (value === undefined) continue;
     if (Array.isArray(value) ? value.length === 0 : typeof value === "object" && Object.keys(value as object).length === 0) continue;
@@ -228,7 +228,7 @@ function lowerAllow(factory: Policy["factory"]): Policy["factory"] {
 
 /** The policy a validated config means. */
 export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
-  const { policy = {}, qa_targets = [], checks, services = {}, toolchains = {}, jira, sla, engines = {}, effort, compliance, budget, evidence, freeze = [] } = config;
+  const { policy = {}, qa_targets = [], checks, services = {}, toolchains = {}, jira, sla, engines = {}, effort, compliance, design, budget, evidence, freeze = [] } = config;
   return {
     qa: policy.qa ?? DEFAULT_POLICY.qa,
     monthlyBudgetUsd: policy.monthly_budget_usd ?? null,
@@ -245,6 +245,7 @@ export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
     engines,
     ...(effort ? { effort } : {}),
     ...(compliance && compliance.length > 0 ? { compliance } : {}),
+    ...(design ? { design } : {}),
     engineBudgets: budget?.engines ?? {},
     decisions: (policy.decisions ?? {}) as Policy["decisions"],
     evidenceRetentionDays: evidence?.retention_days ?? null,

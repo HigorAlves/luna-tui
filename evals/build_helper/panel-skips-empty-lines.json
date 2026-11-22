@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "id": "panel-skips-empty-lines",
+  "uiCase": "panel-empty-error",
+  "title": "The cart total skips lines of quantity 0",
+  "description": "The cart total skips lines with quantity 0 and the cart panel shows its empty and error states.",
+  "logic": {
+    "title": "Total skips lines with no quantity",
+    "touchpoints": [
+      "src/cart/total.ts",
+      "test/cart/total.test.ts"
+    ],
+    "acceptance": [
+      "a line with qty 0 adds nothing",
+      "an empty list totals 0"
+    ]
+  }
+}

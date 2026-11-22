@@ -22,7 +22,7 @@ In factory mode (LUNA_FACTORY=1) nobody is watching: the packet on disk under `/
 1. Probe the base URL with `curl -sf`. A failed probe is an environment failure: every criterion `partial`, the curl output in `summary`, stop. Never re-boot, never run `docker`.
 2. Open the browser on the URL and start HAR capture.
 3. If `command -v ffmpeg` succeeds, start the WebM recording into `<qa-dir>`.
-4. Set the viewport for breakpoint-sensitive changes.
+4. Set the viewport for breakpoint-sensitive changes. When the stage lists design captures, take each with `qa-capture` at the moment its state shows.
 5. Walk the golden path: snapshot, annotated screenshot, interact, wait, per meaningful step.
 6. When a criterion becomes observable, capture `ac-<idx>-<slug>.png` at that moment.
 7. Walk the edge cases: validation errors, empty, failure and auth states.

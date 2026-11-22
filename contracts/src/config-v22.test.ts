@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { CONSUMED_FROM, FACTORY_DEFAULTS, configKeys, factoryConfigOf } from "./config-v22.ts";
+import { CONSUMED_FROM, DesignConfig, FACTORY_DEFAULTS, configKeys, designSettings, factoryConfigOf } from "./config-v22.ts";
 import { SCORING_DEFAULTS } from "./scoring.ts";
 import { LunaConfig } from "./stage.ts";
 
@@ -317,5 +317,35 @@ describe("the e2e app, its seed and its preview", () => {
     expect(ok({ verify: { e2e: { seed: { secrets: ["lower"] } } } }).success).toBe(false);
     expect(ok({ checks: [{ name: "t", run: "x", secrets: ["GIT_DIR"] }] }).success).toBe(false);
     expect(ok({ checks: [{ name: "t", run: "x", secrets: Array.from({ length: 11 }, (_, i) => `SECRET_${i}`) }] }).success).toBe(false);
+  });
+});
+
+describe("the design section", () => {
+  it("takes servers narrowed by tool, and off", () => {
+    expect(LunaConfig.parse({ design: { servers: { figma: { tools: ["get_design_context"] } } } }).design).toEqual({ servers: { figma: { tools: ["get_design_context"] } } });
+    expect(LunaConfig.parse({ design: "off" }).design).toBe("off");
+  });
+  it("refuses anything else", () => {
+    expect(LunaConfig.safeParse({ design: "on" }).success).toBe(false);
+    expect(LunaConfig.safeParse({ design: { servers: { figma: { tools: "all" } } } }).success).toBe(false);
+  });
+});
+
+describe("DesignConfig (phase 2)", () => {
+  it("takes the figma fallback, the budget and the accessibility level and mode beside the servers", () => {
+    const parsed = DesignConfig.parse({ servers: { figma: { tools: ["get_design_context"] } }, figma: { file: "AbCdEf0123456789", page: "Checkout" }, budget: { max_tokens: 500_000, max_minutes: 30 }, a11y: { level: "AAA", mode: "advisory" } });
+    expect(parsed).toMatchObject({ figma: { file: "AbCdEf0123456789" }, a11y: { level: "AAA", mode: "advisory" } });
+    expect(DesignConfig.parse("off")).toBe("off");
+    expect(DesignConfig.parse({ servers: { figma: {} } })).toEqual({ servers: { figma: {} } });
+  });
+  it("refuses a level or a mode it does not know, and a budget over its cap", () => {
+    expect(DesignConfig.safeParse({ a11y: { level: "A" } }).success).toBe(false);
+    expect(DesignConfig.safeParse({ a11y: { mode: "warn" } }).success).toBe(false);
+    expect(DesignConfig.safeParse({ budget: { max_tokens: 50_000_000 } }).success).toBe(false);
+  });
+  it("fills the defaults: 1M tokens and 45 minutes a card, WCAG AA as a gate", () => {
+    expect(designSettings(undefined)).toEqual({ off: false, figma: null, budget: { max_tokens: 1_000_000, max_minutes: 45 }, a11y: { level: "AA", mode: "gate" } });
+    expect(designSettings({ budget: { max_minutes: 10 } }).budget).toEqual({ max_tokens: 1_000_000, max_minutes: 10 });
+    expect(designSettings("off").off).toBe(true);
   });
 });

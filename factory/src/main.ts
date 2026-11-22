@@ -10,7 +10,7 @@
 // A helper on another runtime runs as a child of the stage (core/delegate.ts), into /out/children/<n>/.
 // This file reads the input, renders the prompt and writes the result; the run itself is the
 // runtime's (src/runtimes/).
-import { PACKS, type RunEvent, type RunInfo, effortProblem, resolveEngine } from "@hardness/contracts";
+import { PACKS, type RunEvent, type RunInfo, effortProblem, resolveEngine, visionProblem } from "@hardness/contracts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -23,6 +23,7 @@ import { runInfo } from "./core/fingerprint.ts";
 import { lunaHandlers } from "./core/luna-tools.ts";
 import { EMPTY_RUN, type RunOutcome, finish, settle } from "./core/output.ts";
 import { cutReason } from "./core/data-block.ts";
+import { IMAGE_ROOTS } from "./core/roots.ts";
 import { renderPromptReport } from "./core/render.ts";
 import { factoryTelemetry } from "./core/telemetry.ts";
 import { readJson, readStageInput } from "./core/stage-io.ts";
@@ -57,7 +58,7 @@ const emit: Emit = (event) => {
 const checkWaitMs = DRY ? 0 : Number(env.LUNA_CHECK_WAIT_MS ?? 90_000);
 // The agent commits in its own repository in /work/.git; its commits leave as bundles, at each slice and when the run ends.
 const bundler = makeBundler({ work: WORK, out: OUT });
-const luna = lunaHandlers({ onSliceCommitted: () => void bundler.bundle(), ledgerPath: join(OUT, "ledger.json"), ledger: input.context.ledger ?? null, decisions: input.decisions, emit, checksDir: join(OUT, "checks"), checkWaitMs: Number.isFinite(checkWaitMs) ? checkWaitMs : 90_000 });
+const luna = lunaHandlers({ onSliceCommitted: () => void bundler.bundle(), bundleNow: () => void bundler.bundle(), work: WORK, ledgerPath: join(OUT, "ledger.json"), ledger: input.context.ledger ?? null, decisions: input.decisions, bridge: input.bridge, emit, checksDir: join(OUT, "checks"), checkWaitMs: Number.isFinite(checkWaitMs) ? checkWaitMs : 90_000 });
 
 // Laminar, when the machine's traces are on: this run's spans nest under the machine's span for it.
 const telemetry = await factoryTelemetry(env);
@@ -127,8 +128,11 @@ async function runStage(): Promise<RunOutcome> {
   const effort = input!.effort ?? (pack.kind === "agent" ? pack.effort : "low");
   const problem = input!.effort ? effortProblem(pack.id, engine.id, input!.effort) : null;
   if (problem) return { ...EMPTY_RUN, error: `invalid stage input: ${problem}` };
+  // A pack that reads images on a model that cannot: the machine never sends one (engine-choice.ts); refused here too, before any model call.
+  const blind = visionProblem(pack, engine.id);
+  if (blind) return { ...EMPTY_RUN, error: `invalid stage input: ${blind}` };
   info = runInfo(runtime, engine, pack, template, FACTORY_ROOT, input!.context.economy?.mask, effort);
-  const paths = { factoryRoot: FACTORY_ROOT, work: WORK, out: OUT, input: dirname(IN), scratch };
+  const paths = { factoryRoot: FACTORY_ROOT, work: WORK, out: OUT, input: dirname(IN), scratch, images: IMAGE_ROOTS.filter((root) => existsSync(root)) };
   // A helper the runtime does not run itself is a child run through `delegate`; the parent's turns
   // so far are its calls so far, which is never fewer.
   const turnsUsed = () => events.filter((e) => e.kind === "tool_call").length;

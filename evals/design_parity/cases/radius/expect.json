@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "count",
+      "path": "findings[frame=12:34]",
+      "min": 1
+    },
+    {
+      "kind": "count",
+      "path": "findings[kind=token]",
+      "min": 1
+    },
+    {
+      "kind": "mentions",
+      "path": "findings[].actual",
+      "words": [
+        "4"
+      ]
+    }
+  ],
+  "rubric": "The pay button's corner radius is 4px; the frame's radius/md is 8. Every finding names the frame, the Figma node and the build element, with the expected and the actual value. No finding is invented where the build matches the frame: the machine drops none of them, so an invented difference reaches a person as a blocker. Pixel noise is a nit at most. A frame with no capture is answered not_compared with its reason, never a pass."
+}

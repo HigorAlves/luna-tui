@@ -6,7 +6,7 @@ import { looksLikeTestPath } from "../domain/locked-files.ts";
 import { trustOf } from "../domain/trust.ts";
 import { z } from "zod";
 
-import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, TERMINAL, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, SplitChild, coverageOf, criteriaOf, sizeLimits, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type CardSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, maxRisk, reviseCriteria, stepOf, stepsOfAnswer, stronger, RUN_OR_GATE } from "@hardness/contracts";
+import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, TERMINAL, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, SplitChild, coverageOf, criteriaOf, sizeLimits, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type CardSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, maxRisk, reviseCriteria, stepOf, stepsOfAnswer, stronger, RUN_OR_GATE, designSettings } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -52,8 +52,10 @@ import { basename, isAbsolute, join, normalize } from "node:path";
 import { PolicyParseError, type Policy } from "../domain/policy.ts";
 import { CONFIG_FILE, POLICY_FILE, PolicyStore } from "./policy.ts";
 
-import type { CommitFact, PriorityTruthEntry } from "./ground-truth.ts";
+import { type CommitFact, type PriorityTruthEntry, truthName } from "./ground-truth.ts";
+import { safe } from "../domain/evidence-markdown.ts";
 import { budgetRowsOf, buildBudget, rateLimitWaitMs } from "../domain/build-budget.ts";
+import { type DesignBudget, designBudget } from "../domain/design-budget.ts";
 import { DECIDED_REASONS, type DecidedEscalation, decideEscalation } from "./stages/escalation.ts";
 import { type Economy, type Propose, noEconomy } from "./economy.ts";
 import { type LoopStop, loopStop } from "../domain/economy/stop.ts";
@@ -143,6 +145,12 @@ export class SplitNotValidError extends Error {
 /** The plan gate's two split outcomes: a proposal a person reads, or the reason there is none. */
 /** A size bucket for a child's estimate, as a hint for triage (weighed, never trusted). */
 const sizeBucketOf = (estLoc: number): string => (estLoc <= 100 ? "XS" : estLoc <= 400 ? "S" : estLoc <= 1000 ? "M" : estLoc <= 2000 ? "L" : "XL");
+
+/** Whether the browser run's design block (`detail.design`) says the parity review leaves something for a person. */
+const designGateFires = (design: unknown): boolean => {
+  const gate = (design as { gate?: { fires?: unknown } } | null | undefined)?.gate;
+  return gate?.fires === true;
+};
 
 const isSplitOutcome = (outcome: unknown): outcome is "split" | "split_failed" => outcome === "split" || outcome === "split_failed";
 
@@ -281,6 +289,8 @@ export interface PipelineOptions {
   owners?: (repoPath: string, paths: string[]) => Promise<Exclude<OwnersFound, "failed">>;
   /** Keeps the approved plan and what changed before it (ground truth); answers where. A failure is logged and never blocks the approval. */
   groundTruth?: (task: TaskRow, approval: ApprovalRow) => Promise<string>;
+  /** Keeps what a person answered at the design sign-off (a waiver, an approval, a send-back) in `ground-truth/design_parity/` (RFC 0013); absent, none is kept. Only read when the repo keeps truth. */
+  designTruth?: (task: TaskRow, name: string, body: object) => Promise<string>;
   /** False when the card's repository keeps no ground truth (`learning.truth: false`): no file is written for it. Absent, every card keeps it. */
   truthKept?: (task: TaskRow) => Promise<boolean>;
   /** Keeps a person's priority edit (levels and sub-scores) in `ground-truth/priority/`; absent, none is kept. */
@@ -480,6 +490,7 @@ export class Pipeline {
   private readonly retroOutputs: RetroOutputs | undefined;
   private readonly releaseKept: ((taskId: string) => Promise<void>) | undefined;
   private readonly groundTruth: PipelineOptions["groundTruth"];
+  private readonly designTruth: PipelineOptions["designTruth"];
   private readonly truthKept: NonNullable<PipelineOptions["truthKept"]>;
   private readonly options_priorityTruth: PipelineOptions["priorityTruth"];
   private readonly evidenceFeedbackWriter: PipelineOptions["evidenceFeedback"];
@@ -543,6 +554,7 @@ export class Pipeline {
     this.retroOutputs = options.retroOutputs;
     this.releaseKept = options.releaseKept;
     this.groundTruth = options.groundTruth;
+    this.designTruth = options.designTruth;
     this.options_priorityTruth = options.priorityTruth;
     this.truthKept = async (task) => (await options.truthKept?.(task).catch(() => true)) ?? true;
     this.evidenceFeedbackWriter = options.evidenceFeedback;
@@ -962,6 +974,78 @@ export class Pipeline {
     if (this.retroOutputs) await appendDismissedFinding(this.retroOutputs.stateDir, id, { id: findingId, reason });
     const recordId = reported.get(findingId);
     if (recordId) await this.truth?.learned({ pack: "finding_classify", recordId, label: { severity: { choice: "nit" } }, kind: "person", source: "ship_dismissed", taskId: id });
+  }
+
+  /**
+   * A person waives one design finding at the design sign-off (RFC 0013): `not_a_difference` (the reviewer was wrong; a parity case expects no finding there) or `accepted` (real, and allowed).
+   * The finding is marked waived on the open gate, `design.waived` carries the id and the kind only, the reason (`safe()`, capped) goes to the ground truth file when the repo keeps truth,
+   * and the finding's `finding_classify` record is labelled `nit` when it has one. No tracker is written and nothing leaves the machine.
+   */
+  async waiveDesignFinding(id: string, findingId: string, input: { kind: "not_a_difference" | "accepted"; reason: string }): Promise<void> {
+    const gone = (task: TaskRow) => new TransitionError(task, { type: "approved" });
+    const first = await this.get(id);
+    if (first.state !== "awaiting_design") throw gone(first);
+    const waived = await this.store.withTaskLock(id, async (task, tx) => {
+      const gate = task.state === "awaiting_design" ? await tx.findOpenApproval(id) : null;
+      if (!gate || gate.kind !== "awaiting_design") throw gone(task);
+      const design = objectOf(gate.requested.design);
+      const findings = Array.isArray(design?.findings) ? design.findings : [];
+      const at = findings.findIndex((f) => objectOf(f)?.id === findingId);
+      if (!design || at < 0) throw new FindingNotFoundError(findingId);
+      const finding = objectOf(findings[at])!;
+      const already = objectOf(finding.resolution)?.status === "waived";
+      const next = findings.map((f, i) => (i === at ? { ...finding, resolution: { status: "waived", by: "person" } } : f));
+      // The counts are of what is still open: a waiver moves one finding from its level to `waived`.
+      const parity = objectOf(design.parity);
+      const counts = objectOf(parity?.counts);
+      const level = typeof finding.severity === "string" ? finding.severity : "";
+      const moved = parity && counts && !already && typeof counts.waived === "number" && typeof counts[level] === "number" ? { ...counts, [level]: Math.max(0, (counts[level] as number) - 1), waived: counts.waived + 1 } : counts;
+      await tx.updateApprovalRequested(gate, { ...gate.requested, design: { ...design, findings: next, ...(parity ? { parity: { ...parity, ...(moved ? { counts: moved } : {}) } } : {}) } });
+      const frames = Array.isArray(parity?.frames) ? parity.frames : [];
+      const loc = objectOf(finding.design);
+      const frame = frames.find((f) => objectOf(f)?.frame === loc?.frame && (loc?.viewport === undefined || objectOf(f)?.viewport === loc.viewport) && (loc?.state === undefined || objectOf(f)?.state === loc.state)) ?? frames.find((f) => objectOf(f)?.frame === loc?.frame) ?? null;
+      const record = (Array.isArray(design.classified) ? design.classified : []).map(objectOf).find((c) => c?.id === findingId)?.recordId;
+      return { task, gate, finding, frame, parityRunId: typeof parity?.runId === "string" ? parity.runId : null, recordId: typeof record === "string" ? record : null };
+    });
+    await this.log(id, "design.waived", { id: findingId, kind: input.kind });
+    if (this.designTruth && (await this.truthKept(waived.task))) {
+      try {
+        const path = await this.designTruth(waived.task, `${truthName(id)}-${truthName(findingId)}.json`, { taskId: id, gate: waived.gate.id, finding: waived.finding, frame: waived.frame, kind: input.kind, reason: safe(input.reason).slice(0, 500), parityRunId: waived.parityRunId, at: new Date().toISOString() });
+        await this.log(id, "ground_truth.written", { path });
+      } catch (error) {
+        await this.log(id, "ground_truth.failed", { error: error instanceof Error ? error.message : String(error) }).catch(() => {});
+      }
+    }
+    if (waived.recordId) await this.truth?.learned({ pack: "finding_classify", recordId: waived.recordId, label: { severity: { choice: "nit" } }, kind: "person", source: "design_waived", taskId: id });
+  }
+
+  /** What a person answered at the design sign-off, kept as ground truth beside the waivers: the decision, the note, what stayed open, what was waived, what was not compared. */
+  private async keepDesignSignoff(task: TaskRow, gate: ApprovalRow, decision: string, note: string | undefined): Promise<void> {
+    if (!this.designTruth || !(await this.truthKept(task))) return;
+    try {
+      const design = objectOf((await this.approvals(task.id)).find((a) => a.id === gate.id)?.requested.design) ?? objectOf(gate.requested.design);
+      const rows = (Array.isArray(design?.findings) ? design.findings : []).map(objectOf);
+      const idOf = (f: Record<string, unknown> | undefined) => String(f?.id ?? "");
+      const isWaived = (f: Record<string, unknown> | undefined) => objectOf(f?.resolution)?.status === "waived";
+      const parity = objectOf(design?.parity);
+      const frames = (Array.isArray(parity?.frames) ? parity.frames : []).map(objectOf);
+      const path = await this.designTruth(task, `${truthName(task.id)}-${truthName(gate.id)}.json`, {
+        taskId: task.id,
+        gate: gate.id,
+        decision,
+        note: note ? safe(note).slice(0, 500) : null,
+        kept: rows.filter((f) => !isWaived(f)).map(idOf),
+        waived: rows.filter(isWaived).map(idOf),
+        notCompared: frames.filter((f) => f?.status === "not_compared").map((f) => `${String(f?.frame)} ${String(f?.viewport)}-${String(f?.state)}`),
+        confidence: typeof parity?.confidence === "number" ? parity.confidence : null,
+        bar: typeof parity?.bar === "number" ? parity.bar : null,
+        parityRunId: typeof parity?.runId === "string" ? parity.runId : null,
+        at: new Date().toISOString(),
+      });
+      await this.log(task.id, "ground_truth.written", { path });
+    } catch (error) {
+      await this.log(task.id, "ground_truth.failed", { error: error instanceof Error ? error.message : String(error) }).catch(() => {});
+    }
   }
 
   /** A person adds a finding Verify missed: the row holds the severity only; the text goes to the ground truth file. */
@@ -1727,12 +1811,20 @@ export class Pipeline {
     // "Build's budget is spent: a person decides": a person who approves has decided the card goes on, so it goes on with a fresh budget.
     // Without one, the next Build reads the same spent budget and escalates again, and approving can never move the card.
     if (escalated && wanted === "approved" && budgetWasSpent(escalated.requested)) await this.log(id, "build.budget_reset", { reason: "a person approved the card past its spent budget" });
+    // "The design budget is spent: a person decides": approving gives a fresh design budget; approving with design off also skips the designer agents for this card.
+    if (escalated && wanted === "approved" && escalated.requested.escalation === "design_budget") {
+      await this.log(id, "design.budget_reset", { reason: "a person approved the card past its spent design budget" });
+      if (response?.design === "off") await this.log(id, "design.card_off", { reason: "a person turned design off for this card" });
+    }
     // A person approving a plan made after Build already ran has decided the card builds that plan: its Build counts from a fresh budget.
     // Otherwise the runs spent on the old plan (and its bounces) escalate the new one before it starts, and the stronger model's one run is burnt.
     if (before.state === "awaiting_approval" && wanted === "approved" && !options.auto && (await this.events(id)).some((e) => e.kind === "stage.finished" && e.payload.stage === "implementing")) {
       await this.log(id, "build.budget_reset", { reason: "a person approved a new plan" });
     }
+    // The design sign-off: what a person answered there (and what they left open) is ground truth, written once the decision has gone through.
+    const signoff = before.state === "awaiting_design" && !options.auto ? (await this.approvals(id)).find((a) => a.kind === "awaiting_design" && a.decision === null) : undefined;
     const moved = await this.decideNow(id, wanted, reason, response, options);
+    if (signoff) await this.keepDesignSignoff(moved, signoff, wanted === "changes_requested" ? "sent_back" : wanted, reason);
     if (escalated) await this.keepEscalationTruth(moved, escalated.id);
     if (escalated) await this.confirmEscalationReason(id, escalated);
     return moved;
@@ -2994,6 +3086,8 @@ export class Pipeline {
                 // The retro has something for a person (rules, prompt updates, graph misses): it waits for an answer; otherwise the card closes.
                 ...(stage === "reviewing_memory" && result.outcome === "pass" && result.detail?.rules != null ? { proposals: true as const } : {}),
                 ...(result.detail?.refresh === "media" || result.detail?.refresh === "verify" ? { refresh: result.detail.refresh } : {}),
+                // The design parity review left something for a person (open findings, or it was not sure): the card waits at the design sign-off.
+                ...(stage === "e2e" && result.outcome === "pass" && designGateFires(result.detail?.design) ? { designGate: true as const } : {}),
                 ...(stage === "evidence" ? { preview: (await this.policyFor((await this.get(id)).repoPath)).factory.ship.preview === "on" } : {}),
               };
         // An escalation from Build, the machine's own included, carries a decided reason: a fact where one decides, else the typed decision.
@@ -3276,7 +3370,7 @@ export class Pipeline {
   /** What the draft PR's body is fed: the rows of the stages that ran before Deliver. */
   private async prFacts(id: string): Promise<NonNullable<StageContext["prFacts"]>> {
     const [task, runs, events] = await Promise.all([this.get(id), this.store.listStageRuns(id), this.store.listEvents(id)]);
-    return prFactsOf(task, runs, events);
+    return prFactsOf(task, runs, events, await this.store.listApprovals(id));
   }
 
   /** The failures the browser run's or CI's loop may have before a person is asked: the repository's `verify.e2e_rounds` or `verify.ci_rounds`. */
@@ -3286,12 +3380,14 @@ export class Pipeline {
     return { loopCap: stage === "ci_watch" ? verify.ci_rounds : verify.e2e_rounds };
   }
 
-  /** What Verify's failure tells the transition about its blocker findings: their set, and the rounds Build may have on one set (`verify.build_rounds`). */
-  private async blockerSet(id: string, stage: TaskState, result: StageResult): Promise<{ findingSet?: string; buildRounds?: number }> {
-    if (stage !== "verifying" || result.outcome !== "fail") return {};
+  /** What Verify's failure (and the e2e stage's design failure) tells the transition about its blocker findings: their set, and the rounds Build may have on one set (`verify.build_rounds`). */
+  private async blockerSet(id: string, stage: TaskState, result: StageResult): Promise<{ findingSet?: string; buildRounds?: number; design?: true }> {
+    // The e2e stage's design blockers (the parity review's, `step: "design"`) are counted in the same-set rounds; any other e2e failure keeps the browser loop's cap.
+    const design = stage === "e2e" && result.detail?.step === "design";
+    if ((stage !== "verifying" && !design) || result.outcome !== "fail") return {};
     const key = blockerSetKey(result.findings ?? []);
-    if (!key) return {};
-    return { findingSet: key, buildRounds: (await this.policyFor((await this.get(id)).repoPath)).factory.verify.build_rounds };
+    if (!key) return design ? { design: true } : {};
+    return { findingSet: key, buildRounds: (await this.policyFor((await this.get(id)).repoPath)).factory.verify.build_rounds, ...(design ? { design: true as const } : {}) };
   }
 
   /** The stuck detector's attempt-level rule: a stage that just failed for the third time in a
@@ -3327,6 +3423,14 @@ export class Pipeline {
         (event.payload.stage === "e2e" && event.payload.status === "failed") ||
         (event.payload.stage === "implementing" && event.payload.status === "failed"),
     );
+    // A card sent back from the design sign-off is handed the gate's open design findings and the person's note, when that answer is newer than anything above.
+    const signoff = (await this.approvals(id)).findLast((a) => a.kind === "awaiting_design" && a.decision === "sent_back" && a.decidedAt !== null);
+    if (signoff?.decidedAt && (!latest || signoff.decidedAt.getTime() > latest.at.getTime())) {
+      const open = (Array.isArray(objectOf(signoff.requested.design)?.findings) ? (objectOf(signoff.requested.design)!.findings as unknown[]) : []).filter((f) => objectOf(objectOf(f)?.resolution)?.status !== "waived") as Finding[];
+      const note = signoff.reason?.trim() ?? "";
+      const flat = note.replace(/\s+/g, " ").slice(0, 300);
+      return [...open, ...(note ? [{ path: "design", line: 0, severity: "should_fix", title: `Design sign-off: ${flat}`, body: note, confidence: 1, category: "design" as const }] : [])];
+    }
     // The pack runner reports findings at the result's top level; a stub or an older event
     // may carry them inside detail.
     const detail = latest?.payload.detail as { findings?: unknown } | undefined;
@@ -3363,6 +3467,9 @@ export class Pipeline {
       facts: {
         ...(why.secondScopeRed ? { scopeTwice: true } : {}),
         ...(detail.envBroken === true ? { envBroken: true } : {}),
+        // Set by the pack runner when the ui-designer's end decided it (RFC 0013): the agent's own words never do.
+        ...(detail.escalationFact === "merge_conflict" ? { mergeConflict: true } : {}),
+        ...(detail.escalationFact === "design_budget" ? { designBudget: true } : {}),
         ...(detail.headMoved === true ? { headMoved: true } : {}),
         ...(why.loopGuard ? { loopGuard: why.loopGuard } : {}),
         ...(budget ? { budget: { spent: String(budget.spent), numbers: `${String(budget.iterations)} of ${limits.max_iterations} iterations, ${budget.tokens === null ? "tokens not counted" : `${String(budget.tokens)} of ${limits.max_tokens} tokens`}, ${String(budget.minutes)} of ${limits.max_minutes} minutes`, consecutiveReds: Number(budget.consecutiveReds ?? 0) } } : {}),
@@ -3436,6 +3543,22 @@ export class Pipeline {
     const { runs, events } = await this.budgetRows(id);
     const budget = buildBudget(runs, events, (await this.policyFor(task.repoPath)).factory.build);
     return { spent: budget.spent !== null, minutesLeft: budget.minutesLeft };
+  }
+
+  /** The card's design budget now (RFC 0013): the designer runs since the last `design.budget_reset`, against the repo's `design.budget`. */
+  async designBudgetState(id: string): Promise<DesignBudget> {
+    const task = await this.get(id);
+    return designBudget(await this.events(id), designSettings((await this.policyFor(task.repoPath)).design).budget);
+  }
+
+  /** The shas the machine picked onto the card's branch for the ui-designer, from its own `build.helper_picked` rows (RFC 0013, phase 5). */
+  async helperPicked(id: string): Promise<string[]> {
+    return (await this.events(id)).filter((e) => e.kind === "build.helper_picked").flatMap((e) => (Array.isArray(e.payload.picked) ? e.payload.picked.filter((sha): sha is string => typeof sha === "string") : []));
+  }
+
+  /** Whether a person turned the designer agents off for this card (approving a `design_budget` escalation with design off). */
+  async designCardOff(id: string): Promise<boolean> {
+    return (await this.events(id)).some((e) => e.kind === "design.card_off");
   }
 
   /** The minutes of Build's budget the card has left. */
@@ -3646,7 +3769,7 @@ export class Pipeline {
     const [task, runs, events] = await Promise.all([this.get(id), this.store.listStageRuns(id), this.store.listEvents(id)]);
     // This run's finish is not logged yet: it is the newest row.
     const current: EventRow = { id: "0", taskId: id, stageRunId: null, kind: "stage.finished", payload: finishing, at: new Date() };
-    return stage === "implementing" ? buildReportOf(task, runs, [...events, current], (await this.policyFor(task.repoPath)).factory.build) : verifyReportOf(task, runs, [...events, current]);
+    return stage === "implementing" ? buildReportOf(task, runs, [...events, current], (await this.policyFor(task.repoPath)).factory.build) : verifyReportOf(task, runs, [...events, current], await this.store.listApprovals(id));
   }
 
   /** Build's progress while it runs (for the board's detail): null for a card that has not begun to build. Counts from the last fresh budget. */
@@ -3662,7 +3785,7 @@ export class Pipeline {
     const [task, runs, events] = await Promise.all([this.get(id), this.store.listStageRuns(id), this.store.listEvents(id)]);
     const build = buildReportOf(task, runs, events, (await this.policyFor(task.repoPath)).factory.build);
     const ciPassed = runs.some((r) => r.stage === "ci_watch" && r.status === "passed");
-    return { build, verify: ciPassed ? verifyReportOf(task, runs, events) : null };
+    return { build, verify: ciPassed ? verifyReportOf(task, runs, events, await this.store.listApprovals(id)) : null };
   }
 
   /** A repository image's event as a row on the card that needed it: started, built, refused or failed (text already flattened and capped). */

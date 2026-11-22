@@ -2,7 +2,11 @@ import { RepoImageError } from "../repo-images.ts";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, mkdtempSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
+
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 
 import { FACTORY_DEFAULTS, PACKS, StageInput, type StageOutput } from "@hardness/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +14,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CredentialWaitError, type Credentials, NoCredentialError, fixedCredentials } from "../../adapters/credentials/index.ts";
 import { envHash } from "../../domain/env-hash.ts";
 import { machineGitDir } from "../../adapters/git/machine-repo.ts";
-import { HOST_GIT } from "../../adapters/git/worktree.ts";
+import { HOST_GIT, headCommit } from "../../adapters/git/worktree.ts";
+import { ensureClone } from "../../adapters/git/clone.ts";
+import { helperWorkspace } from "../../adapters/git/helper.ts";
 import { DEFAULT_POLICY } from "../../domain/policy.ts";
 import type { TaskRow } from "../../domain/task.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
@@ -22,6 +28,8 @@ import { noEconomy } from "../economy.ts";
 import { type AgentDeps, agentRunners, runAgent } from "./pack-runner.ts";
 import type { StageContext } from "../ports.ts";
 import type { Graph, GraphStamp } from "../graph.ts";
+import { noTokenMcp, type Mcp } from "../mcp.ts";
+import { createMcp } from "../../adapters/mcp/client.ts";
 import { engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "../engine-gates.ts";
 
 /** What the agent does in its own repository, in the folder's own .git (the one the machine made for it). */
@@ -1253,6 +1261,14 @@ describe("the engine a stage runs on", () => {
     expect(result.events?.find((e) => e.kind === "engine")?.payload).toMatchObject({ engine: "claude:opus", reason: expect.stringMatching(/^codex:sol has no credential/) });
   });
 
+  it("refuses a handed engine that cannot read images for a pack that needs them, before any container starts (RFC 0013)", async () => {
+    seen = undefined;
+    const { credentials, log } = recordingCredentials();
+    await expect(runAgent({ ...deps(fakeSandbox(output())), credentials }, { ...context("e2e"), engine: "openai:sol" }, "design_parity")).rejects.toThrow("openai:sol cannot read images, which design_parity needs: refused before the container started");
+    expect(seen).toBeUndefined();
+    expect(log).toEqual([]);
+  });
+
   it("runs the default and says so on the task when the engine asked for is on a runtime MACHINE_DISABLE_RUNTIMES turned off", async () => {
     const { credentials: inner, log } = recordingCredentials();
     const credentials = gatedCredentials(inner, [runtimeKillSwitch(["eve"])]);
@@ -1772,6 +1788,32 @@ describe("the browser run's one target", () => {
     expect(JSON.stringify(seen?.input)).not.toContain("OTHER_PW");
   });
 
+  it.each(["e2e", "a11y_audit"] as const)("%s runs in the QA image, on the one target given: its host on the list, its credential loaded and passed, and no other target in the input", async (pack) => {
+    two();
+    const s = store();
+    const requests: Array<{ targets?: string[] }> = [];
+    const d: AgentDeps = { ...deps(fakeSandbox(output())), secrets: s, egress: { for: async (r) => (requests.push(r as never), { allow: [], allowPrivate: [], proxyImage: "img" }) } };
+    await runAgent(d, context("e2e"), pack, { qaTarget: { name: "prod-like", baseUrl: "https://other.example.com", credential: "env:OTHER_PW" } });
+    expect(seen?.image).toBe("qa-img");
+    expect(requests[0]!.targets).toEqual(["other.example.com:443"]);
+    expect(s.loads).toEqual([["OTHER_PW"]]);
+    expect(seen?.secrets).toEqual({ OTHER_PW: `${secret}-OTHER_PW` });
+    expect((seen?.input as { context: { qaTargets: Array<{ name: string }> } }).context.qaTargets.map((t) => t.name)).toEqual(["prod-like"]);
+  });
+
+  it("gives a11y_audit the repo's first target when none is named, as the browser run has it", async () => {
+    two();
+    const s = store();
+    await runAgent({ ...deps(fakeSandbox(output())), secrets: s }, context("e2e"), "a11y_audit");
+    expect(s.loads).toEqual([["STAGING_PW"]]);
+    expect((seen?.input as { context: { qaTargets: Array<{ name: string }> } }).context.qaTargets.map((t) => t.name)).toEqual(["staging"]);
+  });
+
+  it("keeps every other pack out of the QA image: a decision-free stage pack still runs in the stage image", async () => {
+    await runAgent(deps(fakeSandbox(output())), context("verifying"), "verifying");
+    expect(seen?.image).not.toBe("qa-img");
+  });
+
   it("is the app the machine started when it is given one: no credential, the app's network joined, and the aliases kept off the proxy", async () => {
     two();
     const s = store();
@@ -1837,5 +1879,441 @@ describe("a value kept only for redaction, and the failure paths", () => {
       extra,
     );
     expect(JSON.stringify(result)).not.toContain(secret);
+  });
+});
+
+describe("the MCP bridge in a stage (RFC 0013)", () => {
+  const declared = { name: "fixture", transport: "http" as const, url: "https://fixture.invalid/mcp", credential: { kind: "none" as const }, tools: ["echo", "shot", "boom"] };
+  const grant = (tools: string[]) => [{ server: "fixture", tools }];
+  const withBridge = <T>(bridge: ReturnType<typeof grant>, run: () => Promise<T>): Promise<T> => {
+    const access = PACKS.triage.access as { bridge: ReturnType<typeof grant> };
+    const before = access.bridge;
+    access.bridge = bridge;
+    return run().finally(() => {
+      access.bridge = before;
+    });
+  };
+  async function fixtureMcp(): Promise<{ mcp: Mcp; closed: () => number }> {
+    const server = new McpServer({ name: "fixture", version: "1.0.0" });
+    server.registerTool("echo", { description: "Echo", inputSchema: { word: z.string() } }, async ({ word }) => ({ content: [{ type: "text", text: word }] }));
+    server.registerTool("shot", { description: "An image" }, async () => ({ content: [{ type: "image", data: Buffer.from("png").toString("base64"), mimeType: "image/png" }] }));
+    server.registerTool("boom", { description: "Fails" }, async () => ({ isError: true, content: [{ type: "text", text: "nope" }] }));
+    const [client, serverSide] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverSide);
+    const inner = createMcp([declared], { transportFor: () => client, token: async () => null });
+    let closes = 0;
+    return { mcp: { ...inner, servers: () => inner.servers(), listTools: (s) => inner.listTools(s), callTool: (s, t, a) => inner.callTool(s, t, a), close: async () => void (closes += 1) }, closed: () => closes };
+  }
+  /** A container that makes the calls the test asks for through the mailbox, reads each answer, and then finishes. */
+  const caller = (calls: Array<{ tool: string; args?: unknown; server?: string }>, answers: unknown[]) => async (run: SandboxRun): Promise<SandboxResult> => {
+    run.onStarted?.("c1");
+    const checks = join(run.runDir, "out", "checks");
+    mkdirSync(checks, { recursive: true });
+    let n = 0;
+    for (const call of calls) {
+      n += 1;
+      writeFileSync(join(checks, `mcp-request-a1b2c3d4-${n}.json`), JSON.stringify({ n, server: call.server ?? "fixture", tool: call.tool, args: call.args ?? {} }));
+      const file = join(checks, `mcp-answer-a1b2c3d4-${n}.json`);
+      for (let i = 0; i < 400 && !existsSync(file); i++) await new Promise((r) => setTimeout(r, 10));
+      answers.push(JSON.parse(readFileSync(file, "utf8")));
+    }
+    seen = run;
+    return fakeSandbox(output())(run);
+  };
+  const mcpDeps = (sandbox: (run: SandboxRun) => Promise<SandboxResult>, mcp: Mcp, emitted: Array<[string, Record<string, unknown>]> = []) => ({
+    deps: { ...deps(sandbox), mcpFor: () => mcp, watchEvery: 5 } as AgentDeps,
+    ctx: { ...context("triage"), emit: async (kind: string, payload: Record<string, unknown>) => void emitted.push([kind, payload]) } as StageContext,
+  });
+
+  it("fills StageInput.bridge from the grants, mounts /design read-only, and answers a call with the result as data", async () => {
+    const { mcp, closed } = await fixtureMcp();
+    const answers: unknown[] = [];
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    const { deps: d, ctx } = mcpDeps(caller([{ tool: "echo", args: { word: "hi" } }], answers), mcp, emitted);
+    await withBridge(grant(["echo"]), () => runAgent(d, ctx, "triage"));
+    const input = seen?.input as { bridge: Array<{ server: string; tool: string; name: string }> };
+    expect(input.bridge.map((b) => [b.server, b.tool, b.name])).toEqual([["fixture", "echo", "fixture_echo"]]);
+    expect(extraMounts(seen!)).toContainEqual({ host: join(seen!.runDir, "design"), container: "/design", readOnly: true });
+    expect(answers).toEqual([{ ok: true, text: '<data source="fixture.echo">hi</data>', images: [], truncated: false }]);
+    const row = emitted.find(([kind]) => kind === "design.mcp_call")![1];
+    expect(row).toMatchObject({ server: "fixture", tool: "echo", n: 1, outcome: "ok", bytes: 2 });
+    expect(row.argsSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(closed()).toBe(1);
+  });
+
+  it("writes an image under <runDir>/design and names it by its /design path", async () => {
+    const { mcp } = await fixtureMcp();
+    const answers: unknown[] = [];
+    const { deps: d, ctx } = mcpDeps(caller([{ tool: "shot" }], answers), mcp);
+    await withBridge(grant(["shot"]), () => runAgent(d, ctx, "triage"));
+    expect(answers).toEqual([{ ok: true, text: '<data source="fixture.shot"></data>', images: ["/design/a1b2c3d4-1-0.png"], truncated: false }]);
+    expect(readFileSync(join(seen!.runDir, "design", "a1b2c3d4-1-0.png"), "utf8")).toBe("png");
+  });
+
+  it("refuses a tool the run was not given, whatever the request says, and logs it", async () => {
+    const { mcp } = await fixtureMcp();
+    const answers: unknown[] = [];
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    const { deps: d, ctx } = mcpDeps(caller([{ tool: "boom" }, { tool: "echo", server: "other" }], answers), mcp, emitted);
+    await withBridge(grant(["echo"]), () => runAgent(d, ctx, "triage"));
+    expect(answers).toEqual([{ ok: false, error: "fixture.boom is not available in this run" }, { ok: false, error: "other.echo is not available in this run" }]);
+    expect(emitted.map(([, p]) => p.outcome)).toEqual(["refused", "refused"]);
+  });
+
+  it("turns a failing tool into an error answer and an error row", async () => {
+    const { mcp } = await fixtureMcp();
+    const answers: unknown[] = [];
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    const { deps: d, ctx } = mcpDeps(caller([{ tool: "boom" }], answers), mcp, emitted);
+    await withBridge(grant(["boom"]), () => runAgent(d, ctx, "triage"));
+    expect(answers).toEqual([{ ok: false, error: '<data source="fixture.boom">nope</data>' }]);
+    expect(emitted[0]![1]).toMatchObject({ tool: "boom", outcome: "error" });
+  });
+
+  it("says why a server gave no tool, and starts without a bridge", async () => {
+    const notes: string[] = [];
+    const { deps: d, ctx } = mcpDeps(fakeSandbox(output()), noTokenMcp([declared]));
+    await withBridge(grant(["echo"]), () => runAgent(d, { ...ctx, note: async (t) => void notes.push(t) }, "triage"));
+    expect((seen?.input as { bridge: unknown[] }).bridge).toEqual([]);
+    expect(notes).toContain("fixture: not logged in (pnpm mcp login fixture)");
+    expect(extraMounts(seen!).some((m) => m.container === "/design")).toBe(false);
+  });
+
+  it("gives an untrusted card no bridged tools, and says so", async () => {
+    const { mcp } = await fixtureMcp();
+    const notes: string[] = [];
+    const { deps: d, ctx } = mcpDeps(fakeSandbox(output()), mcp);
+    const untrusted = { ...ctx, task: { ...ctx.task, source: { kind: "github", authorAssociation: "NONE" } }, note: async (t: string) => void notes.push(t) } as unknown as StageContext;
+    await withBridge(grant(["echo"]), () => runAgent(d, untrusted, "triage"));
+    expect((seen?.input as { bridge: unknown[] }).bridge).toEqual([]);
+    expect(notes).toContain("untrusted card: no bridged tools");
+  });
+
+  it("gives no bridge to a repo whose luna.yaml turns design off, and narrows by its servers otherwise", async () => {
+    const { mcp } = await fixtureMcp();
+    const policy = (design: unknown) => ({ policies: { for: async () => ({ ...DEFAULT_POLICY, design }) } as never });
+    const off = { ...mcpDeps(fakeSandbox(output()), mcp).deps, ...policy("off") };
+    await withBridge(grant(["echo"]), () => runAgent(off, context("triage"), "triage"));
+    expect((seen?.input as { bridge: unknown[] }).bridge).toEqual([]);
+    const narrowed = { ...mcpDeps(fakeSandbox(output()), mcp).deps, ...policy({ servers: { fixture: { tools: ["boom"] } } }) };
+    await withBridge(grant(["echo", "boom"]), () => runAgent(narrowed, context("triage"), "triage"));
+    expect((seen?.input as { bridge: Array<{ tool: string }> }).bridge.map((b) => b.tool)).toEqual(["boom"]);
+  });
+
+  it("neither connects nor mounts for a pack with no grants, and closes the run's client when it has some", async () => {
+    let made = 0;
+    const d = { ...deps(fakeSandbox(output())), mcpFor: () => (made += 1, noTokenMcp()) } as AgentDeps;
+    await runAgent(d, context("triage"), "triage");
+    expect(made).toBe(0);
+    expect(extraMounts(seen!).some((m) => m.container === "/design")).toBe(false);
+  });
+});
+
+describe("the ui-designer's own run (RFC 0013, phase 5)", () => {
+  const SLICE = 3;
+  const helperFor = (base: string, over: Record<string, unknown> = {}) => ({
+    slice: { id: SLICE, title: "The card page", touchpoints: ["page.tsx"], acceptance: ["the page renders"] },
+    message: "build the page",
+    base,
+    locks: { mine: ["page.tsx"], theirs: ["api.ts"] },
+    attempt: 1 as const,
+    ...over,
+  });
+  /** The card's workspace W on `task/card`, and the helper's fresh workspace M' beside it, as the coordinator makes them. */
+  async function made() {
+    writeFileSync(join(repo, "api.ts"), "api\n");
+    writeFileSync(join(repo, "page.tsx"), "page\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "files");
+    const cardPath = join(root, "worktrees", "card");
+    await ensureClone(repo, { branch: "task/card", path: cardPath });
+    const base = await headCommit(cardPath);
+    const ws = await helperWorkspace.make(cardPath, base, context("implementing").task.id, SLICE, 1);
+    return { cardPath, base, ws: { path: ws.path, branch: ws.branch } };
+  }
+  const helperContext = (over: Partial<StageContext> = {}): StageContext => ({ ...context("implementing"), engine: "claude:sonnet", ...over });
+  /** A container that lets `act` work in the folder, bundles what it committed as the factory does, and ends. */
+  const box = (act: (run: SandboxRun) => Promise<void> | void = () => {}) => async (run: SandboxRun): Promise<SandboxResult> => {
+    seen = run;
+    run.onStarted?.("c1");
+    mkdirSync(join(run.runDir, "out", "bundles"), { recursive: true });
+    const started = agent(run.worktree, "rev-parse", "HEAD");
+    await act(run);
+    if (agent(run.worktree, "rev-parse", "HEAD") !== started) agent(run.worktree, "bundle", "create", join(run.runDir, "out", "bundles", "1.bundle"), `${started}..HEAD`);
+    writeFileSync(join(run.runDir, "out", "result.json"), JSON.stringify(output()));
+    writeFileSync(join(run.runDir, "out", "events.jsonl"), "");
+    return { exitCode: 0, timedOut: false, aborted: false, transcriptPath: join(run.runDir, "t.log") };
+  };
+  const commitPage = (run: SandboxRun, file = "page.tsx") => {
+    writeFileSync(join(run.worktree, file), "page v2\n");
+    agent(run.worktree, "add", "-A");
+    agent(run.worktree, "commit", "-q", "-m", "ui");
+    return agent(run.worktree, "rev-parse", "HEAD");
+  };
+  const input = () => seen!.input as unknown as StageInput;
+
+  it("runs in the helper's workspace: its commits land on luna-helper-<slice> there, the card's branch is untouched, nothing is published and the task keeps its workspace", async () => {
+    const { cardPath, base, ws } = await made();
+    let tip = "";
+    const result = await runAgent(deps(box((run) => void (tip = commitPage(run)))), helperContext(), "ui_design", { workspace: ws, helper: helperFor(base) });
+    expect(result.outcome).toBe("pass");
+    expect(seen!.worktree).toBe(ws.path);
+    expect(git(ws.path, "rev-parse", "refs/heads/luna-helper-3")).toBe(tip);
+    expect(git(cardPath, "rev-parse", "refs/heads/task/card")).toBe(base);
+    expect(() => git(repo, "rev-parse", "--verify", "refs/heads/luna-helper-3")).toThrow();
+    expect(() => git(repo, "rev-parse", "--verify", "refs/heads/task/card")).toThrow();
+    expect(result.workspace).toBeUndefined();
+  });
+
+  it("gives the helper no session folder of the implementer's: it never resumes or writes the implementer's trail", async () => {
+    const { base, ws } = await made();
+    await runAgent(deps(box()), helperContext(), "ui_design", { workspace: ws, helper: helperFor(base) });
+    expect(seen!.sessionMount).toBeUndefined();
+    expect((seen!.mounts ?? []).some((m) => m.host.includes(`${sep}session`))).toBe(false);
+  });
+  it("starts from the helper's context: its slice and locks, the plan with the approved spec, the design and a ledger of its one slice", async () => {
+    const { base, ws } = await made();
+    const design = { refs: [{ kind: "figma", url: "https://figma.com/file/x" }] } as never;
+    await runAgent(deps(box()), helperContext(), "ui_design", { workspace: ws, helper: helperFor(base), design });
+    expect(input().pack).toBe("ui_design");
+    expect(input().context.helper).toEqual(helperFor(base));
+    expect(input().context.design).toEqual(design);
+    expect(input().context.ledger).toEqual({ schema: 1, slices: [{ id: SLICE, title: "The card page", status: "pending", commit: null }] });
+    expect(input().task.branch).toBe("luna-helper-3");
+  });
+
+  it("measures the helper's scope from the base it started at, plans only its slice's files and locks the implementer's", async () => {
+    const { base, ws } = await made();
+    const asked: Array<{ planned?: string[] }> = [];
+    let scope: { facts: { changed: string[]; lockedTouched: Array<{ path: string; owner: string }> } } | undefined;
+    const sandbox = box(async (run) => {
+      commitPage(run, "api.ts");
+      // the factory bundles a commit as it lands, before the machine is asked about it
+      agent(run.worktree, "bundle", "create", join(run.runDir, "out", "bundles", "1.bundle"), "HEAD~1..HEAD");
+      const checks = join(run.runDir, "out", "checks");
+      mkdirSync(checks, { recursive: true });
+      writeFileSync(join(checks, "scope-request.json"), JSON.stringify({ diffSummary: "ui", outOfMap: [] }));
+      const file = join(checks, "scope.json");
+      for (let i = 0; i < 400 && !existsSync(file); i++) await new Promise((r) => setTimeout(r, 10));
+      scope = JSON.parse(readFileSync(file, "utf8"));
+    });
+    const decide = (async (_pack: string, check: { planned?: string[] }) => (asked.push(check), null)) as never;
+    await runAgent({ ...deps(sandbox), decide, watchEvery: 5 } as AgentDeps, helperContext(), "ui_design", { workspace: ws, helper: helperFor(base) });
+    expect(scope?.facts.changed).toEqual(["api.ts"]);
+    expect(scope?.facts.lockedTouched).toEqual([{ path: "api.ts", owner: "implementer" }]);
+  });
+
+  it("only syncs the importer when its slice commits: no checkpoint push, and the commit still arrives", async () => {
+    const { base, ws } = await made();
+    const hostExec = vi.fn(async () => ({ code: 0, stdout: "", stderr: "" }));
+    let tip = "";
+    const sandbox = box(async (run) => {
+      tip = commitPage(run);
+      writeFileSync(join(run.runDir, "out", "ledger.json"), JSON.stringify({ schema: 1, slices: [{ id: SLICE, title: "The card page", status: "committed", commit: tip }] }));
+      await new Promise((r) => setTimeout(r, 150));
+    });
+    await runAgent({ ...deps(sandbox), hostExec, watchEvery: 5 }, helperContext(), "ui_design", { workspace: ws, helper: helperFor(base) });
+    expect(hostExec).not.toHaveBeenCalled();
+    expect(git(ws.path, "rev-parse", "refs/heads/luna-helper-3")).toBe(tip);
+  });
+
+  describe("its engine and effort", () => {
+    it("runs on the implementer's engine when the pack allows it", async () => {
+      const { base, ws } = await made();
+      await runAgent(deps(box()), helperContext({ engine: "claude:opus" }), "ui_design", { workspace: ws, helper: helperFor(base) });
+      expect(input().engine).toBe("claude:opus");
+    });
+
+    it("runs on the pack's default when the implementer's engine is not one the pack allows", async () => {
+      const { base, ws } = await made();
+      await runAgent(deps(box()), helperContext({ engine: "codex:sol" }), "ui_design", { workspace: ws, helper: helperFor(base) });
+      expect(input().engine).toBe(PACKS.ui_design.engines.default);
+    });
+
+    it("runs at the effort the repo's luna.yaml sets for the implementer", async () => {
+      const { base, ws } = await made();
+      writeFileSync(join(repo, "luna.yaml"), "effort:\n  implementing: high\n");
+      await runAgent(deps(box()), helperContext(), "ui_design", { workspace: ws, helper: helperFor(base) });
+      expect(input().effort).toBe("high");
+    });
+
+    it("keeps the pack's own effort when the repo sets none", async () => {
+      const { base, ws } = await made();
+      await runAgent(deps(box()), helperContext(), "ui_design", { workspace: ws, helper: helperFor(base) });
+      expect(input().effort).toBeUndefined();
+    });
+  });
+});
+
+describe("the implementer's side of the ui-designer (RFC 0013, phase 5)", () => {
+  const FIGMA = "https://www.figma.com/design/ABCDEFGHIJ1234/Page?node-id=1-2";
+  const uiPlan = { brief: "b", criteria: [], assumptions: [], slices: [{ title: "The page", est_loc: 20, touchpoints: ["page.tsx"], acceptance: ["it renders"] }] };
+  const apiPlan = { ...uiPlan, slices: [{ title: "The api", est_loc: 20, touchpoints: ["api.ts"], acceptance: ["it answers"] }] };
+  const withPlan = (plan: unknown, over: Partial<StageContext> = {}, description = `Build it. ${FIGMA}`): StageContext => {
+    const base = context("implementing");
+    return {
+      ...base,
+      engine: "claude:sonnet",
+      task: { ...base.task, description } as never,
+      approvals: [{ id: "ap1", kind: "awaiting_approval", decision: "approved", requested: plan } as never],
+      ...over,
+    };
+  };
+  const input = () => seen!.input as unknown as StageInput;
+  const policies = (over: Record<string, unknown> = {}) => ({ policies: { for: async () => ({ ...DEFAULT_POLICY, ...over }) } as never });
+  /** A coordinator that records what it was built with and answers as told. */
+  function coordinator(over: Partial<import("./helper-runs.ts").HelperRuns> = {}) {
+    const built: Array<import("./helper-runs.ts").HelperRunsDeps> = [];
+    const calls: string[] = [];
+    const runs: import("./helper-runs.ts").HelperRuns = {
+      onHelperRequest: async (r) => ({ ok: true, handle: `h/${r.slice}`, branch: "refs/luna/helper/x", base: "b", locks: ["page.tsx"] }),
+      onPickRequest: async () => ({ ok: false, error: "no" }),
+      onPickAck: async () => ({ ok: false, reason: "no" }),
+      afterRun: async (outcome) => (calls.push(`afterRun ${outcome}`), null),
+      cancel: async () => void calls.push("cancel"),
+      picked: () => new Set<string>(),
+      delegatedLocks: () => [],
+      status: () => null,
+      ...over,
+    };
+    return { runs, built, calls, factory: (d: import("./helper-runs.ts").HelperRunsDeps) => (built.push(d), runs) };
+  }
+  const commitWeb = () => {
+    for (const [file, text] of [["index.html", "<html></html>\n"], ["page.tsx", "page\n"], ["api.ts", "api\n"]] as const) writeFileSync(join(repo, file), text);
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "web");
+  };
+  const run = (d: Partial<AgentDeps>, context: StageContext, extra = {}) => runAgent({ ...deps(fakeSandbox(output())), ...d } as AgentDeps, context, "implementing", extra);
+
+  it("says the implementer may delegate when the card has a design, a UI slice and budget, and builds the coordinator before the container starts", async () => {
+    commitWeb();
+    const c = coordinator();
+    let builtBeforeStart = false;
+    const sandbox = async (r: SandboxRun) => ((builtBeforeStart = c.built.length === 1), fakeSandbox(output())(r));
+    await run({ helperRuns: c.factory, sandbox }, withPlan(uiPlan));
+    expect(builtBeforeStart).toBe(true);
+    expect(input().context.delegation).toEqual({ available: true, helper: { role: "ui-designer", engine: "claude:sonnet" } });
+    const d = c.built[0]!;
+    expect(d).toMatchObject({ taskId: context("implementing").task.id, signal: expect.any(AbortSignal) });
+    expect(d.outDir).toBe(join(seen!.runDir, "out"));
+    expect(d.branch).toMatch(/^task\//);
+  });
+
+  it("gives the coordinator the machine's facts: the plan, the card's design, the budget, and the tests commit's files as protected", async () => {
+    commitWeb();
+    const c = coordinator();
+    const budget = async () => ({ spent: false, minutesLeft: 40, tokens: null, tokensCounted: false, minutes: 0, limits: { max_tokens: 1, max_minutes: 40 }, } as never);
+    await run({ helperRuns: c.factory, design: { budget } }, withPlan(uiPlan, { budgetMinutes: 30 }), { testsFiles: ["t.test.ts"], scenarioTests: [{ scenario: "S1", file: "t.test.ts" }], inlineTests: ["lib.rs"] });
+    const d = c.built[0]!;
+    const facts = await d.facts();
+    expect(facts.slices.map((s) => s.touchpoints)).toEqual([["page.tsx"]]);
+    expect(facts.webRoots).toEqual([""]);
+    expect(facts.designRef).toEqual({ refs: [{ fileKey: "ABCDEFGHIJ1234", nodeIds: ["1:2"], page: null, from: "issue" }] });
+    expect(facts).toMatchObject({ designOff: false, implementerEngine: "claude:sonnet", repoEngine: null, designBudget: { spent: false, minutesLeft: 40 }, protectedPaths: ["t.test.ts"] });
+    expect(facts.implementerMinutesLeft).toBeGreaterThan(29);
+    expect(facts.implementerMinutesLeft).toBeLessThanOrEqual(30);
+    expect(d.runExtra()).toMatchObject({ scenarioTests: [{ scenario: "S1", file: "t.test.ts" }], testsFiles: ["t.test.ts"], inlineTests: ["lib.rs"] });
+    expect(d.priorPicked).toBeDefined();
+  });
+
+  it("answers the container's helper request through the build watch", async () => {
+    commitWeb();
+    const c = coordinator();
+    const answers: unknown[] = [];
+    const sandbox = async (r: SandboxRun) => {
+      r.onStarted?.("c1");
+      const checks = join(r.runDir, "out", "checks");
+      mkdirSync(checks, { recursive: true });
+      writeFileSync(join(checks, "helper-request-a1b2c3d4-1.json"), JSON.stringify({ n: 1, slice: 1, message: "go" }));
+      const file = join(checks, "helper-answer-a1b2c3d4-1.json");
+      for (let i = 0; i < 400 && !existsSync(file); i++) await new Promise((res) => setTimeout(res, 10));
+      answers.push(JSON.parse(readFileSync(file, "utf8")));
+      return fakeSandbox(output())(r);
+    };
+    await run({ helperRuns: c.factory, sandbox, watchEvery: 5 }, withPlan(uiPlan));
+    expect(answers).toEqual([{ ok: true, handle: expect.stringContaining("/1"), branch: "refs/luna/helper/x", base: "b", locks: ["page.tsx"] }]);
+  });
+
+  it("says no and builds nothing when the repo turns design off", async () => {
+    commitWeb();
+    const c = coordinator();
+    await run({ helperRuns: c.factory, ...policies({ design: "off" }) }, withPlan(uiPlan));
+    expect(input().context.delegation).toEqual({ available: false, reason: "design is off for this repo" });
+    expect(c.built).toHaveLength(0);
+  });
+
+  it.each([
+    ["the card has no design reference", uiPlan, "no design here", "the card has no design reference"],
+    ["the plan has no pure UI slice", apiPlan, `Build it. ${FIGMA}`, "no slice of the plan is a pure UI slice"],
+  ])("says no and builds nothing when %s", async (_why, plan, description, reason) => {
+    commitWeb();
+    const c = coordinator();
+    await run({ helperRuns: c.factory }, withPlan(plan, {}, description));
+    expect(input().context.delegation).toEqual({ available: false, reason });
+    expect(c.built).toHaveLength(0);
+  });
+
+  it("says no when the design budget is spent", async () => {
+    commitWeb();
+    const c = coordinator();
+    const budget = async () => ({ spent: "minutes", minutesLeft: 0 }) as never;
+    await run({ helperRuns: c.factory, design: { budget } }, withPlan(uiPlan));
+    expect(input().context.delegation).toEqual({ available: false, reason: "the design budget is spent" });
+    expect(c.built).toHaveLength(0);
+  });
+
+  it("lands the helper after a pass, before the run's result is used; a merge_conflict overrides whatever the agent answered", async () => {
+    commitWeb();
+    const c = coordinator({ afterRun: async (o) => (c.calls.push(`afterRun ${o}`), { escalate: "merge_conflict", reason: "slice 1 conflicts in a.ts" }), status: () => ({ slice: 1, state: "merge_conflict", attempt: 2 }) });
+    const result = await run({ helperRuns: c.factory }, withPlan(uiPlan));
+    expect(c.calls).toEqual(["afterRun pass"]);
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "merge_conflict", escalationFact: "merge_conflict", reason: "slice 1 conflicts in a.ts", options: [], helper: { slice: 1, state: "merge_conflict", attempt: 2 } });
+  });
+
+  it("overrides a failed answer with merge_conflict too", async () => {
+    commitWeb();
+    const c = coordinator({ afterRun: async () => ({ escalate: "merge_conflict", reason: "r" }) });
+    const result = await run({ helperRuns: c.factory, sandbox: fakeSandbox(output({ ok: false, outcome: "fail", error: "x" })) }, withPlan(uiPlan));
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "merge_conflict", escalationFact: "merge_conflict" });
+  });
+
+  it("escalates design_budget only after a pass", async () => {
+    commitWeb();
+    const spent = () => coordinator({ afterRun: async () => ({ escalate: "design_budget", reason: "spent" }) });
+    const passed = spent();
+    const ok = await run({ helperRuns: passed.factory }, withPlan(uiPlan));
+    expect(ok.outcome).toBe("escalated");
+    expect(ok.detail).toMatchObject({ escalation: "design_budget", escalationFact: "design_budget", reason: "spent", options: [] });
+    const failed = spent();
+    const bad = await run({ helperRuns: failed.factory, sandbox: fakeSandbox(output({ ok: false, outcome: "fail", error: "x" })) }, withPlan(uiPlan));
+    expect(bad.outcome).toBe("fail");
+    expect(bad.detail).not.toHaveProperty("escalationFact");
+  });
+
+  it("tells afterRun the run failed when the container timed out, and cancels the helper before the credential is released", async () => {
+    commitWeb();
+    const { credentials, log } = (() => {
+      const log: string[] = [];
+      const credentials: Credentials = { check: async () => ({ available: true }), prepare: async () => ({ env: {}, mounts: [], release: async () => void log.push("release") }) };
+      return { credentials, log };
+    })();
+    const c = coordinator({ cancel: async () => void log.push("cancel"), afterRun: async (o) => (log.push(`afterRun ${o}`), null), status: () => ({ slice: 1, state: "cancelled", attempt: 1 }) });
+    const sandbox = async (): Promise<SandboxResult> => ({ exitCode: 1, timedOut: true, aborted: false, transcriptPath: join(root, "t.log") });
+    const result = await run({ helperRuns: c.factory, credentials, sandbox }, withPlan(uiPlan));
+    expect(log.indexOf("cancel")).toBeGreaterThan(-1);
+    expect(log.indexOf("cancel")).toBeLessThan(log.indexOf("release"));
+    expect(log).toContain("afterRun fail");
+    expect(result.outcome).toBe("fail");
+    expect(result.detail).toMatchObject({ helper: { slice: 1, state: "cancelled", attempt: 1 } });
+  });
+
+  it("leaves a run with no helper as it was: no helper detail, no coordinator call at all when nothing is delegable", async () => {
+    commitWeb();
+    const c = coordinator();
+    const result = await run({ helperRuns: c.factory }, withPlan(apiPlan));
+    expect(result.detail).not.toHaveProperty("helper");
+    expect(c.calls).toEqual([]);
   });
 });

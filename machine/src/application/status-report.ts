@@ -32,6 +32,7 @@ const BLOCKED: Record<string, string> = {
   awaiting_answers: "waiting on an answer",
   awaiting_approval: "waiting for the plan's approval",
   awaiting_test_check: "waiting for the test check",
+  awaiting_design: "waiting for the design sign-off",
   awaiting_setup: "waiting for setup",
   awaiting_ship: "waiting for the ship approval",
 };

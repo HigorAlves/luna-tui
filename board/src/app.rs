@@ -249,6 +249,8 @@ const CARD_COMMANDS: &[&str] = &[
     "start",
     "whole",
     "dismiss",
+    "waive",
+    "accept",
     "finding",
     "dedup",
     "context",
@@ -375,7 +377,7 @@ const MOVED_ON: &str = "the card moved on; nothing was approved";
 const MOVED_ON_UNSENT: &str = "the card moved on; nothing was sent";
 /// `approve 3 cards? 2 plans · 1 ship`: the count and the kinds, for the box over the marked cards.
 fn approve_many_question(ids: &[(String, &'static str)]) -> String {
-    let parts: Vec<String> = ["plan", "split", "ship", "release"]
+    let parts: Vec<String> = ["plan", "split", "ship", "release", "design"]
         .iter()
         .filter_map(|kind| {
             let n = ids.iter().filter(|(_, k)| k == kind).count();
@@ -481,6 +483,17 @@ pub enum Mode {
         id: String,
         field: usize,
         picks: [usize; 5],
+    },
+    /// A design report (`:spec`, `:audit`): scroll with `j`/`k`, `c` makes a card, `esc` closes.
+    DesignReport {
+        report: Box<crate::design::DesignReport>,
+        repo: Option<String>,
+        scroll: usize,
+    },
+    /// Approving an escalation whose design budget is spent: fresh budget (`y`) or design off for the card (`o`).
+    DesignBudget {
+        id: String,
+        guidance: Option<String>,
     },
     /// `m`: ask the foreman, then walk the actions it suggests. Each runs on its own `y`.
     Foreman(crate::foreman::State),
@@ -805,6 +818,10 @@ pub struct App {
     pub home_repo: Option<String>,
     /// The planning chat closed with `esc`: `t` reopens it until its ticket is created or it is discarded.
     pub ticket_talk: Option<crate::ticket_chat::State>,
+    /// `:spec` / `:audit` waiting for a repo from the picker.
+    design_ask: Option<crate::design::Ask>,
+    /// A report that landed while another box was open; `:report` opens it.
+    design_kept: Option<(crate::design::DesignReport, Option<String>)>,
     /// The engine the last planning chat used this session; the next one starts on it.
     pub ticket_engine: Option<String>,
     /// Column rectangles from the last frame, for mouse clicks.
@@ -938,6 +955,8 @@ impl App {
             last_seen_secs: store::last_seen_secs_at(&store::state_path()),
             home_repo: herdr::workspace_repo(),
             ticket_talk: None,
+            design_ask: None,
+            design_kept: None,
             ticket_engine: None,
             column_rects: RefCell::new(Vec::new()),
             list_offsets: RefCell::new(Vec::new()),
@@ -1252,6 +1271,7 @@ impl App {
                     self.slack_catalog = Some((groups, channels));
                     self.slack_catalog_pending = false;
                 }
+                Incoming::Design(result) => self.take_design(result),
                 Incoming::Foreman(result) => self.take_foreman(result),
                 Incoming::TicketChat { generation, result } => {
                     self.take_ticket_chat(generation, result)
@@ -1583,7 +1603,15 @@ impl App {
             },
         };
         let Some(task) = self.task(&id) else { return };
-        if crate::detail::order(task).contains(&self.detail_section) {
+        if crate::detail::order(task).contains(&self.detail_section)
+            || (self.detail_section == Section::Design
+                && self
+                    .detail
+                    .as_ref()
+                    .filter(|d| d.task.id == task.id)
+                    .and_then(crate::detail::design_page)
+                    .is_some())
+        {
             return;
         }
         let (first, column) = (Section::for_task(task), task.column.clone());
@@ -3065,6 +3093,8 @@ impl App {
             Mode::Reject { .. } => self.handle_reject(key),
             Mode::EvidenceNote { .. } => self.handle_evidence_note(key),
             Mode::Foreman(_) => self.handle_foreman(key),
+            Mode::DesignReport { .. } => self.handle_design_report(key),
+            Mode::DesignBudget { .. } => self.handle_design_budget(key),
             Mode::TicketChat(_) => self.handle_ticket_chat(key),
             Mode::ConfirmApprove(_) => self.handle_confirm_approve(key),
             Mode::ConfirmDelete(id) | Mode::ConfirmAbort(id) | Mode::ConfirmWorktree(id) => {
@@ -3327,6 +3357,10 @@ impl App {
     pub fn is_new(&self, task: &Task) -> bool {
         digest::is_new(task, self.last_seen_secs)
     }
+
+    /// The keys `handle_design_report` matches.
+    #[cfg(test)]
+    pub(crate) const HANDLED_DESIGN: &[&str] = &["c", "j", "k", "esc", "q", "?"];
 
     /// The keys `handle_digest` matches.
     #[cfg(test)]
@@ -4533,7 +4567,10 @@ impl App {
                 }
             }
             KeyCode::Up => *cursor = cursor.saturating_sub(1),
-            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Esc => {
+                self.design_ask = None;
+                self.mode = Mode::Normal;
+            }
             KeyCode::Enter => {
                 let matches = Self::matching_repos(all, query);
                 let Some(folder) = matches.get(*cursor).map(|f| f.to_string()) else {
@@ -5660,6 +5697,8 @@ impl App {
             "release"
         } else if question.starts_with("ship") {
             "ship"
+        } else if question.starts_with("sign off") {
+            "design"
         } else {
             "plan"
         })
@@ -5830,6 +5869,9 @@ impl App {
             {
                 self.open_artifact(id, self.detail_row())
             }
+            KeyCode::Enter if self.detail_section == Section::Design && self.detail_rows() > 0 => {
+                self.open_design_frame(id)
+            }
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.mode = Mode::Normal,
             KeyCode::Tab => {
                 self.detail_refs.flip_focus();
@@ -5853,6 +5895,9 @@ impl App {
             KeyCode::Char('+') => self.detail_full = !self.detail_full,
             KeyCode::Char('?') => {
                 self.open_help();
+            }
+            KeyCode::Char('o') if self.detail_section == Section::Design => {
+                self.open_design_frame(id)
             }
             KeyCode::Char('o') => match self.detail_open_target() {
                 Some(target) => self.open_target(id, target),
@@ -6063,6 +6108,9 @@ impl App {
         match self.detail_section {
             Section::Runs => detail.map_or(0, |d| d.stage_runs.len()),
             Section::Evidence => detail.map_or(0, |d| d.artifacts.len()),
+            Section::Design => detail
+                .and_then(crate::detail::design_page)
+                .map_or(0, |p| p.rows.len()),
             Section::Engines => self
                 .engine_catalog
                 .as_ref()
@@ -6096,6 +6144,14 @@ impl App {
                 })
             }
             Section::Pr => self.detail_pr_url().map(OpenTarget::Url),
+            Section::Design => {
+                let page = crate::detail::design_page(self.open_detail_of()?)?;
+                let target = page.rows.get(self.detail_row())?.open_target()?.to_string();
+                Some(OpenTarget::Path {
+                    path: target,
+                    what: "the frame's pair".to_string(),
+                })
+            }
             _ if self
                 .open_detail_of()
                 .is_some_and(|d| !d.artifacts.is_empty()) =>
@@ -6133,6 +6189,14 @@ impl App {
             },
             OpenTarget::Path { path, what } => self.open_file(id, &path, &what),
             OpenTarget::EvidenceFolder => self.open_evidence_folder(id),
+        }
+    }
+
+    /// `enter` / `o` on the Design page: the selected frame's composite pair, else its build capture, through the usual open rules.
+    fn open_design_frame(&mut self, id: &str) {
+        match self.detail_open_target() {
+            Some(target) => self.open_target(id, target),
+            None => self.notify("nothing to open for this frame", false),
         }
     }
 
@@ -6481,6 +6545,8 @@ impl App {
         "setup",
         "whole",
         "dismiss",
+        "waive",
+        "accept",
         "finding",
         "slots",
         "drain",
@@ -6502,6 +6568,9 @@ impl App {
         "slack",
         "jira",
         "help",
+        "spec",
+        "audit",
+        "report",
     ];
 
     /// Runs one palette command: `name` and whatever follows it.
@@ -6593,6 +6662,21 @@ impl App {
                     "finding dismissed",
                 ),
             },
+            "waive" | "accept" => match (self.card_target(), parse_waiver(rest)) {
+                (None, _) => self.notify("no ticket selected", true),
+                (_, Err(error)) => self.notify(error, true),
+                (Some(id), Ok((finding, reason))) => {
+                    let kind = if name == "waive" {
+                        "not_a_difference"
+                    } else {
+                        "accepted"
+                    };
+                    self.act(
+                        |m| m.waive_design_finding(&id, &finding, kind, &reason),
+                        "finding waived",
+                    )
+                }
+            },
             "finding" => match (self.card_target(), parse_finding(rest)) {
                 (None, _) => self.notify("no ticket selected", true),
                 (_, Err(error)) => self.notify(error, true),
@@ -6648,6 +6732,20 @@ impl App {
                 None => self.notify("no ticket selected", true),
             },
             "help" | "?" => self.open_help(),
+            "spec" if rest.is_empty() => self.notify(
+                "spec takes a Figma link, e.g. :spec https://www.figma.com/design/...",
+                true,
+            ),
+            "spec" => self.ask_design(crate::design::Ask::Spec(rest.to_string())),
+            "audit" if rest.is_empty() => self.notify(
+                "audit takes the name of a QA target, e.g. :audit staging",
+                true,
+            ),
+            "audit" => self.ask_design(crate::design::Ask::Audit(rest.to_string())),
+            "report" => match self.design_kept.take() {
+                Some((report, repo)) => self.open_design_report(report, repo),
+                None => self.notify("no design report is waiting", false),
+            },
             other => self.notify(format!("unknown command: {other} (try :help)"), true),
         }
         self.clamp_selection();
@@ -6675,8 +6773,20 @@ impl App {
                     self.notify(MOVED_ON_UNSENT, true);
                     return Outcome::Continue;
                 }
-                self.mode = Mode::Normal;
                 let reason = (!reason.is_empty()).then_some(reason);
+                // A spent design budget asks once: a fresh budget, or design off for this card.
+                if approve
+                    && self.detail.as_ref().is_some_and(|d| d.task.id == id)
+                    && crate::detail::escalation_reason(self.detail.as_ref())
+                        == Some("design_budget")
+                {
+                    self.mode = Mode::DesignBudget {
+                        id,
+                        guidance: reason,
+                    };
+                    return Outcome::Continue;
+                }
+                self.mode = Mode::Normal;
                 let done = if approve {
                     "continuing with your guidance"
                 } else {
@@ -7026,6 +7136,126 @@ impl App {
         if let Mode::TicketChat(state) = &mut self.mode {
             state.answered(generation, result);
         }
+    }
+
+    /// `:spec` / `:audit`: on the card's repo, else this board's, else the one picked from the list.
+    fn ask_design(&mut self, ask: crate::design::Ask) {
+        let repo = self
+            .selected_task()
+            .and_then(|t| t.repo_path.clone())
+            .or_else(|| self.home_repo.clone());
+        match repo {
+            Some(repo) => self.start_design(ask, repo),
+            None => {
+                self.design_ask = None;
+                self.pick_repo("", false);
+                if matches!(self.mode, Mode::RepoPicker { .. }) {
+                    self.design_ask = Some(ask);
+                }
+            }
+        }
+    }
+
+    /// Calls the route on a background thread; the answer arrives as `Incoming::Design`.
+    fn start_design(&mut self, ask: crate::design::Ask, repo: String) {
+        let machine = self.machine.clone();
+        let tx = self.tx.clone();
+        let words = match &ask {
+            crate::design::Ask::Spec(_) => "reading the design (a few minutes)…",
+            crate::design::Ask::Audit(_) => "auditing (up to twenty minutes)…",
+        };
+        self.notify(words, false);
+        thread::spawn(move || {
+            let result = match &ask {
+                crate::design::Ask::Spec(link) => machine.design_spec(&repo, link),
+                crate::design::Ask::Audit(target) => machine.design_audit(&repo, target),
+            };
+            let _ = tx.send(Incoming::Design(result.map(|r| (r, Some(repo)))));
+        });
+    }
+
+    fn open_design_report(&mut self, report: crate::design::DesignReport, repo: Option<String>) {
+        self.mode = Mode::DesignReport {
+            report: Box::new(report),
+            repo,
+            scroll: 0,
+        };
+    }
+
+    /// A design route answered: the report opens, unless another box is open (then `:report` does), or the call failed (a notice).
+    fn take_design(
+        &mut self,
+        result: Result<(crate::design::DesignReport, Option<String>), String>,
+    ) {
+        match result {
+            Err(error) => self.notify(error, true),
+            Ok((report, repo)) if matches!(self.mode, Mode::Normal) => {
+                self.open_design_report(report, repo)
+            }
+            Ok(kept) => {
+                self.design_kept = Some(kept);
+                self.notify("a design report is ready: :report opens it", false);
+            }
+        }
+    }
+
+    fn handle_design_report(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::DesignReport {
+            report,
+            repo,
+            scroll,
+        } = &mut self.mode
+        else {
+            return Outcome::Continue;
+        };
+        let last = crate::design::report_lines(report).len().saturating_sub(1);
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => *scroll = (*scroll + 1).min(last),
+            KeyCode::Char('k') | KeyCode::Up => *scroll = scroll.saturating_sub(1),
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            KeyCode::Char('?') => self.open_help(),
+            KeyCode::Char('c') => {
+                let text = crate::design::card_text(report, repo.as_deref());
+                match self.machine.create(&text) {
+                    Ok(task) => {
+                        let id = task.id.clone();
+                        self.upsert(task);
+                        self.select(&id, true);
+                        self.mode = Mode::Normal;
+                        self.notify("made a card", false);
+                    }
+                    Err(error) => self.notify(error, true),
+                }
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    fn handle_design_budget(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::DesignBudget { id, guidance } = &self.mode else {
+            return Outcome::Continue;
+        };
+        let (id, guidance) = (id.clone(), guidance.clone());
+        match key.code {
+            KeyCode::Char('y') => {
+                self.mode = Mode::Normal;
+                self.act(
+                    |m| m.decide(&id, true, guidance.as_deref()),
+                    "continuing with a fresh design budget",
+                );
+            }
+            KeyCode::Char('o') => {
+                self.mode = Mode::Normal;
+                self.act(
+                    |m| m.decide_design_off(&id, guidance.as_deref()),
+                    "continuing with design off for this card",
+                );
+            }
+            KeyCode::Esc | KeyCode::Char('n') => self.mode = Mode::Normal,
+            _ => {}
+        }
+        Outcome::Continue
     }
 
     /// The foreman answered: its reply and actions show, unless the popup was closed meanwhile.
@@ -7467,7 +7697,12 @@ impl App {
     /// the card waits at a gate that commits something; None at the gates and states that do not.
     pub fn approval_question(&self, task: &Task) -> Option<String> {
         self.approval_gate(task)
-            .filter(|gate| matches!(gate.kind, "plan" | "split" | "ship" | "release" | "memory"))
+            .filter(|gate| {
+                matches!(
+                    gate.kind,
+                    "plan" | "split" | "ship" | "release" | "memory" | "design"
+                )
+            })
             .map(|gate| gate.question)
     }
 
@@ -7504,6 +7739,7 @@ impl App {
                 format!("write the proposed luna.yaml for #{short}?"),
             ),
             "awaiting_test_check" => ("tests", format!("approve the test cases of #{short}?")),
+            "awaiting_design" => ("design", format!("sign off the design of #{short}?")),
             "draft" | "awaiting_answers" | "escalated" | "paused_rate_limit" | "closed"
             | "archived" => return None,
             _ => ("approval", format!("approve #{short}?")),
@@ -7547,7 +7783,9 @@ impl App {
                 };
                 let (id, chat) = (id.clone(), *chat);
                 self.mode = Mode::Normal;
-                if chat {
+                if let Some(ask) = self.design_ask.take() {
+                    self.start_design(ask, repo);
+                } else if chat {
                     self.start_ticket_chat(repo);
                 } else {
                     self.set_repo(&id, repo);
@@ -7733,6 +7971,7 @@ pub(crate) mod handled {
     pub(crate) const DIGEST: &[&str] = App::HANDLED_DIGEST;
     pub(crate) const FLOOR: &[&str] = App::HANDLED_FLOOR;
     pub(crate) const HELP: &[&str] = App::HANDLED_HELP;
+    pub(crate) const DESIGN: &[&str] = App::HANDLED_DESIGN;
     pub(crate) const ACTIONS: &[&str] = App::HANDLED_ACTIONS;
     pub(crate) const COMMANDS: &[&str] = App::HANDLED_COMMANDS;
 }
@@ -7772,6 +8011,22 @@ pub(crate) fn parse_dismiss(arg: &str) -> Result<(String, Option<String>), Strin
             Some(reason.chars().take(500).collect())
         },
     ))
+}
+
+/// `:waive <finding id> <reason>` and `:accept <finding id> <reason>` at the design sign-off: the reason is 3 to 500 characters.
+pub(crate) fn parse_waiver(arg: &str) -> Result<(String, String), String> {
+    let arg = arg.trim();
+    let (id, reason) = arg
+        .split_once(char::is_whitespace)
+        .map_or((arg, ""), |(i, r)| (i, r.trim()));
+    let length = reason.chars().count();
+    if id.is_empty() || !(3..=500).contains(&length) {
+        return Err(
+            "waive takes a finding id and a reason, e.g. :waive D1a2b3c4 same token, anti-aliasing"
+                .to_string(),
+        );
+    }
+    Ok((id.to_string(), reason.to_string()))
 }
 
 /// `:finding <blocker|should_fix|nit> <title>`.
@@ -12138,11 +12393,72 @@ mod task_view_command_tests {
     }
 
     #[test]
+    fn waive_and_accept_need_an_id_and_a_reason() {
+        assert_eq!(
+            parse_waiver("D1a2b3c4 same token, anti-aliasing"),
+            Ok((
+                "D1a2b3c4".to_string(),
+                "same token, anti-aliasing".to_string()
+            ))
+        );
+        assert!(parse_waiver("D1a2b3c4").is_err());
+        assert!(parse_waiver("").is_err());
+        assert!(
+            parse_waiver("D1 ab").is_err(),
+            "a reason is 3 characters or more"
+        );
+        assert!(parse_waiver(&format!("D1 {}", "x".repeat(501))).is_err());
+        assert_eq!(
+            parse_waiver("D1 abc").unwrap().1,
+            "abc",
+            "three characters is enough"
+        );
+    }
+
+    #[test]
+    fn a_waiver_without_a_reason_is_refused_locally() {
+        let (mut app, _, _, seen) = two_cards();
+        command(&mut app, "waive D1a2b3c4");
+        assert_eq!(
+            app.toast.as_ref().map(|t| t.text.as_str()),
+            Some(
+                "waive takes a finding id and a reason, e.g. :waive D1a2b3c4 same token, anti-aliasing"
+            )
+        );
+        assert!(posts(&seen).is_empty());
+    }
+
+    #[test]
+    fn approving_the_design_sign_off_asks_what_it_commits() {
+        use crate::testkit::{open_card, task_json};
+        use serde_json::json;
+        let app = open_card(
+            task_json(
+                "aaaaaaaa1",
+                "Checkout",
+                "awaiting_design",
+                "Verify",
+                json!({"waitingOnYou": true}),
+            ),
+            json!({"approvals": [{"id": "g1", "kind": "awaiting_design", "requested": {"design": {"gate": {"fires": true, "why": ["open_findings"]}, "findings": []}}, "decision": null}]}),
+        );
+        let task = app.tasks[0].clone();
+        assert_eq!(
+            app.approval_question(&task).as_deref(),
+            Some("sign off the design of #aaaaaaaa?")
+        );
+        assert_eq!(app.approval_gate(&task).map(|g| g.kind), Some("design"));
+        assert_eq!(app.committing_kind(&task), Some("design"));
+    }
+
+    #[test]
     fn every_card_command_in_the_task_goes_to_the_open_card() {
         let (_, open, other, _) = two_cards();
         for line in [
             "whole",
             "dismiss F1",
+            "waive D1 same token",
+            "accept D1 brand allows it",
             "finding nit rename x",
             "dup bbbbbbbb9",
             "undup",
@@ -14432,6 +14748,52 @@ mod evidence_open_tests {
         fs::canonicalize(path).unwrap().into_os_string()
     }
 
+    /// The card at the design sign-off, with two frames: the first has a real pair on disk, the second has nothing to open.
+    fn design_card(name: &str) -> (App, PathBuf, Calls) {
+        let (mut app, root, calls) = card(name);
+        let pair = root.join("runs/r1-parity/pairs/S1-desktop-default.png");
+        fs::create_dir_all(pair.parent().unwrap()).unwrap();
+        fs::write(&pair, b"x").unwrap();
+        let frame = |state: &str, status: &str, pair: serde_json::Value| serde_json::json!({"frame": "F1", "name": "Checkout", "node": "12:34", "scenario": "S1", "viewport": "desktop", "state": state, "status": status, "reason": "no capture", "capture": null, "render": null, "diff": null, "pair": pair, "diffRatio": null});
+        app.tasks[0].state = "awaiting_design".into();
+        app.tasks[0].waiting_on_you = true;
+        let detail = app.detail.as_mut().unwrap();
+        detail.task.state = "awaiting_design".into();
+        detail.approvals = vec![serde_json::from_value(serde_json::json!({"id": "g1", "kind": "awaiting_design", "decision": null,
+            "requested": {"design": {"wcag": "AA", "a11y": null, "findings": [], "gate": {"fires": true, "why": ["not_compared"]},
+                "parity": {"ran": true, "runId": "r1-parity", "confidence": 0.9, "bar": 0.75, "designInput": "complete", "summary": "",
+                    "counts": {"blocker": 0, "should_fix": 0, "nit": 0, "waived": 0},
+                    "frames": [frame("default", "compared", serde_json::json!(pair.to_string_lossy())), frame("hover", "not_compared", serde_json::Value::Null)]}}}})).unwrap()];
+        app.set_section(Section::Design);
+        (app, root, calls)
+    }
+
+    #[test]
+    fn on_the_design_page_j_and_k_pick_a_frame_and_enter_opens_its_pair() {
+        let (mut app, root, calls) = design_card("design-open");
+        assert_eq!(app.detail_rows(), 2);
+        press(&mut app, 'j');
+        assert_eq!(app.detail_row(), 1);
+        press(&mut app, 'j');
+        assert_eq!(app.detail_row(), 1, "stops at the last frame");
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(toast(&app), "nothing to open for this frame");
+        assert!(launched(&calls).is_empty());
+        press(&mut app, 'k');
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(
+            launched(&calls),
+            vec![canon(
+                &root.join("runs/r1-parity/pairs/S1-desktop-default.png")
+            )]
+        );
+        assert!(matches!(app.mode, Mode::Detail(_)), "the card stays open");
+        press(&mut app, 'j');
+        press(&mut app, 'o');
+        assert_eq!(toast(&app), "nothing to open for this frame");
+        assert_eq!(launched(&calls).len(), 1);
+    }
+
     #[test]
     fn o_opens_the_evidence_folder_from_any_section_of_a_card_that_has_files() {
         let (mut app, root, calls) = card("o-anywhere");
@@ -14672,7 +15034,7 @@ mod evidence_open_tests {
         assert_eq!(reason(&app, "o"), Avail::On);
         assert_eq!(
             reason(&app, "enter"),
-            Avail::Off("only in the Evidence section")
+            Avail::Off("only in the Evidence and Design sections")
         );
         app.set_section(Section::Evidence);
         assert_eq!(reason(&app, "enter"), Avail::On);
@@ -15914,13 +16276,18 @@ mod ticket_chat_tests {
             generation,
             Ok(Reply {
                 reply: "which?".into(),
-                choices: (1..=4).map(|n| format!("choice{n} {}", "w".repeat(200))).collect(),
+                choices: (1..=4)
+                    .map(|n| format!("choice{n} {}", "w".repeat(200)))
+                    .collect(),
                 ..Reply::default()
             }),
         );
         let screen = screen(&mut app);
         for n in 1..=4 {
-            assert!(screen.contains(&format!(" {n} ")) && screen.contains(&format!("choice{n}")), "{screen}");
+            assert!(
+                screen.contains(&format!(" {n} ")) && screen.contains(&format!("choice{n}")),
+                "{screen}"
+            );
         }
     }
 
@@ -16348,5 +16715,167 @@ mod foreman_tests {
             dropped: vec![],
         }));
         assert!(matches!(app.mode, Mode::Normal));
+    }
+}
+
+#[cfg(test)]
+mod design_tests {
+    use super::confirm_tests::body_recording_machine;
+    use super::*;
+    use crate::design::DesignReport;
+    use crate::testkit::escalated_app;
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    fn audit() -> DesignReport {
+        serde_json::from_value(serde_json::json!({
+            "kind": "audit", "target": "staging", "level": "AA", "mode": "gate", "pages": [], "notes": [],
+            "findings": [{ "path": "/checkout", "line": 0, "severity": "blocker", "title": "WCAG 2.1.2 (A): div.modal on /checkout", "body": "trap", "confidence": 0.9, "category": "accessibility" }]
+        }))
+        .unwrap()
+    }
+
+    /// The paths POSTed so far, once at least `count` have arrived (the call runs on its own thread).
+    fn posted(
+        seen: &super::confirm_tests::PostBodies,
+        count: usize,
+    ) -> Vec<(String, serde_json::Value)> {
+        for _ in 0..200 {
+            if seen.lock().unwrap().len() >= count {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        seen.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn audit_asks_the_machine_on_the_boards_repo_and_the_answer_opens_the_report() {
+        let (machine, seen) = body_recording_machine();
+        let mut app = App::new(machine);
+        app.home_repo = Some("/r/shop".into());
+        app.run_command("audit staging");
+        let calls = posted(&seen, 1);
+        assert_eq!(calls[0].0, "/design/audit");
+        assert_eq!(
+            calls[0].1,
+            serde_json::json!({ "repo": "/r/shop", "target": "staging" })
+        );
+        app.take_design(Ok((audit(), Some("/r/shop".into()))));
+        assert!(matches!(&app.mode, Mode::DesignReport { .. }));
+    }
+
+    #[test]
+    fn spec_asks_with_the_link_and_a_failed_call_is_a_notice() {
+        let (machine, seen) = body_recording_machine();
+        let mut app = App::new(machine);
+        app.home_repo = Some("/r/shop".into());
+        app.run_command("spec https://www.figma.com/design/AbCdEf0123456789/Shop?node-id=12-34");
+        let calls = posted(&seen, 1);
+        assert_eq!(calls[0].0, "/design/spec");
+        assert_eq!(
+            calls[0].1["link"],
+            "https://www.figma.com/design/AbCdEf0123456789/Shop?node-id=12-34"
+        );
+        app.take_design(Err("no Figma reference".into()));
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(
+            app.toast
+                .as_ref()
+                .is_some_and(|t| t.error && t.text.contains("no Figma reference"))
+        );
+    }
+
+    #[test]
+    fn j_and_k_scroll_esc_closes_and_c_makes_one_card_from_the_report() {
+        let (machine, seen) = body_recording_machine();
+        let mut app = App::new(machine);
+        app.take_design(Ok((audit(), Some("/r/shop".into()))));
+        press(&mut app, KeyCode::Char('j'));
+        assert!(matches!(app.mode, Mode::DesignReport { scroll: 1, .. }));
+        press(&mut app, KeyCode::Char('k'));
+        press(&mut app, KeyCode::Char('k'));
+        assert!(matches!(app.mode, Mode::DesignReport { scroll: 0, .. }));
+        press(&mut app, KeyCode::Char('c'));
+        let calls = posted(&seen, 1);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "/tasks");
+        assert_eq!(calls[0].1["title"], "Fix accessibility of staging");
+        assert_eq!(calls[0].1["repoPath"], "/r/shop");
+        assert!(
+            calls[0].1["description"]
+                .as_str()
+                .unwrap()
+                .contains("- [blocker] WCAG 2.1.2 (A): div.modal on /checkout")
+        );
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn a_report_that_lands_while_something_else_is_open_waits_for_the_report_command() {
+        let mut app = App::new(crate::testkit::dead_machine());
+        app.mode = Mode::Adding("half a title".into());
+        app.take_design(Ok((audit(), None)));
+        assert!(matches!(&app.mode, Mode::Adding(text) if text == "half a title"));
+        app.mode = Mode::Normal;
+        app.run_command("report");
+        assert!(matches!(&app.mode, Mode::DesignReport { .. }));
+    }
+
+    #[test]
+    fn approving_a_spent_design_budget_asks_once_and_design_off_is_sent_with_the_decision() {
+        let (machine, seen) = body_recording_machine();
+        let mut app = escalated_app();
+        app.machine = machine;
+        let id = app.tasks[0].id.clone();
+        app.detail.as_mut().unwrap().approvals[0].requested["escalationDecision"]["reason"] =
+            "design_budget".into();
+        app.mode = Mode::Reason {
+            id: id.clone(),
+            approve: true,
+            text: String::new(),
+        };
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(&app.mode, Mode::DesignBudget { id: asked, .. } if *asked == id));
+        press(&mut app, KeyCode::Char('o'));
+        let calls = posted(&seen, 1);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, format!("/tasks/{id}/decision"));
+        assert_eq!(calls[0].1["decision"], "approved");
+        assert_eq!(calls[0].1["design"], "off");
+    }
+
+    #[test]
+    fn a_fresh_design_budget_sends_the_plain_approval_and_any_other_escalation_asks_nothing() {
+        let (machine, seen) = body_recording_machine();
+        let mut app = escalated_app();
+        app.machine = machine;
+        let id = app.tasks[0].id.clone();
+        app.detail.as_mut().unwrap().approvals[0].requested["escalationDecision"]["reason"] =
+            "design_budget".into();
+        app.mode = Mode::Reason {
+            id: id.clone(),
+            approve: true,
+            text: "carry on".into(),
+        };
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('y'));
+        let calls = posted(&seen, 1);
+        assert_eq!(calls[0].1["decision"], "approved");
+        assert!(calls[0].1.get("design").is_none());
+        assert_eq!(calls[0].1["reason"], "carry on");
+
+        let mut other = escalated_app();
+        let id = other.tasks[0].id.clone();
+        other.mode = Mode::Reason {
+            id,
+            approve: true,
+            text: String::new(),
+        };
+        press(&mut other, KeyCode::Enter);
+        assert!(matches!(other.mode, Mode::Normal));
     }
 }

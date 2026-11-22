@@ -1,11 +1,11 @@
 // The v2.2 Build Report and Verify Report, assembled from what the stages already leave: the stage runs,
 // the `stage.finished` details, the task's counters. Pure; the caller reads the rows. Reads only the
 // machine's own events, never anything a model or a ticket wrote beyond what a stage detail already holds.
-import { type FactoryConfig, type BuildProgress, type BuildReport, CoverageSummary, DiffSummary, Finding, type VerifyReport, credentialOwner, mergeDuplicateFindings, normaliseFinding, severityOf } from "@hardness/contracts";
+import { type FactoryConfig, type BuildProgress, type BuildReport, type HelperState, CoverageSummary, DiffSummary, Finding, VerifyDesignReport, type VerifyReport, credentialOwner, mergeDuplicateFindings, normaliseFinding, severityOf } from "@hardness/contracts";
 
 import { safe } from "../domain/evidence-markdown.ts";
 import { budgetRowsOf, buildBudget } from "../domain/build-budget.ts";
-import type { EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
+import type { ApprovalRow, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
 
 const REPORT_VERSION = 2;
 
@@ -101,6 +101,7 @@ export function buildReportOf(task: TaskRow, runs: readonly StageRunRow[], event
     limits: limits ? { max_iterations: limits.max_iterations, max_tokens: limits.max_tokens, max_minutes: limits.max_minutes } : null,
     testsStep: step && typeof step.status === "string" ? { status: step.status, ...(typeof step.why === "string" ? { why: step.why } : {}), ...(typeof step.commit === "string" ? { commit: step.commit } : {}), ...(typeof step.redCheck === "string" ? { redCheck: step.redCheck } : {}) } : null,
     sweep: sweep && typeof sweep.status === "string" ? { status: sweep.status, ran: stringsOf(sweep.ran), ...(typeof sweep.note === "string" ? { note: sweep.note } : {}), ...(stringsOf(sweep.failed).length ? { failed: stringsOf(sweep.failed) } : {}) } : null,
+    ...(pickedOf(events).length > 0 ? { picked: pickedOf(events).map((p) => ({ slice: p.slice, shas: p.shas, tip: p.tip })) } : {}),
   };
 }
 
@@ -110,12 +111,29 @@ const findingsOf = (detail: Record<string, unknown> | undefined): Finding[] =>
     return parsed.success ? [normaliseFinding(parsed.data)] : [];
   });
 
+/**
+ * The last browser run's design block with the design sign-off's waivers applied, and how many findings a person kept by approving. The sign-off belongs to that run when its payload's parity run id is the
+ * same (an earlier round's sign-off, sent back, is not read). "Kept at sign-off" is not stored: it is the findings still open on an approved gate. Null when the run left no block that parses.
+ */
+export function designOf(events: readonly EventRow[], approvals: readonly ApprovalRow[] = []): { report: VerifyDesignReport; kept: number } | null {
+  const last = finishes(events).filter((f) => f.stage === "e2e").at(-1);
+  const ran = VerifyDesignReport.safeParse(last?.detail.design);
+  if (!ran.success) return null;
+  const gate = approvals.findLast((a) => a.kind === "awaiting_design" && VerifyDesignReport.safeParse(a.requested.design).data?.parity?.runId === (ran.data.parity?.runId ?? null));
+  const signed = gate ? VerifyDesignReport.safeParse(gate.requested.design) : null;
+  const report = signed?.success ? signed.data : ran.data;
+  const kept = gate?.decision === "approved" ? report.findings.filter((f) => f.resolution?.status !== "waived").length : 0;
+  return { report, kept };
+}
+
 /** What the draft PR's body is fed, from the rows of Build, Verify and the browser run (Deliver runs after all three): the open findings of the last verifying run that are not blockers
  *  (a blocker fails the stage), the files Build declared outside the map and the file of each scenario's tagged test. */
-export function prFactsOf(task: TaskRow, runs: readonly StageRunRow[], events: readonly EventRow[]): { findings: Finding[]; outOfMap: Array<{ path: string; reason: string }>; tests: Map<string, string> } {
+export function prFactsOf(task: TaskRow, runs: readonly StageRunRow[], events: readonly EventRow[], approvals: readonly ApprovalRow[] = []): { findings: Finding[]; outOfMap: Array<{ path: string; reason: string }>; tests: Map<string, string>; design?: { report: VerifyDesignReport; kept: number } } {
   const build = buildReportOf(task, runs, events);
   const last = finishes(events).filter((f) => f.stage === "verifying").at(-1);
+  const design = designOf(events, approvals);
   return {
+    ...(design ? { design } : {}),
     findings: findingsOf(last?.detail).filter((f) => !f.resolution && severityOf(f.severity) !== "blocker"),
     outOfMap: build?.declaredFiles ?? [],
     tests: new Map((build?.tests ?? []).flatMap((t) => (t.file ? [[t.scenario, t.file] as [string, string]] : []))),
@@ -123,7 +141,7 @@ export function prFactsOf(task: TaskRow, runs: readonly StageRunRow[], events: r
 }
 
 /** What Verify hands to Evidence; null until a verifying run has happened. */
-export function verifyReportOf(task: TaskRow, runs: readonly StageRunRow[], events: readonly EventRow[]): VerifyReport | null {
+export function verifyReportOf(task: TaskRow, runs: readonly StageRunRow[], events: readonly EventRow[], approvals: readonly ApprovalRow[] = []): VerifyReport | null {
   const verifyingRuns = runs.filter((r) => r.stage === "verifying");
   if (verifyingRuns.length === 0) return null;
   const all = finishes(events);
@@ -151,6 +169,7 @@ export function verifyReportOf(task: TaskRow, runs: readonly StageRunRow[], even
   const opened = events.findLast((e) => e.kind === "stage.pr.opened");
   const prNumber = all.findLast((f) => f.stage === "delivering" && typeof f.detail.prNumber === "number")?.detail.prNumber ?? opened?.payload.number;
   const lastRun = verifyingRuns.at(-1)!;
+  const design = designOf(events, approvals);
   return {
     prNumber: typeof prNumber === "number" ? prNumber : null,
     headSha: lastRun.outputCommit ?? lastRun.inputCommit,
@@ -175,6 +194,7 @@ export function verifyReportOf(task: TaskRow, runs: readonly StageRunRow[], even
     mutation: mutationOf(last?.detail.mutation),
     ciClass: typeof all.findLast((f) => f.stage === "ci_watch")?.detail.class === "string" ? (all.findLast((f) => f.stage === "ci_watch")!.detail.class as string) : null,
     ...(task.retries ? { rounds: { verify: task.retries.verify, e2e: task.retries.e2e, ci: task.retries.ci } } : {}),
+    ...(design ? { design: design.report } : {}),
   };
 }
 
@@ -194,6 +214,69 @@ const mutationOf = (value: unknown): { score: number; min: number } | null => {
   return typeof m?.score === "number" && typeof m.min === "number" ? { score: m.score, min: m.min } : null;
 };
 
+const SHA = /^[0-9a-f]{40,64}$/;
+
+/** The slices the machine put on the branch: its own `build.helper_picked` rows, the last one per slice, with a well-formed slice, shas and tip. A container cannot write one (the kind is reserved). */
+function pickedOf(events: readonly EventRow[]): Array<{ slice: number; shas: string[]; tip: string }> {
+  const bySlice = new Map<number, { slice: number; shas: string[]; tip: string }>();
+  for (const { kind, payload } of events) {
+    if (kind !== "build.helper_picked") continue;
+    const { slice, picked, tip } = payload;
+    if (typeof slice !== "number" || !Number.isInteger(slice) || slice < 1 || !Array.isArray(picked) || picked.length === 0 || !picked.every((p) => typeof p === "string" && SHA.test(p)) || typeof tip !== "string" || !SHA.test(tip)) continue;
+    bySlice.set(slice, { slice, shas: picked as string[], tip });
+  }
+  return [...bySlice.values()].sort((a, b) => a.slice - b.slice);
+}
+
+type HelperRow = { kind: string; payload: Record<string, unknown>; at: Date };
+
+/** Where one slice's latest helper stands, from the machine's rows since its newest start, by the last of them: a pick is `committed`, a refusal `refused`, a second conflict `merge_conflict`, a first one `conflict_rerun` (the re-run writes no start row of its own), a pass nobody took yet `returned`, any other end `failed` (or `cancelled` when the run said so). The attempt is the one that row belongs to. */
+function helperStateOf(rows: readonly HelperRow[]): { state: HelperState; attempt: number } {
+  const last = rows.at(-1)!;
+  // A conflict of attempt 1 is followed by attempt 2, which has no start row of its own.
+  const attempt = Math.max(1, ...rows.map((r) => (typeof r.payload.attempt === "number" ? (r.kind === "build.helper_conflict" ? Math.min(2, r.payload.attempt + 1) : r.payload.attempt) : 1)));
+  if (rows.some((r) => r.kind === "build.helper_picked")) return { state: "committed", attempt };
+  if (last.kind === "build.helper_refused") return { state: "refused", attempt };
+  if (last.kind === "build.helper_conflict") return { state: attempt >= 2 && last.payload.attempt === 2 ? "merge_conflict" : "conflict_rerun", attempt };
+  if (last.kind === "build.helper_ended") return { state: last.payload.outcome === "pass" ? "returned" : last.payload.outcome === "cancelled" ? "cancelled" : "failed", attempt };
+  return { state: "running", attempt };
+}
+
+/** Each slice's owner and the latest helper, from the machine's own rows. A slice is the ui-designer's while its helper is out, when its commits are waiting to be picked and once they landed; any other end gives it back to the implementer. */
+function helpersOf(events: readonly EventRow[]): { slices: NonNullable<BuildProgress["slices"]>; helper: BuildProgress["helper"] } {
+  const owned = new Map<number, HelperRow[]>();
+  const sliceIds = new Set<number>();
+  let latest: { slice: number; at: Date; branch: string; attempt: number } | null = null;
+  for (const { kind, payload, at } of events) {
+    // A container's own ledger rows name the slices; whoever wrote them, they never say who owns one.
+    if ((kind === "stage.slice.red" || kind === "stage.slice.green" || kind === "stage.slice.committed") && payload.by !== "ui-designer") {
+      const id = payload.id;
+      if (typeof id === "number" && Number.isInteger(id) && id >= 1) sliceIds.add(id);
+      continue;
+    }
+    if (!kind.startsWith("build.helper_")) continue;
+    const slice = payload.slice;
+    if (typeof slice !== "number" || !Number.isInteger(slice) || slice < 1) continue;
+    sliceIds.add(slice);
+    if (kind === "build.helper_started") {
+      owned.set(slice, [{ kind, payload, at }]);
+      const branch = typeof payload.branch === "string" ? payload.branch : "";
+      const attempt = typeof payload.attempt === "number" ? payload.attempt : 1;
+      latest = { slice, at, branch, attempt };
+    } else if (owned.has(slice) || kind === "build.helper_picked") (owned.get(slice) ?? owned.set(slice, []).get(slice)!).push({ kind, payload, at });
+  }
+  const stands = new Map([...owned].filter(([, rows]) => rows.length > 0).map(([slice, rows]) => [slice, helperStateOf(rows)] as const));
+  const picked = new Map(pickedOf(events).map((p) => [p.slice, p.shas]));
+  const slices = [...sliceIds].sort((a, b) => a - b).map((slice) => {
+    const state = stands.get(slice)?.state;
+    const shas = picked.get(slice);
+    const owner = state === "running" || state === "returned" || state === "conflict_rerun" || state === "committed" || shas ? ("ui-designer" as const) : ("implementer" as const);
+    return { slice, owner, ...(shas ? { picked: shas } : {}) };
+  });
+  const stand = latest ? stands.get(latest.slice) : undefined;
+  return { slices, helper: latest && stand ? { slice: latest.slice, state: stand.state, attempt: stand.attempt, branch: latest.branch, startedAt: latest.at.toISOString() } : null };
+}
+
 const SCENE_ID = /^[A-Za-z0-9_-]{1,40}$/;
 
 /** Build while it runs: each scenario red or green (from the `scenario.red` and `scenario.green` rows), the budget used against its limits, the last checkpoint pushed. Null for a card that has not begun to build. */
@@ -211,5 +294,6 @@ export function buildProgressOf(runs: readonly StageRunRow[], events: readonly E
     scenarios: [...state].map(([id, s]) => ({ id, state: s })),
     budget: { iterations: budget.iterations, tokens: budget.tokens, minutes: budget.minutes, limits: { max_iterations: limits.max_iterations, max_tokens: limits.max_tokens, max_minutes: limits.max_minutes } },
     lastCheckpoint: checkpoint ? { sha: checkpoint.payload.sha as string, follows: checkpoint.payload.follows as "red" | "green", at: checkpoint.at.toISOString() } : null,
+    ...helpersOf(events),
   };
 }

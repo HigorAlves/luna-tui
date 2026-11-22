@@ -41,6 +41,7 @@ describe("host-side git on a workspace", () => {
     ["adapters/git/clone.ts", "readCopy"], // clones the user's repository (a path the machine lists) into a new folder of its own, then runs only there
     ["adapters/git/clone.ts", "moveToClone"],
     ["adapters/git/clone.ts", "copiedSettings"],
+    ["adapters/git/helper.ts", "checkGit"], // reads only `git --version`: no repository
   ];
 
   /** The name of the function a position is inside: the nearest declaration above it. */

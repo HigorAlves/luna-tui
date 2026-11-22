@@ -2,12 +2,14 @@
 // decisions, as a description and an input shape per tool plus one handler that keeps the state.
 // The state lives in the factory process, because finish() reads it; each runtime serves the
 // handlers its own way (Claude as an in-process MCP server, eve over a loopback call).
-import type { Ledger, LedgerSlice, LunaTool, RunEvent, StageInput } from "@hardness/contracts";
+import type { BridgedTool, Ledger, LedgerSlice, LunaTool, RunEvent, StageInput } from "@hardness/contracts";
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
 import type { Emit } from "./events.ts";
+import { helperTools, releaseOrphans } from "./helper-tools.ts";
 
 const STATUS = z.enum(["pending", "red", "green", "committed", "escalated"]);
 const SLICE_EVENT: Record<LedgerSlice["status"], "slice.red" | "slice.green" | "slice.committed" | "escalation" | null> = {
@@ -55,6 +57,14 @@ export const LUNA_TOOLS = {
     input: { scenario: z.string().min(1).max(40), output: z.string() },
   },
   slice_list: { description: "The slice ledger as it stands.", input: {} },
+  slice_delegate: {
+    description: "Hand one pending UI slice to the ui-designer, which builds it in its own container while you go on: { slice: 3, message: '...' }. Returns at once with the helper's handle and the files you must not touch, or the machine's refusal (then build the slice yourself).",
+    input: { slice: z.number().int(), message: z.string().max(2000).optional() },
+  },
+  slice_wait: {
+    description: "Wait for the ui-designer's slice: { slice: 3, waitSeconds: 120 }. Returns the helper's state after at most waitSeconds (240 at most); picks its commits onto your branch when it has returned.",
+    input: { slice: z.number().int(), waitSeconds: z.number().int().min(1).max(240).optional() },
+  },
   decision_get: {
     description: "A decision already settled for this task (by key, e.g. 'driver'), from the stage input's decisions; empty when nothing was settled.",
     input: { key: z.string() },
@@ -77,6 +87,12 @@ export interface LunaToolsOptions {
   checkWaitMs?: number;
   /** Called once a slice is recorded as committed: the run hands its commits to the machine here (core/bundles.ts). */
   onSliceCommitted?: () => void;
+  /** The MCP tools the machine bridged for this run (RFC 0013); a call to one goes through the checks mailbox. Absent: none. */
+  bridge?: BridgedTool[];
+  /** The implementer's repository (`/work`): with `checksDir` it switches the ui-designer tools on (RFC 0013, phase 5). */
+  work?: string;
+  /** Writes the run's commits as a bundle for the machine now; the pick handshake sends it before it asks for the helper's. */
+  bundleNow?: () => void;
 }
 
 const POLL_MS = 25;
@@ -84,29 +100,52 @@ const MIN_RED_NOTE = 20;
 type CheckAnswer = { verdict: string; problems: string[]; [key: string]: unknown };
 const SKIPPED: CheckAnswer = { verdict: "skipped", problems: [] };
 
-/** Polls for a JSON answer file until `waitMs` has passed; a half-written file is retried. */
-async function awaitAnswer(path: string, waitMs: number): Promise<CheckAnswer> {
+/** Polls for a JSON answer file until `waitMs` has passed; a half-written file, or one `accept` refuses, is retried. */
+async function awaitFile<T>(path: string, waitMs: number, accept: (parsed: unknown) => T | null, none: T): Promise<T> {
   const until = Date.now() + waitMs;
   for (;;) {
     if (existsSync(path)) {
       try {
-        const parsed = JSON.parse(readFileSync(path, "utf8")) as CheckAnswer;
-        if (parsed && typeof parsed === "object" && typeof parsed.verdict === "string") return { ...parsed, problems: Array.isArray(parsed.problems) ? parsed.problems : [] };
+        const answer = accept(JSON.parse(readFileSync(path, "utf8")));
+        if (answer !== null) return answer;
       } catch {
         // half-written: look again
       }
     }
-    if (Date.now() >= until) return SKIPPED;
+    if (Date.now() >= until) return none;
     await new Promise((resolve) => setTimeout(resolve, POLL_MS));
   }
 }
 
+const awaitAnswer = (path: string, waitMs: number): Promise<CheckAnswer> =>
+  awaitFile<CheckAnswer>(
+    path,
+    waitMs,
+    (p) => {
+      const parsed = p as CheckAnswer;
+      return parsed && typeof parsed === "object" && typeof parsed.verdict === "string" ? { ...parsed, problems: Array.isArray(parsed.problems) ? parsed.problems : [] } : null;
+    },
+    SKIPPED,
+  );
+
+/** The luna names of the bridged tools a run was given. */
+export const bridgeNames = (bridge: readonly BridgedTool[]): string[] => bridge.map((b) => b.name);
+
 /** The handlers, by tool, and the state the runner reads at the end. `call` validates the input
  *  first, so a runtime that hands it raw JSON gets the same refusal a schema would give. */
 export function lunaHandlers(options: LunaToolsOptions) {
-  const state: { ledger: Ledger } = { ledger: options.ledger ?? { schema: 1, slices: [] } };
+  const state: { ledger: Ledger } = { ledger: releaseOrphans(options.ledger ?? { schema: 1, slices: [] }) };
   const persist = () => writeFileSync(options.ledgerPath, JSON.stringify(state.ledger, null, 2) + "\n");
   const note = (event: RunEvent) => options.emit(event);
+  const helper = options.checksDir && options.work
+    ? helperTools({ checksDir: options.checksDir, work: options.work, ledger: () => state.ledger, persist, emit: options.emit, bundleNow: options.bundleNow ?? (() => {}), checkWaitMs: options.checkWaitMs ?? 0 })
+    : null;
+  /** A returned helper slice is picked before the tool answers; an error of the pick rides on the answer. */
+  const picked = async <T>(result: () => T | Promise<T>): Promise<T | (T & { pickError: string })> => {
+    const problem = (await helper?.syncPicks()) ?? null;
+    const got = await result();
+    return problem && got && typeof got === "object" ? { ...got, pickError: problem } : got;
+  };
 
   /** Waits for the machine's answer file in the mailbox. */
   const answerOf = async (file: string): Promise<CheckAnswer> => {
@@ -133,9 +172,10 @@ export function lunaHandlers(options: LunaToolsOptions) {
       note({ kind: "ledger.init", payload: { total: state.ledger.slices.length } });
       return state.ledger;
     },
-    slice_set: async ({ id, status, commit, actualLoc, note: sliceNote }) => {
+    slice_set: ({ id, status, commit, actualLoc, note: sliceNote }) => picked(async () => {
       const slice = state.ledger.slices.find((s) => s.id === id);
       if (!slice) return { error: `no slice ${id}; call slice_list` };
+      if (slice.owner === "ui-designer") return { error: `slice ${id} is the ui-designer's; call slice_wait` };
       if (status === "red" && (sliceNote ?? "").trim().length < MIN_RED_NOTE) {
         return { error: `a red slice needs a note of at least ${MIN_RED_NOTE} characters: the failing output's last lines` };
       }
@@ -153,15 +193,17 @@ export function lunaHandlers(options: LunaToolsOptions) {
       if (status !== "red") return slice;
       // The machine judges the red from the ledger it just read; the answer is a file in the mailbox.
       return { ...slice, check: await answerOf(`red-${id}.json`) };
-    },
-    scope_check: async ({ diffSummary, outOfMap }) => {
+    }),
+    scope_check: ({ diffSummary, outOfMap }) => picked(async () => {
+      const out = helper?.outstanding() ?? [];
+      if (out.length > 0) return { verdict: "wait", problems: out.map((id) => `slice ${id} is with ui-designer; call slice_wait`) };
       if (options.checksDir) {
         mkdirSync(options.checksDir, { recursive: true });
         clear("scope.json");
         writeFileSync(join(options.checksDir, "scope-request.json"), JSON.stringify({ diffSummary, outOfMap }, null, 2) + "\n");
       }
       return answerOf("scope.json");
-    },
+    }),
     card_search: async ({ query }) => {
       if (!options.checksDir) return SKIPPED;
       mkdirSync(options.checksDir, { recursive: true });
@@ -186,14 +228,31 @@ export function lunaHandlers(options: LunaToolsOptions) {
       writeFileSync(file, text);
       return { recorded: true };
     },
-    slice_list: () => state.ledger,
+    slice_list: () => picked(() => state.ledger),
+    slice_delegate: (args) => (helper ? helper.delegate(args) : { error: "not available in this run" }),
+    slice_wait: (args) => (helper ? helper.wait(args) : { error: "not available in this run" }),
     decision_get: ({ key }) => {
       const hits = options.decisions.filter((d) => d.decision === key || key in (d.answers ?? {}));
       return hits.length > 0 ? hits : { decided: null };
     },
   };
 
+  // A bridged tool (RFC 0013): the request is a file in the mailbox, the machine's answer another. The nonce keeps
+  // an earlier run's leftovers out; the machine reads only the names this run was given.
+  const nonce = randomBytes(4).toString("hex");
+  let sent = 0;
+  const bridged = async (b: BridgedTool, args: unknown): Promise<unknown> => {
+    if (!options.checksDir) return { skipped: true };
+    const n = ++sent;
+    mkdirSync(options.checksDir, { recursive: true });
+    note({ kind: "note", payload: { phase: "design.mcp_call", server: b.server, tool: b.tool, n } });
+    writeFileSync(join(options.checksDir, `mcp-request-${nonce}-${n}.json`), JSON.stringify({ n, server: b.server, tool: b.tool, args: args ?? {} }));
+    return awaitFile<unknown>(join(options.checksDir, `mcp-answer-${nonce}-${n}.json`), options.checkWaitMs ?? 0, (p) => (p && typeof p === "object" ? p : null), { skipped: true });
+  };
+
   const call = async (tool: string, args: unknown): Promise<unknown> => {
+    const b = (options.bridge ?? []).find((x) => x.name === tool);
+    if (b && !(tool in LUNA_TOOLS)) return bridged(b, args);
     if (!(tool in LUNA_TOOLS)) return { error: `no luna tool ${tool}` };
     const name = tool as LunaTool;
     const parsed = z.object(LUNA_TOOLS[name].input).safeParse(args ?? {});

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { fileTokenStore, tokenFor } from "../adapters/mcp/tokens.ts";
 import { machineSecrets } from "./machine-secrets.ts";
 
 describe("machineSecrets", () => {
@@ -25,5 +26,27 @@ describe("machineSecrets", () => {
     const secrets = machineSecrets({ githubToken: null, apiToken: null, slack: null, jira: null, traces: { mode: "off" }, slackInbox: { userToken: "slack-user-1234", appToken: "slack-app-1234" }, databaseUrl: "postgres://hardness:p%40ss-word-1234@127.0.0.1:5433/hardness" } as never, { CLAUDE_CODE_OAUTH_TOKEN: "claude-env-token-1234" }, home);
     expect(Object.values(secrets).sort()).toEqual(["claude-env-token-1234", "claude-file-token-1234", "codex-access-1234", "codex-refresh-1234", "p@ss-word-1234", "slack-app-1234", "slack-user-1234"].sort());
     expect(Object.keys(secrets)).toContain("DATABASE_PASSWORD");
+  });
+
+  it("names every stored MCP access, refresh and client secret", () => {
+    const state = mkdtempSync(join(tmpdir(), "secrets-"));
+    mkdirSync(join(state, "mcp"), { recursive: true });
+    writeFileSync(join(state, "mcp", "figma.json"), JSON.stringify({ access_token: "tok-aaaaaaaaaaaa", refresh_token: "ref-bbbbbbbbbbbb" }));
+    writeFileSync(join(state, "mcp", "figma.client.json"), JSON.stringify({ client_id: "cid", client_secret: "sec-cccccccccccc" }));
+    const secrets = machineSecrets({ githubToken: null, apiToken: null, slack: null, jira: null, traces: { mode: "off" }, stateDir: state } as never, {}, mkdtempSync(join(tmpdir(), "secrets-")));
+    expect(Object.values(secrets).sort()).toEqual(["ref-bbbbbbbbbbbb", "sec-cccccccccccc", "tok-aaaaaaaaaaaa"]);
+  });
+});
+
+describe("machineSecrets and resolved credential refs", () => {
+  it("includes the values a literal: and an env: ref resolved to, and not short ones", async () => {
+    const home = mkdtempSync(join(tmpdir(), "secrets-"));
+    const t = tokenFor(fileTokenStore(home), { REF_ENV: "env-ref-value-1234" });
+    const server = (ref: string) => ({ name: "figma", transport: "http", url: "https://x.dev/mcp", credential: { kind: "ref", ref }, tools: [] }) as never;
+    await t(server("literal:literal-ref-value-1234"));
+    await t(server("env:REF_ENV"));
+    await t(server("literal:short"));
+    const values = Object.values(machineSecrets({ githubToken: null, apiToken: null, slack: null, jira: null, traces: { mode: "off" } } as never, {}, home));
+    expect(values.sort()).toEqual(["env-ref-value-1234", "literal-ref-value-1234"]);
   });
 });

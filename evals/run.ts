@@ -4,6 +4,7 @@
 //
 //   pnpm eval --pack slack_triage --engine codex:luna [--against claude:haiku] [--case <id>]...
 //             [--effort low|medium|high] [--no-judge | --judge] [--trials N] [--dataset <name>] [--save-baseline] [--image hardness-runner:dev]
+//   (RUNNER_QA_IMAGE names the QA image a browser pack runs in; a case with an mcp/ folder replays it)
 //
 // A decision pack runs without the judge (its grade is the label and the confidence); --judge adds it.
 // --trials N runs each case N times, each in its own container; --dataset <name> takes the cases from
@@ -17,9 +18,11 @@
 // transcript) stay under evals/.runs/ for reading; delete them whenever.
 import { EngineId, PACKS, PackId } from "@hardness/contracts";
 import { machineCredentials } from "@hardness/machine/credentials";
+import { bridgeFor } from "@hardness/machine/design-bridge";
 import { imageExists } from "@hardness/machine/docker";
 import { loadConfig } from "@hardness/machine/config";
 import { buildEgress } from "@hardness/machine/egress";
+import { replayMcp } from "@hardness/machine/mcp-replay";
 import { PolicyStore } from "@hardness/machine/policy";
 import { outputError, runPackOnce } from "@hardness/machine/run-once";
 import { type Evaluation, buildTelemetry, noTelemetry, tracesFromEnv } from "@hardness/machine/telemetry";
@@ -29,8 +32,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-import { type EvalCase, baselinePath, caseInput, datasetCases, engineSlug, judgeInput, loadCases, parseEffort, parseTrials, prepareWorktree, verdictOf } from "./src/cases.ts";
-import { IGNORED_EFFORT, effortProblems, honourEffort } from "./src/effort-check.ts";
+import { type EvalCase, baselinePath, bridgeGrantsOf, caseInput, datasetCases, engineSlug, judgeInput, loadCases, mcpServersOf, mountsOf, parseEffort, parseTrials, prepareWorktree, verdictOf } from "./src/cases.ts";
+import { IGNORED_EFFORT, effortProblems, honourEffort, visionProblems } from "./src/effort-check.ts";
 import { formatDiff, formatScorecard } from "./src/format.ts";
 import { type CaseResult, type JudgeVerdict, type Scorecard, caseResult, diffScorecards, gradeAnswer, scorecard } from "./src/grade.ts";
 import { evalDatapoint } from "./src/report.ts";
@@ -82,7 +85,13 @@ const effort = (() => {
 // An effort a pack or an engine cannot run is refused here, before any case runs or any baseline is written.
 const unrunnable = effortProblems(pack, engines, effort);
 if (unrunnable) fail(unrunnable);
+// A pack that reads images on a model that cannot is refused here too, before any case runs or any baseline is written.
+const blind = visionProblems(pack, engines);
+if (blind) fail(blind);
 const image = values.image!;
+// A browser pack runs in the QA image (as the machine runs it); every other pack, and the judge, in the stage image.
+const qaImage = process.env.RUNNER_QA_IMAGE ?? "hardness-runner-qa:dev";
+const imageOf = (of: PackId) => (evalSandbox(of, false).image === "qa" ? qaImage : image);
 // The sandbox a real run of the pack gets: the engine relay as the machine sets it (no real token in the stage), the pack's own egress list, a trusted card.
 // MACHINE_EGRESS=off and MACHINE_ENGINE_RELAY apply here too.
 const machineConfig = loadConfig(process.env);
@@ -112,6 +121,7 @@ try {
 }
 if (cases.length === 0) fail(values.dataset ? `no labelled datapoints in the dataset ${values.dataset}` : `no cases under evals/${pack}/cases`);
 if (!(await imageExists(image))) fail(`no image ${image}: build it with \`pnpm --filter @hardness/machine runner:build\``);
+if (imageOf(pack) !== image && !(await imageExists(imageOf(pack)))) fail(`no image ${imageOf(pack)}: ${pack} drives a browser; build it with \`pnpm --filter @hardness/machine runner-qa:build\``);
 for (const engine of new Set([...engines, ...(judge ? [judge] : [])])) {
   const found = await credentials.check(engine);
   if (!found.available) fail(`${engine}: ${found.reason}`);
@@ -131,8 +141,15 @@ async function runCase(evalCase: EvalCase, engine: EngineId, index: number, tria
   const worktree = prepareWorktree(evalCase.input, ROOT, runDir);
   const span = telemetry.run({ kind: "eval", pack, engine, client: "eval", sessionId: `eval-${pack}-${stamp}` });
   const started = Date.now();
+  // An eval is always replay: the case's recorded design servers answer the bridge; nothing connects (MCP_BRIDGE_MODE is not read).
+  let bridge: NonNullable<Parameters<typeof runPackOnce>[0]["bridge"]> | undefined;
+  if (evalCase.mcpDir) {
+    const mcp = replayMcp(mcpServersOf(evalCase.mcpDir), evalCase.mcpDir);
+    const { tools } = await bridgeFor({ mcp, pack: bridgeGrantsOf(pack), repo: {}, trust: "trusted", untrusted: "deny" });
+    bridge = { tools, mcp, designDir: join(runDir, "design"), log: () => {} };
+  }
   const run = await runPackOnce(
-    { name: `hardness-eval-${slug(pack)}-${slug(evalCase.id)}-${slug(engine)}-${stamp.slice(11, 19)}${trial > 1 ? `-t${trial}` : ""}`, image, runDir, worktree, input: caseInput(evalCase.input, engine, effort), engine, labels: { luna: "eval" }, extraEnv: span.childEnv(), egressKind: sandboxOf(pack).egressKind, trust: sandboxOf(pack).trust },
+    { name: `hardness-eval-${slug(pack)}-${slug(evalCase.id)}-${slug(engine)}-${stamp.slice(11, 19)}${trial > 1 ? `-t${trial}` : ""}`, image: imageOf(pack), runDir, worktree, input: caseInput(evalCase.input, engine, effort), engine, labels: { luna: "eval" }, extraEnv: span.childEnv(), egressKind: sandboxOf(pack).egressKind, trust: sandboxOf(pack).trust, ...(bridge ? { bridge } : {}), ...(evalCase.mountsDir ? { mounts: mountsOf(evalCase.mountsDir) } : {}) },
     { credentials, policies, ...(egress ? { egress } : {}) },
   ).catch((error: Error) => ({ output: null, error: error.message }) as const);
   const caseRun = { id: evalCase.id, output: run.output, error: run.error, wallMs: Date.now() - started };

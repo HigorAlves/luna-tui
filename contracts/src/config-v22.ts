@@ -5,6 +5,7 @@
 import { z } from "zod";
 
 import type { EconomyConfig } from "./economy.ts";
+import { FIGMA_FILE_KEY } from "./design.ts";
 import { hostPatternProblem, secretNameProblem, urlPatternProblem } from "./egress.ts";
 
 const unit = z.number().min(0).max(1);
@@ -139,6 +140,25 @@ export const EvidenceConfigV22 = {
   storage: z.enum(["release_asset", "local"]).optional(),
 };
 
+/** The designer agents' defaults (RFC 0013): a design budget per card, and WCAG 2.2 AA as a gate. */
+export const DESIGN_DEFAULTS = { budget: { max_tokens: 1_000_000, max_minutes: 45 }, a11y: { level: "AA", mode: "gate" } } as const;
+
+/** The designer agents' section (RFC 0013). `off` turns them off for the repo. `servers` narrows the machine's MCP servers by name; it never adds one.
+ *  `figma` is the fallback design reference, `budget` the designer agents' own tokens and minutes per card, `a11y` the WCAG level and whether the audit gates.
+ *  Read by the stage runner, so it is not in `FactoryConfigInput`. */
+export const DesignConfig = z.union([
+  z.literal("off"),
+  z.object({
+    servers: z.record(z.string(), z.object({ tools: z.array(z.string()).optional() })).optional(),
+    figma: z.object({ file: z.string().regex(FIGMA_FILE_KEY), page: z.string().max(200).optional() }).strict().optional(),
+    budget: section({ max_tokens: count(20_000_000).optional(), max_minutes: minutes(1440).optional() }).optional(),
+    a11y: section({ level: z.enum(["AA", "AAA"]).optional(), mode: z.enum(["gate", "advisory"]).optional() }).optional(),
+    /** Design parity (phase 3): `bar` is the confidence under which the sign-off gate fires (default 0.75), `publish` whether the frame | build pairs go on the PR (default `auto`). */
+    parity: section({ bar: z.number().min(0).max(1).optional(), publish: z.enum(["auto", "always", "never"]).optional() }).optional(),
+  }),
+]);
+export type DesignConfig = z.infer<typeof DesignConfig>;
+
 export interface FactoryConfig {
   learning: { records: boolean; context: "full" | "answers"; truth: boolean; traces: "off" | "metadata" | "host" };
   tickets: { assignees: string[]; teams: string[]; debounce_seconds: number; auto: "off" | "on"; sla: { acknowledge_hours: number; resolve_days: { P0: number; P1: number; P2: number; P3: number }; stale_days: number; needs_info_reminder_days: number; needs_info_park_days: number } };
@@ -236,4 +256,22 @@ function merge<T>(base: T, over: unknown): T {
 /** A repo's sections (already validated) over the diagram's defaults. */
 export function factoryConfigOf(sections: Partial<Record<keyof FactoryConfig, unknown>>): FactoryConfig {
   return merge(structuredClone(FACTORY_DEFAULTS), sections);
+}
+
+export interface DesignSettings {
+  off: boolean;
+  figma: { file: string; page: string | null } | null;
+  budget: { max_tokens: number; max_minutes: number };
+  a11y: { level: "AA" | "AAA"; mode: "gate" | "advisory" };
+}
+
+/** The repo's `design` over the defaults. */
+export function designSettings(config: DesignConfig | undefined): DesignSettings {
+  const c = config === "off" || config === undefined ? {} : config;
+  return {
+    off: config === "off",
+    figma: c.figma ? { file: c.figma.file, page: c.figma.page ?? null } : null,
+    budget: { ...DESIGN_DEFAULTS.budget, ...c.budget },
+    a11y: { ...DESIGN_DEFAULTS.a11y, ...c.a11y },
+  };
 }

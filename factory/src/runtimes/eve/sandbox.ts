@@ -4,7 +4,7 @@
 // no-new-privileges). The runner names the work dir in LUNA_EVE_WORKSPACE.
 import { spawn } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, posix } from "node:path";
 import { Readable, Writable } from "node:stream";
 import { defineSandbox } from "eve/sandbox";
 import { defineSandboxProvider, SANDBOX_AGENT_ENV, type SandboxConnection } from "eve/sandbox/provider";
@@ -20,7 +20,21 @@ function scriptEnv(extra: Readonly<Record<string, string>>): Record<string, stri
   return { ...commandEnv("bash", { home: process.env.LUNA_EVE_SCRATCH || "/nonexistent" }), ...SANDBOX_AGENT_ENV, ...extra };
 }
 
-export function connect(root: string): SandboxConnection {
+/** Where eve keeps each file a tool result returns, under the workspace (harness/attachment-staging.js). The worktree is
+ *  read-only in a read-only stage and the person's in any other, so the runner moves them to the run's own state folder. */
+const ATTACHMENTS = ".eve/attachments";
+
+/** `path` as the connection opens it: under the store when it is one of eve's attachments and a store is set.
+ *  The path is normalised first, so a `..` cannot climb out of the store. */
+export function storePath(root: string, path: string, store: string | undefined): string {
+  if (!store) return path;
+  const under = posix.join(root, ATTACHMENTS);
+  const clean = posix.normalize(path);
+  return clean === under || clean.startsWith(`${under}/`) ? posix.join(store, posix.relative(under, clean)) : path;
+}
+
+export function connect(root: string, store: string | undefined = process.env.LUNA_EVE_ATTACHMENTS || undefined): SandboxConnection {
+  const at = (path: string) => storePath(root, path, store);
   return {
     workspaceRoot: root,
     async spawn({ command, env, workingDirectory, signal, stdin }) {
@@ -52,7 +66,7 @@ export function connect(root: string): SandboxConnection {
     },
     async readFile({ path }) {
       try {
-        return new Uint8Array(await readFile(path));
+        return new Uint8Array(await readFile(at(path)));
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
         throw error;
@@ -60,12 +74,12 @@ export function connect(root: string): SandboxConnection {
     },
     async writeFiles({ files }) {
       for (const file of files) {
-        await mkdir(dirname(file.path), { recursive: true });
-        await writeFile(file.path, file.content);
+        await mkdir(dirname(at(file.path)), { recursive: true });
+        await writeFile(at(file.path), file.content);
       }
     },
     async removePath({ path, force, recursive }) {
-      await rm(path, { force: force ?? false, recursive: recursive ?? false });
+      await rm(at(path), { force: force ?? false, recursive: recursive ?? false });
     },
     async stop() {},
   };

@@ -16,6 +16,10 @@ import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from 
 import { type Bands, type KnockOutFlags, type SubScores, type Weights, knockOut, riskProduct, scorePriority } from "./scoring.ts";
 import { AccessReviewAnswer, ChangeExceptionsAnswer, PostmortemAnswer, QuestionnaireAnswer, ReleaseNotesAnswer, StatusReportAnswer, VulnTriageAnswer } from "./compliance.ts";
 import { ComplianceReviewAnswer } from "./compliance-review.ts";
+import { A11yAuditAnswer } from "./a11y.ts";
+import { DesignParityAnswer } from "./design-parity.ts";
+import { DesignSpec } from "./design-spec.ts";
+import type { BridgeGrant } from "./mcp.ts";
 import { DocsDriftAnswer } from "./docs-drift.ts";
 import { ForemanAnswer } from "./foreman.ts";
 import { TicketChatAnswer } from "./ticket-chat.ts";
@@ -68,6 +72,13 @@ export const AgentRole = z.enum([
   "thread-writer",
   "code-fixer",
   "second-opinion",
+  // Reads a card's Figma design through the bridge and writes the spec the planner reads; read-only.
+  "design-spec-writer",
+  // Builds one pure UI slice of a card from its design spec, in its own container; the implementer's writable helper (RFC 0013, phase 5).
+  "ui-designer",
+  // Audits a rendered UI change for WCAG 2.2 with axe-core and judged checks, in the QA browser; read-only on the code.
+  "a11y-auditor",
+  "parity-reviewer",
   // The foreman: answers a question about the board from a snapshot and suggests actions; no tools, no worktree.
   "foreman",
   // The ticket planner: talks a ticket through with a person over a read-only checkout and drafts it.
@@ -240,6 +251,16 @@ export const ImplementingAnswer = z.object({
   outOfMap: z.array(z.object({ path: z.string(), reason: z.string() })).optional(),
 });
 
+/** ui_design: the helper's account of the slice it built. The commits are the ones it made on its own branch; the machine reads its own refs, never this list. `escalation` set means it could not build the slice. */
+export const UiDesignAnswer = z.object({
+  summary: z.string().max(1500),
+  commits: z.array(z.string()).max(20),
+  files: z.array(z.string()).max(60),
+  notes: z.string().max(1500).optional(),
+  escalation: EscalationReason.optional(),
+});
+export type UiDesignAnswer = z.infer<typeof UiDesignAnswer>;
+
 export const VerifyingAnswer = z.object({
   verdict: z.enum(["pass", "fail"]),
   summary: z.string(),
@@ -408,12 +429,21 @@ export interface Helper {
   engine: EngineId;
   /** The engine instead when the stage runs on that runtime: a second opinion stays in another family (D9), and a cheap helper on the stage's own subscription. */
   on?: Partial<Record<RuntimeId, EngineId>>;
+  /** A writable helper runs in its own container as the pack it names, through the machine (RFC 0013, phase 5); never a subagent or a `delegate` child. */
+  writes?: true;
+  pack?: PackId;
 }
 
 /** The helpers a stage on `runtime` has, each on the engine it runs on there. */
 export function helpersOn(pack: Pack, runtime: RuntimeId): Array<{ role: AgentRole; engine: EngineId }> {
   if (pack.kind !== "agent") return [];
-  return pack.helpers.map(({ role, engine, on }) => ({ role, engine: on?.[runtime] ?? engine }));
+  return pack.helpers.filter((h) => !h.writes).map(({ role, engine, on }) => ({ role, engine: on?.[runtime] ?? engine }));
+}
+
+/** The pack's writable helper, or null: the one the machine starts in its own container. */
+export function writableHelper(pack: Pack): (Helper & { writes: true; pack: PackId }) | null {
+  if (pack.kind !== "agent") return null;
+  return (pack.helpers.find((h): h is Helper & { writes: true; pack: PackId } => h.writes === true && h.pack !== undefined)) ?? null;
 }
 
 /** What a helper run through `delegate` answers: its reply to the agent that asked, and findings
@@ -446,6 +476,15 @@ export type LoopRedirectAnswer = z.infer<typeof LoopRedirectAnswer>;
 /** conversation_reply: the draft reply to a Slack thread. A draft only: a person decides whether it is posted. */
 export const ConversationReplyAnswer = z.object({ reply: z.string().max(1500), confidence: z.number().min(0).max(1) });
 export type ConversationReplyAnswer = z.infer<typeof ConversationReplyAnswer>;
+
+const FIGMA_READ = ["get_metadata", "get_design_context", "get_variable_defs", "get_code_connect_map", "get_screenshot"];
+const MOBBIN_READ = ["search_screens", "search_flows", "search_sections"];
+/** The design tools a designer pack may call (RFC 0013): Figma's reading tools on either server, Mobbin's searches. A golden test pins them. */
+export const DESIGN_READ_BRIDGE: BridgeGrant[] = [{ server: "figma", tools: FIGMA_READ }, { server: "figma-desktop", tools: FIGMA_READ }, { server: "mobbin", tools: MOBBIN_READ }];
+const DESIGN_READ: Partial<Access> = { bridge: DESIGN_READ_BRIDGE };
+
+/** The parity reviewer reads frames and tokens only (RFC 0013, phase 3): no Code Connect, no Mobbin. A golden test pins the list. */
+const PARITY_READ = ["get_design_context", "get_metadata", "get_screenshot", "get_variable_defs"];
 
 /** council_security and council_second: a short summary and findings from the member's own lane. No findings means nothing to add. */
 export const CouncilAnswer = z.object({ summary: z.string().max(300), findings: z.array(Finding).max(8) });
@@ -495,6 +534,8 @@ export interface AgentPack extends PackBase {
   effort: Effort;
   /** The prompt template under factory/prompts/. */
   template: string;
+  /** It reads images (design frames, Verify's captures) and runs only on engines whose model has vision (RFC 0013). */
+  vision?: true;
   /** The hosts the stage may reach: `engine` its engines' (and the relay) only, `github` those and GitHub's (`gh`, issues, PRs), `full` also the repository's
    *  hosts, registries, the QA targets and the machine's private entries. A pack that needs less than `full` says so; a missing value does not compile. */
   network: PackNetwork;
@@ -522,6 +563,8 @@ export type Pack = AgentPack | DecisionPack;
 const READ_ONLY: Partial<Access> = { read: true, skills: true, luna: ["step"], commands: ["cat", "ls", "head", "tail", "wc", "pwd", "echo", "git branch --show-current", "git rev-parse", "git status", "git show", "git log", "git diff", "git ls-files", "graphify query", "graphify explain", "graphify path", "graphify affected", "graphify god-nodes"] };
 const CHECK_COMMANDS = ["npm", "pnpm", "yarn", "npx", "go", "cargo", "pip", "pytest", "make"];
 const LEDGER_TOOLS: LunaTool[] = ["slice_init", "slice_set", "slice_list", "decision_get"];
+/** The implementer's commands: what a pack that builds code may run beside reading. */
+const BUILD_COMMANDS = ["git add", "git commit", "git mv", "git rm", "git restore", "mv", "rm", "git diff", "git status", "git log", ...CHECK_COMMANDS];
 
 /** What the setup planner may run to learn a repo: version prints and listings, nothing that builds. */
 const PROBE_COMMANDS = ["which", "command -v", "find", "node", "npm", "pnpm", "yarn", "go", "cargo", "rustc", "python", "python3", "pip", "make", "docker", "git log", "git ls-files"];
@@ -1131,6 +1174,25 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     template: "council_second.md",
     network: "engine",
   },
+  // The design-spec writer (RFC 0013): runs in Plan before the planner on a UI card, and on demand (POST /design/spec). Read-only; design tools through the bridge.
+  design_spec: {
+    id: "design_spec",
+    kind: "agent",
+    agent: "design-spec-writer",
+    helpers: [],
+    skills: [],
+    access: access(READ_ONLY, { skills: false }, DESIGN_READ),
+    writable: false,
+    maxTurns: 30,
+    timeoutMs: 10 * MINUTE,
+    // Claude only. Codex sees images (probed, RFC 0013) but joins only after the admission eval; a blind engine is refused (visionProblem).
+    engines: { default: "claude:sonnet", allowed: ["claude:sonnet", "claude:opus"] },
+    vision: true,
+    effort: "medium",
+    answer: DesignSpec,
+    template: "design_spec.md",
+    network: "engine",
+  },
   // Triage's question council: settles open questions from the code before a person is asked. Read-only, no web, no gh.
   question_council: {
     id: "question_council",
@@ -1184,9 +1246,10 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     id: "implementing",
     kind: "agent",
     agent: "implementer",
-    helpers: [],
+    // The one writable helper (RFC 0013, phase 5): a pure UI slice goes to the ui-designer in its own container, started and picked by the machine. Never a subagent or a `delegate` child.
+    helpers: [{ role: "ui-designer", engine: "claude:sonnet", writes: true, pack: "ui_design" }],
     skills: ["tdd", "verification-before-completion", "code-discovery"],
-    access: access(READ_ONLY, { write: true, luna: [...LEDGER_TOOLS, "scope_check"], commands: ["git add", "git commit", "git mv", "git rm", "git restore", "mv", "rm", "git diff", "git status", "git log", ...CHECK_COMMANDS] }),
+    access: access(READ_ONLY, { write: true, luna: [...LEDGER_TOOLS, "scope_check", "slice_delegate", "slice_wait"], commands: BUILD_COMMANDS }),
     writable: true,
     maxTurns: 80,
     timeoutMs: 30 * MINUTE,
@@ -1195,6 +1258,25 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: ImplementingAnswer,
     template: "implementing.md",
+    network: "full",
+  },
+  // The implementer's writable helper (RFC 0013, phase 5): builds one pure UI slice from the design spec, in its own container on its own branch. The machine starts it and picks its commits; it has no helpers and cannot delegate.
+  ui_design: {
+    id: "ui_design",
+    kind: "agent",
+    agent: "ui-designer",
+    helpers: [],
+    skills: ["tdd", "verification-before-completion", "code-discovery"],
+    access: access(READ_ONLY, { write: true, luna: ["slice_set", "slice_list", "decision_get", "scope_check"], commands: BUILD_COMMANDS }, { bridge: DESIGN_READ_BRIDGE }),
+    writable: true,
+    maxTurns: 60,
+    timeoutMs: 30 * MINUTE,
+    // Claude only. It reads frames, so it needs vision; Codex sees images (probed) but joins only after the admission eval.
+    engines: { default: "claude:sonnet", allowed: ["claude:sonnet", "claude:opus"] },
+    vision: true,
+    effort: "medium",
+    answer: UiDesignAnswer,
+    template: "ui_design.md",
     network: "full",
   },
   build_tests: {
@@ -1253,6 +1335,43 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     answer: E2eAnswer,
     template: "e2e.md",
     network: "full",
+  },
+  // The accessibility auditor (RFC 0013): a sub-run of the e2e stage after a passing browser run, against the app the machine started; and on demand (POST /design/audit).
+  a11y_audit: {
+    id: "a11y_audit",
+    kind: "agent",
+    agent: "a11y-auditor",
+    helpers: [],
+    skills: ["browser-qa", "playwright-qa", "agent-browser", "qa-targets"],
+    access: access(READ_ONLY, { write: true, commands: ["curl", "node", "npm", "pnpm", "npx", "agent-browser", "npx agent-browser", "command -v", "qa-axe"] }, { bridge: [{ server: "mobbin", tools: MOBBIN_READ }] }),
+    writable: true,
+    maxTurns: 60,
+    timeoutMs: 20 * MINUTE,
+    // codex joins after an a11y eval on codex:sol matches the Claude baseline (RFC 0013, phase 4's parity rule).
+    engines: { default: "claude:sonnet", allowed: ["claude:sonnet", "claude:opus"] },
+    effort: "medium",
+    answer: A11yAuditAnswer,
+    template: "a11y_audit.md",
+    network: "full",
+  },
+  // The parity reviewer (RFC 0013, phase 3): a sub-run of the e2e stage after a passing browser run. Reads the captures mounted at /evidence/parity and the frames through the bridge; never edits.
+  design_parity: {
+    id: "design_parity",
+    kind: "agent",
+    agent: "parity-reviewer",
+    helpers: [],
+    skills: [],
+    access: access(READ_ONLY, { skills: false }, { bridge: [{ server: "figma", tools: PARITY_READ }, { server: "figma-desktop", tools: PARITY_READ }] }),
+    writable: false,
+    maxTurns: 40,
+    timeoutMs: 15 * MINUTE,
+    // Claude only for now. Codex sees images (probed, RFC 0013) but joins after the admission eval matches the Claude baseline.
+    engines: { default: "claude:opus", allowed: ["claude:opus", "claude:sonnet"] },
+    vision: true,
+    effort: "high",
+    answer: DesignParityAnswer,
+    template: "design_parity.md",
+    network: "engine",
   },
   evidence: {
     id: "evidence",
@@ -1315,7 +1434,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     writable: false,
     maxTurns: 12,
     timeoutMs: 8 * MINUTE,
-    // Another engine than the writer (sonnet). Only the Claude runtime is known to read images, so haiku is the default; codex:sol judges from the report, the transcript and the timeline.
+    // Another engine than the writer (sonnet). No `vision: true`: the run sees the contact sheets on an engine whose model reads images, and judges from the report, the transcript and the timeline where it cannot.
     engines: { default: "claude:haiku", allowed: ["claude:haiku", "codex:sol"], fallback: ["codex:sol"] },
     effort: "medium",
     answer: VideoQaAnswer,
@@ -1942,10 +2061,16 @@ export function effortProblem(pack: PackId, engine: EngineId, effort: Effort): s
   return `${engine} does not support effort ${effort} (supports: ${supported.join(", ") || "none"})`;
 }
 
+/** Why `engine` cannot run `pack` for want of vision, or null: a pack that reads images on a model that cannot. */
+export function visionProblem(pack: { id: PackId; vision?: boolean }, engine: EngineId): string | null {
+  return pack.vision && !resolveEngine(engine).caps.vision ? `${engine} cannot read images, which ${pack.id} needs` : null;
+}
+
 /** A helper as the pack its child run is: the helper's role on its engine, the parent's access
  *  narrowed to reading, no helpers of its own (delegation has depth 1), no skills, the parent's
  *  effort, and the helper's reply as its answer. Its id stays the parent's: it has no pack of its own. */
-export function helperPack(parent: AgentPack, helper: { role: AgentRole; engine: EngineId }): AgentPack {
+export function helperPack(parent: AgentPack, helper: { role: AgentRole; engine: EngineId; writes?: true }): AgentPack {
+  if (helper.writes) throw new Error(`${helper.role}: a writable helper runs as its own pack, through the machine`);
   return {
     id: parent.id,
     kind: "agent",

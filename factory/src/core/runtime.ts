@@ -23,6 +23,8 @@ export interface RunContext {
     work: string;
     /** Where the run's files go (/out). */
     out: string;
+    /** The image mounts present in this container (core/roots.ts IMAGE_ROOTS): read roots, never written. Absent means none. */
+    images?: string[];
     /** The folder the stage input was read from (/in): the model may read it. */
     input: string;
     /** The run's scratch folder under /tmp, made fresh per run: the model's HOME and TMPDIR, the

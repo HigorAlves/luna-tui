@@ -15,6 +15,9 @@ const DEVICES = new Set(["/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr"
 /** Where the machine mounts the repo's code graph, read-only, in a stage container. */
 export const GRAPH_ROOT = "/graph";
 
+/** Where the machine mounts images a pack reads, read-only (RFC 0013): bridged design images, and Verify's captures and contact sheets. */
+export const IMAGE_ROOTS = ["/design", "/evidence"] as const;
+
 export function realPath(path: string): string {
   // One component at a time, so a link is followed even when what it points at does not exist
   // yet (realpath fails there, and resolving the parent instead would keep the link's own name

@@ -5,7 +5,7 @@
 import { STAGE_REPORTS } from "./card-events.ts";
 
 /** Rows the machine logs itself under a `stage.` kind (the pipeline's, the pack runner's, the stages'): never from a container. `stage.note` is not here: the container's own notes are stored under it. */
-const MACHINE_STAGE_KINDS = ["stage.started", "stage.finished", "stage.engine", "stage.held", "stage.reattached", "stage.sub_container", "stage.restarted", "stage.malformed", "stage.sandbox.egress_blocked"];
+const MACHINE_STAGE_KINDS = ["stage.started", "stage.finished", "stage.engine", "stage.held", "stage.reattached", "stage.sub_container", "stage.restarted", "stage.malformed", "stage.sandbox.egress_blocked", "stage.design.mcp_call", "stage.design.run"];
 
 /** The kinds the agent's own tools write (the slice ledger) and its notes: a container may write these. */
 export const CONTAINER_STAGE_KINDS = ["stage.slice.red", "stage.slice.green", "stage.slice.committed", "stage.note"];
@@ -13,10 +13,13 @@ export const CONTAINER_STAGE_KINDS = ["stage.slice.red", "stage.slice.green", "s
 /** What a stage-reported name (`pr.opened`, `build.checkpoint`, `ship.ready`...) is stored under: rows a machine stage reports, never a container. */
 const REPORTED = [...STAGE_REPORTS].map((name) => `stage.${name}`);
 
+/** The ui-designer's rows (`build.helper_picked`, `build.helper_refused`...): the machine trusts its own, so no container may write one (RFC 0013, risk 8). Reserved by prefix, whatever the name. */
+const HELPER_PREFIX = "stage.build.helper_";
+
 export const RESERVED_KINDS: readonly string[] = [...MACHINE_STAGE_KINDS, ...REPORTED];
 
 /** The kind a container's event is stored under. */
 export const finalKind = (kind: string): string => (kind.startsWith("stage.") ? kind : `stage.${kind}`);
 
 /** Whether a container's event of this kind would be stored as a row only the machine writes. */
-export const isReservedKind = (kind: string): boolean => RESERVED_KINDS.includes(finalKind(kind));
+export const isReservedKind = (kind: string): boolean => RESERVED_KINDS.includes(finalKind(kind)) || finalKind(kind).startsWith(HELPER_PREFIX);

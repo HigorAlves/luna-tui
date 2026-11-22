@@ -1,0 +1,86 @@
+[
+  {
+    "text": "Checkout",
+    "color": "#1A1A1A",
+    "background": "rgba(0, 0, 0, 0)",
+    "fontFamily": "Inter",
+    "fontSize": "24px",
+    "fontWeight": "600",
+    "lineHeight": "32px",
+    "letterSpacing": "0px",
+    "padding": "0px",
+    "margin": "0px",
+    "gap": "0px",
+    "borderRadius": "0px",
+    "selector": "main > h1",
+    "rect": {
+      "x": 504,
+      "y": 64,
+      "w": 216,
+      "h": 32
+    }
+  },
+  {
+    "text": "",
+    "color": "#1A1A1A",
+    "background": "rgba(0, 0, 0, 0)",
+    "fontFamily": "Inter",
+    "fontSize": "16px",
+    "fontWeight": "400",
+    "lineHeight": "24px",
+    "letterSpacing": "0px",
+    "padding": "0px",
+    "margin": "0px",
+    "gap": "20px",
+    "borderRadius": "0px",
+    "selector": "ul.items",
+    "rect": {
+      "x": 504,
+      "y": 120,
+      "w": 432,
+      "h": 100
+    }
+  },
+  {
+    "text": "2 items",
+    "color": "#1A1A1A",
+    "background": "rgba(0, 0, 0, 0)",
+    "fontFamily": "Inter",
+    "fontSize": "16px",
+    "fontWeight": "400",
+    "lineHeight": "24px",
+    "letterSpacing": "0px",
+    "padding": "0px",
+    "margin": "0px",
+    "gap": "0px",
+    "borderRadius": "0px",
+    "selector": "ul.items > li",
+    "rect": {
+      "x": 504,
+      "y": 120,
+      "w": 432,
+      "h": 40
+    }
+  },
+  {
+    "text": "Pay now",
+    "color": "rgb(255, 255, 255)",
+    "background": "#1B5E20",
+    "fontFamily": "Inter",
+    "fontSize": "16px",
+    "fontWeight": "400",
+    "lineHeight": "24px",
+    "letterSpacing": "0px",
+    "padding": "16px",
+    "margin": "0px",
+    "gap": "0px",
+    "borderRadius": "8px",
+    "selector": "button.pay",
+    "rect": {
+      "x": 504,
+      "y": 252,
+      "w": 432,
+      "h": 48
+    }
+  }
+]

@@ -1,0 +1,15 @@
+[
+  {
+    "server": "mobbin",
+    "tool": "search_screens",
+    "description": "Search screens",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        }
+      }
+    }
+  }
+]

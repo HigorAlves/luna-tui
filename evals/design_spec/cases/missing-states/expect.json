@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "mentions",
+      "path": "frames[].id",
+      "words": [
+        "21:10"
+      ]
+    },
+    {
+      "kind": "mentions",
+      "path": "frames[].states[].state",
+      "words": [
+        "default",
+        "hover",
+        "empty",
+        "error"
+      ]
+    },
+    {
+      "kind": "equals",
+      "path": "frames[].states[state=hover].nodeId",
+      "value": null
+    },
+    {
+      "kind": "equals",
+      "path": "frames[].states[state=empty].nodeId",
+      "value": null
+    },
+    {
+      "kind": "equals",
+      "path": "frames[].states[state=error].nodeId",
+      "value": null
+    },
+    {
+      "kind": "mentions",
+      "path": "frames[].states[].suggestion.source",
+      "words": [
+        "mobbin"
+      ],
+      "any": true
+    }
+  ],
+  "rubric": "The file draws only the default state of the summary panel, and says so. A good answer lists the hover, empty and error states the criteria need with nodeId null, because the file does not draw them. A state may carry one suggestion, and only a suggestion that names its Mobbin source (here the empty-cart screen, ref mobbin:screen/shopfront-empty-cart); the suggestion is never presented as the design, and it never sets a nodeId. Coverage counts: the default frame, the tokens the file gives and the states left open appear. A real error is an invented value or an invented node id for a state the file lacks, a suggestion with no source, or treating the suggestion as a designed state. Do not invent anything the replayed results do not hold."
+}

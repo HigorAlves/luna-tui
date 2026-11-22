@@ -56,7 +56,7 @@ export function scriptedModel(name?: string) {
       }
       const step = script[Math.min(results.length, script.length - 1)]!;
       if ("call" in step) {
-        const call = step.call === "bash" ? shellCall(step.command) : step.call === "delegate" ? { name: "delegate", input: { helper: step.helper, message: step.message } } : { name: step.tool, input: step.args };
+        const call = step.call === "bash" ? shellCall(step.command) : step.call === "read" ? { name: "read_file", input: { filePath: step.path } } : step.call === "delegate" ? { name: "delegate", input: { helper: step.helper, message: step.message } } : { name: step.tool, input: step.args };
         return { ...(step.say && { text: step.say }), toolCalls: [call] };
       }
       // A model that never answers within any stage's time; the server is stopped long before.

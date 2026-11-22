@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "mentions",
+      "path": "frames[].id",
+      "words": [
+        "12:34"
+      ]
+    },
+    {
+      "kind": "mentions",
+      "path": "tokens.color[].value",
+      "words": [
+        "#1B5E20",
+        "#FFFFFF"
+      ]
+    },
+    {
+      "kind": "mentions",
+      "path": "tokens.spacing[].value",
+      "words": [
+        "16"
+      ]
+    },
+    {
+      "kind": "mentions",
+      "path": "components[].name",
+      "words": [
+        "PayButton"
+      ]
+    },
+    {
+      "kind": "mentions",
+      "path": "components[].codeConnect.path",
+      "words": [
+        "src/components/PayButton.tsx"
+      ]
+    },
+    {
+      "kind": "avoids",
+      "words": [
+        "#2E7D32",
+        "#0D47A1"
+      ]
+    }
+  ],
+  "rubric": "The file defines its variables, so a good answer reads them: colour, type, spacing and radius tokens with the values the file gives (primary #1B5E20, surface #FFFFFF, space 16, radius 8), the checkout frame 12:34 at 390x844 with its default and hover states (the hover state is frame 12:35), and the PayButton component with its Code Connect path. Coverage counts: every token, frame and component the file names appears. A real error is a value the file does not hold: an invented colour, a made-up radius, a component or node id that is not in the replayed results. The machine will drop none of them, so an invented value reaches the planner as the design."
+}

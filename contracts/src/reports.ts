@@ -3,6 +3,7 @@
 // a field the machine cannot know yet is null, with the wave that fills it named beside it.
 import { z } from "zod";
 
+import { VerifyDesignReport } from "./design-report.ts";
 import { CoverageSummary, Finding } from "./stage.ts";
 
 /** The Diff Summary the implementer writes after reading its own diff. A plain string (an answer from before v2.2) is read as `what`. */
@@ -77,6 +78,8 @@ export const BuildReport = z.object({
   testsStep: z.object({ status: z.string(), why: z.string().optional(), commit: z.string().optional(), redCheck: z.string().optional() }).nullable().optional(),
   /** What the regression sweep did: passed, failed, or skipped (a repo with no checks). */
   sweep: z.object({ status: z.string(), ran: z.array(z.string()), note: z.string().optional(), failed: z.array(z.string()).optional() }).nullable().optional(),
+  /** The slices the ui-designer built (RFC 0013, phase 5): the shas the machine put on the branch, from its own `build.helper_picked` rows; absent when no helper's commits landed. */
+  picked: z.array(z.object({ slice: z.number().int(), shas: z.array(z.string()), tip: z.string() })).optional(),
 });
 export type BuildReport = z.infer<typeof BuildReport>;
 
@@ -109,6 +112,8 @@ export const VerifyReport = z.object({
   ciClass: z.string().nullable().optional(),
   /** The failures each loop has had: Verify, the browser run, CI. */
   rounds: z.object({ verify: z.number().int(), e2e: z.number().int(), ci: z.number().int() }).optional(),
+  /** The last browser run's design block (RFC 0013, phase 3), with the design sign-off's waivers applied; absent on a card with no design run. */
+  design: VerifyDesignReport.nullable().optional(),
 });
 export type VerifyReport = z.infer<typeof VerifyReport>;
 

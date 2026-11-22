@@ -641,6 +641,19 @@ export function diffNameStatus(path: string, from: string, to: string): Promise<
   return execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--name-status", from, to]);
 }
 
+/** Each commit of `<from>..<to>`, oldest first, with the files it touched (`--no-renames`: a rename lists both paths, so a locked file moved away still shows). `-z` keeps a non-ASCII path as it is (git C-quotes it otherwise, and a lock on it would never match). */
+export async function commitFiles(path: string, from: string, to: string): Promise<{ sha: string; files: string[] }[]> {
+  const out = await execOrThrow("git", [...HOST_GIT, ...at(path), "log", "-z", "--reverse", "--format=%x01%H", "--name-only", "--no-renames", `${from}..${to}`]);
+  return out
+    .split("\x01")
+    .filter((block) => block.trim())
+    .map((block) => {
+      // `sha NUL \n file NUL file NUL ...`: the newline after the format's NUL belongs to the first file's entry, not to its name.
+      const [sha = "", first = "", ...rest] = block.split("\0");
+      return { sha: sha.trim(), files: [first.replace(/^\n/, ""), ...rest].filter((f) => f !== "") };
+    });
+}
+
 /** `git diff <from> <to>` in `path`: the unified diff, for reading what a change added. */
 export function diffText(path: string, from: string, to: string): Promise<string> {
   return execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--no-color", "--no-ext-diff", from, to]);

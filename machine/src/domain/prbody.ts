@@ -3,7 +3,7 @@
 // issue's url). Never the plan's criteria as a checklist, the scenario list, plan versions or shas: the Evidence section and the board
 // hold those. The Jira key opens the title, so Jira's GitHub app files the PR under the issue. No attribution. Pure.
 import type { TaskRow } from "./task.ts";
-import { type Finding, type StageInput, type TriageRecord, severityOf } from "@hardness/contracts";
+import { type Finding, type StageInput, type TriageRecord, type VerifyDesignReport, severityOf } from "@hardness/contracts";
 
 import { isDocsOnly } from "./docs-only.ts";
 import { safe } from "./evidence-markdown.ts";
@@ -46,6 +46,8 @@ export interface PrExtra {
   followsUp?: number;
   /** The repository's PR template (from its default branch), when it has one: its headings are what the body fills. */
   template?: string | null;
+  /** The last browser run's design block (parity and accessibility) with the sign-off's waivers applied; `kept` is how many findings stayed open when a person approved; `published` whether the pairs are in the Evidence section. */
+  design?: { report: VerifyDesignReport; kept: number; published: boolean };
 }
 
 /** A foreign text made safe for the section: flattened, capped, and unable to hold either marker (a forged end marker would let the section grow on every update). */
@@ -58,6 +60,39 @@ export function mergePrSection(body: string, section: string): string {
   if (start !== -1 && end !== -1) return body.slice(0, start) + section + body.slice(end + PR_END.length);
   const trimmed = body.replace(/\s+$/, "");
   return trimmed ? `${trimmed}\n\n${section}` : section;
+}
+
+const PAIRS_SHOWN = 6;
+const LEVELS = ["blocker", "should_fix", "nit"] as const;
+
+/** The Design & accessibility block's lines: the WCAG level, what is open by level, the frames compared and up to six pairs. Every foreign string goes through `flat()`. */
+function designLines({ report, kept, published }: NonNullable<PrExtra["design"]>): string[] {
+  const lines: string[] = [];
+  const by = (c: { blocker: number; should_fix: number; nit: number }) => LEVELS.map((l) => `${c[l]} ${l}`).join(", ");
+  if (report.wcag) lines.push(`WCAG 2.2 ${report.wcag}${report.a11y ? ` (${report.a11y.mode})` : ""}`);
+  if (report.a11y) lines.push(`accessibility: ${by(report.a11y.counts)}${report.a11y.counts.waived > 0 ? ` · ${report.a11y.counts.waived} waived` : ""}`);
+  const parity = report.parity;
+  if (parity?.ran) {
+    const frames = parity.frames;
+    const compared = frames.filter((f) => f.status === "compared").length;
+    lines.push(`parity: ${by(parity.counts)} open · ${parity.counts.waived} waived${kept > 0 ? ` · ${kept} kept at sign-off` : ""} · ${compared} of ${frames.length} frames compared`);
+    for (const f of frames.slice(0, PAIRS_SHOWN)) {
+      const where = `${flat(f.scenario ?? "-", 40)} ${flat(f.viewport, 20)}/${f.state} — ${flat(f.name, 80)}`;
+      if (f.status !== "compared") {
+        lines.push(flat(`${where}: not compared (${flat(f.reason ?? "no capture", 80)})`, 300));
+        continue;
+      }
+      const open = report.findings.filter((x) => !x.resolution && x.design?.source === "parity" && x.design.frame === f.frame && (x.design.viewport === undefined || x.design.viewport === f.viewport) && (x.design.state === undefined || x.design.state === f.state));
+      const said = LEVELS.flatMap((l) => {
+        const n = open.filter((x) => severityOf(x.severity) === l).length;
+        return n > 0 ? [`${n} ${l}`] : [];
+      });
+      lines.push(flat(`${where}: compared${said.length ? `, ${said.join(", ")}` : ", no difference"}`, 300));
+    }
+    if (frames.length > PAIRS_SHOWN) lines.push(`${frames.length - PAIRS_SHOWN} more frames on the board`);
+    lines.push(published ? "images in the Evidence section" : "pairs on the board only");
+  }
+  return lines;
 }
 
 const CONVENTIONAL = /^[a-z]+(\([^)]+\))?!?:\s/;
@@ -77,6 +112,8 @@ interface Parts {
   changed: string[];
   tested: string;
   notes: string[];
+  /** The Design & accessibility lines; empty without a design report. */
+  design: string[];
   trailers: string[];
 }
 
@@ -120,7 +157,7 @@ function partsOf({ task, plan, repoSlug, extra }: PrBodyInput): Parts {
   const source = task.source;
   if (source && (source.kind === "github" || source.kind === "github_pr") && repoSlug && source.repo.toLowerCase() === repoSlug.toLowerCase()) trailers.push(`Closes #${source.number}`);
   if (jira) trailers.push(`Jira: ${jira.url}`);
-  return { title, why, changed, tested, notes, trailers };
+  return { title, why, changed, tested, notes, design: extra?.design ? designLines(extra.design) : [], trailers };
 }
 
 /** The caveman-pr body: only the sections that carry something, then the trailers. */
@@ -129,14 +166,16 @@ function caveman(p: Parts): string {
     ...(p.why ? [`## Why\n${p.why}`] : []),
     ...(p.changed.length ? [`## What changed\n${p.changed.map((c) => `- ${c}`).join("\n")}`] : []),
     `## How tested\n${p.tested}`,
+    ...(p.design.length ? [`## Design & accessibility\n${p.design.map((d) => `- ${d}`).join("\n")}`] : []),
     ...(p.notes.length ? [`## Notes\n${p.notes.map((n) => `- ${n}`).join("\n")}`] : []),
     ...(p.trailers.length ? [p.trailers.join("\n")] : []),
   ].join("\n\n");
 }
 
 /** What a template heading asks for, by its words. */
-function slotOf(heading: string): keyof Pick<Parts, "why" | "changed" | "tested" | "notes" | "trailers"> | null {
+function slotOf(heading: string, withDesign: boolean): keyof Pick<Parts, "why" | "changed" | "tested" | "notes" | "trailers" | "design"> | null {
   const h = heading.toLowerCase();
+  if (withDesign && /design|accessib|a11y/.test(h)) return "design";
   if (/test|qa|verif|how (has|was|to) (this|it) been/.test(h)) return "tested";
   if (/why|motivation|context|problem|summary|description|overview|purpose/.test(h)) return "why";
   if (/what|change|approach|implementation|solution/.test(h)) return "changed";
@@ -159,11 +198,12 @@ function filled(template: string, p: Parts): string {
     const heading = lines[i++]!;
     const body: string[] = [];
     while (i < lines.length && !/^#{1,6}\s/.test(lines[i]!)) body.push(lines[i++]!);
-    const slot = slotOf(heading);
+    const slot = slotOf(heading, p.design.length > 0);
     const fill =
       slot === "why" ? p.why
       : slot === "changed" ? (p.changed.length ? p.changed.map((c) => `- ${c}`).join("\n") : null)
       : slot === "tested" ? p.tested
+      : slot === "design" ? p.design.map((d) => `- ${d}`).join("\n")
       : slot === "notes" ? (p.notes.length ? p.notes.map((n) => `- ${n}`).join("\n") : null)
       : slot === "trailers" ? (p.trailers.length ? p.trailers.join("\n") : null)
       : null;
@@ -176,8 +216,10 @@ function filled(template: string, p: Parts): string {
     } else out.push(...body);
   }
   const done = out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
-  const missingTrailers = p.trailers.filter((t) => !used.has("trailers") && !done.includes(t));
-  return missingTrailers.length ? `${done}\n\n${missingTrailers.join("\n")}` : done;
+  // A template with no heading for the design block still shows it, before the trailers.
+  const withDesign = p.design.length > 0 && !used.has("design") ? `${done}\n\n## Design & accessibility\n${p.design.map((d) => `- ${d}`).join("\n")}` : done;
+  const missingTrailers = p.trailers.filter((t) => !used.has("trailers") && !withDesign.includes(t));
+  return missingTrailers.length ? `${withDesign}\n\n${missingTrailers.join("\n")}` : withDesign;
 }
 
 export function buildPr(input: PrBodyInput): { title: string; body: string } {

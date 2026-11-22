@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "count",
+      "path": "findings[frame=12:34]",
+      "min": 1
+    },
+    {
+      "kind": "count",
+      "path": "findings[kind=layout]",
+      "min": 1
+    }
+  ],
+  "rubric": "At the frame's width the build's pay button is a narrow box and its label wraps onto two lines; the frame has one line on a full-width button: a layout break. Every finding names the frame, the Figma node and the build element, with the expected and the actual value. No finding is invented where the build matches the frame: the machine drops none of them, so an invented difference reaches a person as a blocker. Pixel noise is a nit at most. A frame with no capture is answered not_compared with its reason, never a pass."
+}

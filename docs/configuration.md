@@ -59,7 +59,10 @@ See `machine/.env.example`. The defaults match `compose.yaml`. You need a `.env`
 | `MACHINE_SHIP_POLL_INTERVAL` | unset: the repository's `ship.poll_minutes` (5 minutes) | seconds between the ship monitor's polls of a watched PR; when set it overrides `ship.poll_minutes` for every repository. It was 60 before wave 13 |
 | `MACHINE_REPO_MAP` | unset | `owner/name=/abs/path` pairs: the checkout an imported issue's task works in. Without a match, the checkouts up to two folders under `MACHINE_REPOS_DIR` (`~/Developer/orc` and `~/Developer/projects/orc`) are matched by their `origin` remote. A folder you pick in the board's clone prompt that already is a checkout is linked instead of cloned, and the link is kept in `<state dir>/repo-links.json`, so a renamed remote needs no setting |
 | `MACHINE_REPOS_DIR` | `~/Developer` | where `MACHINE_REPO_MAP`'s fallback scan looks |
-| `MACHINE_PUBLIC_URL` | unset | the board's public address (http or https). The only address the machine puts in a line it posts outward, and only to a reporter who could already see the card it links (a merged duplicate's notice); unset, such lines carry the card's short id and no link |
+| `MACHINE_PUBLIC_URL` | unset | the board's public address (http or https). The only address the machine puts in a line it posts outward, and only to a reporter who could already see the card it links (a merged duplicate's notice); unset, such lines carry the card's short id and no link The OAuth login of an MCP server redirects here too (`<address>/mcp/<server>/callback`); unset, it redirects to `http://localhost:<port>` |
+| `MACHINE_MCP_SERVERS` | unset: `~/.config/hardness/mcp.yaml` | the file that declares the MCP servers the machine bridges into stages (RFC 0013, see [MCP servers](#mcp-servers-mcpyaml-and-pnpm-mcp)). A missing file means no server; an unreadable or invalid one stops the machine at start, naming the file and the key |
+| `MCP_BRIDGE_MODE` | `live` | `record` calls the servers and writes each tool list and each call under `MCP_FIXTURES`; `replay` answers from those files and never connects, so a design stage runs offline (the evals use it). Any other value stops the machine at start |
+| `MCP_FIXTURES` | unset | the folder of recorded MCP answers, `<server>/tools.json` and `<server>/<tool>/<sha256 of the arguments>.json`; required by `record` and `replay`. Results are stored as the server returned them, images in base64 |
 | `MACHINE_THREAD_REPLIES` | on | set to `off` to stop the machine replying in the thread a task came from (a comment on its GitHub issue; a Slack thread when the pair below is set) when it is picked up, needs you, escalates, pauses, gets its PR and closes |
 | `MACHINE_GRAPH_INTERVAL` | `600` | seconds between checks of each known repo's default branch; when it moved, the machine rebuilds that repo's code graph (Graphify, in the runner image) under `<MACHINE_STATE_DIR>/graphs/<repo>/<commit>/`, and builds one for a repo that has none. `off` stops the watch. Beside the graphs, `graphs/<repo>/misses.jsonl` records the files Build changed outside the code map (one JSON line per accepted scope check); a rebuild counts it into the stamp's `misses` |
 | `MACHINE_DECISIONS` | on | set to `off` to stop the machine keeping a record of every decision pack call the pipeline makes (the context it judged, the validated answer, each question's verdict under the pack's own bars, the engine and model, the span's trace id) as `<MACHINE_STATE_DIR>/decisions/<pack>/<day>/<id>.json` (mode 0600). When a later fact settles what the right answer was (a flake re-run's result, the format a pack finally shipped with, your plan or retro decision, a resolved review thread) the machine writes it onto the record as `truth`. `pnpm eval harvest` turns records into eval cases; see [evals/README.md](../evals/README.md) and [runbooks/calibrate-decisions.md](runbooks/calibrate-decisions.md) |
@@ -101,6 +104,7 @@ See `machine/.env.example`. The defaults match `compose.yaml`. You need a `.env`
 | `MACHINE_SLA_GATE` | `2d` (was `1h` before wave 9) | how long a task may wait on you at a gate (plan, test check, answers, ship, memory review, escalated) before its clock turns red, where the repo's `luna.yaml` `sla.gate` says nothing. `30m`, `4h`, `3d` or `off`. A Jira priority of Highest or High halves it, Lowest doubles it |
 | `MACHINE_SLA_CYCLE` | unset | created-to-closed target for every ticket, where the repo's `sla.cycle` says nothing; same durations |
 | `RUNNER_IMAGE` | `hardness-runner:dev` | the stage container image |
+| `RUNNER_QA_IMAGE` | `hardness-runner-qa:dev` | the QA image: the browser stages (`e2e`, `a11y_audit`) run in it. `pnpm runner-qa:build` makes it. Without it, e2e is skipped and `POST /design/audit` answers `503 qa_image_missing`. The evals use it too |
 | `RUNNER_QA_IMAGE` | `hardness-runner-qa:dev` | the QA stage image; without it e2e is skipped |
 | `RUNNER_VIDEO_IMAGE` | `hardness-runner-video:dev` | the video image (narration, cards, compose, measure); without it Evidence's video format degrades to captures |
 | `WORKTREES_DIR` | `~/Developer/worktrees` | where task worktrees are created, as `<worktreesDir>/<repo>/<branch>` |
@@ -188,6 +192,12 @@ engines:                                  # the engine a pack runs on in this re
 effort:                                   # the effort a pack runs at in this repo, over its default: low, medium or high
   triage: medium                          # not for a decision pack; the engine that runs must support it
 compliance: [soc2, gdpr]                  # the regimes this repo answers to: soc2, hipaa, gdpr, lgpd, us_privacy; each makes the compliance review run that regime's reviewer
+design:                                   # the designer agents (RFC 0013); `design: off` turns them off for this repo (see "Designer agents" below)
+  servers: { figma: { tools: [get_design_context] } }   # narrows the machine's MCP servers by name and their tools, and never adds one
+  figma: { file: Qx7LmP2vR9sTa, page: Checkout }        # the fallback design reference when a card names no Figma link
+  a11y: { level: AA, mode: gate }                        # WCAG 2.2 level (AA or AAA); gate blocks, advisory only advises
+  budget: { max_tokens: 1000000, max_minutes: 45 }       # the designer agents' tokens and minutes for one card
+  parity: { bar: 0.75, publish: auto }                   # design parity: the confidence the sign-off gate wants, and whether the frame | build pairs go on the PR
 budget:
   engines: { openai:sol: 10, codex: 0 }   # monthly caps in USD on this repo's stage runs, by engine or credential (never Claude)
 evidence:
@@ -305,6 +315,123 @@ A repository can turn a mechanism off, or tune a number inside its bounds. A tun
 - Change the fixed rules: the gate and stuck numbers, the 90th percentile and its margin of 1.25, and the fact lifecycle.
 - Add a tool or widen a pack's access. A mask only removes.
 - Approve a mask, drop a fact or restore a tool. A person does that through the routes in [api.md](api.md).
+
+## MCP servers: `mcp.yaml` and `pnpm mcp`
+
+The machine bridges the tools of MCP servers into the stages whose pack names them (RFC 0013). Only the machine declares a server; a repository's `luna.yaml` `design` narrows. The file is `~/.config/hardness/mcp.yaml`, or the one `MACHINE_MCP_SERVERS` names:
+
+```yaml
+untrusted: deny            # allow: a card from outside the repository's own people may also be given bridged tools (default deny)
+servers:
+  - name: figma-desktop    # lowercase letters, digits and dashes; a stage sees it as figma_desktop_<tool>
+    transport: http        # http (needs url) or stdio (needs command)
+    url: http://host.docker.internal:3845/mcp
+    credential: { kind: none }          # none, oauth, or ref: { kind: ref, ref: "env:NAME" | "literal:<value>" | "op://vault/item/field" }
+    tools: [get_design_context, get_screenshot]   # the most the machine bridges; a pack and a repo can only narrow it
+  - name: figma
+    transport: http
+    url: https://mcp.figma.com/mcp
+    credential: { kind: oauth, scopes: [mcp:connect] }
+    tools: [get_design_context]
+```
+
+The machine keeps an image that a tool returns only up to 3 MiB, at most 8 a call and 20 MB a run. It drops the rest and counts them in `imagesDropped`. A pack that reads images (`vision: true`) runs only on an engine whose catalog model has `vision`.
+
+`op://` references need the 1Password CLI installed and signed in inside the machine's image; `env:` works without it. A `ref` token reaches a stdio server as `MCP_TOKEN` in its environment and an http server as a bearer header; it never reaches a stage container.
+
+| Command | What it does |
+|---|---|
+| `pnpm mcp status` | lists the declared servers: transport, whether a token is saved, whether the server answers, its tools |
+| `pnpm mcp login <server>` | asks the machine for the authorization URL, opens it in the host's browser, and waits for the redirect (`MACHINE_PUBLIC_URL`, else the machine's port). The tokens are kept in `<MACHINE_STATE_DIR>/mcp/<server>.json` |
+
+`pnpm mcp` talks to the machine API at `MACHINE_URL` (default `http://localhost:4317`) with `MACHINE_API_TOKEN`, else `~/.config/hardness/machine-api-token`. A server that refuses dynamic client registration (Figma's remote server) needs a client registered by hand, saved as `<MACHINE_STATE_DIR>/mcp/<server>.client.json`, which the login reads.
+
+## Designer agents
+
+RFC 0013, phase 2. Two agent packs read a card's design: `design_spec` and `a11y_audit`. Both need an MCP server only for design tools (`design_spec`); the audit needs the QA image.
+
+### `luna.yaml` `design`
+
+| Key | Default | What it does |
+|---|---|---|
+| `design: off` | not set | turns every designer step off for this repo: no spec, no audit, no bridged design tools |
+| `design.servers` | the machine's list | narrows the machine's MCP servers by name and tool. It never adds one |
+| `design.figma.file`, `.page` | none | the fallback design reference: a Figma file key and an optional page name. It is used when the card names no Figma link |
+| `design.a11y.level` | `AA` | the WCAG 2.2 level the audit checks: `AA` or `AAA`. A criterion above the level is a `nit` |
+| `design.a11y.mode` | `gate` | `gate`: axe `critical` and `serious` findings and every judged failure block. `advisory`: every finding is `should_fix` and nothing blocks |
+| `design.parity.bar` | `0.75` | the confidence (0 to 1) under which the parity reviewer opens the `awaiting_design` gate. |
+| `design.parity.publish` | `auto` | whether the frame | build pair images go on the PR and into Evidence. `auto`: only when GitHub says the repository is private. A public repository, or one whose visibility cannot be read (no token, no GitHub remote), counts as public. `always`: publish. `never`: list the pairs on the board only |
+| `design.budget.max_tokens` | `1000000` | the tokens the designer agents may spend on one card |
+| `design.budget.max_minutes` | `45` | the minutes the designer agents may run on one card |
+
+The machine finds a card's design in the Figma links of the issue or ticket and its attachments. Else it uses `design.figma`.
+
+The spec runs in Plan, before the planner, on a card with a design reference or on a `frontend` card. A fast-lane card gets a spec only when it has a reference. A failed spec never stops the plan: the plan goes on without it and the gate says so. The audit runs in Verify's browser step, only when the browser run passed. It needs a QA target. With no `verify.e2e.start` and no deploy, the browser run boots its own server, so the audit is skipped and `detail.a11y` says so. Audit blockers send the card back to Build through the e2e loop, so they count against `verify.e2e_rounds`.
+
+### Design parity and the sign-off gate
+
+RFC 0013, phase 3. When a change touches rendered files and the card has a design reference, the browser run also captures each UI scenario, and a `design_parity` reviewer compares it with the Figma frame. Open findings, a frame that could not be compared, or a confidence under `design.parity.bar` stop the card at `awaiting_design`. It is a gate in Verify, and `design: off` turns it off with the other designer steps. See "Design parity and the sign-off gate" in [architecture.md](architecture.md).
+
+- **Waive.** `POST /tasks/:id/design/findings/:findingId/waive` takes `{ kind: "not_a_difference" | "accepted", reason }`, a reason of 3 to 500 characters. The board's `:waive <finding id> <reason>` and `:accept <finding id> <reason>` call it. The board's Design page, in the rail at the gate, shows each frame beside its build. Approve (`a`) and send back with a note (`r`) are the ordinary decision.
+- **Ground truth.** On a repo that keeps ground truth, a waiver is written to `<MACHINE_STATE_DIR>/ground-truth/design_parity/<task>-<finding>.json` and a sign-off to `<task>-<gate>.json`. The reasons pass the machine's text cap and escaping first. `pnpm eval harvest --pack design_parity [--since <date>]` turns the waivers into eval cases ([evals/README.md](../evals/README.md)).
+- **Kept at sign-off** is not stored. It is derived: the findings on an approved gate that are not waived.
+- **Publishing and visibility.** `publish: auto` asks the GitHub port, `GitHub.repoPrivate(slug)`. It answers `true`, `false` or null; the no-token adapter answers null, and null counts as public. So a machine with no GitHub token never publishes a pair under `auto`.
+- **Known gap.** The ship monitor's restack rebuilds the PR body without the card's facts. The Design & accessibility block drops then, as the findings already did.
+
+### The ui-designer helper
+
+RFC 0013, phase 5. On a card with a design reference, `implementing` may hand a pure UI slice to a writable helper in its own container (see [architecture](architecture.md#pipeline), Build step 4). Nothing here is an environment variable. The limits are fixed in the machine's code:
+
+| Limit | Value | What it does |
+|---|---|---|
+| `MIN_HELPER_MINUTES` | `8` | the machine refuses to delegate when the helper would get fewer minutes than this: the smaller of the design budget's minutes left and the implementer's minutes left, less its reserve |
+| `IMPLEMENTER_RESERVE_MINUTES` | `3` | minutes of the implementer's budget that the helper's limit never takes |
+| helper requests | `4` per run | `slice_delegate` calls the build watch answers; past this the watch answers with an error itself |
+| pick requests, pick acks | `12` per run each | the pick handshake's own cap |
+| helper commits | `20` | the most commits the machine takes from one helper |
+| `slice_wait` | `240` s at most | one wait; it returns `running` after that and the agent asks again |
+
+The helper runs at `effort.implementing` of the repo's `luna.yaml` (there is no per-task effort), on `claude:sonnet` or the repo's `engines.ui_design`. Its tokens and minutes count against `design.budget`, not Build's budget.
+
+Delegation is off, with the reason given to the implementer, when:
+
+- `design: off` is set for the repo (the helper is a designer step);
+- the card's design is off (`design.card_off`, from an approved `design_budget` escalation with `response.design = "off"`);
+- the card has no design reference;
+- the design budget is spent;
+- no slice of the plan is a pure UI slice.
+
+A merge conflict that survives the one re-run escalates the card as `merge_conflict`.
+
+### The design budget
+
+The designer runs of a card (the spec, the audit) count against `design.budget`. The machine reads the runtime's own token count and the run's minutes, never a model's text. When a run spends the budget, the next designer step escalates the card with the reason `design_budget`. A person answers it at the escalated gate:
+
+- Approve: the card gets a fresh design budget (`design.budget_reset`).
+- Approve with `response.design = "off"`: also turns design off for this card (`design.card_off`). Every designer step is skipped for it.
+
+On-demand runs have no card, so the budget does not apply to them. The pack-run cap and the daily spend ceiling do.
+
+### On demand: `POST /design/spec` and `POST /design/audit`
+
+Both take the machine API token and a `repo` that is a checkout the machine knows. The machine resolves the link, the QA target and its credential itself. A client never sends a URL, a host or a credential.
+
+| Route | Body | Answers |
+|---|---|---|
+| `POST /design/spec` | `{ repo, link, engine? }`, a Figma link | a `DesignSpecReport`: the design reference and the spec |
+| `POST /design/audit` | `{ repo, target, engine? }`, the name of one of the repo's `qa_targets` | an `A11yReport`: the findings at the repo's level and mode, the pages and notes |
+
+They run through the same machinery as `POST /ticket-chat`: the pack-run cap, the daily ceiling, a `pack_runs` row and the untrusted sandbox. The machine keeps no report. The errors are `404 unknown_repo`, `404 unknown_target`, `400 no_design_reference`, `409 design_off`, `503 qa_image_missing` and `503 agents_off`. A run from these routes counts as trusted for bridged tools only (it holds the machine token, so it is the operator): a default machine, with `untrusted: deny`, still gives it the Figma tools. The pack and the sandbox still treat every input and every tool result as data.
+
+The board runs them: `:spec <figma link>` and `:audit <qa target>`. The report opens in a popup, and `c` makes a card from it.
+
+### Mobbin
+
+`design_spec` and `a11y_audit` may read Mobbin through the bridge, with the search tools only. Mobbin is off until the operator declares it in `mcp.yaml`. Check Mobbin's terms of use before you do. Luna has not.
+
+### Engines
+
+`design_spec` runs on Claude (`claude:sonnet`, `claude:opus`). `a11y_audit` is Claude-only too. Codex joins it when an a11y eval on `codex:sol` matches the Claude baseline. The cases are `evals/design_spec/cases` and `evals/a11y_audit/cases`; see [the evals](../evals/README.md).
 
 ## Machine sandbox policy
 

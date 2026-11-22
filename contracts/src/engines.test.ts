@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { AGENT_PACKS, ENGINES, EngineBudgets, EngineId, MODELS, type ModelEntry, PACKS, STRONGER, StageInput, credentialOwner, effortProblem, engineBudgetKeyProblem, helperPack, helpersOn, readOnly, resolveEngine, retired, stronger } from "./index.ts";
+import { type AgentPack, AGENT_PACKS, ENGINES, EngineBudgets, EngineId, MODELS, type ModelEntry, PACKS, STRONGER, StageInput, credentialOwner, effortProblem, engineBudgetKeyProblem, helperPack, helpersOn, readOnly, resolveEngine, retired, stronger, visionProblem } from "./index.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 
@@ -44,7 +44,7 @@ describe("the model catalog and the engines", () => {
   });
 
   it("retires a deprecated model the day after its retireAfter, and nothing else", () => {
-    const old: ModelEntry = { runtime: "claude", id: "x", status: "deprecated", retireAfter: "2026-12-31", caps: { tools: true, structured: true, effort: ["low"] } };
+    const old: ModelEntry = { runtime: "claude", id: "x", status: "deprecated", retireAfter: "2026-12-31", caps: { tools: true, structured: true, effort: ["low"], vision: false } };
     expect(retired(old, "2026-12-31")).toBe(false);
     expect(retired(old, "2027-01-01")).toBe(true);
     expect(retired({ ...old, status: "ga" }, "2099-01-01")).toBe(false);
@@ -59,7 +59,34 @@ describe("the model catalog and the engines", () => {
   });
 });
 
+describe("the model catalog and vision", () => {
+  it("says which models read images: Claude's do, the probed OpenAI ones do (gpt-5.6-terra, gpt-6-luna), gpt-6-sol is unprobed, Jev never", () => {
+    const vision = Object.fromEntries(Object.entries(MODELS).map(([key, m]) => [key, m.caps.vision]));
+    expect(vision).toEqual({
+      "anthropic/opus-5.5": true,
+      "anthropic/sonnet-5.5": true,
+      "anthropic/haiku-5.5": true,
+      "openai/gpt-6-sol": false,
+      "openai/gpt-6-luna": true,
+      "openai/gpt-5.6-terra": true,
+      "typesafe/jev": false,
+    });
+    expect(resolveEngine("claude:opus").caps.vision).toBe(true);
+  });
+});
+
 describe("the engines each pack may run on", () => {
+  it.each(AGENT_PACKS.filter((p) => p.vision).map((p) => [p.id, p] as const))("%s: reads images, so every engine it may run on has vision", (_id, pack) => {
+    for (const id of [...pack.engines.allowed, ...(pack.engines.fallback ?? [])]) expect(resolveEngine(id).caps.vision, `${pack.id} on ${id}`).toBe(true);
+  });
+
+  it("needs vision for the spec writer, the parity reviewer and the ui-designer only, and names a blind engine", () => {
+    expect(AGENT_PACKS.filter((p) => p.vision).map((p) => p.id).sort()).toEqual(["design_parity", "design_spec", "ui_design"]);
+    expect(visionProblem(PACKS.design_parity, "openai:sol")).toBe("openai:sol cannot read images, which design_parity needs");
+    expect(visionProblem(PACKS.design_parity, "claude:opus")).toBeNull();
+    expect(visionProblem(PACKS.implementing, "openai:sol")).toBeNull();
+  });
+
   // The real clock: the rule's point is to fail on the day a referenced model retires.
   const today = new Date().toISOString().slice(0, 10);
 
@@ -84,7 +111,12 @@ describe("the engines each pack may run on", () => {
     expect(new Set(pack.helpers.map((h) => h.role)).size).toBe(pack.helpers.length);
     // The runtime the stage runs on when the helper has that engine: the default's for `engine`, the key for an `on` entry.
     const parentOf = resolveEngine(pack.engines.default).runtime;
-    const onEach = pack.helpers.flatMap((h) => [{ role: h.role, engine: h.engine, parent: parentOf }, ...Object.entries(h.on ?? {}).flatMap(([runtime, engine]) => (engine ? [{ role: h.role, engine, parent: runtime }] : []))]);
+    // A writable helper is no subagent: it runs as the pack it names, on an engine that pack allows.
+    for (const h of pack.helpers.filter((x) => x.writes)) {
+      expect((PACKS[h.pack!] as AgentPack).agent, `${pack.id}: ${h.role}'s pack`).toBe(h.role);
+      expect(PACKS[h.pack!].engines.allowed, `${pack.id}: ${h.role}'s engine`).toContain(h.engine);
+    }
+    const onEach = pack.helpers.filter((h) => !h.writes).flatMap((h) => [{ role: h.role, engine: h.engine, parent: parentOf }, ...Object.entries(h.on ?? {}).flatMap(([runtime, engine]) => (engine ? [{ role: h.role, engine, parent: runtime }] : []))]);
     for (const helper of onEach) {
       expect(helper.role, `${pack.id}: a helper is not the pack's own role`).not.toBe(pack.agent);
       const engine = resolveEngine(helper.engine);

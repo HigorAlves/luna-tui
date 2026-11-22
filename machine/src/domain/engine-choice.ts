@@ -2,7 +2,7 @@
 // luna.yaml, else the pack's default. An engine the pack does not allow is never run, and one
 // whose credential this machine lacks gives way to the default; either way the reason says so,
 // for the task's log. Pure: the caller says which credentials are missing. See RFC 0002.
-import { type CredentialOwner, type Effort, type EngineId, PACKS, type Pack, type PackId, type StageEfforts, type StageEngines, credentialOwner, effortProblem } from "@hardness/contracts";
+import { type CredentialOwner, type Effort, type EngineId, PACKS, type Pack, type PackId, type StageEfforts, type StageEngines, credentialOwner, effortProblem, visionProblem } from "@hardness/contracts";
 
 import { packStates } from "./packs.ts";
 
@@ -50,12 +50,17 @@ export function taskStagesProblem(stages: Partial<Record<PackId, EngineId | null
   return null;
 }
 
-function notAllowed(pack: Pick<Pack, "id" | "engines">, engine: EngineId): string | null {
-  return pack.engines.allowed.includes(engine) ? null : `${engine} is not allowed for ${pack.id} (allowed: ${pack.engines.allowed.join(", ")})`;
+/** What the choice needs of a pack: its engines, and whether it reads images. */
+type Choosable = Pick<Pack, "id" | "engines"> & { vision?: boolean };
+
+function notAllowed(pack: Choosable, engine: EngineId): string | null {
+  if (!pack.engines.allowed.includes(engine)) return `${engine} is not allowed for ${pack.id} (allowed: ${pack.engines.allowed.join(", ")})`;
+  // A pack that reads images runs only where the model can (RFC 0013), refused like an engine it does not allow.
+  return visionProblem(pack, engine);
 }
 
 export function chooseEngine(opts: {
-  pack: Pick<Pack, "id" | "engines">;
+  pack: Choosable;
   /** The task's own overrides, per pack. */
   task?: StageEngines | null;
   /** The repo's luna.yaml `engines`. */
@@ -136,9 +141,10 @@ export function effortsProblem(efforts: StageEfforts): string | null {
 
 /** The engines a pack may move to after a usage limit, in its order: its `fallback` list less the
  *  engines that already ran the stage this time. The caller drops those it cannot run now. */
-export function fallbackCandidates(pack: Pick<Pack, "engines">, tried: Iterable<EngineId>): EngineId[] {
+export function fallbackCandidates(pack: Pick<Pack, "engines"> & Partial<Choosable>, tried: Iterable<EngineId>): EngineId[] {
   const done = new Set(tried);
-  return (pack.engines.fallback ?? []).filter((engine) => !done.has(engine));
+  // A blind engine never takes over a pack that reads images (RFC 0013).
+  return (pack.engines.fallback ?? []).filter((engine) => !done.has(engine) && (pack.id === undefined || visionProblem({ id: pack.id, vision: pack.vision }, engine) === null));
 }
 
 /** The engine a reviewing pack runs on when it should not share the implementer's model family: the first allowed engine of another credential owner whose

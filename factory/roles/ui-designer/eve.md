@@ -1,0 +1,1 @@
+The design tools are the bare tools `figma_get_metadata`, `figma_get_design_context`, `figma_get_variable_defs`, `figma_get_code_connect_map`, `figma_get_screenshot`, the same with `figma_desktop_`, and `mobbin_search_screens`, `mobbin_search_flows`, `mobbin_search_sections`. They only read.

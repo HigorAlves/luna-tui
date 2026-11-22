@@ -1,7 +1,8 @@
 # The machine itself, for `docker compose up`. Stages still run as sibling containers
 # through the host's Docker socket, so this image only needs the docker CLI, git and gh.
 # Build context is the repo root (it needs the pnpm workspace and contracts/).
-FROM node:24-slim
+# trixie, not bookworm: the ui-designer helper's pick (git merge-tree --write-tree --merge-base) needs git 2.40 or newer; bookworm has 2.39, trixie 2.47.
+FROM node:24-trixie-slim
 
 ARG GH_VERSION=2.63.2
 ARG PNPM_VERSION=12.14.0

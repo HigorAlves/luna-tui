@@ -1,8 +1,9 @@
 // What a pack's agent may touch, in no runtime's words: each runtime maps it to its own tool
 // names (the Claude runtime in factory/src/runtimes/claude/access.ts). See RFC 0002.
+import type { BridgeGrant } from "./mcp.ts";
 
-/** The luna tools: progress, the slice ledger, the settled decisions, the scope check and the board search (read-only). */
-export type LunaTool = "step" | "slice_init" | "slice_set" | "slice_list" | "decision_get" | "scope_check" | "card_search" | "scenario_red";
+/** The luna tools: progress, the slice ledger, the settled decisions, the scope check and the board search (read-only), and the implementer's hand-off of a UI slice to the ui-designer and the wait for it (RFC 0013, phase 5). */
+export type LunaTool = "step" | "slice_init" | "slice_set" | "slice_list" | "decision_get" | "scope_check" | "card_search" | "scenario_red" | "slice_delegate" | "slice_wait";
 
 export interface Access {
   /** Read files and search the tree. */
@@ -18,9 +19,11 @@ export interface Access {
   /** The command prefixes the shell may run, such as `git add` or `npm`. */
   commands: string[];
   luna: LunaTool[];
+  /** Read-only MCP tools the machine bridges in, by server (RFC 0013). */
+  bridge: BridgeGrant[];
 }
 
-export const NO_ACCESS: Access = { read: false, write: false, web: false, agent: false, skills: false, commands: [], luna: [] };
+export const NO_ACCESS: Access = { read: false, write: false, web: false, agent: false, skills: false, commands: [], luna: [], bridge: [] };
 
 /** One access from fragments: a capability any fragment grants, each command and luna tool once. */
 export function access(...parts: Partial<Access>[]): Access {
@@ -33,16 +36,24 @@ export function access(...parts: Partial<Access>[]): Access {
       skills: all.skills || !!part.skills,
       commands: [...new Set([...all.commands, ...(part.commands ?? [])])],
       luna: [...new Set([...all.luna, ...(part.luna ?? [])])],
+      bridge: mergeBridge(all.bridge, part.bridge ?? []),
     }),
     NO_ACCESS,
   );
+}
+
+/** Grants by server, in first-seen order, each tool once. */
+function mergeBridge(a: BridgeGrant[], b: BridgeGrant[]): BridgeGrant[] {
+  const out = new Map<string, string[]>(a.map((g) => [g.server, [...g.tools]]));
+  for (const g of b) out.set(g.server, [...new Set([...(out.get(g.server) ?? []), ...g.tools])]);
+  return [...out].map(([server, tools]) => ({ server, tools }));
 }
 
 /** The commands that only read: all a read-only helper keeps of its parent's list. */
 const READING_COMMANDS: ReadonlySet<string> = new Set(["cat", "ls", "head", "tail", "wc", "pwd", "echo", "git branch --show-current", "git rev-parse", "git diff", "git log", "git show", "git merge-base", "git rev-list", "git blame", "git status", "git ls-files", "gh pr view", "gh pr diff", "gh issue view", "graphify query", "graphify explain", "graphify path", "graphify affected", "graphify god-nodes"]);
 
 /** `access` narrowed to reading: no writes, subagents, skills or luna tools, and only the
- *  commands that read. What a helper's child run gets of its parent's access. */
+ *  commands that read. What a helper's child run gets of its parent's access. Bridged tools stay: each one reads. */
 export function readOnly(a: Access): Access {
   return { ...a, write: false, agent: false, skills: false, commands: a.commands.filter((c) => READING_COMMANDS.has(c)), luna: [] };
 }

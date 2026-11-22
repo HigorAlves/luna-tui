@@ -16,7 +16,7 @@ describe("context-only packs", () => {
     const none = PackId.options.filter((id) => packStates(id).length === 0);
     // A new context-only pack must be given a context key or be denied: never on demand by accident.
     expect(none.filter((id) => !NOT_ON_DEMAND.includes(id)).sort()).toEqual(Object.keys(CONTEXT_OF).sort());
-    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["access_review", "breach_assess", "capacity_check", "change_exceptions", "chat_triage", "ci_failure_class", "comment_intent", "conversation_assess", "conversation_relation", "conversation_reply", "coverage_check", "decompose", "e2e_failure_cause", "escalation_reason", "event_class", "evidence_format", "evidence_valid", "fact_propose", "finding_classify", "fix_scope", "foreman", "frame_privacy", "intake_dedup", "jira_intake", "loop_judge", "loop_redirect", "plan_check", "postmortem", "pr_link", "questionnaire", "red_check", "release_notes", "risk_score", "scope_check", "size_estimate", "slack_triage", "split_check", "status_report", "ticket_assess", "ticket_chat", "ticket_recommend", "ticket_reply", "ticket_validity", "triage_signals", "vuln_triage", "worth_learning"]);
+    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["a11y_audit", "access_review", "breach_assess", "capacity_check", "change_exceptions", "chat_triage", "ci_failure_class", "comment_intent", "conversation_assess", "conversation_relation", "conversation_reply", "coverage_check", "decompose", "design_spec", "e2e_failure_cause", "escalation_reason", "event_class", "evidence_format", "evidence_valid", "fact_propose", "finding_classify", "fix_scope", "foreman", "frame_privacy", "intake_dedup", "jira_intake", "loop_judge", "loop_redirect", "plan_check", "postmortem", "pr_link", "questionnaire", "red_check", "release_notes", "risk_score", "scope_check", "size_estimate", "slack_triage", "split_check", "status_report", "ticket_assess", "ticket_chat", "ticket_recommend", "ticket_reply", "ticket_validity", "triage_signals", "vuln_triage", "worth_learning"]);
     expect(isContextPack("triage")).toBe(false);
     expect(isContextPack("reviewing_memory")).toBe(false);
     expect(isContextPack("chat_triage")).toBe(true);
@@ -38,6 +38,18 @@ describe("context-only packs", () => {
     expect(packStates("docs_drift")).toEqual([]);
     expect(NOT_ON_DEMAND).toContain("docs_drift");
     expect(isContextPack("docs_drift")).toBe(false);
+  });
+
+  it("never include ui_design: the machine starts it with the brief it composes", () => {
+    expect(packStates("ui_design")).toEqual([]);
+    expect(NOT_ON_DEMAND).toContain("ui_design");
+    expect(isContextPack("ui_design")).toBe(false);
+  });
+
+  it("never include design_parity: it reads captures the browser run left, so a client has nothing to send it", () => {
+    expect(packStates("design_parity")).toEqual([]);
+    expect(NOT_ON_DEMAND).toContain("design_parity");
+    expect(isContextPack("design_parity")).toBe(false);
   });
 
   it("take an object with the pack's own key and nothing else", () => {
@@ -285,5 +297,22 @@ describe("the change-size decisions", () => {
       expect(input).toMatchObject({ pack, stage: pack, plan: null, context: { projectContext: null, ...context }, limits: { maxTurns: 1 } });
     }
     expect(buildContextPackInput("size_estimate", { size }).task.title).toBe("Export");
+  });
+
+  it("runs a11y_audit on demand with the level as its one key", () => {
+    expect(isContextPack("a11y_audit")).toBe(true);
+    expect(CONTEXT_OF.a11y_audit.key).toBe("a11y");
+    expect(contextSchema("a11y_audit").safeParse({ a11y: { level: "AA" } }).success).toBe(true);
+    expect(contextSchema("a11y_audit").safeParse({ a11y: { level: "A" } }).success).toBe(false);
+    expect(buildContextPackInput("a11y_audit", { a11y: { level: "AAA" } })).toMatchObject({ pack: "a11y_audit", plan: null, context: { projectContext: null, a11y: { level: "AAA" } } });
+  });
+
+  it("runs design_spec on demand with the design reference as its one key", () => {
+    expect(isContextPack("design_spec")).toBe(true);
+    expect(CONTEXT_OF.design_spec.key).toBe("design");
+    expect(contextSchema("design_spec").safeParse({ design: { refs: [{ fileKey: "AbCdEf0123456789", nodeIds: [], page: null, from: "link" }] } }).success).toBe(true);
+    expect(contextSchema("design_spec").safeParse({ design: { refs: [] } }).success).toBe(false);
+    const design = { refs: [{ fileKey: "AbCdEf0123456789", nodeIds: ["12:34"], page: null, from: "link" as const }] };
+    expect(buildContextPackInput("design_spec", { design })).toMatchObject({ pack: "design_spec", plan: null, context: { projectContext: null, design } });
   });
 });

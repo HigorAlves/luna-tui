@@ -20,6 +20,8 @@ export type ExecFn = (command: string, args: string[], options?: { cwd?: string;
 export interface DeliverDeps {
   /** The repository's PR template (default: read from its default branch); tests pass one. */
   prTemplate?: (repoPath: string | null) => Promise<string | null>;
+  /** Whether the design pairs will be in the Evidence section (the repo's `design.parity.publish` and its visibility), for the PR block's last line. Absent, the pairs are on the board only. */
+  designPublished?: (task: StageContext["task"]) => Promise<boolean>;
   exec: ExecFn;
   github: GitHub;
   /** The `owner/name` a worktree pushes to; tests inject one, the default reads the origin remote. */
@@ -106,10 +108,12 @@ export async function prTemplateOf(repoPath: string | null): Promise<string | nu
   return defaultBranchFile(repoPath, PR_TEMPLATE_PATHS, 32_768).catch(() => null);
 }
 
-export function prExtraOf(context: StageContext, commits: { base: string | null; head: string | null } | null, template: string | null = null): PrExtra {
+export function prExtraOf(context: StageContext, commits: { base: string | null; head: string | null } | null, template: string | null = null, designPublished = false): PrExtra {
   const { task } = context;
+  const design = context.prFacts?.design;
   return {
     ...(template ? { template } : {}),
+    ...(design ? { design: { report: design.report, kept: design.kept, published: designPublished } } : {}),
     record: task.record,
     // The plan's version: how many times a plan was approved (a plan sent back and approved again counts).
     planVersion: context.approvals.filter((a) => a.kind === "awaiting_approval" && a.decision === "approved").length || null,
@@ -355,7 +359,8 @@ export function deliverRunner(deps: DeliverDeps): StageRunner {
       const existing = await deps.github.findPr(slug, task.branch);
       const commits = deps.commitsOf ? await deps.commitsOf(task.worktreePath, task.repoPath).catch(() => null) : null;
       const template = await (deps.prTemplate ?? prTemplateOf)(task.repoPath);
-      const extra = { ...prExtraOf(context, commits, template), ...(stackedOn?.number ? { stack: { number: stackedOn.number } } : {}) };
+      const published = await (deps.designPublished?.(task) ?? Promise.resolve(false)).catch(() => false);
+      const extra = { ...prExtraOf(context, commits, template, published), ...(stackedOn?.number ? { stack: { number: stackedOn.number } } : {}) };
       const ref = existing ?? (await openTaskPr(deps.github, slug, context, true, extra, stackedOn?.branch));
       // A PR that exists keeps whatever a person wrote: only the machine's own section is replaced.
       if (existing) {
@@ -420,9 +425,10 @@ export function deliverRunner(deps: DeliverDeps): StageRunner {
 }
 
 /** The real runner needs the GitHub port, which main.ts builds from the token. */
-export const realDeliverRunner = (github: GitHub, stacked?: DeliverDeps["stacked"], resolveConflicts?: DeliverDeps["resolveConflicts"]): StageRunner => deliverRunner({
+export const realDeliverRunner = (github: GitHub, stacked?: DeliverDeps["stacked"], resolveConflicts?: DeliverDeps["resolveConflicts"], designPublished?: DeliverDeps["designPublished"]): StageRunner => deliverRunner({
     exec: realExec,
     github,
+    ...(designPublished ? { designPublished } : {}),
     ...(stacked ? { stacked } : {}),
     ...(resolveConflicts ? { resolveConflicts } : {}),
     commitsOf: async (worktreePath, repoPath) => {

@@ -16,7 +16,7 @@ conformance(
     const query = scriptedQuery(script);
     return Object.assign(claudeRuntime(query), { told: () => query.told });
   },
-  { resetsAt: true, schemaIssue: true, tools: true, text: true, delegate: true, economy: true },
+  { resetsAt: true, schemaIssue: true, tools: true, text: true, delegate: true, economy: true, imageParts: false },
 );
 conformance("claude (decide)", "claude:haiku", (script) => claudeRuntime(scriptedQuery(script)), { resetsAt: true, schemaIssue: true, ...CAPS_NO_TOOLS, economy: false }, { table: DECISION_TABLE });
 

@@ -34,6 +34,15 @@ export interface Ingested {
   artifacts: IngestedArtifact[];
 }
 
+/** `by: "ui-designer"` marks the helper's rows so Build's budget skips them: the machine sets it from the run's pack, over whatever the container wrote, and no other run's row may carry it. */
+function stamp(event: IngestedEvent, pack: string | undefined): void {
+  if (pack === "ui_design") event.payload = { ...event.payload, by: "ui-designer" };
+  else if (event.payload.by === "ui-designer") {
+    const { by: _by, ...rest } = event.payload;
+    event.payload = rest;
+  }
+}
+
 const exists = (error: unknown): boolean => (error as NodeJS.ErrnoException)?.code !== "ENOENT";
 
 /** What the host reads of a container's result and events: a regular file within these caps, never a link or a FIFO. */
@@ -44,8 +53,10 @@ export async function ingestStageOutput(opts: {
   outDir: string;
   runId: string;
   stateDir: string;
+  /** The run's pack, known to the machine: a `ui_design` run's rows are stamped as the ui-designer's. */
+  pack?: string;
 }): Promise<Ingested> {
-  const { outDir, runId, stateDir } = opts;
+  const { outDir, runId, stateDir, pack } = opts;
   const raw = await readRegularFile(join(outDir, "result.json"), RESULT_CAP);
   const parsed = StageOutput.safeParse(JSON.parse(raw));
   if (!parsed.success) {
@@ -78,6 +89,7 @@ export async function ingestStageOutput(opts: {
         kind: item.kind,
         payload: item.payload && typeof item.payload === "object" ? item.payload : {},
       });
+      stamp(events.at(-1)!, pack);
     } catch {
       events.push({ at: new Date().toISOString(), kind: "stage.malformed", payload: { line } });
     }

@@ -30,20 +30,25 @@ export interface ModelEntry {
     /** It can answer through a JSON schema. */
     structured: boolean;
     effort: Effort[];
+    /** It reads an image a tool returns (a file read from /design or /evidence): a pack that needs vision runs only on such a model (RFC 0013). */
+    vision: boolean;
   };
 }
 
 const ALL_EFFORTS: Effort[] = ["low", "medium", "high"];
 const AGENT = { tools: true, structured: true, effort: ALL_EFFORTS };
+/** An agent model that reads images, and one that does not or is not yet known to on its route (the Codex backend: RFC 0013's probe). */
+const SEES = { ...AGENT, vision: true };
+const BLIND = { ...AGENT, vision: false };
 
 const CATALOG = {
-  "anthropic/opus-5.5": { runtime: "claude", id: "claude-opus-5-5", status: "ga", caps: AGENT },
-  "anthropic/sonnet-5.5": { runtime: "claude", id: "claude-sonnet-5-5", status: "ga", caps: AGENT },
-  "anthropic/haiku-5.5": { runtime: "claude", id: "claude-haiku-5-5", status: "ga", caps: AGENT },
-  "openai/gpt-6-sol": { runtime: "eve", id: "gpt-6-sol", status: "preview", caps: AGENT },
-  "openai/gpt-6-luna": { runtime: "eve", id: "gpt-6-luna-fast", status: "preview", caps: AGENT },
+  "anthropic/opus-5.5": { runtime: "claude", id: "claude-opus-5-5", status: "ga", caps: SEES },
+  "anthropic/sonnet-5.5": { runtime: "claude", id: "claude-sonnet-5-5", status: "ga", caps: SEES },
+  "anthropic/haiku-5.5": { runtime: "claude", id: "claude-haiku-5-5", status: "ga", caps: SEES },
+  "openai/gpt-6-sol": { runtime: "eve", id: "gpt-6-sol", status: "preview", caps: BLIND },
+  "openai/gpt-6-luna": { runtime: "eve", id: "gpt-6-luna-fast", status: "preview", caps: SEES },
   // What a ChatGPT (Codex) login serves for the stronger engine: gpt-6-sol is API-only on it.
-  "openai/gpt-5.6-terra": { runtime: "eve", id: "gpt-5.6-terra", status: "preview", caps: AGENT },
+  "openai/gpt-5.6-terra": { runtime: "eve", id: "gpt-5.6-terra", status: "preview", caps: SEES },
   // A decision model: typed answers to typed questions, no tools and no effort setting. Billed per
   // input token only, through TypeSafe's API or the Vercel AI Gateway alike.
   "typesafe/jev": {
@@ -52,7 +57,7 @@ const CATALOG = {
     gatewayId: "typesafe-ai/jev",
     pricing: { inputPerMTokUsd: 0.042 },
     status: "preview",
-    caps: { tools: false, structured: true, effort: [] },
+    caps: { tools: false, structured: true, effort: [], vision: false },
   },
 } as const satisfies Record<string, ModelEntry>;
 export type ModelKey = keyof typeof CATALOG;

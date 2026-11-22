@@ -1,0 +1,66 @@
+[
+  {
+    "server": "figma",
+    "tool": "get_metadata",
+    "description": "Figma get_metadata",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "fileKey": {
+          "type": "string"
+        },
+        "nodeId": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "server": "figma",
+    "tool": "get_design_context",
+    "description": "Figma get_design_context",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "fileKey": {
+          "type": "string"
+        },
+        "nodeId": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "server": "figma",
+    "tool": "get_variable_defs",
+    "description": "Figma get_variable_defs",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "fileKey": {
+          "type": "string"
+        },
+        "nodeId": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "server": "figma",
+    "tool": "get_screenshot",
+    "description": "Figma get_screenshot",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "fileKey": {
+          "type": "string"
+        },
+        "nodeId": {
+          "type": "string"
+        }
+      }
+    }
+  }
+]

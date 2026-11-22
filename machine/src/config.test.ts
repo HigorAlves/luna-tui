@@ -65,6 +65,7 @@ describe("loadConfig", () => {
       datadog: { apiKey: "", appKey: "", site: "datadoghq.com", scope: "" },
       sla: { gateSecs: 172_800, cycleSecs: null },
       sandboxPolicy: DEFAULT_MACHINE_POLICY,
+      mcp: { servers: [], untrusted: "deny" },
     });
   });
 
@@ -507,5 +508,33 @@ describe("sandbox policy keys that have no effect", () => {
 
   it("names nothing when bash_sandbox is off", () => {
     expect(sandboxPolicyNotes(DEFAULT_MACHINE_POLICY)).toEqual({ notInForce: [], warnings: [] });
+  });
+});
+
+describe("the MCP servers file", () => {
+  const home = () => mkdtempSync(join(tmpdir(), "mcp-servers-"));
+  const write = (path: string, text: string): string => {
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, text);
+    return path;
+  };
+
+  it("an absent file is no servers, and untrusted cards denied", () => {
+    expect(loadConfig({ HOME: home() }).mcp).toEqual({ servers: [], untrusted: "deny" });
+  });
+
+  it("reads ~/.config/hardness/mcp.yaml", () => {
+    const dir = home();
+    write(join(dir, ".config", "hardness", "mcp.yaml"), "servers:\n  - name: figma-desktop\n    transport: http\n    url: http://127.0.0.1:3845/mcp\n    credential: { kind: none }\n    tools: [get_screenshot]\n");
+    expect(loadConfig({ HOME: dir }).mcp).toEqual({
+      servers: [{ name: "figma-desktop", transport: "http", url: "http://127.0.0.1:3845/mcp", credential: { kind: "none" }, tools: ["get_screenshot"] }],
+      untrusted: "deny",
+    });
+  });
+
+  it("refuses an invalid file, naming the file and the key", () => {
+    const dir = home();
+    const file = write(join(dir, "mcp.yaml"), "servers:\n  - name: sb\n    transport: ftp\n    credential: { kind: none }\n    tools: []\n");
+    expect(() => loadConfig({ HOME: dir, MACHINE_MCP_SERVERS: file })).toThrow(/MACHINE_MCP_SERVERS .*mcp.yaml: servers.0.transport/);
   });
 });

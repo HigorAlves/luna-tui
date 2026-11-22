@@ -39,6 +39,7 @@ const METHODS: Array<keyof GitHub> = [
   "commentOnIssue",
   "createIssue",
   "defaultBranch",
+  "repoPrivate",
   "findPr",
   "openPr",
   "retargetPr",

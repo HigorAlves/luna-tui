@@ -1,0 +1,69 @@
+{
+  "schema": 3,
+  "stage": "a11y_audit",
+  "pack": "a11y_audit",
+  "attempt": 1,
+  "task": {
+    "id": "eval-clean-page",
+    "title": "Audit the fixed checkout page",
+    "description": "The checkout page has the same layout and the failures fixed: contrast, alt text, a label, a dialog that releases focus and a visible focus outline.",
+    "criteria": [
+      "The checkout page has no WCAG 2.2 AA failure"
+    ],
+    "repoPath": "fixtures/a11y-clean",
+    "branch": "task/eval-clean-page",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "bridge": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "a11y": {
+      "level": "AA"
+    },
+    "qaTargets": [
+      {
+        "name": "seeded",
+        "baseUrl": "file:///work/index.html"
+      }
+    ],
+    "testCases": [
+      {
+        "title": "Pay form renders",
+        "criterion": "The checkout page is accessible",
+        "approach": "the checkout page is open at /, the page loads, the pay form, its image and the Pay button are visible",
+        "given": "the checkout page is open at /",
+        "when": "the page loads",
+        "then": "the pay form, its image and the Pay button are visible",
+        "layer": "e2e"
+      },
+      {
+        "title": "Open and close the help dialog",
+        "criterion": "The checkout page is accessible",
+        "approach": "the checkout page is open, the user opens the help dialog with the keyboard and tries to leave it with Tab and Escape, focus can leave the dialog and returns to the Help button",
+        "given": "the checkout page is open",
+        "when": "the user opens the help dialog with the keyboard and tries to leave it with Tab and Escape",
+        "then": "focus can leave the dialog and returns to the Help button",
+        "layer": "e2e"
+      },
+      {
+        "title": "Pay button hover and focus",
+        "criterion": "The checkout page is accessible",
+        "approach": "the checkout page is open, the user hovers the Pay button and tabs to it, the hover and focus states are visible and readable",
+        "given": "the checkout page is open",
+        "when": "the user hovers the Pay button and tabs to it",
+        "then": "the hover and focus states are visible and readable",
+        "layer": "e2e"
+      }
+    ]
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

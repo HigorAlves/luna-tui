@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type AccessReviewContext, ReleaseNotesContext, type PostmortemContext, type BreachAssessContext, type CapacityContext, type StatusReportContext, QuestionnaireContext, VulnTriageContext, type ChangeExceptionsContext, type ComplianceReviewContext, type DocsDriftContext, type ChatTriageContext, type ForemanContext, type TicketChatContext, type QuestionsContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type Effort, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type PrLinkContext, type ProposeContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
+import { type A11yContext, type CapturePlan, type ParityCapture, DesignSpec, type DesignContext, type AccessReviewContext, ReleaseNotesContext, type PostmortemContext, type BreachAssessContext, type BridgedTool, type CapacityContext, type StatusReportContext, QuestionnaireContext, VulnTriageContext, type ChangeExceptionsContext, type ComplianceReviewContext, type DocsDriftContext, type ChatTriageContext, type ForemanContext, type TicketChatContext, type QuestionsContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type Effort, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type PrLinkContext, type ProposeContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
 import { isDocsOnly } from "./docs-only.ts";
 
 export { PACK_LIMITS };
@@ -111,6 +111,13 @@ export function approvedScenarios(approvals: ApprovalRow[]): Scenario[] {
   return approvedCases(approvals).map((c, i) => scenarioOf(c, i, plan.success ? plan.data.acceptance_criteria : criteria));
 }
 
+/** The design spec the plan gate was approved with (`requested.design.spec`, which the plan stage writes); null when there was none, it did not parse, or no plan gate was approved. */
+export function designSpecOf(approvals: ApprovalRow[]): DesignSpec | null {
+  const approved = approvals.findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
+  const spec = DesignSpec.safeParse((approved?.requested.design as { spec?: unknown } | undefined)?.spec);
+  return spec.success ? spec.data : null;
+}
+
 /** What Intake gathered, as triage reads it: each stranger's text flattened again and capped, every list bounded, attachments as references only. */
 export function intakeOf(task: TaskRow): IntakeContext {
   const card = cardOf(task);
@@ -163,6 +170,20 @@ export function buildStageInput(opts: {
   qaTargets?: QaTarget[];
   /** For implementing and verifying: the repo's checks from luna.yaml. */
   checks?: CheckSpec[] | null;
+  /** For design_spec and ui_design: the card's design reference, composed by the machine. */
+  design?: DesignContext | null;
+  /** For ui_design: the slice it builds, the files each side owns and the base it starts from; its ledger is seeded with that one slice. */
+  helper?: StageInput["context"]["helper"];
+  /** For implementing: whether it may hand a UI slice to the ui-designer, and why not (the machine's own composition). */
+  delegation?: StageInput["context"]["delegation"];
+  /** For a11y_audit: the WCAG level to audit against; AA when absent. */
+  a11yLevel?: "AA" | "AAA";
+  /** e2e: the captures the browser run is asked to take for the frames its scenarios cite. */
+  parityPlan?: CapturePlan;
+  /** For design_parity: what the browser run captured, the plan it followed and the approved spec. */
+  parity?: { plan: CapturePlan; captures: ParityCapture[]; spec: DesignSpec | null };
+  /** The MCP tools the machine bridged for this run (RFC 0013); none by default. */
+  bridge?: BridgedTool[];
   /** For reviewing_memory: the last implementing ledger and every earlier run of the task. */
   history?: { ledger: Ledger | null; runs: RunSummary[] } | null;
   /** For reviewing (a PR task): the PR's diff and comments the host fetched. */
@@ -192,16 +213,19 @@ export function buildStageInput(opts: {
   const pack = opts.pack ?? (stage as PackId);
   // The test designer designs from the criteria and the goal: it is never shown the plan's steps, brief or assumptions.
   const designer = pack === "test_design" || pack === "test_design_fast";
-  const designed: PlanContext | null = designer && opts.plan ? { ...(opts.plan.docsOnly ? { docsOnly: true } : {}), record: opts.plan.record, brief: "", criteria: opts.plan.criteria, assumptions: [], slices: [], ...(opts.plan.cases ? { cases: opts.plan.cases } : {}), ...(opts.plan.gaps ? { gaps: opts.plan.gaps } : {}), ...(opts.plan.coverage_notes ? { coverage_notes: opts.plan.coverage_notes } : {}), ...(opts.plan.round !== undefined ? { round: opts.plan.round } : {}) } : null;
+  const designed: PlanContext | null = designer && opts.plan ? { ...(opts.plan.docsOnly ? { docsOnly: true } : {}), record: opts.plan.record, brief: "", criteria: opts.plan.criteria, assumptions: [], slices: [], ...(opts.plan.cases ? { cases: opts.plan.cases } : {}), ...(opts.plan.gaps ? { gaps: opts.plan.gaps } : {}), ...(opts.plan.coverage_notes ? { coverage_notes: opts.plan.coverage_notes } : {}), ...(opts.plan.round !== undefined ? { round: opts.plan.round } : {}), ...(opts.plan.frames ? { frames: opts.plan.frames } : {}) } : null;
   const reviewed = designed ?? opts.plan;
   const underReview = reviewed
     ? { brief: reviewed.brief, criteria: reviewed.criteria, assumptions: reviewed.assumptions, ...(designer ? {} : { slices: reviewed.slices }), ...(reviewed.rollback !== undefined ? { rollback: reviewed.rollback } : {}) }
     : null;
-  const plan = approvedPlan(approvals) ?? underReview;
+  const approved = approvedPlan(approvals) ?? underReview;
+  // The ui-designer reads the approved spec in its plan (`context.plan.designSpec`).
+  const spec = pack === "ui_design" ? designSpecOf(approvals) : null;
+  const plan = approved && spec ? { ...approved, designSpec: spec } : approved;
   const scaled = budgetFor(pack, plan?.slices?.length ?? 0);
   const { maxTurns } = scaled;
   // Build's budget: a run never outlives the minutes the card has left.
-  const timeoutMs = opts.budgetMinutes !== undefined && (pack === "implementing" || pack === "build_tests") ? Math.floor(Math.min(scaled.timeoutMs, Math.max(1, opts.budgetMinutes) * MINUTE)) : scaled.timeoutMs;
+  const timeoutMs = opts.budgetMinutes !== undefined && (pack === "implementing" || pack === "build_tests" || pack === "ui_design") ? Math.floor(Math.min(scaled.timeoutMs, Math.max(1, opts.budgetMinutes) * MINUTE)) : scaled.timeoutMs;
   // A budget left in fractions of a minute gives a fraction of a millisecond: the stage input takes whole ones (`invalid stage input: limits.timeoutMs`).
   return {
     schema: 3,
@@ -231,21 +255,22 @@ export function buildStageInput(opts: {
         reason: a.reason,
         answers: (a.response?.answers ?? {}) as Record<string, string>,
       })),
+    bridge: opts.bridge ?? [],
     priorFindings: opts.priorFindings.filter((f) => f.confidence >= PRIOR_FINDING_CONFIDENCE),
     // The runner reads docs/agents/project-context.md from the worktree itself.
     context: {
       projectContext: opts.projectContext ?? null,
       testCases:
-        pack === "e2e"
+        pack === "e2e" || pack === "a11y_audit"
           ? browserCases(approvedCases(approvals))
           : pack === "verifying"
           ? withoutBrowserCases(approvedCases(approvals))
-          : pack === "video_script" || pack === "video_fix" || pack === "recording" || (pack === "implementing" && !opts.holdoutCases)
+          : pack === "video_script" || pack === "video_fix" || pack === "recording" || ((pack === "implementing" || pack === "ui_design") && !opts.holdoutCases)
           ? approvedCases(approvals)
           : pack === "build_tests"
             ? approvedScenarios(approvals)
             : [],
-      ...(pack === "implementing" && opts.scenarioTests?.length ? { scenarioTests: opts.scenarioTests } : {}),
+      ...((pack === "implementing" || pack === "ui_design") && opts.scenarioTests?.length ? { scenarioTests: opts.scenarioTests } : {}),
       ...(pack === "implementing" && opts.sweepFailures?.length ? { sweepFailures: opts.sweepFailures.slice(0, SWEEP_FAILURES_MAX).map((f) => ({ name: safe(f.name).slice(0, 60), tail: safe(f.tail.slice(-SWEEP_TAIL_CAP)).slice(-SWEEP_TAIL_CAP) })) } : {}),
       baseCommit: opts.baseCommit ?? null,
       ...((pack === "implementing" || pack === "verifying") && plan && isDocsOnly((plan.slices ?? []).flatMap((s) => (s as { touchpoints?: string[] }).touchpoints ?? [])) ? { docsOnly: true } : {}),
@@ -257,12 +282,18 @@ export function buildStageInput(opts: {
       ci: opts.ci ?? null,
       graph: opts.graph ?? null,
       ...(opts.plan ? { plan: reviewed ?? opts.plan } : {}),
+      ...(pack === "a11y_audit" ? { a11y: { level: opts.a11yLevel ?? "AA" } } : {}),
+      ...(pack === "e2e" && opts.parityPlan ? { parityPlan: opts.parityPlan } : {}),
+      ...(pack === "design_parity" && opts.parity ? { parity: opts.parity } : {}),
+      ...((pack === "design_spec" || pack === "ui_design") && opts.design ? { design: opts.design } : {}),
+      ...(pack === "implementing" && opts.delegation ? { delegation: opts.delegation } : {}),
+      ...(pack === "ui_design" && opts.helper ? { helper: opts.helper, ledger: { schema: 1 as const, slices: [{ id: opts.helper.slice.id, title: opts.helper.slice.title, status: "pending" as const, commit: null }] } } : {}),
       ...(pack === "question_council" && opts.questions ? { questions: opts.questions } : {}),
       ...(pack === "verifying" && opts.blastRadius?.length ? { blastRadius: opts.blastRadius } : {}),
       ...(pack === "verifying" && opts.coverage ? { coverage: opts.coverage } : {}),
-      ...((pack === "e2e" || pack === "recording") && opts.qaTargets ? { qaTargets: opts.qaTargets } : {}),
+      ...((pack === "e2e" || pack === "a11y_audit" || pack === "recording") && opts.qaTargets ? { qaTargets: opts.qaTargets } : {}),
       ...(VIDEO_PACKS.has(pack) && opts.video ? { video: opts.video } : {}),
-      ...((pack === "implementing" || pack === "verifying") && opts.checks ? { checks: opts.checks } : {}),
+      ...((pack === "implementing" || pack === "verifying" || pack === "ui_design") && opts.checks ? { checks: opts.checks } : {}),
       ...((pack === "reviewing" || pack === "compliance_review") && opts.review ? { review: opts.review } : {}),
       ...(pack === "compliance_review" && opts.compliance ? { compliance: opts.compliance } : {}),
       ...(pack === "docs_drift" && opts.docsDrift ? { docsDrift: opts.docsDrift } : {}),
@@ -294,6 +325,7 @@ export function buildSlackTriageInput(slack: SlackTriageContext, engine?: Engine
     attempt: 1,
     task: { id: SLACK_TRIAGE_TASK_ID, title: "Slack triage", description: "", criteria: [], repoPath: "", branch: "", source: null },
     plan: null,
+    bridge: [],
     decisions: [],
     priorFindings: [],
     context: { projectContext: null, slack },
@@ -317,6 +349,7 @@ export function buildJiraIntakeInput(jira: JiraIntakeContext, engine?: EngineId)
     attempt: 1,
     task: { id: JIRA_INTAKE_TASK_ID, title: jira.summary, description: jira.description, criteria: [], repoPath: jira.repoPath ?? "", branch: "", source: null },
     plan: null,
+    bridge: [],
     decisions: [],
     priorFindings: [],
     context: { projectContext: null, jira },
@@ -335,6 +368,8 @@ export function buildContextPackInput(pack: ContextPackId, context: PackContext,
   const issue: IssueContext | null = "issue" in context ? context.issue : null;
   const chat: ChatTriageContext | null = "chat" in context ? context.chat : null;
   const foreman: ForemanContext | null = "foreman" in context ? context.foreman : null;
+  const design: DesignContext | null = "design" in context ? context.design : null;
+  const a11y: A11yContext | null = "a11y" in context ? context.a11y : null;
   const ticketChat: TicketChatContext | null = "ticketChat" in context ? context.ticketChat : null;
   const exceptions: ChangeExceptionsContext | null = "exceptions" in context ? context.exceptions : null;
   const access: AccessReviewContext | null = "access" in context ? context.access : null;
@@ -363,11 +398,12 @@ export function buildContextPackInput(pack: ContextPackId, context: PackContext,
     pack,
     ...(engine ? { engine } : {}),
     attempt: 1,
-    task: { id: pack.replace(/_/g, "-"), title: (ticket ? `${ticket.key}: ${ticket.title}` : null) ?? (conversation ? "Conversation" : null) ?? (prLink ? prLink.pr.title : null) ?? (propose ? `Facts of ${propose.repo}` : null) ?? (foreman ? "Foreman" : null) ?? (ticketChat ? `Ticket chat: ${ticketChat.repo.name}` : null) ?? (exceptions ? `Change exceptions of ${exceptions.repo}, ${exceptions.period}` : null) ?? (access ? `Access review of ${access.org}, ${access.period}` : null) ?? (breach ? `Incident: ${breach.title}` : null) ?? (capacity ? `Capacity of ${capacity.week}` : null) ?? (status ? `Status of ${status.week}` : null) ?? (postmortem ? `Postmortem: ${postmortem.incident.title}` : null) ?? (questionnaire ? `Questionnaire for ${questionnaire.repo}` : null) ?? (vulns ? `Vulnerability alert of ${vulns.repo}` : null) ?? (release ? `Release notes of ${release.repo} ${release.tag}` : null) ?? issue?.title ?? dedup?.title ?? size?.title ?? split?.origin.title ?? plan?.brief.split("\n")[0] ?? (check ? checkTitle(check) : evidence ? evidenceTitle(evidence) : ship ? shipTitle(ship) : "Chat triage"), description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
+    task: { id: pack.replace(/_/g, "-"), title: (ticket ? `${ticket.key}: ${ticket.title}` : null) ?? (conversation ? "Conversation" : null) ?? (prLink ? prLink.pr.title : null) ?? (propose ? `Facts of ${propose.repo}` : null) ?? (foreman ? "Foreman" : null) ?? (design ? "Design spec" : null) ?? (a11y ? "Accessibility audit" : null) ?? (ticketChat ? `Ticket chat: ${ticketChat.repo.name}` : null) ?? (exceptions ? `Change exceptions of ${exceptions.repo}, ${exceptions.period}` : null) ?? (access ? `Access review of ${access.org}, ${access.period}` : null) ?? (breach ? `Incident: ${breach.title}` : null) ?? (capacity ? `Capacity of ${capacity.week}` : null) ?? (status ? `Status of ${status.week}` : null) ?? (postmortem ? `Postmortem: ${postmortem.incident.title}` : null) ?? (questionnaire ? `Questionnaire for ${questionnaire.repo}` : null) ?? (vulns ? `Vulnerability alert of ${vulns.repo}` : null) ?? (release ? `Release notes of ${release.repo} ${release.tag}` : null) ?? issue?.title ?? dedup?.title ?? size?.title ?? split?.origin.title ?? plan?.brief.split("\n")[0] ?? (check ? checkTitle(check) : evidence ? evidenceTitle(evidence) : ship ? shipTitle(ship) : "Chat triage"), description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
     plan: null,
+    bridge: [],
     decisions: [],
     priorFindings: [],
-    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}), ...(foreman ? { foreman } : {}), ...(ticketChat ? { ticketChat } : {}), ...(exceptions ? { exceptions } : {}), ...(access ? { access } : {}), ...(breach ? { breach } : {}), ...(capacity ? { capacity } : {}), ...(status ? { status } : {}), ...(postmortem ? { postmortem } : {}), ...(questionnaire ? { questionnaire } : {}), ...(vulns ? { vulns } : {}), ...(release ? { release } : {}), ...(plan ? { plan } : {}), ...(check ? { check } : {}), ...(evidence ? { evidence } : {}), ...(ship ? { ship } : {}), ...(dedup ? { dedup } : {}), ...(size ? { size } : {}), ...(split ? { split } : {}), ...(ticket ? { ticket } : {}), ...(conversation ? { conversation } : {}), ...(prLink ? { prLink } : {}), ...(propose ? { propose } : {}) },
+    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}), ...(foreman ? { foreman } : {}), ...(design ? { design } : {}), ...(a11y ? { a11y } : {}), ...(ticketChat ? { ticketChat } : {}), ...(exceptions ? { exceptions } : {}), ...(access ? { access } : {}), ...(breach ? { breach } : {}), ...(capacity ? { capacity } : {}), ...(status ? { status } : {}), ...(postmortem ? { postmortem } : {}), ...(questionnaire ? { questionnaire } : {}), ...(vulns ? { vulns } : {}), ...(release ? { release } : {}), ...(plan ? { plan } : {}), ...(check ? { check } : {}), ...(evidence ? { evidence } : {}), ...(ship ? { ship } : {}), ...(dedup ? { dedup } : {}), ...(size ? { size } : {}), ...(split ? { split } : {}), ...(ticket ? { ticket } : {}), ...(conversation ? { conversation } : {}), ...(prLink ? { prLink } : {}), ...(propose ? { propose } : {}) },
     limits: { maxTurns, timeoutMs },
     env: { LUNA_FACTORY: "1" },
   };

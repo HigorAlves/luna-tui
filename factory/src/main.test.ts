@@ -168,6 +168,39 @@ describe("factory main (dry run)", () => {
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });
 
+  it("a11y_audit: drives the browser with qa-axe, renders the level, scenarios and targets, and leaves a valid result", () => {
+    const task = { id: "t1", title: "Checkout page", description: "d", criteria: ["pay works"], repoPath: "/r/a", branch: "task/t1", source: null };
+    const testCases = [{ id: "S1", title: "pay", criterion: null, criterion_ref: "C1", approach: "a", given: "a cart", when: "I pay", then: "I see the receipt", layer: "e2e" }];
+    const qaTargets = [{ name: "app", baseUrl: "http://luna-app:4000", credential: null }];
+    const { code, stdout, out, result } = run(stageInput("a11y_audit", { task, plan: null, context: { projectContext: null, a11y: { level: "AA" }, testCases, qaTargets } }));
+    expect(code).toBe(0);
+    const prompt = readFileSync(join(out, "prompt.md"), "utf8");
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("WCAG 2.2 AA");
+    expect(prompt).toContain("app: http://luna-app:4000");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: "a11y-auditor", effort: "medium" });
+    expect(options.allowedTools).toContain("Bash(qa-axe:*)");
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+  });
+
+  it("design_spec: reads the repo read-only with the bridged tools of its grants, renders the design reference and leaves a valid result", () => {
+    const task = { id: "t1", title: "Checkout page", description: "Build the checkout from https://www.figma.com/design/AbCdEf0123456789/Shop?node-id=12-34", criteria: ["the pay button matches the design"], repoPath: "/r/a", branch: "task/t1", source: null };
+    const design = { refs: [{ fileKey: "AbCdEf0123456789", nodeIds: ["12:34"], page: null, from: "issue" }] };
+    const bridge = [{ server: "figma", tool: "get_design_context", name: "figma_get_design_context", description: "d", inputSchema: { type: "object", properties: { nodeId: { type: "string" } } } }];
+    const { code, stdout, out, result } = run(stageInput("design_spec", { task, plan: null, bridge, context: { projectContext: null, design } }));
+    expect(code).toBe(0);
+    const prompt = readFileSync(join(out, "prompt.md"), "utf8");
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("`design-spec-writer` role running the `design_spec` stage");
+    expect(prompt).toContain("file AbCdEf0123456789 · nodes 12:34 · from issue");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: "design-spec-writer", model: resolveEngine("claude:sonnet").modelId, effort: "medium" });
+    expect(options.allowedTools).toContain("mcp__luna__figma_get_design_context");
+    expect(options.allowedTools).not.toContain("Write");
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+  });
+
   it("ticket_chat: runs read-only over the checkout, renders the talk as data and leaves a valid result", () => {
     const task = { id: "ticket-chat", title: "Ticket chat for luna-tui", description: "", criteria: [], repoPath: "", branch: "", source: null };
     const ticketChat = { repo: { name: "luna-tui", path: "/work" }, message: "add csv export", history: [{ who: "person", text: "hi" }], notes: "", draft: null };
@@ -405,6 +438,11 @@ describe("factory main (dry run)", () => {
     expect(run(stageInput("triage")).result.run).toMatchObject({ effort: PACKS.triage.effort });
   });
 
+  it("design_parity on a blind engine: refused before any model call", () => {
+    const { code, result } = run(stageInput("design_parity", { engine: "openai:sol" }));
+    expect(code).toBe(0);
+    expect(result).toMatchObject({ ok: false, outcome: "fail", error: "invalid stage input: openai:sol cannot read images, which design_parity needs" });
+  });
   it("fails the stage as invalid input on an effort the engine does not support", () => {
     // A decision engine supports no effort.
     const { code, result } = run(stageInput("triage", { engine: "jev", effort: "low" }));

@@ -1,0 +1,44 @@
+{
+  "schema": 3,
+  "stage": "design_spec",
+  "pack": "design_spec",
+  "attempt": 1,
+  "task": {
+    "id": "eval-missing-states",
+    "title": "Build the cart summary panel",
+    "description": "The cart summary panel follows the Figma frame. Show the items, the subtotal and the checkout button.",
+    "criteria": [
+      "The summary panel matches the Figma frame",
+      "The checkout button has hover, empty and error behaviour"
+    ],
+    "repoPath": "fixtures/golden-web",
+    "branch": "task/eval-missing-states",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "bridge": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "design": {
+      "refs": [
+        {
+          "fileKey": "Zk3NwB8dYe5Hc",
+          "nodeIds": [
+            "21:10"
+          ],
+          "page": null,
+          "from": "issue"
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

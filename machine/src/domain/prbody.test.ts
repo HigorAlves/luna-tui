@@ -172,3 +172,67 @@ describe("a stacked card's PR body", () => {
     expect(buildPr({ task, plan: null, repoSlug: "o/a", extra: { stack: { number: "12; rm" as never } } }).body).not.toContain("Stacked on");
   });
 });
+
+describe("Design & accessibility (RFC 0013)", () => {
+  const frame = (over: Record<string, unknown>) => ({ frame: "F1", name: "Checkout", node: "12:34", scenario: "S1", viewport: "desktop", state: "default", status: "compared", capture: null, render: null, diff: null, pair: "/s/p.png", diffRatio: 0.03, ...over });
+  const design = {
+    wcag: "AA",
+    a11y: { mode: "gate", counts: { blocker: 0, should_fix: 1, nit: 2, waived: 0 } },
+    parity: {
+      ran: true,
+      runId: "r1-parity",
+      confidence: 0.82,
+      bar: 0.75,
+      designInput: "complete",
+      summary: "",
+      counts: { blocker: 0, should_fix: 1, nit: 0, waived: 1 },
+      frames: [frame({ name: "Checkout <!-- luna:pr:end -->" }), frame({ state: "hover", status: "not_compared", reason: "no capture", pair: null, diffRatio: null })],
+    },
+    findings: [{ path: "", line: 0, severity: "should_fix", title: "radius", body: "b", confidence: 0.8, category: "design", design: { source: "parity", frame: "F1", element: "button", viewport: "desktop", state: "default", kind: "radius" } }],
+    gate: { fires: true, why: ["open_findings"] },
+  };
+  const extra = (over: Record<string, unknown> = {}): PrExtra => ({ design: { report: design as never, kept: 1, published: true, ...over } });
+  const input = { task: task(), plan: null, repoSlug: "acme/app" };
+
+  it("adds the block with the level, the findings by level and the pairs, naming the images' place", () => {
+    const { body } = buildPr({ ...input, extra: extra() });
+    expect(body).toContain("## Design & accessibility");
+    expect(body).toContain("WCAG 2.2 AA");
+    expect(body).toMatch(/accessibility: 0 blocker, 1 should_fix, 2 nit/);
+    expect(body).toMatch(/parity: 0 blocker, 1 should_fix, 0 nit open · 1 waived · 1 kept at sign-off · 1 of 2 frames compared/);
+    expect(body).toContain("S1 desktop/default — Checkout: compared, 1 should_fix");
+    expect(body).toContain("S1 desktop/hover — Checkout: not compared (no capture)");
+    expect(body).toContain("images in the Evidence section");
+    expect(body.match(/<!-- luna:pr:end -->/g)).toHaveLength(1);
+  });
+
+  it("says the pairs are on the board only when they are not published", () => {
+    const { body } = buildPr({ ...input, extra: extra({ published: false }) });
+    expect(body).toContain("pairs on the board only");
+    expect(body).not.toContain("images in the Evidence section");
+  });
+
+  it("puts the block into a template that has no heading for it, before the trailers", () => {
+    const { body } = buildPr({ ...input, extra: { ...extra(), template: "## Summary\n\n## Testing\n" } });
+    expect(body).toContain("## Design & accessibility");
+  });
+
+  it("fills a template's own design heading instead of adding a second one", () => {
+    const { body } = buildPr({ ...input, extra: { ...extra(), template: "## Summary\n\n## Design / accessibility\n" } });
+    expect(body.match(/Design/g)?.length).toBeGreaterThan(0);
+    expect(body).toContain("WCAG 2.2 AA");
+    expect(body.match(/^##\s.*(design|accessib)/gim)).toHaveLength(1);
+  });
+
+  it("makes every foreign string safe: a forged marker, a token, an at-mention", () => {
+    const token = "gh" + "p_" + "a".repeat(36);
+    const hostile = { ...design, parity: { ...design.parity, frames: [frame({ name: `Pay ${token} @someone`, reason: "x" })] } };
+    const { body } = buildPr({ ...input, extra: { design: { report: hostile as never, kept: 0, published: true } } });
+    expect(body).not.toContain(token);
+    expect(body).not.toContain("@someone");
+  });
+
+  it("leaves the body as it was without a design report", () => {
+    expect(buildPr({ ...input, extra: {} }).body).toBe(buildPr(input).body);
+  });
+});

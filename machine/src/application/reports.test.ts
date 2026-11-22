@@ -236,6 +236,78 @@ describe("buildProgressOf", () => {
   });
 });
 
+describe("buildProgressOf: the ui-designer helper (RFC 0013, phase 5)", () => {
+  const limits = { max_iterations: 15, max_tokens: 2_000_000, max_minutes: 90, backoff_minutes: [1, 30] as [number, number], regression_full_suite_minutes: 10 };
+  const runs = [run("implementing", 1, { status: "running", endedAt: null as never })];
+  const started = (slice: number, attempt = 1) => event("build.helper_started", { slice, base: "b".repeat(40), branch: `refs/luna/helper/t/${slice}`, engine: "claude:sonnet", attempt, locks: { helper: [], implementer: [] } });
+  const progress = (events: EventRow[]) => buildProgressOf(runs, events, limits, new Date("2026-11-01T10:05:00Z"))!;
+
+  it("has no helper and no owner for a card the helper never touched, whatever the ledger rows say", () => {
+    const p = progress([event("stage.slice.committed", { id: 1, owner: "ui-designer" })]);
+    expect(p.helper).toBeNull();
+    expect(p.slices).toEqual([{ slice: 1, owner: "implementer" }]);
+  });
+
+  it("shows the running helper with its slice, state, attempt, branch and start, and the slice as the ui-designer's", () => {
+    const p = progress([event("stage.slice.red", { id: 1 }), started(2)]);
+    expect(p.helper).toEqual({ slice: 2, state: "running", attempt: 1, branch: "refs/luna/helper/t/2", startedAt: "2026-11-01T10:00:00.000Z" });
+    expect(p.slices).toEqual([{ slice: 1, owner: "implementer" }, { slice: 2, owner: "ui-designer" }]);
+  });
+
+  it("owns a picked slice by the machine's picked row, with its shas, and ignores a forged ledger owner", () => {
+    const picked = ["c".repeat(40), "d".repeat(40)];
+    const p = progress([started(2), event("build.helper_ended", { slice: 2, attempt: 1, outcome: "pass", tokens: 5, minutes: 1 }), event("build.helper_picked", { slice: 2, base: "b".repeat(40), helperTip: "e".repeat(40), onto: "f".repeat(40), picked, tip: "d".repeat(40) }), event("stage.slice.committed", { id: 1, owner: "ui-designer" })]);
+    expect(p.helper).toMatchObject({ slice: 2, state: "committed", attempt: 1 });
+    expect(p.slices).toEqual([{ slice: 1, owner: "implementer" }, { slice: 2, owner: "ui-designer", picked }]);
+  });
+
+  it.each([
+    ["refused", [event("build.helper_refused", { slice: 2, reason: "r" })]],
+    ["failed", [event("build.helper_ended", { slice: 2, attempt: 1, outcome: "fail", tokens: null, minutes: 1 })]],
+    ["cancelled", [event("build.helper_ended", { slice: 2, attempt: 1, outcome: "cancelled", tokens: null, minutes: 1 })]],
+    ["merge_conflict", [event("build.helper_conflict", { slice: 2, attempt: 1 }), started(2, 2), event("build.helper_conflict", { slice: 2, attempt: 2 })]],
+  ] as const)("shows %s and gives the slice back to the implementer", (state, rest) => {
+    const p = progress([started(2), ...rest]);
+    expect(p.helper?.state).toBe(state);
+    expect(p.slices).toContainEqual({ slice: 2, owner: "implementer" });
+  });
+
+  it("shows a pass that is not picked yet as returned, and a first conflict with no re-run yet as conflict_rerun, both still the ui-designer's", () => {
+    const ended = event("build.helper_ended", { slice: 2, attempt: 1, outcome: "pass", tokens: 1, minutes: 1 });
+    expect(progress([started(2), ended]).helper?.state).toBe("returned");
+    const rerun = progress([started(2), ended, event("build.helper_conflict", { slice: 2, attempt: 1 })]);
+    expect(rerun.helper?.state).toBe("conflict_rerun");
+    expect(rerun.slices).toContainEqual({ slice: 2, owner: "ui-designer" });
+  });
+
+  it("follows the re-run after a first conflict, which writes no start row: its end tells the state, and the attempt is 2", () => {
+    const ended = (attempt: number, outcome: string) => event("build.helper_ended", { slice: 2, attempt, outcome, tokens: null, minutes: 1 });
+    const conflict = event("build.helper_conflict", { slice: 2, attempt: 1 });
+    expect(progress([started(2), ended(1, "pass"), conflict, ended(2, "pass")]).helper).toMatchObject({ state: "returned", attempt: 2 });
+    expect(progress([started(2), ended(1, "pass"), conflict, ended(2, "fail")]).helper).toMatchObject({ state: "failed", attempt: 2 });
+    expect(progress([started(2), ended(1, "pass"), conflict]).helper).toMatchObject({ state: "conflict_rerun", attempt: 2 });
+  });
+
+  it("follows the second attempt of a re-run", () => {
+    const p = progress([started(2), event("build.helper_conflict", { slice: 2, attempt: 1 }), started(2, 2)]);
+    expect(p.helper).toMatchObject({ slice: 2, state: "running", attempt: 2 });
+  });
+});
+
+describe("buildReportOf: picked slices", () => {
+  const runs = [run("implementing", 1, { outputCommit: "abc123" })];
+  it("lists each picked slice with its shas, and nothing for a card with no pick", () => {
+    expect(buildReportOf(task, runs, [finished("implementing", 1, "passed")])).not.toHaveProperty("picked");
+    const events = [event("build.helper_picked", { slice: 2, base: "b".repeat(40), helperTip: "e".repeat(40), onto: "f".repeat(40), picked: ["c".repeat(40), "d".repeat(40)], tip: "d".repeat(40) }), finished("implementing", 1, "passed")];
+    expect(buildReportOf(task, runs, events)?.picked).toEqual([{ slice: 2, shas: ["c".repeat(40), "d".repeat(40)], tip: "d".repeat(40) }]);
+  });
+
+  it("drops a picked row whose fields are malformed", () => {
+    const events = [event("build.helper_picked", { slice: 2, picked: ["not a sha"], tip: 5 }), finished("implementing", 1, "passed")];
+    expect(buildReportOf(task, runs, events)).not.toHaveProperty("picked");
+  });
+});
+
 describe("the environment in the reports", () => {
   it("puts the hash Build recorded in the Build Report, and null when none was", () => {
     const runs = [run("implementing", 1, { outputCommit: "abc" })];
@@ -282,5 +354,47 @@ describe("prFactsOf: what the draft PR's body is fed after Build, Verify and the
     const facts = prFactsOf(task, runs, events);
     expect(report?.tests.map((t) => t.scenario)).toEqual(["S1", "S2"]);
     expect([...facts.tests]).toEqual([["S1", "src/export.test.ts"]]);
+  });
+});
+
+describe("the design block (RFC 0013): the last browser run's report, with the sign-off's waivers", () => {
+  const counts = (over: Record<string, number> = {}) => ({ blocker: 0, should_fix: 1, nit: 0, waived: 0, ...over });
+  const parityFinding = (resolution?: Record<string, unknown>) => ({ path: "", line: 0, severity: "should_fix", title: "radius 8 to 4", body: "b", confidence: 0.8, category: "design", design: { source: "parity", frame: "F1", element: "button", viewport: "1440x900", state: "default", kind: "radius" }, ...(resolution ? { resolution } : {}) });
+  const design = (over: { runId?: string | null; waived?: boolean } = {}) => ({
+    wcag: "AA",
+    a11y: null,
+    parity: { ran: true, runId: over.runId === undefined ? "e1-parity" : over.runId, confidence: 0.8, bar: 0.75, designInput: "complete", summary: "", counts: over.waived ? counts({ should_fix: 0, waived: 1 }) : counts(), frames: [] },
+    findings: [parityFinding(over.waived ? { status: "waived", by: "person" } : undefined)],
+    gate: { fires: true, why: ["open_findings"] },
+  });
+  const gate = (decision: string | null, requested: Record<string, unknown>) => ({ id: "g1", taskId: "t", kind: "awaiting_design", requested, decision, reason: null, response: null, createdAt: new Date(), decidedAt: decision ? new Date() : null }) as never;
+  const runs = [run("verifying", 1), run("e2e", 1), run("ci_watch", 1)];
+
+  it("takes the last e2e finish's design block", () => {
+    const events = [finished("verifying", 1, "passed"), finished("e2e", 1, "passed", { design: design() })];
+    expect(verifyReportOf(task, runs, events)?.design).toMatchObject({ wcag: "AA", parity: { counts: counts() } });
+    expect(prFactsOf(task, runs, events).design).toMatchObject({ kept: 0, report: { wcag: "AA" } });
+  });
+
+  it("has none when the browser run left none, and none for a block that does not parse", () => {
+    expect(verifyReportOf(task, runs, [finished("verifying", 1, "passed"), finished("e2e", 1, "passed", {})])?.design).toBeUndefined();
+    expect(prFactsOf(task, runs, [finished("e2e", 1, "passed", { design: { wcag: "AA" } })]).design).toBeUndefined();
+  });
+
+  it("applies the waivers of the sign-off that belongs to that run, and counts what a person kept when approving", () => {
+    const events = [finished("verifying", 1, "passed"), finished("e2e", 1, "passed", { design: design() })];
+    const waived = [gate("approved", { design: design({ waived: true }) })];
+    expect(verifyReportOf(task, runs, events, waived)?.design?.parity?.counts).toEqual(counts({ should_fix: 0, waived: 1 }));
+    expect(prFactsOf(task, runs, events, waived).design).toMatchObject({ kept: 0, report: { parity: { counts: counts({ should_fix: 0, waived: 1 }) } } });
+    const kept = [gate("approved", { design: design() })];
+    expect(prFactsOf(task, runs, events, kept).design?.kept).toBe(1);
+    // A gate still open decided nothing: nothing is kept.
+    expect(prFactsOf(task, runs, events, [gate(null, { design: design() })]).design?.kept).toBe(0);
+  });
+
+  it("ignores the waivers of an earlier run's sign-off after a send-back and a new browser run", () => {
+    const events = [finished("e2e", 1, "passed", { design: design() }), finished("e2e", 2, "passed", { design: design({ runId: "e2-parity" }) })];
+    const old = [gate("sent_back", { design: design({ waived: true }) })];
+    expect(prFactsOf(task, runs, events, old).design?.report.parity?.counts).toEqual(counts());
   });
 });

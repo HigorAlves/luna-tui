@@ -93,6 +93,24 @@ describe("finish", () => {
     expect(StageOutput.safeParse(result).error).toBeUndefined();
   });
 
+  it("leaves an audit's own findings in the answer: they are not review findings, and the envelope would refuse them", () => {
+    const dir = outDir();
+    const finding = { criterion: "1.4.3", level: "AA", source: "axe", rule: "color-contrast", impact: "serious", page: "/", state: "default", selector: "a", summary: "s", evidence: [], fix: null, confidence: 1 };
+    const result = finish(dir, PACKS.a11y_audit, { ...EMPTY_RUN, ok: true, structured: { summary: "s", pages: [], findings: [finding] } }, state());
+    expect(result.findings).toEqual([]);
+    expect(result.answer).toMatchObject({ findings: [finding] });
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+  });
+
+  it("leaves the parity reviewer's findings in the answer: they name a frame and a node, not a path and a line", () => {
+    const dir = outDir();
+    const finding = { level: "should_fix", kind: "token", frame: "1:2", node: "12:34", element: "button.pay", viewport: "desktop", state: "default", expected: "#1A73E8", actual: "#1B74E9", title: "t", why: "w", confidence: 0.9 };
+    const result = finish(dir, PACKS.design_parity, { ...EMPTY_RUN, ok: true, structured: { summary: "s", frames: [], findings: [finding], designInput: "complete", confidence: 0.9 } }, state());
+    expect(result.findings).toEqual([]);
+    expect(result.answer).toMatchObject({ findings: [finding] });
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+  });
+
   it("writes rules.md from rulesMarkdown and indexes it as a rules artifact", () => {
     const dir = outDir();
     const result = finish(dir, PACKS.reviewing_memory, { ...EMPTY_RUN, ok: true, structured: { summary: "s", rulesMarkdown: "- a rule" } }, state());

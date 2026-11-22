@@ -28,6 +28,8 @@ Slices (in order; seed the ledger from these):
 
 {{context.sweepFailures}}
 
+{{context.delegation}}
+
 {{plan.fallback}}
 
 ## Decisions so far

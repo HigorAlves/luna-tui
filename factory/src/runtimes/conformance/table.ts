@@ -5,7 +5,7 @@
 // settles it, and the same checks apply to every runtime. A new runtime, or a major SDK bump, is
 // done when the table passes.
 import { type AgentPack, type AgentRole, type EconomyInput, type EngineId, LOOP_STUCK, type LunaTool, type Pack, PACKS, type RunEvent, StageInput, helpersOn, resolveEngine } from "@hardness/contracts";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +24,7 @@ export type ScriptStep =
   | { call: "bash"; command: string; say?: string; fails?: string }
   | { call: "luna"; tool: LunaTool; args: Record<string, unknown>; say?: string }
   | { call: "delegate"; helper: AgentRole; message: string; say?: string }
+  | { call: "read"; path: string; say?: string }
   | { answer: Record<string, unknown>; as?: "structured" | "text"; echo?: boolean }
   | { rateLimit: { resetsAt?: number } }
   | { fail: string }
@@ -44,13 +45,15 @@ export interface Scenario {
   name: string;
   /** What the runtime must be able to do for the row to apply. */
   needs?: "tools" | "text" | "delegate" | "economy";
+  /** The row is about an image the model is shown, so a runtime with an engine that sees runs it with vision on. */
+  vision?: boolean;
   /** What the machine's token economy hands the run, when the row is about it. */
   economy?: EconomyInput;
   /** How a helper the row delegates to ends; it answers when the row does not say. */
   child?: ChildPlay;
   /** The stage's time limit, when the row is about it. */
   timeoutMs?: number;
-  script(t: TablePack): ScriptStep[];
+  script(t: TablePack, dirs: { design: string }): ScriptStep[];
   check(result: ConformanceResult, can: RuntimeCapabilities, t: TablePack): void;
 }
 
@@ -108,6 +111,8 @@ export interface RuntimeCapabilities {
   /** The runtime reads each tool result into an observation and runs the loop guard on it (the
    *  token economy, RFC 0007). */
   economy: boolean;
+  /** The fake sees what the model is handed, so a check can read an image part in a tool result. */
+  imageParts: boolean;
 }
 
 /** The helper the table's pack may delegate to: on a runtime that is neither of the agent
@@ -123,6 +128,8 @@ export const RESETS_AT = 1_900_000_000;
 const DONE = { kind: "done", summary: "did it" };
 export const AGENT_TABLE: TablePack = { pack: PACK, valid: DONE, expected: DONE, off: { kind: "maybe", summary: "x" } };
 const TIMEOUT_MS = 2_000;
+/** The smallest valid PNG: one transparent pixel. */
+export const PNG_1X1 = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
 
 const LOOPING = { mode: "on", judge: false, envelope: 8, judgeConfidence: 0.7, redirects: 1, backstopMult: 2.5 } as const;
 const FAILING_TEXT = "AssertionError: expected 1 to be 2";
@@ -306,6 +313,18 @@ export const SCENARIOS: Scenario[] = [
       expect(written).toMatchObject({ ok: false, rateLimited: false, error: expect.stringMatching(new RegExp(`^${LOOP_STUCK}`)) });
     },
   },
+  {
+    name: "an image under an image mount is read, and shown to a model that sees",
+    needs: "tools",
+    vision: true,
+    script: (t, dirs) => [{ call: "read", path: join(dirs.design, "0-0.png") }, { answer: t.valid, echo: true }],
+    check: ({ run, events, out }, can) => {
+      expect(run.ok).toBe(true);
+      expect(events.some((e) => e.kind === "tool_call" && /read/i.test(e.payload.tool) && e.payload.allowed === true)).toBe(true);
+      if (can.imageParts) expect(run.structured?.summary).toMatch(/"type":"file"[^}]*"mediaType":"image\/png"|"mediaType":"image\/png"[^}]*"type":"file"/);
+      expect(existsSync(join(dirname(out), "work", ".eve"))).toBe(false);
+    },
+  },
 ];
 
 /** The golden run: text, a progress step, a refused and an allowed command, a ledger call and an
@@ -324,7 +343,7 @@ export const masked = (lines: string[]): string[] => lines.map((line) => line.re
 
 const FACTORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
-const stageInput = (pack: Pack, engine: EngineId, timeoutMs: number, economy?: EconomyInput): StageInput =>
+export const stageInput = (pack: Pack, engine: EngineId, timeoutMs: number, economy?: EconomyInput): StageInput =>
   StageInput.parse({
     schema: 3,
     stage: pack.id,
@@ -347,7 +366,9 @@ export async function runScenario(runtime: ToldRuntime, engine: EngineId, root: 
   const out = join(root, "out");
   const scratch = join(root, "scratch");
   const codexHome = join(root, "codex");
-  for (const dir of [work, out, scratch, codexHome]) mkdirSync(dir, { recursive: true });
+  const design = join(root, "design");
+  for (const dir of [work, out, scratch, codexHome, design]) mkdirSync(dir, { recursive: true });
+  writeFileSync(join(design, "0-0.png"), PNG_1X1);
   if (child !== "no-credential") writeFileSync(join(codexHome, "auth.json"), "{}");
   const transcript: string[] = [];
   const events: RunEvent[] = [];
@@ -361,7 +382,7 @@ export async function runScenario(runtime: ToldRuntime, engine: EngineId, root: 
   const started = Date.now();
   // As main.ts wires it: a helper on a runtime this one does not run is a child through `delegate`.
   const given: RunContext[] = [];
-  const paths = { factoryRoot: FACTORY_ROOT, work, out, input: root, scratch };
+  const paths = { factoryRoot: FACTORY_ROOT, work, out, input: root, scratch, images: [design] };
   const helperRuntime = fakeChild(child, given);
   const delegating = delegationFor(runtime.id, {
     pack: t.pack,
@@ -383,7 +404,7 @@ export async function runScenario(runtime: ToldRuntime, engine: EngineId, root: 
 export function conformance(
   name: string,
   engine: EngineId,
-  runtimeFor: (script: ScriptStep[]) => ToldRuntime | Promise<ToldRuntime>,
+  runtimeFor: (script: ScriptStep[], row: { vision: boolean }) => ToldRuntime | Promise<ToldRuntime>,
   can: RuntimeCapabilities,
   { timeoutMs = 5_000, table = AGENT_TABLE }: { timeoutMs?: number; table?: TablePack } = {},
 ): void {
@@ -392,7 +413,7 @@ export function conformance(
     it.each(rows)("$name", async (scenario) => {
       const root = mkdtempSync(join(tmpdir(), "conformance-"));
       try {
-        const result = await runScenario(await runtimeFor(scenario.script(table)), engine, root, table, scenario.timeoutMs, scenario.child, scenario.economy);
+        const result = await runScenario(await runtimeFor(scenario.script(table, { design: join(root, "design") }), { vision: scenario.vision === true }), engine, root, table, scenario.timeoutMs, scenario.child, scenario.economy);
         scenario.check(result, can, table);
       } finally {
         rmSync(root, { recursive: true, force: true });

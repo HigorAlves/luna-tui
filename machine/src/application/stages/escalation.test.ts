@@ -15,6 +15,14 @@ describe("decideEscalation", () => {
     expect(asked).toEqual([]);
   });
 
+  it("lets a fact decide merge_conflict and design_budget, as a second scope red is: no model asked, the agent's own word kept beside it", async () => {
+    const asked: unknown[] = [];
+    const decide: Decide = async (...args) => (asked.push(args), choice("too_complex", 0.99));
+    expect(await decideEscalation({ ...base, decide, agent: { reason: "too_complex" }, facts: { mergeConflict: true } })).toMatchObject({ reason: "merge_conflict", source: "fact", confidence: 1, agentReason: "too_complex" });
+    expect(await decideEscalation({ ...base, decide, facts: { designBudget: true } })).toMatchObject({ reason: "design_budget", source: "fact", confidence: 1 });
+    expect(asked).toEqual([]);
+  });
+
   it("tells the decision the loop guard stopped the run, as one line of facts", async () => {
     const asked: Array<Record<string, any>> = [];
     const decide: Decide = async (_p, check) => (asked.push(check as never), choice("too_complex", 0.9));

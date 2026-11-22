@@ -32,7 +32,7 @@
 // that one is per repo (luna.yaml), and a call has no repo.
 import type { EgressPolicy } from "./egress-policy.ts";
 import type { PolicyStore } from "./policy.ts";
-import { type CredentialOwner, type DecisionRecord, type EngineId, type FactoryConfig, PACKS, type PackId, type RunInfo, type RunInput, type RunResult, credentialOwner, resolveEngine } from "@hardness/contracts";
+import { type CredentialOwner, type DecisionRecord, type EngineId, type FactoryConfig, PACKS, type PackId, type QaTarget, type RunInfo, type RunInput, type RunResult, credentialOwner, resolveEngine } from "@hardness/contracts";
 import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -50,7 +50,11 @@ import { buildContextPackInput } from "../domain/stage-input.ts";
 import { type RunFacts, runFacts } from "../domain/task.ts";
 import { applyPolicy } from "@hardness/contracts";
 import type { DecisionAppender } from "./decision-log.ts";
-import { outputError, runPackOnce } from "./stages/run-once.ts";
+import type { Mcp } from "./mcp.ts";
+import type { SecretStore } from "./secrets.ts";
+import { type McpCallRow, bridgeFor } from "./stages/design-bridge.ts";
+import { targetHosts } from "./stages/pack-runner.ts";
+import { outputError, runPackOnce, type OneRun } from "./stages/run-once.ts";
 import { currentTask } from "./task-scope.ts";
 import { type Telemetry, noTelemetry } from "./telemetry.ts";
 
@@ -130,6 +134,10 @@ export interface RunOptions {
   own?: boolean;
   /** A repository the run reads: a throwaway copy of its tracked files (`PackRunsDeps.copyRepo`) is mounted read-only in place of the empty /work, never the folder itself. Only the machine's own routes set it (`POST /ticket-chat`, after checking the repo is one it knows); `POST /runs` cannot, and the pack must be an agent pack that may read. */
   readRepo?: string;
+  /** Hands the run its pack's bridged design tools (RFC 0013). Only the machine's own design routes set it. The caller holds the machine's API token, so it is the operator: the grant rule treats it as trusted (D5). The sandbox and the prompt still treat every input and every bridged result as untrusted data. */
+  bridge?: { repoPath: string };
+  /** Runs a browser pack on one of the repository's declared QA targets: the QA image, the target's hosts on the egress list, and the credential its `env:` names, by value only in the container's environment. */
+  qa?: { repoPath: string; target: QaTarget };
 }
 
 export interface PackRunsPort {
@@ -159,6 +167,13 @@ export interface PackRunsDeps {
   now?: () => Date;
   /** Makes `dest` a copy of the tracked files of the repository `repo`, for a run's `readRepo`; absent, such a run fails (the live folder is never mounted). */
   copyRepo?: (repo: string, dest: string) => Promise<void>;
+  /** The MCP client of a run with `bridge` (one per run, closed when it ends), and what the machine's `mcp.yaml` says of untrusted callers. */
+  mcpFor?: () => Mcp;
+  mcpUntrusted?: "allow" | "deny";
+  /** The QA image a run with `qa` needs; absent, such a run fails. */
+  qaImage?: string;
+  /** Where a QA target's credential is read from; only a run with `qa` reads it. (`secrets` above is for redaction.) */
+  qaSecrets?: Pick<SecretStore, "load">;
   /** Calls at once; defaults to PACK_RUNS_MAX. */
   max?: number;
   /** Calls that may wait; defaults to PACK_RUNS_QUEUE. */
@@ -266,7 +281,7 @@ export class PackRuns implements PackRunsPort {
         const mayMove = request.engine === undefined && PACKS[pack].kind === "decision" && fallbackCandidates(PACKS[pack], [...tried, engine]).length > 0;
         const loginWaitMs = mayMove ? LOGIN_BUSY_WAIT_MS : LOGIN_WAIT_MS[pack];
         try {
-          return await this.once(pack, context, engine, client, stop, movedFrom, { taskId: request.taskId, stage: request.stage, own: options.own === true, ...(options.readRepo !== undefined ? { readRepo: options.readRepo } : {}), ...(loginWaitMs !== undefined ? { credentialWaitMs: loginWaitMs } : {}) });
+          return await this.once(pack, context, engine, client, stop, movedFrom, { taskId: request.taskId, stage: request.stage, own: options.own === true, ...(options.readRepo !== undefined ? { readRepo: options.readRepo } : {}), ...(options.bridge ? { bridge: options.bridge } : {}), ...(options.qa ? { qa: options.qa } : {}), ...(loginWaitMs !== undefined ? { credentialWaitMs: loginWaitMs } : {}) });
         } catch (thrown) {
           if (thrown instanceof RunCredentialBusyError && mayMove) {
             tried.push(engine);
@@ -347,7 +362,7 @@ export class PackRuns implements PackRunsPort {
   }
 
   /** One run of the pack on one engine, in a place already taken: its answer, or the error that ended it. */
-  private async once(pack: ContextPackId, context: PackContext, engine: EngineId, client: string | null, signal?: AbortSignal, movedFrom: EngineId | null = null, origin: { taskId?: string; stage?: string; own?: boolean; readRepo?: string; credentialWaitMs?: number } = {}): Promise<RunResult> {
+  private async once(pack: ContextPackId, context: PackContext, engine: EngineId, client: string | null, signal?: AbortSignal, movedFrom: EngineId | null = null, origin: { taskId?: string; stage?: string; own?: boolean; readRepo?: string; bridge?: { repoPath: string }; qa?: { repoPath: string; target: QaTarget }; credentialWaitMs?: number } = {}): Promise<RunResult> {
     const startedAt = this.now();
     const t0 = Date.now();
     const policy = await this.learningOf(origin.taskId);
@@ -373,8 +388,9 @@ export class PackRuns implements PackRunsPort {
         await this.deps.copyRepo(origin.readRepo, work);
       }
       const input = buildContextPackInput(pack, context, engine);
+      const extras = await this.designExtras(pack, origin, runDir);
       const run = await runPackOnce(
-        { name: `hardness-run-${pack.replace(/_/g, "-")}-${runDir.slice(-12)}`, image: this.deps.image, runDir, worktree: work, input, engine, labels: { luna: "run" }, extraEnv: mode === "full" ? span.childEnv() : {}, ...(origin.credentialWaitMs !== undefined ? { credentialWaitMs: origin.credentialWaitMs } : {}), signal },
+        { ...extras, name: `hardness-run-${pack.replace(/_/g, "-")}-${runDir.slice(-12)}`, image: extras.image ?? this.deps.image, runDir, worktree: work, input, engine, labels: { luna: "run" }, extraEnv: mode === "full" ? span.childEnv() : {}, ...(origin.credentialWaitMs !== undefined ? { credentialWaitMs: origin.credentialWaitMs } : {}), signal },
         { credentials: this.deps.credentials, sandbox: this.deps.sandbox, ...(this.deps.policies ? { policies: this.deps.policies } : {}), ...(this.deps.egress ? { egress: this.deps.egress } : {}) },
       );
       if (run.error !== null) failure = signal?.aborted ? new RunAbortedError("the client left: the run was stopped") : run.credentialBusy ? new RunCredentialBusyError(run.error) : new RunFailedError(run.error);
@@ -435,6 +451,43 @@ export class PackRuns implements PackRunsPort {
     this.log(failure ? `run: ${pack} on ${engine}${client ? ` for ${client}` : ""} failed: ${failure.message}` : `run: ${pack} on ${engine}${client ? ` for ${client}` : ""}, ${usage.turns} turn(s)${cost}`);
     if (failure) throw failure;
     return { answer: answer!, usage, ...(recordId ? { recordId } : {}) };
+  }
+
+  /** The run's bridged tools and its QA target, for a call that asks for them (the design routes); nothing for any other. Never throws past its own failures: they are the run's. */
+  private async designExtras(pack: ContextPackId, origin: { bridge?: { repoPath: string }; qa?: { repoPath: string; target: QaTarget } }, runDir: string): Promise<Partial<OneRun>> {
+    const extras: Partial<OneRun> = {};
+    if (origin.qa) {
+      const { repoPath, target } = origin.qa;
+      if (!this.deps.qaImage) throw new Error("this machine has no QA image (pnpm runner-qa:build): the audit cannot run");
+      const names = target.credential?.startsWith("env:") ? [target.credential.slice(4)] : [];
+      if (names.length > 0) {
+        if (!this.deps.qaSecrets) throw new Error(`${names[0]} is not set for this repository: this machine has no secrets store`);
+        const loaded = await this.deps.qaSecrets.load(repoPath, names);
+        if (loaded.missing.length > 0) throw new Error(`${loaded.missing.map((m) => m.name).join(", ")} is not set for this repository`);
+        extras.secrets = loaded.values;
+      }
+      extras.image = this.deps.qaImage;
+      extras.egressTargets = targetHosts([target]);
+    }
+    const grants = PACKS[pack].kind === "agent" ? PACKS[pack].access.bridge : [];
+    if (origin.bridge && grants.length > 0 && this.deps.mcpFor) {
+      const mcp = this.deps.mcpFor();
+      try {
+        const repoDesign = (await this.deps.policies?.for(origin.bridge.repoPath))?.design;
+        // An on-demand call comes from the operator's own board or notch, so the grant rule sees it as trusted (D5); nothing else about the run is.
+        const { tools } = await bridgeFor({ mcp, pack: grants, repo: repoDesign && repoDesign !== "off" ? repoDesign.servers ?? {} : {}, trust: "trusted", untrusted: this.deps.mcpUntrusted ?? "deny" });
+        if (tools.length > 0) {
+          // The rows are for cards; an on-demand run has none.
+          extras.bridge = { tools, mcp, designDir: join(runDir, "design"), log: (_row: McpCallRow) => {} };
+          return extras;
+        }
+      } catch (error) {
+        await mcp.close().catch(() => {});
+        throw error;
+      }
+      await mcp.close().catch(() => {});
+    }
+    return extras;
   }
 
   /** What a span of the machine's own decision call carries as input: the stored copy of the context (secrets redacted, a private

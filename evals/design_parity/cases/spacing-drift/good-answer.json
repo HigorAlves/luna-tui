@@ -1,0 +1,32 @@
+{
+  "frames": [
+    {
+      "frame": "12:34",
+      "scenario": "S1",
+      "viewport": "1440x900",
+      "state": "default",
+      "status": "compared",
+      "capture": "/evidence/parity/S1/1440x900-default.png",
+      "render": "/design/1-0.png"
+    }
+  ],
+  "findings": [
+    {
+      "level": "should_fix",
+      "kind": "token",
+      "frame": "12:34",
+      "node": "12:40",
+      "element": "ul.items",
+      "viewport": "1440x900",
+      "state": "default",
+      "expected": "16",
+      "actual": "20",
+      "title": "Item gap is 20 not 16",
+      "why": "Item gap is 20 not 16",
+      "confidence": 0.9
+    }
+  ],
+  "designInput": "complete",
+  "confidence": 0.9,
+  "summary": "spacing-drift"
+}

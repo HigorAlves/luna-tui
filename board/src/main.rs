@@ -9,6 +9,7 @@ mod app;
 mod backlog;
 mod client;
 mod compliance;
+mod design;
 mod detail;
 mod digest;
 mod discover;

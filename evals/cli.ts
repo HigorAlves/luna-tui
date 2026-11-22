@@ -15,24 +15,28 @@
 //   pnpm eval baseline-plan [--engines a,b,c] [--efforts a,b] prints the baseline commands and runs none; --efforts adds the agent packs
 //   pnpm eval prune-runs [--older-than 30]                    removes run folders under evals/.runs older than that many days
 //   pnpm eval propose --repo <abs path> [--machine <url>] [--dry-run]   posts the scorecards to the machine, which drafts a luna.yaml proposal card for the repo
+//   pnpm eval admit --pack <p> --engine <e> --against <claude:*> [--write]   whether the engine may join a pack that reads images: its saved baseline against Claude's; exits 0 on a pass, 1 on a fail, 2 on a missing baseline
+//   pnpm eval build-helper --engine <claude:*> [--case <id>]... [--no-baseline] [--dry] [--image <tag>]   `implementing` on 3 cards (a logic slice and a UI slice) with the ui-designer helper, and with delegation off; reports both slices committed, scope, picks, conflicts and wall clock. Local only
 //   pnpm eval scorecard                    evals/scorecard.md over every decision baseline
 //   pnpm eval defaults [--write] [--except <pack>...]              the default per slot by the scorecard's rule; --write updates contracts/src/decision-defaults.json
-import { DECISION_DEFAULTS, PACKS, PackId, decisionEngines } from "@hardness/contracts";
+import { DECISION_DEFAULTS, EngineId, PACKS, PackId, decisionEngines } from "@hardness/contracts";
 import { machineCredentials } from "@hardness/machine/credentials";
 import { imageExists } from "@hardness/machine/docker";
 import { DecisionLog, machineStateDir } from "@hardness/machine/decisions";
 import { buildTelemetry, tracesFromEnv } from "@hardness/machine/telemetry";
 import { collectorGate } from "./src/collector.ts";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import { type DefaultsEntry, proposalCandidates } from "./src/candidates.ts";
+import { admission, admissionPath } from "./src/admission.ts";
 import { decisionPack } from "./src/labels.ts";
 import { baselineHashes, changedLines, readLedger, writeLedger } from "./src/baseline-ledger.ts";
 import { labelFor, nextToLabel, renderNext, setLabel } from "./src/label.ts";
+import { harvestParity } from "./src/harvest-parity.ts";
 import { runHarvest, runLabelPush, runPull, runPush } from "./src/loop.ts";
 import { agentPacksWithCases, baselinePlan, parseEfforts } from "./src/baseline-plan.ts";
 import { renderBars } from "./src/propose.ts";
@@ -80,6 +84,13 @@ if (command === "harvest") {
   const { values } = parseArgs({ args: process.argv.slice(3), options: { pack: { type: "string" }, since: { type: "string" }, "with-truth": { type: "boolean", default: false }, all: { type: "boolean", default: false } } });
   const since = values.since ? new Date(values.since) : undefined;
   if (since && Number.isNaN(since.getTime())) fail("--since must be a date, like 2026-11-01");
+  if (values.pack === "design_parity") {
+    // Waivers are not decision records: they come from the machine's ground-truth folder, and make cases with their own frame and capture (RFC 0013).
+    const parity = harvestParity({ stateDir: machineStateDir(), out: EVALS, ...(since ? { since } : {}) });
+    console.log(`wrote ${parity.written.length}: ${parity.written.join(", ") || "-"}\nkept (already cases) ${parity.kept.length}`);
+    for (const r of parity.refused) console.log(`refused ${printable(r.id)}: ${printable(r.reason)}`);
+    process.exit(0);
+  }
   const pack = decisionOf(values.pack);
   const out = await runHarvest(EVALS, pack, log(), { ...(since ? { since } : {}), withTruth: values["with-truth"], all: values.all });
   console.log(`wrote ${out.written.length}: ${out.written.join(", ") || "-"}\nkept (already cases) ${out.kept.length}`);
@@ -213,6 +224,54 @@ if (command === "harvest") {
     for (const c of out.changes) console.log(stripUnsafe(`${c.pack}: ${[c.engine && `engine ${c.engine.from} -> ${c.engine.to}`, c.effort && `effort ${c.effort.from} -> ${c.effort.to}`].filter(Boolean).join(", ")}; ${c.why}`));
     if (out.taskId) console.log(`card ${out.taskId}: approve or reject it on the board`);
   }
+} else if (command === "admit") {
+  const { values } = parseArgs({ args: process.argv.slice(3), options: { pack: { type: "string" }, engine: { type: "string" }, against: { type: "string" }, write: { type: "boolean", default: false } } });
+  const pack = PackId.safeParse(values.pack).data ?? fail(`--pack must be one of ${PackId.options.join(", ")}`);
+  const engine = EngineId.safeParse(values.engine).data ?? fail(`--engine must be one of ${EngineId.options.join(", ")}`);
+  const against = EngineId.safeParse(values.against).data ?? fail(`--against must be one of ${EngineId.options.join(", ")}`);
+  const verdict = admission(EVALS, { pack, engine, against });
+  for (const line of verdict.lines) console.log(line);
+  if (verdict.record && values.write) {
+    const file = admissionPath(EVALS, engine, pack);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `${JSON.stringify(verdict.record, null, 2)}\n`);
+    console.log(`admission record written: ${file.slice(EVALS.length + 1)}`);
+  }
+  process.exit(verdict.code);
+} else if (command === "build-helper") {
+  const { values } = parseArgs({ args: process.argv.slice(3), options: { engine: { type: "string" }, case: { type: "string", multiple: true }, "no-baseline": { type: "boolean", default: false }, dry: { type: "boolean", default: false }, image: { type: "string", default: process.env.RUNNER_IMAGE ?? "hardness-runner:dev" } } });
+  const engine = EngineId.safeParse(values.engine).data ?? fail(`--engine must be one of ${EngineId.options.join(", ")}`);
+  if (!PACKS.implementing.engines.allowed.includes(engine)) fail(`--engine must be one of implementing's engines: ${PACKS.implementing.engines.allowed.join(", ")}`);
+  const { caseReport, loadBuildCases, renderDry, renderReport } = await import("./src/build-helper.ts");
+  let found;
+  try {
+    found = loadBuildCases(EVALS, values.case ?? []);
+  } catch (error) {
+    fail((error as Error).message);
+  }
+  if (values.dry) {
+    console.log(renderDry(found, !values["no-baseline"]));
+    process.exit(0);
+  }
+  // Local only, like every eval: it needs the stage image and a model credential, and it starts real containers.
+  const found1 = await machineCredentials().check(engine);
+  if (!found1.available) fail(`${engine}: ${found1.reason}`);
+  if (!(await imageExists(values.image!))) fail(`no image ${values.image}: build it with \`pnpm --filter @hardness/machine runner:build\``);
+  const { runBuildTrial } = await import("./src/build-helper-run.ts");
+  const options = { engine, image: values.image!, root: resolve(EVALS, "..") };
+  const reports = [];
+  for (const c of found) {
+    console.log(`${c.id}: running with the helper on`);
+    const delegated = await runBuildTrial(c, "on", options);
+    let baseline = null;
+    if (!values["no-baseline"]) {
+      console.log(`${c.id}: running with delegation off`);
+      baseline = await runBuildTrial(c, "off", options);
+    }
+    reports.push(caseReport(c, delegated, baseline));
+  }
+  console.log(renderReport(engine, reports));
+  process.exit(reports.every((r) => r.pass) ? 0 : 1);
 } else if (command === "scorecard" || command === "defaults") {
   const { values } = parseArgs({ args: process.argv.slice(3), options: { write: { type: "boolean", default: false }, except: { type: "string", multiple: true, default: [] } } });
   const cards = loadBaselines(EVALS);

@@ -3,7 +3,7 @@
 // committed is handed to `onCommitted` as it lands.
 import { type CheckContext, type DecisionOverrides, type LedgerSlice, Ledger, PACKS, Slice, confidenceOf } from "@hardness/contracts";
 import { constants, opendirSync } from "node:fs";
-import { lstat, mkdir, open, opendir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, open, opendir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { join, sep } from "node:path";
 
 import { type TruthSink, redCheckTruth, scopeFactsTruth } from "../decision-truth.ts";
@@ -11,7 +11,7 @@ import { scopeFacts as diffFacts } from "../../domain/scope-facts.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
 import type { CardHit } from "../../domain/card-search.ts";
 import { looksLikeTestPath } from "../../domain/locked-files.ts";
-import { type AddedLine, type ScopeFacts, addedLinesOf, removedLinesOf, sanitizeFacts, scopeFacts } from "../../domain/scope.ts";
+import { type AddedLine, type ScopeFacts, type ScopeLocks, addedLinesOf, removedLinesOf, sanitizeFacts, scopeFacts } from "../../domain/scope.ts";
 
 /** The most a request file the container writes may hold: a request is a few lines of JSON. */
 export const MAX_MAILBOX_BYTES = 64 * 1024;
@@ -59,6 +59,19 @@ export async function writeMailbox(outDir: string, file: string, content: string
   await rename(tmp, join(dir, file));
 }
 
+/** A file into the mailbox, by its bytes, with the same checks as `writeMailbox` (a real `checks/` inside the run's folder, a new temporary file, a rename over the name): the pick bundle. `from` is the machine's own file. */
+export async function writeMailboxFile(outDir: string, file: string, from: string): Promise<void> {
+  const dir = join(outDir, "checks");
+  await mkdir(dir, { recursive: true });
+  if (!(await lstat(dir)).isDirectory()) throw new Error("checks/ is not a directory");
+  const [root, real] = await Promise.all([realpath(outDir), realpath(dir)]);
+  if (!real.startsWith(root + sep)) throw new Error("checks/ is outside the run folder");
+  const tmp = join(dir, `.${file}.tmp`);
+  await rm(tmp, { force: true });
+  await copyFile(from, tmp, constants.COPYFILE_EXCL);
+  await rename(tmp, join(dir, file));
+}
+
 export interface BuildWatchOptions {
   /** The run's `/out` folder on the host. */
   outDir: string;
@@ -74,8 +87,64 @@ export interface BuildWatchOptions {
   onCardSearch?: (query: string) => Promise<void>;
   /** Called once per `checks/loop-request-<nonce>-<n>.json` the loop guard writes, in order of first sight and then `n`; its verdict is written as `loop-answer-<nonce>-<n>.json`. A request already there when the watch starts belongs to an earlier container and is never answered. Not awaited by the watch: a judge takes seconds, and a red slice or a commit does not wait for it. */
   onLoopRequest?: (request: LoopRequest) => Promise<LoopVerdict>;
+  /** Called once per `checks/mcp-request-<nonce>-<n>.json` a bridged design tool writes (RFC 0013), in order of first sight and then `n`, one at a time; its answer is written as `mcp-answer-<nonce>-<n>.json`. A request already there when the watch starts is never answered. Not awaited by the watch. Past `MAX_MCP_REQUESTS` the watch answers with an error itself and reports the request to `onMcpCapped`. */
+  onMcpRequest?: (request: McpRequest) => Promise<McpAnswer>;
+  onMcpCapped?: (request: McpRequest) => void;
+  /** The coordinator's three calls (RFC 0013, phase 5), each answered through the same queue machinery as the MCP requests: `checks/helper-request-<nonce>-<n>.json` is answered as `helper-answer-<nonce>-<n>.json`, `pick-request-…` as `pick-answer-…` and `pick-ack-…` as `pick-done-…`. Each queue is one at a time, in the order first seen and then by `n`, never awaited by the watch, and capped (`MAX_HELPER_REQUESTS`, `MAX_PICK_REQUESTS`); past its cap the watch answers with an error itself. A request already there when the watch starts is never answered. */
+  onHelperRequest?: (request: HelperRequest) => Promise<HelperAnswer>;
+  onPickRequest?: (request: PickRequest) => Promise<PickAnswer>;
+  onPickAck?: (request: PickAck) => Promise<PickDone>;
   log?: (line: string) => void;
 }
+
+/** What `slice_delegate` leaves for the machine. */
+export interface HelperRequest {
+  nonce: string;
+  n: number;
+  slice: number;
+  message: string;
+}
+/** The machine's answer to it: the factory hands it to the agent as it is. */
+export type HelperAnswer = { ok: true; handle: string; branch: string; base: string; locks: string[] } | { ok: false; error: string };
+
+/** What the pick handshake's first step leaves: the implementer's own head, after it bundled its commits. */
+export interface PickRequest {
+  nonce: string;
+  n: number;
+  slice: number;
+  head: string;
+}
+/** The pick: `bundle` is a file in `checks/` holding one ref, the picked one, over the implementer's head; `retry` asks the factory to bundle and ask again; `conflict` says the pick conflicted (the `error` has the words the agent sees). */
+export type PickAnswer = { ok: true; tip: string; picked: string[]; bundle: string } | { ok: false; retry?: true; conflict?: true; error?: string };
+
+/** The factory's acknowledgement that its own HEAD is now the picked tip. */
+export interface PickAck {
+  nonce: string;
+  n: number;
+  slice: number;
+  head: string;
+}
+/** The machine's last word on a pick: whether it moved the card's branch. */
+export type PickDone = { ok: boolean; reason?: string };
+
+/** The coordinator the watch calls (slice 77 implements it). */
+export interface HelperCoordinator {
+  onHelperRequest(request: HelperRequest): Promise<HelperAnswer>;
+  onPickRequest(request: PickRequest): Promise<PickAnswer>;
+  onPickAck(request: PickAck): Promise<PickDone>;
+}
+
+/** What a bridged tool's call leaves for the machine: the number is the file's, the nonce its name's. */
+export interface McpRequest {
+  nonce: string;
+  n: number;
+  server: string;
+  tool: string;
+  args: unknown;
+}
+
+/** The answer to an MCP request: the factory returns the file's JSON to the agent as it is. */
+export type McpAnswer = { ok: true; text: string; images: string[]; truncated: boolean; imagesDropped?: number } | { ok: false; error: string };
 
 /** What the loop guard's question leaves for the machine: its number is the file's, and the body must say the same. */
 export interface LoopRequest {
@@ -112,17 +181,30 @@ export const MAX_SCOPE_REQUESTS = 3;
 export const MAX_CARD_SEARCHES = 5;
 /** Loop requests judged per run: the container writes the files, and each one is a metered decision. */
 export const MAX_LOOP_REQUESTS = 20;
+/** Design tool calls answered per run: each one is a call to an outside server. */
+export const MAX_MCP_REQUESTS = 60;
+/** Helper requests answered per run: one helper at a time, and a rerun or two. */
+export const MAX_HELPER_REQUESTS = 4;
+/** Pick requests (and acknowledgements) answered per run: each slice picks once, a retry or two more. */
+export const MAX_PICK_REQUESTS = 12;
 /** The most names of `checks/` one look reads. */
 const MAX_NAMES = 200;
 /** Looks at an unreadable request file before it is given up. */
 const UNREADABLE_LOOKS = 5;
 const LOOP_REQUEST_NAME = /^loop-request-([0-9a-f]{8})-(\d{1,4})\.json$/;
+const MCP_REQUEST_NAME = /^mcp-request-([0-9a-f]{8})-(\d{1,4})\.json$/;
+const HELPER_REQUEST_NAME = /^helper-request-([0-9a-f]{8})-(\d{1,4})\.json$/;
+const PICK_REQUEST_NAME = /^pick-request-([0-9a-f]{8})-(\d{1,4})\.json$/;
+const PICK_ACK_NAME = /^pick-ack-([0-9a-f]{8})-(\d{1,4})\.json$/;
+const COMMIT_ID = /^[0-9a-f]{40}$/;
+/** The longest message a helper request may carry: what `slice_delegate` accepts. */
+const MAX_HELPER_MESSAGE = 2000;
 
 /** The loop request files in a list of names, with the nonce and number their names carry; the order of `n`. */
-function loopNames(names: readonly string[]): Array<{ name: string; nonce: string; n: number }> {
+function loopNames(names: readonly string[], pattern: RegExp = LOOP_REQUEST_NAME): Array<{ name: string; nonce: string; n: number }> {
   return names
     .flatMap((name) => {
-      const found = LOOP_REQUEST_NAME.exec(name);
+      const found = pattern.exec(name);
       return found ? [{ name, nonce: found[1]!, n: Number(found[2]) }] : [];
     })
     .sort((a, b) => a.n - b.n || (a.nonce < b.nonce ? -1 : a.nonce > b.nonce ? 1 : 0));
@@ -325,8 +407,134 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
     }
   };
 
+  /** One queue of numbered requests, one at a time, in the order first seen and then by `n`. A file that is not JSON, names another number than its own or fails `parse` is skipped and counts; past `cap` the request gets `capped` as its answer and the handler is not called. Answers are dropped once the watch has stopped. */
+  const queued = <R extends { nonce: string; n: number }>(spec: {
+    on: boolean;
+    label: string;
+    pattern: RegExp;
+    answer: string;
+    cap: number;
+    parse: (body: Record<string, unknown>, nonce: string, n: number) => R | null;
+    handle: (request: R) => Promise<unknown>;
+    capped: (request: R) => unknown;
+  }): (() => Promise<void>) => {
+    // The requests of an earlier container are in the folder when the watch starts: they are handled already, and never answered.
+    const seenNames = new Set<string>(spec.on ? loopNames(checkNamesNow(options.outDir), spec.pattern).map((r) => r.name) : []);
+    const queue: Array<{ name: string; nonce: string; n: number }> = [];
+    let handled = 0;
+    let unreadableLooks = 0;
+    let pending = false;
+    return async () => {
+      if (!spec.on) return;
+      for (const request of loopNames(await checkNames(options.outDir), spec.pattern)) {
+        if (seenNames.has(request.name)) continue;
+        seenNames.add(request.name);
+        queue.push(request);
+      }
+      while (!pending && queue.length > 0) {
+        const { name, nonce, n } = queue[0]!;
+        const text = await readMailbox(options.outDir, name);
+        if (text === null) {
+          unreadableLooks += 1;
+          if (unreadableLooks < UNREADABLE_LOOKS) return;
+          options.log?.(`build watch: ${spec.label} request ${nonce}-${n} cannot be read; skipped`);
+        }
+        unreadableLooks = 0;
+        queue.shift();
+        handled += 1;
+        if (text === null) continue;
+        let request: R | null;
+        try {
+          const parsed = JSON.parse(text) as Record<string, unknown> | null;
+          request = parsed && typeof parsed === "object" && parsed.n === n ? spec.parse(parsed, nonce, n) : null;
+        } catch {
+          options.log?.(`build watch: ${spec.label} request ${nonce}-${n} is not JSON; skipped`);
+          continue;
+        }
+        if (!request) {
+          options.log?.(`build watch: ${spec.label} request ${nonce}-${n} names another number than its file or is malformed; skipped`);
+          continue;
+        }
+        const answerName = `${spec.answer}-${nonce}-${n}.json`;
+        if (handled > spec.cap) {
+          if (!stopped) await writeMailbox(options.outDir, answerName, JSON.stringify(spec.capped(request)));
+          continue;
+        }
+        pending = true;
+        void spec.handle(request).then(
+          async (answer) => {
+            if (!stopped) await writeMailbox(options.outDir, answerName, JSON.stringify(answer));
+          },
+          (error: unknown) => options.log?.(`build watch: ${spec.label} request ${nonce}-${n}: ${error instanceof Error ? error.message : String(error)}`),
+        ).catch(() => {}).finally(() => {
+          pending = false;
+        });
+      }
+    };
+  };
+
+  /** The design tools' calls. */
+  const mcps = queued<McpRequest>({
+    on: !!options.onMcpRequest,
+    label: "mcp",
+    pattern: MCP_REQUEST_NAME,
+    answer: "mcp-answer",
+    cap: MAX_MCP_REQUESTS,
+    parse: (body, nonce, n) => (typeof body.server === "string" && typeof body.tool === "string" ? { nonce, n, server: body.server, tool: body.tool, args: body.args } : null),
+    handle: (r) => options.onMcpRequest!(r),
+    capped: (r) => {
+      options.onMcpCapped?.(r);
+      const capped: McpAnswer = { ok: false, error: "too many design tool calls in this run" };
+      return capped;
+    },
+  });
+  const sliceOf = (body: Record<string, unknown>): number | null => (typeof body.slice === "number" && Number.isInteger(body.slice) && body.slice >= 0 ? body.slice : null);
+  /** The ui-designer's requests: the delegation, the pick and its acknowledgement. */
+  const helpers = queued<HelperRequest>({
+    on: !!options.onHelperRequest,
+    label: "helper",
+    pattern: HELPER_REQUEST_NAME,
+    answer: "helper-answer",
+    cap: MAX_HELPER_REQUESTS,
+    parse: (body, nonce, n) => {
+      const slice = sliceOf(body);
+      return slice === null || (body.message !== undefined && typeof body.message !== "string") ? null : { nonce, n, slice, message: String(body.message ?? "").slice(0, MAX_HELPER_MESSAGE) };
+    },
+    handle: (r) => options.onHelperRequest!(r),
+    capped: () => ({ ok: false, error: "too many helper requests in this run" }),
+  });
+  const headOf = (body: Record<string, unknown>): string | null => (typeof body.head === "string" && COMMIT_ID.test(body.head) ? body.head : null);
+  const picks = queued<PickRequest>({
+    on: !!options.onPickRequest,
+    label: "pick",
+    pattern: PICK_REQUEST_NAME,
+    answer: "pick-answer",
+    cap: MAX_PICK_REQUESTS,
+    parse: (body, nonce, n) => {
+      const slice = sliceOf(body);
+      const head = headOf(body);
+      return slice === null || head === null ? null : { nonce, n, slice, head };
+    },
+    handle: (r) => options.onPickRequest!(r),
+    capped: () => ({ ok: false, error: "too many pick requests in this run" }),
+  });
+  const acks = queued<PickAck>({
+    on: !!options.onPickAck,
+    label: "pick ack",
+    pattern: PICK_ACK_NAME,
+    answer: "pick-done",
+    cap: MAX_PICK_REQUESTS,
+    parse: (body, nonce, n) => {
+      const slice = sliceOf(body);
+      const head = headOf(body);
+      return slice === null || head === null ? null : { nonce, n, slice, head };
+    },
+    handle: (r) => options.onPickAck!(r),
+    capped: () => ({ ok: false, reason: "too many pick acknowledgements in this run" }),
+  });
+
   const timer = setInterval(() => {
-    tick = tick.then(() => (stopped ? undefined : poll().then(requests).then(searches).then(loops)));
+    tick = tick.then(() => (stopped ? undefined : poll().then(requests).then(searches).then(loops).then(mcps).then(helpers).then(picks).then(acks)));
   }, options.every);
 
   return {
@@ -449,7 +657,13 @@ export interface BuildChecksDeps {
   /** Told, once a slice commits, whether each judged red was a right-reason red (RFC 0005 wave 7). */
   truth?: TruthSink | null;
   taskId?: string;
-  git: { nameStatus(from: string, to: string): Promise<string>; diff(from: string, to: string): Promise<string> };
+  /** The other agent's files (RFC 0013, phase 5), read when asked: the delegated slice's touchpoints on the implementer's run, the implementer's on the helper's (`owner: "implementer"`). */
+  locks?: () => ScopeLocks;
+  /** The shas the machine itself picked onto the branch (its own `build.helper_picked` rows), read when asked so a pick during the run counts. Empty on the helper's run. */
+  picked?: () => ReadonlySet<string>;
+  git: { nameStatus(from: string, to: string): Promise<string>; diff(from: string, to: string): Promise<string>;
+    /** Each commit of `<from>..HEAD` with its files (`git log --format=%H --name-only --no-renames`). Read only while the other side holds files. */
+    commitFiles?(from: string, to: string): Promise<{ sha: string; files: string[] }[]> };
   log?: (line: string) => void;
 }
 
@@ -513,7 +727,9 @@ export function buildChecks(deps: BuildChecksDeps) {
     const repo = !protects && deps.repoFiles && touchedTests.length ? await deps.repoFiles(touchedTests).catch(() => new Set(touchedTests)) : new Set(touchedTests);
     const harness = new Set(touchedTests.filter((p) => !repo.has(p)));
     const removedLines = removedLinesOf(diff).filter((l) => !harness.has(l.path));
-    const facts = sanitizeFacts(scopeFacts({ nameStatus, addedLines, removedLines, planned: deps.planned, declared, planPresent: deps.planPresent === true, ...(deps.scenarioTests?.length ? { scenarioTests: deps.scenarioTests } : {}), ...(deps.protectedPaths?.length ? { protectedPaths: deps.protectedPaths } : {}), ...(deps.inlineTests?.length ? { inlineTests: deps.inlineTests } : {}) }));
+    const locks = deps.locks?.();
+    const commits = locks && locks.other.length > 0 && deps.git.commitFiles ? await deps.git.commitFiles(deps.inputCommit, "HEAD") : [];
+    const facts = sanitizeFacts(scopeFacts({ nameStatus, addedLines, removedLines, ...(locks ? { locks, commits, picked: deps.picked?.() ?? new Set<string>() } : {}), planned: deps.planned, declared, planPresent: deps.planPresent === true, ...(deps.scenarioTests?.length ? { scenarioTests: deps.scenarioTests } : {}), ...(deps.protectedPaths?.length ? { protectedPaths: deps.protectedPaths } : {}), ...(deps.inlineTests?.length ? { inlineTests: deps.inlineTests } : {}) }));
     if (harness.size === 0) return facts;
     return { ...facts, removedTests: facts.removedTests.filter((p) => !harness.has(p)), undeclared: facts.undeclared.filter((p) => !harness.has(p)) };
   };
@@ -551,6 +767,11 @@ export function buildChecks(deps: BuildChecksDeps) {
       const answer = facts
         ? await judge("scope_check", { kind: "scope", planned: deps.planned, ...facts, declared: request.outOfMap, diffSummary: request.diffSummary })
         : { verdict: "skipped", problems: [] };
+      // A locked file is a fact of the diff, not a judgement: it flags whatever the decision said.
+      if (facts && facts.lockedTouched.length > 0) {
+        answer.problems = [...facts.lockedTouched.map((l) => `${l.path}: held by ${l.owner === "implementer" ? "the implementer" : "the ui-designer"}; revert your change to it`), ...answer.problems];
+        answer.verdict = "flag";
+      }
       verdict = answer.verdict;
       // The diff answers four of the six questions by script; a "no" it found says what the answer should have been.
       const scopeRecord = facts ? lastRecord : undefined;

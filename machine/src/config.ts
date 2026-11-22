@@ -4,8 +4,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { parse as parseYaml } from "yaml";
+import { z } from "zod";
 
-import { type EngineBudgets, type MachinePolicy, MachinePolicySchema, RUNNING, type RuntimeId, type TaskState, engineBudgetKeyProblem, hostPatternProblem, machinePolicyProblem, normalizeHostPattern } from "@hardness/contracts";
+import { type EngineBudgets, type MachinePolicy, MachinePolicySchema, McpServerConfig, RUNNING, type RuntimeId, type TaskState, engineBudgetKeyProblem, hostPatternProblem, machinePolicyProblem, normalizeHostPattern } from "@hardness/contracts";
 
 import type { TracesMode } from "./application/telemetry.ts";
 import { isLoopback } from "./adapters/http/access.ts";
@@ -113,6 +114,8 @@ export interface Config {
   traces: TracesConfig;
   /** What the owner lets any repository's sandbox ask for (`MACHINE_SANDBOX_POLICY`, default `~/.config/hardness/sandbox.yaml`); the defaults when the file is absent. A repo's luna.yaml stays within it. */
   sandboxPolicy: MachinePolicy;
+  /** The MCP servers the machine bridges into stages (`MACHINE_MCP_SERVERS`, default `~/.config/hardness/mcp.yaml`, RFC 0013); none when the file is absent. */
+  mcp: McpFile;
 }
 
 export interface SlackInboxConfig {
@@ -357,6 +360,40 @@ export function sandboxPolicyFrom(env: NodeJS.ProcessEnv, home: string): Machine
   return parsed.data;
 }
 
+/** The MCP servers file's name in `~/.config/hardness` (RFC 0013). */
+export const MCP_SERVERS_FILE = "mcp.yaml";
+
+export const McpFileSchema = z.object({
+  servers: z.array(McpServerConfig).default([]),
+  /** Whether an untrusted card gets bridged tools at all. */
+  untrusted: z.enum(["allow", "deny"]).default("deny"),
+});
+export type McpFile = z.infer<typeof McpFileSchema>;
+
+/** The machine's MCP servers: the file `MACHINE_MCP_SERVERS` names, else `~/.config/hardness/mcp.yaml`. Absent: none. Unreadable or invalid: an error naming the file and the key. */
+export function mcpServersFrom(env: NodeJS.ProcessEnv, home: string): McpFile {
+  const file = env.MACHINE_MCP_SERVERS?.trim() || join(home, ".config", "hardness", MCP_SERVERS_FILE);
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return McpFileSchema.parse({});
+    throw new Error(`MACHINE_MCP_SERVERS ${file} cannot be read: ${(error as Error).message}`);
+  }
+  let raw: unknown;
+  try {
+    raw = parseYaml(text) ?? {};
+  } catch (error) {
+    throw new Error(`MACHINE_MCP_SERVERS ${file} is not valid YAML: ${(error as Error).message}`);
+  }
+  const parsed = McpFileSchema.safeParse(raw);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0]!;
+    throw new Error(`MACHINE_MCP_SERVERS ${file}: ${issue.path.join(".")}: ${issue.message}`);
+  }
+  return parsed.data;
+}
+
 /** The policy keys that are set but do nothing, and a startup warning for each. Today only `bash_sandbox: on`: the nested Bash sandbox was not built (RFC 0009). */
 export function sandboxPolicyNotes(policy: MachinePolicy): { notInForce: string[]; warnings: string[] } {
   if (policy.bash_sandbox !== "on") return { notInForce: [], warnings: [] };
@@ -595,6 +632,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     restartPolicy,
     traces: tracesConfig(env, home),
     sandboxPolicy: sandboxPolicyFrom(env, home),
+    mcp: mcpServersFrom(env, home),
   };
 }
 

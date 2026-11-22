@@ -2,7 +2,7 @@ import { PACKS, type PackId, StageInput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { ApprovalRow, TaskRow } from "./task.ts";
-import { PACK_LIMITS, browserCases, withoutBrowserCases, buildJiraIntakeInput, buildSlackTriageInput, buildStageInput } from "./stage-input.ts";
+import { PACK_LIMITS, designSpecOf, browserCases, withoutBrowserCases, buildJiraIntakeInput, buildSlackTriageInput, buildStageInput } from "./stage-input.ts";
 
 const task = {
   id: "t1",
@@ -307,9 +307,9 @@ describe("buildStageInput", () => {
     const input = buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [] });
     expect(input.plan).toBeNull();
     expect(Object.keys(PACK_LIMITS).sort()).toEqual(
-      ["addressing", "build_tests", "chat_triage", "ci_failure_class", "ci_watch", "code_map", "council_second", "council_security", "coverage_check", "e2e", "e2e_failure_cause", "escalation_reason", "eval_judge", "evidence", "evidence_format", "size_estimate", "split_check", "decompose", "finding_classify", "frame_privacy", "implementing", "jira_intake", "loop_judge", "loop_redirect", "fact_propose", "plan", "plan_check", "plan_fast", "question_council", "red_check", "reviewing", "reviewing_memory", "risk_score", "scope_check", "setup", "slack_triage", "test_design", "test_design_fast", "triage", "triage_signals", "verifying", "video_fix", "video_qa", "video_script", "recording", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "pr_reply", "conversation_assess", "conversation_relation", "conversation_reply", "pr_link", "foreman", "ticket_chat", "change_exceptions", "compliance_review", "vuln_triage", "breach_assess", "capacity_check", "status_report", "release_notes", "access_review", "postmortem", "docs_drift", "questionnaire"].sort(),
+      ["addressing", "build_tests", "a11y_audit", "chat_triage", "design_spec", "design_parity", "ui_design", "ci_failure_class", "ci_watch", "code_map", "council_second", "council_security", "coverage_check", "e2e", "e2e_failure_cause", "escalation_reason", "eval_judge", "evidence", "evidence_format", "size_estimate", "split_check", "decompose", "finding_classify", "frame_privacy", "implementing", "jira_intake", "loop_judge", "loop_redirect", "fact_propose", "plan", "plan_check", "plan_fast", "question_council", "red_check", "reviewing", "reviewing_memory", "risk_score", "scope_check", "setup", "slack_triage", "test_design", "test_design_fast", "triage", "triage_signals", "verifying", "video_fix", "video_qa", "video_script", "recording", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "pr_reply", "conversation_assess", "conversation_relation", "conversation_reply", "pr_link", "foreman", "ticket_chat", "change_exceptions", "compliance_review", "vuln_triage", "breach_assess", "capacity_check", "status_report", "release_notes", "access_review", "postmortem", "docs_drift", "questionnaire"].sort(),
     );
-    expect(Object.keys(PACK_LIMITS)).toHaveLength(73);
+    expect(Object.keys(PACK_LIMITS)).toHaveLength(77);
   });
 
   it("builds slack_triage's input around a synthetic task: the batch in context.slack, no plan, no branch, the pack's limits", () => {
@@ -391,7 +391,7 @@ describe("buildStageInput", () => {
 
   it("hands implementing and verifying the repo's checks from luna.yaml, and no other pack", () => {
     const checks = [{ name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] }];
-    const build = (stage: Exclude<PackId, "escalation_reason" | "build_tests" | "plan" | "code_map" | "council_security" | "council_second" | "question_council" | "plan_fast" | "test_design_fast" | "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause" | "ci_failure_class" | "frame_privacy" | "evidence_format" | "size_estimate" | "split_check" | "decompose" | "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning" | "intake_dedup" | "ticket_validity" | "ticket_assess" | "ticket_recommend" | "ticket_reply" | "pr_link" | "loop_judge" | "loop_redirect" | "fact_propose" | "pr_reply" | "video_script" | "recording" | "video_qa" | "video_fix" | "slack_triage" | "jira_intake" | "triage_signals" | "eval_judge" | "chat_triage" | "conversation_assess" | "conversation_relation" | "conversation_reply" | "foreman" | "ticket_chat" | "change_exceptions" | "compliance_review" | "vuln_triage" | "breach_assess" | "capacity_check" | "status_report" | "release_notes" | "access_review" | "postmortem" | "docs_drift" | "questionnaire">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
+    const build = (stage: Exclude<PackId, "escalation_reason" | "build_tests" | "plan" | "code_map" | "council_security" | "council_second" | "question_council" | "plan_fast" | "test_design_fast" | "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause" | "ci_failure_class" | "frame_privacy" | "evidence_format" | "size_estimate" | "split_check" | "decompose" | "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning" | "intake_dedup" | "ticket_validity" | "ticket_assess" | "ticket_recommend" | "ticket_reply" | "pr_link" | "loop_judge" | "loop_redirect" | "fact_propose" | "pr_reply" | "video_script" | "recording" | "video_qa" | "video_fix" | "slack_triage" | "jira_intake" | "triage_signals" | "eval_judge" | "chat_triage" | "conversation_assess" | "conversation_relation" | "conversation_reply" | "foreman" | "design_spec" | "design_parity" | "ui_design" | "a11y_audit" | "ticket_chat" | "change_exceptions" | "compliance_review" | "vuln_triage" | "breach_assess" | "capacity_check" | "status_report" | "release_notes" | "access_review" | "postmortem" | "docs_drift" | "questionnaire">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
     expect(build("implementing").context.checks).toEqual(checks);
     expect(build("verifying").context.checks).toEqual(checks);
     expect(build("triage").context.checks).toBeUndefined();
@@ -509,5 +509,75 @@ describe("buildStageInput's economy", () => {
   it("has no economy key without one", () => {
     expect("economy" in build({}).context).toBe(false);
     expect("economy" in build({ economy: undefined }).context).toBe(false);
+  });
+});
+
+describe("buildStageInput's design spec", () => {
+  const design = { refs: [{ fileKey: "AbCdEf0123456789", nodeIds: ["1:2"], page: null, from: "issue" as const }] };
+  const build = (pack: "design_spec" | "plan", extra: object) => buildStageInput({ task, stage: "test_design", pack, attempt: 1, approvals: [], priorFindings: [], ...extra });
+
+  it("hands design_spec the card's design reference as context.design, and no other pack", () => {
+    const input = build("design_spec", { design });
+    expect(StageInput.parse(input)).toEqual(input);
+    expect(input.context.design).toEqual(design);
+    expect(build("plan", { design }).context.design).toBeUndefined();
+    expect(build("design_spec", {}).context.design).toBeUndefined();
+  });
+
+  it("keeps the spec in the planner's context and only the frames in the test designer's", () => {
+    const spec = { frames: [], tokens: { color: [], type: [], spacing: [], radius: [] }, components: [], a11yNotes: [], missing: [], confidence: 0.5 };
+    const frames = [{ id: "1:2", name: "Checkout", viewport: "1440x900", states: ["default"] }];
+    const plan = { record: null, brief: "", criteria: ["c1"], assumptions: [], slices: [], designSpec: spec, frames };
+    expect(buildStageInput({ task, stage: "test_design", pack: "plan", attempt: 1, approvals: [], priorFindings: [], plan }).context.plan).toMatchObject({ designSpec: spec });
+    const designer = buildStageInput({ task, stage: "test_design", pack: "test_design", attempt: 1, approvals: [], priorFindings: [], plan });
+    expect(designer.context.plan).toMatchObject({ frames });
+    expect(designer.context.plan).not.toHaveProperty("designSpec");
+  });
+});
+
+describe("buildStageInput's accessibility audit", () => {
+  const cases = [{ title: "pay", criterion: null, approach: "x", layer: "e2e" }, { title: "unit", criterion: null, approach: "y", layer: "unit" }];
+  const approvals = [approval({ kind: "awaiting_test_check", requested: { cases } })];
+  const targets = [{ name: "app", baseUrl: "http://luna-app:4000", credential: null }];
+  const build = (pack: "a11y_audit" | "e2e" | "verifying", extra: object = {}) => buildStageInput({ task, stage: "e2e", pack, attempt: 1, approvals, priorFindings: [], qaTargets: targets, ...extra });
+
+  it("gives a11y_audit the browser scenarios, the one target and the WCAG level", () => {
+    const input = build("a11y_audit", { a11yLevel: "AAA" });
+    expect(StageInput.parse(input)).toEqual(input);
+    expect(input.pack).toBe("a11y_audit");
+    expect(input.context.testCases!.map((c) => (c as { title: string }).title)).toEqual(["pay"]);
+    expect(input.context.qaTargets).toEqual(targets);
+    expect(input.context.a11y).toEqual({ level: "AAA" });
+  });
+
+  it("defaults the level to AA, and gives no other pack an a11y context", () => {
+    expect(build("a11y_audit").context.a11y).toEqual({ level: "AA" });
+    expect(build("e2e", { a11yLevel: "AAA" }).context.a11y).toBeUndefined();
+    expect(build("verifying", { a11yLevel: "AAA" }).context.a11y).toBeUndefined();
+    expect(build("verifying").context.qaTargets).toBeUndefined();
+  });
+});
+
+describe("designSpecOf and the e2e capture plan", () => {
+  const spec = { frames: [{ id: "1:2", name: "Checkout", viewport: { width: 1440, height: 900 }, states: [] }], tokens: { color: [], type: [], spacing: [], radius: [] }, components: [], a11yNotes: [], missing: [], confidence: 0.8 };
+  const approved = (requested: Record<string, unknown>) => approval({ kind: "awaiting_approval", decision: "approved", requested });
+  it("reads the approved spec off the plan gate, and nothing when there is none, it is malformed, or the gate is not approved", () => {
+    expect(designSpecOf([approved({ design: { ref: null, spec } })])).toEqual(spec);
+    expect(designSpecOf([])).toBeNull();
+    expect(designSpecOf([approved({ design: { ref: null, spec: null, note: "planned without a design spec: x" } })])).toBeNull();
+    expect(designSpecOf([approved({ design: { ref: null, spec: { frames: "no" } } })])).toBeNull();
+    expect(designSpecOf([approval({ kind: "awaiting_approval", decision: "rejected", requested: { design: { ref: null, spec } } })])).toBeNull();
+  });
+  it("hands the capture plan to the e2e pack only", () => {
+    const parityPlan = { targets: [], uncited: ["1:2"], notes: [] };
+    const base = { task, attempt: 1, approvals: [], priorFindings: [] as never[], parityPlan };
+    expect(buildStageInput({ ...base, stage: "e2e", pack: "e2e" }).context.parityPlan).toEqual(parityPlan);
+    expect(buildStageInput({ ...base, stage: "e2e", pack: "a11y_audit" }).context.parityPlan).toBeUndefined();
+  });
+  it("hands the captures, the plan and the spec to the design_parity pack only", () => {
+    const parity = { plan: { targets: [], uncited: [], notes: [] }, captures: [], spec: null };
+    const base = { task, attempt: 1, approvals: [], priorFindings: [] as never[], parity };
+    expect(buildStageInput({ ...base, stage: "e2e", pack: "design_parity" }).context.parity).toEqual(parity);
+    expect(buildStageInput({ ...base, stage: "e2e", pack: "e2e" }).context.parity).toBeUndefined();
   });
 });

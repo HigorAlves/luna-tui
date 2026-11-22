@@ -6,7 +6,7 @@ import { PACKS } from "@hardness/contracts";
 import type { RuntimeCapabilities, TablePack } from "./table.ts";
 
 /** A decision runtime calls no tools, and it answers in structured output only. */
-export const CAPS_NO_TOOLS = { tools: false, text: false, delegate: false } satisfies Partial<RuntimeCapabilities>;
+export const CAPS_NO_TOOLS = { tools: false, text: false, delegate: false, imageParts: false } satisfies Partial<RuntimeCapabilities>;
 
 const ANSWER = {
   kind: { choice: "bug", confidence: 0.91 },

@@ -32,6 +32,8 @@ use ratatui::{
 pub enum Section {
     /// The plan gate's one page: flags, brief, criteria with their scenarios, steps. In the rail in place of Plan and Tests.
     Review,
+    /// The design sign-off, or the last browser run's design block: each frame beside its build, and the differences found.
+    Design,
     /// A stage is running: the step, the slices, the budget, the latest activity.
     Now,
     /// The card stopped (escalated, failed, paused): why, what can be done, the failing output.
@@ -53,8 +55,9 @@ pub enum Section {
 }
 
 impl Section {
-    pub const ALL: [Section; 14] = [
+    pub const ALL: [Section; 15] = [
         Section::Review,
+        Section::Design,
         Section::Now,
         Section::Stopped,
         Section::Result,
@@ -73,6 +76,7 @@ impl Section {
     pub fn label(self) -> &'static str {
         match self {
             Section::Review => "Review",
+            Section::Design => "Design",
             Section::Now => "Now",
             Section::Stopped => "Stopped",
             Section::Result => "Result",
@@ -116,6 +120,7 @@ impl Section {
         match task.state.as_str() {
             "awaiting_approval" => Section::Review,
             "awaiting_test_check" => Section::Tests,
+            "awaiting_design" => Section::Design,
             _ if is_stopped(task) => Section::Stopped,
             _ if is_question(task) => Section::Gate,
             _ if is_result(task) => Section::Result,
@@ -128,7 +133,7 @@ impl Section {
     pub fn has_cursor(self) -> bool {
         matches!(
             self,
-            Section::Runs | Section::Diff | Section::Evidence | Section::Engines
+            Section::Runs | Section::Diff | Section::Evidence | Section::Engines | Section::Design
         )
     }
 }
@@ -197,12 +202,18 @@ fn is_running(task: &Task) -> bool {
 /// The sections the rail lists for `task`, in order. At the plan gate Review stands in for Plan and Tests; Now, Stopped,
 /// Result and Question are listed only for a card they describe.
 pub fn order(task: &Task) -> Vec<Section> {
+    order_with(task, false)
+}
+
+/// `order`, with the Design page kept for a card whose detail carries a design report even when it is past the sign-off.
+fn order_with(task: &Task, design: bool) -> Vec<Section> {
     let at_plan_gate = task.state == "awaiting_approval";
     Section::ALL
         .iter()
         .copied()
         .filter(|s| match s {
             Section::Review => at_plan_gate,
+            Section::Design => design || task.state == "awaiting_design",
             Section::Plan | Section::Tests => !at_plan_gate,
             Section::Now => is_running(task),
             Section::Stopped => is_stopped(task),
@@ -227,6 +238,7 @@ fn has_content(
         Section::Runs => !detail.stage_runs.is_empty(),
         Section::Diff => has_diff,
         Section::Evidence => !detail.artifacts.is_empty() || task.evidence.is_some(),
+        Section::Design => design_page(detail).is_some(),
         Section::Pr => {
             pr_for(task, prs).is_some() || pr_url(detail).is_some() || detail.ship.is_some()
         }
@@ -243,10 +255,10 @@ pub fn rail(
     has_diff: bool,
     prs: &[PullRequest],
 ) -> (Vec<Section>, Vec<Section>) {
-    let all = order(task);
     let Some(detail) = detail.filter(|d| d.task.id == task.id) else {
-        return (all, Vec::new());
+        return (order(task), Vec::new());
     };
+    let all = order_with(task, design_page(detail).is_some());
     all.into_iter()
         .partition(|s| has_content(*s, task, detail, has_diff, prs))
 }
@@ -435,6 +447,10 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
             crate::pages::review_page(task, detail, width, ref_width),
             None,
         ),
+        Section::Design => {
+            let (lines, row) = design_section_lines(detail, view.cursor);
+            (Page::of(lines), row)
+        }
         Section::Now => (
             crate::pages::now_page(task, detail, width, ref_width, now),
             None,
@@ -837,6 +853,11 @@ fn rail_status(section: Section, view: &DetailView, detail: Option<&TaskDetail>)
             (None, None) if view.task.branch.is_some() => dim("…".to_string()),
             _ => dim("–".to_string()),
         },
+        Section::Design => match design_page(d) {
+            Some(_) if view.task.state == "awaiting_design" => Span::styled("⏸", theme::flag()),
+            Some(page) => dim(page.rows.len().to_string()),
+            None => dim("–".to_string()),
+        },
         Section::Evidence => {
             if d.artifacts.is_empty() {
                 dim("–".to_string())
@@ -995,6 +1016,7 @@ pub fn gate_question(task: &Task, detail: Option<&TaskDetail>) -> Option<String>
     Some(match task.state.as_str() {
         "awaiting_approval" => plan,
         "awaiting_test_check" => "approve the tests?".to_string(),
+        "awaiting_design" => format!("sign off the design?{}", design_counts(open)),
         "awaiting_setup" => "approve the setup?".to_string(),
         "awaiting_answers" => match open.map(|a| questions_of(a).len()) {
             Some(n) if n > 0 => format!("answer {n} question{}", if n == 1 { "" } else { "s" }),
@@ -1012,6 +1034,318 @@ pub fn gate_question(task: &Task, detail: Option<&TaskDetail>) -> Option<String>
         "reviewing_memory" => "apply the memory rules?".to_string(),
         _ => return None,
     })
+}
+
+/// `· 3 open, 1 not compared`: what the design sign-off still holds, read from the gate's design block; empty when nothing is open or unplaced.
+fn design_counts(open: Option<&Approval>) -> String {
+    let design = open.map_or(&serde_json::Value::Null, |a| &a.requested["design"]);
+    let counts = &design["parity"]["counts"];
+    let opened: u64 = ["blocker", "should_fix", "nit"]
+        .iter()
+        .filter_map(|level| counts[level].as_u64())
+        .sum();
+    let unplaced = design["parity"]["frames"].as_array().map_or(0, |frames| {
+        frames
+            .iter()
+            .filter(|f| f["status"].as_str() == Some("not_compared"))
+            .count()
+    });
+    let parts: Vec<String> = [(opened as usize, "open"), (unplaced, "not compared")]
+        .iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, what)| format!("{n} {what}"))
+        .collect();
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" · {}", parts.join(", "))
+    }
+}
+
+/// One frame of the design page: its line, the findings under it and the files it can open.
+#[derive(Clone, Debug)]
+pub struct FrameRow {
+    pair: Option<String>,
+    capture: Option<String>,
+    line: Line<'static>,
+    findings: Vec<Line<'static>>,
+}
+
+impl FrameRow {
+    /// What `enter` opens: the composite pair, else the build's capture; None when the frame has neither.
+    pub fn open_target(&self) -> Option<&str> {
+        self.pair.as_deref().or(self.capture.as_deref())
+    }
+}
+
+/// The Design page: the gate's header, one row per frame with its findings, and what no frame holds.
+#[derive(Clone, Debug)]
+pub struct DesignPage {
+    header: Vec<Line<'static>>,
+    pub rows: Vec<FrameRow>,
+    other: Vec<Line<'static>>,
+    footer: Vec<Line<'static>>,
+}
+
+impl DesignPage {
+    /// The page's lines, the cursor's frame marked, and the line that row is on.
+    fn build(&self, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
+        let mut lines = vec![heading("Design")];
+        lines.extend(self.header.iter().cloned());
+        lines.push(Line::default());
+        let mut at = None;
+        let selected = cursor.min(self.rows.len().saturating_sub(1));
+        for (i, row) in self.rows.iter().enumerate() {
+            let on = i == selected;
+            if on {
+                at = Some(lines.len());
+            }
+            let mut line =
+                vec![Span::from(if on { "  ▌ " } else { "    " }).style(theme::border_focus())];
+            line.extend(row.line.spans.iter().cloned());
+            lines.push(Line::from(line));
+            lines.extend(row.findings.iter().cloned());
+        }
+        if self.rows.is_empty() {
+            lines.push(muted("  no frames were compared".into()));
+        }
+        if !self.other.is_empty() {
+            lines.push(Line::default());
+            lines.push(muted("  not in a frame".into()));
+            lines.extend(self.other.iter().cloned());
+        }
+        lines.push(Line::default());
+        lines.extend(self.footer.iter().cloned());
+        (lines, at)
+    }
+
+    #[cfg(test)]
+    pub fn lines(&self, cursor: usize) -> Vec<Line<'static>> {
+        self.build(cursor).0
+    }
+}
+
+/// The design block of the card: the open sign-off's, else the last browser run's (`reports.verify.design`), else the newest decided sign-off's.
+fn design_block(detail: &TaskDetail) -> Option<(&serde_json::Value, bool)> {
+    fn gate(a: &Approval) -> Option<&serde_json::Value> {
+        (a.kind_or_guess() == "awaiting_design" && a.requested["design"].is_object())
+            .then(|| &a.requested["design"])
+    }
+    detail
+        .approvals
+        .iter()
+        .rev()
+        .filter(|a| a.decision.is_none())
+        .find_map(|a| gate(a))
+        .map(|d| (d, true))
+        .or_else(|| {
+            detail
+                .reports
+                .as_ref()
+                .and_then(|r| r.verify.as_ref())
+                .and_then(|v| v.design.as_ref())
+                .filter(|d| d.is_object())
+                .map(|d| (d, false))
+        })
+        .or_else(|| {
+            detail
+                .approvals
+                .iter()
+                .rev()
+                .find_map(|a| gate(a))
+                .map(|d| (d, false))
+        })
+}
+
+/// `design_page`'s header: the confidence against its bar, the accessibility level, why the gate fired and what is open.
+fn design_header(design: &serde_json::Value) -> Vec<Line<'static>> {
+    let parity = &design["parity"];
+    let mut facts: Vec<String> = Vec::new();
+    if let Some(confidence) = parity["confidence"].as_f64() {
+        facts.push(format!("confidence {confidence:.2}"));
+    }
+    if let Some(bar) = parity["bar"].as_f64() {
+        facts.push(format!("bar {bar:.2}"));
+    }
+    if let Some(level) = design["wcag"].as_str() {
+        facts.push(format!("WCAG 2.2 {}", plain(level)));
+    }
+    let mut lines = Vec::new();
+    if !facts.is_empty() {
+        lines.push(Line::from(
+            Span::from(format!("  {}", facts.join(" · "))).bold(),
+        ));
+    }
+    if design["gate"]["fires"].as_bool() == Some(true) {
+        let why: Vec<&str> = design["gate"]["why"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|w| w.as_str())
+            .map(|w| match w {
+                "open_findings" => "open findings",
+                "low_confidence" => "confidence under the bar",
+                "not_compared" => "frames not compared",
+                "rounds_spent" => "rounds spent",
+                other => other,
+            })
+            .collect();
+        let why = if why.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", why.join(", "))
+        };
+        lines.push(Line::from(
+            Span::from(format!("  the gate fired{why}")).fg(c(YELLOW)),
+        ));
+    }
+    let counts = &parity["counts"];
+    if counts.is_object() {
+        let n = |k: &str| counts[k].as_u64().unwrap_or(0);
+        lines.push(muted(format!(
+            "  open: {} blocker · {} should_fix · {} nit · {} waived",
+            n("blocker"),
+            n("should_fix"),
+            n("nit"),
+            n("waived")
+        )));
+    }
+    lines
+}
+
+/// One finding of the page: level, id, kind, title, expected and built, element; dimmed and marked once waived.
+fn design_finding_line(f: &serde_json::Value) -> Line<'static> {
+    let text = |v: &serde_json::Value| plain(v.as_str().unwrap_or(""));
+    let d = &f["design"];
+    let mut parts = vec![
+        format!("{:<10}", text(&f["severity"])),
+        text(&f["id"]),
+        text(&d["kind"]),
+        text(&f["title"]),
+    ];
+    if let Some(expected) = d["expected"].as_str() {
+        parts.push(format!("expected {}", plain(expected)));
+    }
+    if let Some(built) = d["actual"].as_str() {
+        parts.push(format!("built {}", plain(built)));
+    }
+    parts.push(text(&d["element"]));
+    parts.retain(|p| !p.is_empty());
+    let waived = f["resolution"]["status"].as_str() == Some("waived");
+    let mut line = format!("      {}", parts.join("  "));
+    if waived {
+        line.push_str("  waived");
+        return Line::from(line).style(theme::label());
+    }
+    let color = match f["severity"].as_str() {
+        Some("blocker") => RED,
+        Some("should_fix") => YELLOW,
+        _ => SUBTEXT0,
+    };
+    Line::from(line).fg(c(color))
+}
+
+/// The Design page of a card, from its open sign-off or its last browser run; None when it has no design report.
+pub fn design_page(detail: &TaskDetail) -> Option<DesignPage> {
+    let (design, gate_open) = design_block(detail)?;
+    let frames: &[serde_json::Value] = design["parity"]["frames"].as_array().map_or(&[], |v| v);
+    let findings: &[serde_json::Value] = design["findings"].as_array().map_or(&[], |v| v);
+    let mut placed = vec![false; findings.len()];
+    let text = |v: &serde_json::Value| plain(v.as_str().unwrap_or(""));
+    let mut rows = Vec::new();
+    for frame in frames {
+        let mut head: Vec<String> = Vec::new();
+        if let Some(scenario) = frame["scenario"].as_str() {
+            head.push(plain(scenario));
+        }
+        head.push(text(&frame["viewport"]));
+        head.push(text(&frame["state"]));
+        head.push(format!(
+            "{} ({})",
+            text(&frame["name"]),
+            text(&frame["node"])
+        ));
+        let verdict = if frame["status"].as_str() == Some("compared") {
+            match frame["diffRatio"].as_f64() {
+                Some(ratio) => format!("compared · diff {:.1}%", ratio * 100.0),
+                None => "compared".to_string(),
+            }
+        } else {
+            match frame["reason"].as_str() {
+                Some(reason) => format!("not compared: {}", plain(reason)),
+                None => "not compared".to_string(),
+            }
+        };
+        head.push(verdict);
+        let mut mine = Vec::new();
+        for (i, f) in findings.iter().enumerate() {
+            let d = &f["design"];
+            let here = !placed[i]
+                && d["frame"] == frame["frame"]
+                && d["node"] == frame["node"]
+                && (d["viewport"].is_null() || d["viewport"] == frame["viewport"])
+                && (d["state"].is_null() || d["state"] == frame["state"]);
+            if here {
+                placed[i] = true;
+                mine.push(design_finding_line(f));
+            }
+        }
+        let path = |k: &str| frame[k].as_str().map(str::to_string);
+        rows.push(FrameRow {
+            pair: path("pair"),
+            capture: path("capture"),
+            line: Line::from(head.join(" · ")),
+            findings: mine,
+        });
+    }
+    let other = findings
+        .iter()
+        .zip(&placed)
+        .filter(|(_, placed)| !**placed)
+        .map(|(f, _)| design_finding_line(f))
+        .collect();
+    let footer = if gate_open {
+        vec![
+            muted("  a approve · r send back with a note".into()),
+            muted("  :waive <id> <reason> · :accept <id> <reason> · enter opens the pair".into()),
+        ]
+    } else {
+        vec![muted("  enter opens the pair · j/k picks a frame".into())]
+    };
+    Some(DesignPage {
+        header: design_header(design),
+        rows,
+        other,
+        footer,
+    })
+}
+
+/// The Design section's lines and the line the cursor's frame is on.
+fn design_section_lines(
+    detail: Option<&TaskDetail>,
+    cursor: usize,
+) -> (Vec<Line<'static>>, Option<usize>) {
+    match detail {
+        None => (
+            vec![
+                heading("Design"),
+                Line::default(),
+                muted("  loading…".into()),
+            ],
+            None,
+        ),
+        Some(d) => match design_page(d) {
+            Some(page) => page.build(cursor),
+            None => (
+                vec![
+                    heading("Design"),
+                    Line::default(),
+                    muted("  no design report yet".into()),
+                ],
+                None,
+            ),
+        },
+    }
 }
 
 /// What the decision bar says: the state's glyph and words in the state's role style, and the
@@ -1044,6 +1378,7 @@ pub(crate) fn escalation_words(reason: &str) -> String {
         "too_complex" => "too complex for this engine".to_string(),
         "undeclared_scope" => "it changed files outside its scope".to_string(),
         "head_moved" => "the branch moved under it".to_string(),
+        "design_budget" => "the design budget is spent".to_string(),
         "other" => "it needs a person".to_string(),
         unknown => plain(unknown).replace('_', " "),
     }
@@ -4531,6 +4866,119 @@ mod tests {
         "risk":{"level":"high","scores":{"blast_radius":2,"reversibility":1,"data_sensitivity":0}},
         "verdicts":{"coverage":"proceed","plan":"flag","risk":"proceed"},"approvers":["ana"],
         "cases":[{"title":"j on empty","criterion":"no panic","approach":"cargo test keys::empty"}]}"#;
+
+    fn design_gate_requested() -> serde_json::Value {
+        serde_json::json!({"design": {
+            "wcag": "AA", "a11y": null,
+            "parity": {"ran": true, "runId": "r1-parity", "confidence": 0.62, "bar": 0.75, "designInput": "complete", "summary": "",
+                "counts": {"blocker": 0, "should_fix": 1, "nit": 0, "waived": 0},
+                "frames": [
+                    {"frame": "F1", "name": "Checkout", "node": "12:34", "scenario": "S1", "viewport": "desktop", "state": "default", "status": "compared", "capture": "/s/c.png", "render": "/s/r.png", "diff": "/s/d.png", "pair": "/s/p.png", "diffRatio": 0.031},
+                    {"frame": "F1", "name": "Checkout", "node": "12:34", "scenario": "S1", "viewport": "desktop", "state": "hover", "status": "not_compared", "reason": "no capture", "capture": null, "render": null, "diff": null, "pair": null, "diffRatio": null}]},
+            "findings": [{"id": "D1a2b3c4", "path": "figma:F1/12:34", "line": 0, "severity": "should_fix", "title": "Pay colour", "body": "b", "confidence": 0.9, "category": "design",
+                "design": {"source": "parity", "frame": "F1", "node": "12:34", "element": "button.pay", "viewport": "desktop", "state": "default", "kind": "token", "expected": "#1A73E8", "actual": "#1B74E9"}}],
+            "gate": {"fires": true, "why": ["open_findings", "not_compared"]}}})
+    }
+
+    fn design_gate() -> (Task, TaskDetail) {
+        let (task, mut detail) = at_gate("{}", "awaiting_design");
+        detail.approvals = vec![serde_json::from_value(serde_json::json!({"id": "g1", "kind": "awaiting_design", "requested": design_gate_requested(), "decision": null})).unwrap()];
+        (task, detail)
+    }
+
+    #[test]
+    fn the_design_page_lists_frames_with_their_findings_and_opens_the_pair() {
+        let (task, detail) = design_gate();
+        assert_eq!(order(&task)[0], Section::Design);
+        let page = design_page(&detail).expect("a design report");
+        assert_eq!(page.rows.len(), 2);
+        assert_eq!(page.rows[0].open_target(), Some("/s/p.png"));
+        assert_eq!(page.rows[1].open_target(), None);
+        let text = page
+            .lines(0)
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("confidence 0.62 · bar 0.75 · WCAG 2.2 AA"),
+            "{text}"
+        );
+        assert!(
+            text.contains("S1 · desktop · default · Checkout (12:34) · compared · diff 3.1%"),
+            "{text}"
+        );
+        assert!(text.contains("should_fix  D1a2b3c4  token  Pay colour  expected #1A73E8  built #1B74E9  button.pay"), "{text}");
+        assert!(text.contains("not compared: no capture"), "{text}");
+        assert!(text.contains("open findings"), "why the gate fired: {text}");
+    }
+
+    #[test]
+    fn a_frame_with_no_pair_opens_its_capture_and_a_waived_finding_says_so() {
+        let (_, mut detail) = design_gate();
+        let mut requested = design_gate_requested();
+        requested["design"]["parity"]["frames"][0]["pair"] = serde_json::Value::Null;
+        requested["design"]["findings"][0]["resolution"] =
+            serde_json::json!({"status": "waived", "by": "me"});
+        detail.approvals[0].requested = requested;
+        let page = design_page(&detail).unwrap();
+        assert_eq!(page.rows[0].open_target(), Some("/s/c.png"));
+        let text = page
+            .lines(0)
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("D1a2b3c4") && text.contains("waived"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_design_page_reads_the_last_run_when_no_gate_is_open() {
+        let (_, mut detail) = at_gate("{}", "awaiting_ship");
+        detail.approvals.clear();
+        assert!(design_page(&detail).is_none());
+        detail.reports = Some(
+            serde_json::from_value(serde_json::json!({"verify": {"findings": [], "design": design_gate_requested()["design"]}})).unwrap(),
+        );
+        assert_eq!(design_page(&detail).map(|p| p.rows.len()), Some(2));
+    }
+
+    #[test]
+    fn the_design_page_draws_at_the_gate_in_the_rail() {
+        let (task, detail) = design_gate();
+        let text = render_open(120, 40, &task, Some(&detail), Section::Design, 0).join("\n");
+        assert!(text.contains("Design"), "{text}");
+        assert!(
+            text.contains("S1 · desktop · hover · Checkout (12:34) · not compared: no capture"),
+            "{text}"
+        );
+        assert!(text.contains("enter opens the pair"), "{text}");
+    }
+
+    #[test]
+    fn the_design_sign_off_asks_and_counts_what_is_open_and_not_compared() {
+        let (task, mut detail) = at_gate("{}", "awaiting_design");
+        let sign_off = |requested: serde_json::Value| -> Vec<Approval> {
+            vec![serde_json::from_value(serde_json::json!({"id": "g1", "kind": "awaiting_design", "requested": requested, "decision": null})).unwrap()]
+        };
+        detail.approvals = sign_off(
+            serde_json::json!({"design": {"gate": {"fires": true, "why": ["open_findings"]}, "findings": [],
+            "parity": {"counts": {"blocker": 0, "should_fix": 2, "nit": 1, "waived": 1},
+            "frames": [{"status": "compared"}, {"status": "not_compared", "reason": "no capture"}]}}}),
+        );
+        assert_eq!(
+            gate_question(&task, Some(&detail)).as_deref(),
+            Some("sign off the design? · 3 open, 1 not compared")
+        );
+        detail.approvals = sign_off(serde_json::json!({"design": {"gate": {"fires": true}}}));
+        assert_eq!(
+            gate_question(&task, Some(&detail)).as_deref(),
+            Some("sign off the design?")
+        );
+    }
 
     #[test]
     fn the_gate_shows_its_approval_rule_and_a_risk_a_person_set() {

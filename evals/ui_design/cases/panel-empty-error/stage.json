@@ -1,0 +1,209 @@
+{
+  "schema": 3,
+  "stage": "implementing",
+  "pack": "ui_design",
+  "attempt": 1,
+  "task": {
+    "id": "eval-ui-panel-empty-error",
+    "title": "Cart panel: empty and error",
+    "description": "The cart panel follows the Figma frames: the empty cart and the cart that failed to load.",
+    "criteria": [
+      "The panel shows the empty and error states the design names"
+    ],
+    "repoPath": "fixtures/golden-ui",
+    "branch": "luna-helper-2",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "bridge": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ledger": {
+      "schema": 1,
+      "slices": [
+        {
+          "id": 2,
+          "title": "Cart panel with empty and error states",
+          "status": "pending",
+          "commit": null
+        }
+      ]
+    },
+    "design": {
+      "refs": [
+        {
+          "fileKey": "Hv4RnT6qWc8Ld",
+          "nodeIds": [
+            "21:10"
+          ],
+          "page": null,
+          "from": "issue"
+        }
+      ]
+    },
+    "plan": {
+      "record": null,
+      "brief": "The cart panel follows the Figma frames: the empty cart and the cart that failed to load.",
+      "criteria": [
+        "The panel shows the empty and error states the design names"
+      ],
+      "assumptions": [],
+      "slices": [
+        {
+          "id": 2,
+          "title": "Cart panel with empty and error states",
+          "est_loc": 70,
+          "touchpoints": [
+            "src/ui/CartPanel.ts"
+          ],
+          "acceptance": [
+            "an empty cart says so with role status",
+            "an error is announced with role alert in the error colour"
+          ]
+        }
+      ],
+      "designSpec": {
+        "frames": [
+          {
+            "id": "21:10",
+            "name": "Cart panel",
+            "viewport": {
+              "width": 360,
+              "height": 520
+            },
+            "states": [
+              {
+                "state": "default",
+                "nodeId": "21:10",
+                "suggestion": null
+              },
+              {
+                "state": "empty",
+                "nodeId": "21:20",
+                "suggestion": null
+              },
+              {
+                "state": "error",
+                "nodeId": "21:30",
+                "suggestion": null
+              }
+            ]
+          }
+        ],
+        "tokens": {
+          "color": [
+            {
+              "name": "color/primary",
+              "value": "#1B5E20",
+              "variable": "color/primary",
+              "nodeId": null
+            },
+            {
+              "name": "color/primary-hover",
+              "value": "#144A18",
+              "variable": "color/primary-hover",
+              "nodeId": null
+            },
+            {
+              "name": "color/surface",
+              "value": "#FFFFFF",
+              "variable": "color/surface",
+              "nodeId": null
+            },
+            {
+              "name": "color/text",
+              "value": "#1A1A1A",
+              "variable": "color/text",
+              "nodeId": null
+            },
+            {
+              "name": "color/error",
+              "value": "#B3261E",
+              "variable": "color/error",
+              "nodeId": null
+            }
+          ],
+          "type": [],
+          "spacing": [
+            {
+              "name": "space/4",
+              "value": "16",
+              "variable": "space/4",
+              "nodeId": null
+            }
+          ],
+          "radius": [
+            {
+              "name": "radius/md",
+              "value": "8",
+              "variable": "radius/md",
+              "nodeId": null
+            }
+          ]
+        },
+        "components": [
+          {
+            "name": "CartPanel",
+            "nodeId": "21:10",
+            "codeConnect": {
+              "path": "src/ui/CartPanel.ts",
+              "name": "CartPanel"
+            }
+          }
+        ],
+        "a11yNotes": [
+          {
+            "frame": "21:30",
+            "note": "The error message is announced (role alert) and drawn in color/error."
+          },
+          {
+            "frame": "21:20",
+            "note": "The empty message is a status, not an alert."
+          }
+        ],
+        "missing": [],
+        "confidence": 0.9
+      }
+    },
+    "scenarioTests": [
+      {
+        "scenario": "The panel shows the empty and error states the design names",
+        "file": "test/ui/cart-panel.test.ts"
+      }
+    ],
+    "helper": {
+      "slice": {
+        "id": 2,
+        "title": "Cart panel with empty and error states",
+        "touchpoints": [
+          "src/ui/CartPanel.ts"
+        ],
+        "acceptance": [
+          "an empty cart says so with role status",
+          "an error is announced with role alert in the error colour"
+        ]
+      },
+      "message": "Build the cart panel states. ProductCard is another slice's.",
+      "base": "0000000000000000000000000000000000000001",
+      "locks": {
+        "mine": [
+          "src/ui/CartPanel.ts"
+        ],
+        "theirs": [
+          "src/cart/total.ts",
+          "src/ui/ProductCard.ts"
+        ]
+      },
+      "attempt": 1
+    }
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

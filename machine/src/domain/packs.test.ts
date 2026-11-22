@@ -19,6 +19,16 @@ describe("soleAgentPackForState", () => {
     expect(soleAgentPackForState("triage")).toBe("triage");
   });
 
+  it("keeps e2e the sole agent pack of its state: the audit is a sub-run", () => {
+    expect(packStates("a11y_audit")).toEqual([]);
+    expect(soleAgentPackForState("e2e")).toBe("e2e");
+  });
+
+  it("keeps e2e the sole agent pack of its state: the parity reviewer is a sub-run too", () => {
+    expect(packStates("design_parity")).toEqual([]);
+    expect(soleAgentPackForState("e2e")).toBe("e2e");
+  });
+
   it("keeps test_design unattributed: the planner, the test designer and the code map all decide there", () => {
     expect(soleAgentPackForState("test_design")).toBeNull();
   });
