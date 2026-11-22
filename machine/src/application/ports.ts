@@ -11,11 +11,12 @@ import type {
   VerifyDesignReport,
 } from "@hardness/contracts";
 
+import { HELPER_EVENT_KINDS } from "../domain/helper-events.ts";
 import type { ApprovalRow, TaskRow } from "../domain/task.ts";
 import type { StageOutcome } from "../domain/transition.ts";
 
 /** The rows a running stage may log through `emit`: the diagram's names for facts only it knows. Never a kind other code acts on (`transition`, `task.reply`...). */
-export const EMITTABLE = ["ship.event", "ship.ready", "ship.approval_needed", "evidence.published", "evidence.stale", "scenario.red", "scenario.red_check", "build.checkpoint", "build.sweep_failed", "scenario.green", "sla.reminder", "sla.escalated", "evidence.edited", "ship.override", "sandbox.egress_blocked", "design.mcp_call", "design.run"] as const;
+export const EMITTABLE = ["ship.event", "ship.ready", "ship.approval_needed", "evidence.published", "evidence.stale", "scenario.red", "scenario.red_check", "build.checkpoint", "build.sweep_failed", "scenario.green", "sla.reminder", "sla.escalated", "evidence.edited", "ship.override", "sandbox.egress_blocked", "design.mcp_call", "design.run", ...HELPER_EVENT_KINDS] as const;
 export type EmittableKind = (typeof EMITTABLE)[number];
 
 export interface StageContext {

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { StageContext, StageResult } from "../ports.ts";
 import { designRun } from "./design-run.ts";
 
-const budget = (spent: "tokens" | "minutes" | null) => ({ tokens: 10, tokensCounted: true, minutes: 1, spent, limits: { max_tokens: 1_000_000, max_minutes: 45 } });
+const budget = (spent: "tokens" | "minutes" | null) => ({ tokens: 10, tokensCounted: true, minutes: 1, minutesLeft: 44, spent, limits: { max_tokens: 1_000_000, max_minutes: 45 } });
 const ctx = (emitted: Array<[string, Record<string, unknown>]>) => ({ task: { id: "t1" }, emit: async (k: string, p: Record<string, unknown>) => void emitted.push([k, p]) }) as unknown as StageContext;
 const passing: StageResult = { outcome: "pass", detail: { answer: {} }, usage: { turns: 3, costUsd: 0.1, tokens: { input: 1000, output: 200, cached: 0 } } };
 

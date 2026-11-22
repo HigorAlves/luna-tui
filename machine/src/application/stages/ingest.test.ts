@@ -133,6 +133,32 @@ describe("ingestStageOutput", () => {
     expect(ingested.events.at(-1)!.payload).toMatchObject({ note: expect.stringMatching(/4 .*dropped/) });
   });
 
+  it("drops a container's line of every ui-designer kind the machine writes, whichever way it spells it", async () => {
+    await writeFile(join(outDir, "result.json"), JSON.stringify(output()));
+    const kinds = ["build.helper_started", "build.helper_refused", "build.helper_conflict", "build.helper_picked", "build.helper_ended", "stage.build.helper_ended"];
+    const lines = [...kinds.map((kind) => ({ kind, payload: { slice: 1, tokens: 1, minutes: 1 } })), { kind: "slice.red", payload: { id: 1 } }];
+    await writeFile(join(outDir, "events.jsonl"), `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+    const ingested = await ingestStageOutput({ outDir, runId: "r", stateDir, pack: "ui_design" });
+    expect(ingested.events.map((e) => e.kind)).toEqual(["slice.red", "note"]);
+    expect(ingested.events.at(-1)!.payload).toMatchObject({ note: expect.stringMatching(/6 .*dropped/) });
+  });
+
+  it("stamps a ui_design run's rows `by: ui-designer` itself, over whatever the container wrote; any other run's rows never carry it", async () => {
+    await writeFile(join(outDir, "result.json"), JSON.stringify(output()));
+    const lines = [{ kind: "slice.red", payload: { id: 2, by: "implementer" } }, { kind: "slice.green", payload: { id: 2 } }, { kind: "note", payload: { note: "x" } }];
+    await writeFile(join(outDir, "events.jsonl"), `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+    const helper = await ingestStageOutput({ outDir, runId: "r", stateDir, pack: "ui_design" });
+    expect(helper.events.map((e) => e.payload.by)).toEqual(["ui-designer", "ui-designer", "ui-designer"]);
+    expect(helper.events[0]!.payload).toMatchObject({ id: 2 });
+
+    const forged = [{ kind: "slice.red", payload: { id: 1, by: "ui-designer" } }, { kind: "slice.green", payload: { id: 1, by: "somebody" } }];
+    await writeFile(join(outDir, "events.jsonl"), `${forged.map((l) => JSON.stringify(l)).join("\n")}\n`);
+    for (const pack of ["implementing", undefined]) {
+      const mine = await ingestStageOutput({ outDir, runId: "r", stateDir, ...(pack ? { pack } : {}) });
+      expect(mine.events.map((e) => e.payload.by)).toEqual([undefined, "somebody"]);
+    }
+  });
+
   it("keeps the run's stream in events.jsonl and off the task's log, and a kind it does not know on it", async () => {
     await writeFile(join(outDir, "result.json"), JSON.stringify(output()));
     const lines = [

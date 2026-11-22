@@ -40,6 +40,8 @@ export function buildBudget(runs: readonly RunFacts[], events: readonly { kind: 
   let lastCommit: string | null = null;
   let verifyFailedSince = false;
   for (const { kind, payload } of events) {
+    // The ui-designer's rows (stamped by the machine at ingest) are the design budget's, never Build's (RFC 0013, risk 5).
+    if (payload.by === "ui-designer") continue;
     if (kind === "stage.slice.red") {
       ledgerIterations += 1;
       consecutiveReds += 1;

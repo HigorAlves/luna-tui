@@ -3467,6 +3467,9 @@ export class Pipeline {
       facts: {
         ...(why.secondScopeRed ? { scopeTwice: true } : {}),
         ...(detail.envBroken === true ? { envBroken: true } : {}),
+        // Set by the pack runner when the ui-designer's end decided it (RFC 0013): the agent's own words never do.
+        ...(detail.escalationFact === "merge_conflict" ? { mergeConflict: true } : {}),
+        ...(detail.escalationFact === "design_budget" ? { designBudget: true } : {}),
         ...(detail.headMoved === true ? { headMoved: true } : {}),
         ...(why.loopGuard ? { loopGuard: why.loopGuard } : {}),
         ...(budget ? { budget: { spent: String(budget.spent), numbers: `${String(budget.iterations)} of ${limits.max_iterations} iterations, ${budget.tokens === null ? "tokens not counted" : `${String(budget.tokens)} of ${limits.max_tokens} tokens`}, ${String(budget.minutes)} of ${limits.max_minutes} minutes`, consecutiveReds: Number(budget.consecutiveReds ?? 0) } } : {}),

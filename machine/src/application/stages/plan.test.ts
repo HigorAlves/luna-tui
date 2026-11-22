@@ -1300,7 +1300,7 @@ describe("planStage's design spec", () => {
   });
 
   it("escalates design_budget, before the spec writer runs, when the design budget is spent", async () => {
-    const spent = { tokens: 1_000_001, tokensCounted: true, minutes: 3, spent: "tokens" as const, limits: { max_tokens: 1_000_000, max_minutes: 45 } };
+    const spent = { tokens: 1_000_001, tokensCounted: true, minutes: 3, minutesLeft: 42, spent: "tokens" as const, limits: { max_tokens: 1_000_000, max_minutes: 45 } };
     const { run, calls } = setup({}, designOn({ budget: async () => spent }));
     const result = await run(context({ task: frontend }));
     expect(calls).toHaveLength(0);

@@ -1,5 +1,5 @@
 // Why a Build escalated, as a typed decision with a confidence. Facts decide without a model (a second scope red; a service or container that
-// never started); everything else, a spent budget included, goes to the `escalation_reason` decision once, with the machine's facts. Under the
+// never started); everything else, Build's own spent budget included, goes to the `escalation_reason` decision once, with the machine's facts. Under the
 // pack's bar the reason is `other` and a person reads it; a decision that cannot run leaves the agent's own word. Text from the agent and the
 // failing output is data: flattened, cut and passed through `safe()` before it is sent or kept.
 import { type DecisionOverrides, type EscalationReason } from "@hardness/contracts";
@@ -31,6 +31,10 @@ export interface EscalationInput {
     scopeTwice?: boolean;
     /** The branch was moved under the card (a recorded tests commit that is gone, a worktree on another branch). */
     headMoved?: boolean;
+    /** The ui-designer's commits conflicted twice (the machine's own fact, set when the helper ended). */
+    mergeConflict?: boolean;
+    /** The design budget was spent while a helper ran (the machine's own fact). */
+    designBudget?: boolean;
     /** A service that never became ready, or a container that could not start. */
     envBroken?: boolean;
     /** A spent budget: which limit, the numbers as text, and the reds in a row. */
@@ -66,6 +70,8 @@ export async function decideEscalation(input: EscalationInput): Promise<DecidedE
   const facts = [
     ...(input.facts.budget ? [`the budget is spent: ${input.facts.budget.numbers} (${input.facts.budget.spent})`, `${input.facts.budget.consecutiveReds} consecutive reds at the end of the ledger`] : []),
     ...(input.facts.scopeTwice ? ["the scope check failed twice on this card"] : []),
+    ...(input.facts.mergeConflict ? ["the ui-designer's commits conflicted with the implementer's twice"] : []),
+    ...(input.facts.designBudget ? ["the design budget was spent while the ui-designer ran"] : []),
     ...(input.facts.envBroken ? ["a service or the container never started"] : []),
     ...(input.facts.loopGuard ? [`the loop guard stopped the run: ${input.facts.loopGuard.cause} after ${input.facts.loopGuard.calls} calls`] : []),
     ...(input.facts.notes ?? []),
@@ -75,6 +81,8 @@ export async function decideEscalation(input: EscalationInput): Promise<DecidedE
   const kept = { agentReason, summary, outputTail, facts };
   if (input.facts.headMoved) return { reason: "head_moved", confidence: 1, source: "fact", ...kept };
   if (input.facts.scopeTwice) return { reason: "undeclared_scope", confidence: 1, source: "fact", ...kept };
+  if (input.facts.mergeConflict) return { reason: "merge_conflict", confidence: 1, source: "fact", ...kept };
+  if (input.facts.designBudget) return { reason: "design_budget", confidence: 1, source: "fact", ...kept };
   if (input.facts.envBroken) return { reason: "env_broken", confidence: 1, source: "fact", ...kept };
   const word = flat(input.agent?.text);
   const { verdict, answer, recordId } = await judgeCheck(

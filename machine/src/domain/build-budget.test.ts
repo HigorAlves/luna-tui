@@ -20,6 +20,15 @@ describe("buildBudget", () => {
     expect(budget.minutesLeft).toBe(60);
   });
 
+  it("never counts the ui-designer's rows: a card with a helper's reds, greens and tokens has the Build budget of one without (RFC 0013, risk 5)", () => {
+    const mine = [row("stage.slice.red", { id: 1 }), row("stage.slice.green", { id: 1 }), finished({ input: 100, output: 20 })];
+    const helper = [row("stage.slice.red", { id: 2, by: "ui-designer" }), row("stage.slice.red", { id: 2, by: "ui-designer" }), row("stage.slice.green", { id: 2, by: "ui-designer" }), row("stage.slice.committed", { id: 2, by: "ui-designer" }), row("build.helper_ended", { slice: 2, attempt: 1, outcome: "pass", tokens: 900_000, minutes: 40 })];
+    const runs = [run("implementing", 0, 10)];
+    expect(buildBudget(runs, [...mine.slice(0, 2), ...helper, mine[2]!], limits)).toEqual(buildBudget(runs, mine, limits));
+    // The consecutive-reds streak is the implementer's too: a helper's reds do not extend it, and its green does not break it.
+    expect(buildBudget(runs, [row("stage.slice.red", { id: 1 }), ...helper, row("stage.slice.red", { id: 1 })], limits).consecutiveReds).toBe(2);
+  });
+
   it("says tokens are not counted when no run reported them, and never spends the token limit then", () => {
     const budget = buildBudget([run("implementing", 0, 10)], [finished()], limits);
     expect(budget).toMatchObject({ tokens: null, tokensCounted: false, spent: null });

@@ -1,7 +1,7 @@
 import { type EngineId, type Ledger, type Slice, stepsOfAnswer } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { type DelegationFacts, MIN_HELPER_MINUTES, delegable, isUiSlice, locksOf } from "./delegation.ts";
+import { type DelegationFacts, IMPLEMENTER_RESERVE_MINUTES, MIN_HELPER_MINUTES, delegable, helperMinutes, isUiSlice, locksOf } from "./delegation.ts";
 
 const plan: Slice[] = stepsOfAnswer([
   { title: "API", description: "API", est_loc: 20, files: ["src/api/card.ts", "src/api/card.test.ts"], done_when: ["a"] },
@@ -102,11 +102,14 @@ describe("delegable", () => {
   it("refuses when the design budget is spent", () => {
     expect(delegable(facts({ designBudget: { spent: true, minutesLeft: 30 } }))).toEqual({ ok: false, reason: "the design budget is spent: build the slice yourself" });
   });
-  it(`refuses when less than ${MIN_HELPER_MINUTES} minutes are left, on either clock`, () => {
+  it(`refuses when the helper would get less than ${MIN_HELPER_MINUTES} minutes: the smaller of the design budget's and the run's minus ${IMPLEMENTER_RESERVE_MINUTES}`, () => {
     expect(MIN_HELPER_MINUTES).toBe(8);
-    expect(delegable(facts({ implementerMinutesLeft: 7 }))).toEqual({ ok: false, reason: "less than 8 minutes are left in this run: build the slice yourself" });
+    expect(IMPLEMENTER_RESERVE_MINUTES).toBe(3);
+    expect(helperMinutes(30, 25)).toBe(22);
+    expect(helperMinutes(5, 25)).toBe(5);
+    expect(delegable(facts({ implementerMinutesLeft: 10 }))).toEqual({ ok: false, reason: "less than 8 minutes would be left for the helper once the implementer keeps 3 of this run's: build the slice yourself" });
     expect(delegable(facts({ designBudget: { spent: false, minutesLeft: 7.5 } }))).toEqual({ ok: false, reason: "less than 8 minutes are left of the design budget: build the slice yourself" });
-    expect(delegable(facts({ implementerMinutesLeft: 8, designBudget: { spent: false, minutesLeft: 8 } })).ok).toBe(true);
+    expect(delegable(facts({ implementerMinutesLeft: 11, designBudget: { spent: false, minutesLeft: 8 } })).ok).toBe(true);
   });
   it("uses the repo's engine for the helper when luna.yaml names one", () => {
     expect(delegable(facts({ repoEngine: "claude:opus" }))).toMatchObject({ ok: true, engine: "claude:opus" });

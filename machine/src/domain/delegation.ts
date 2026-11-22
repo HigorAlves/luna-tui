@@ -8,6 +8,12 @@ import { touchesRenderedSurface } from "./rendered.ts";
 /** A helper needs this many minutes, on the run's clock and on the design budget's, to be worth its own workspace and install. */
 export const MIN_HELPER_MINUTES = 8;
 
+/** What the implementer keeps of its own minutes while a helper runs: the helper's clock ends this much before the implementer's. */
+export const IMPLEMENTER_RESERVE_MINUTES = 3;
+
+/** The minutes a helper may run: the smaller of the design budget's and the implementer's, less what the implementer keeps. */
+export const helperMinutes = (designMinutesLeft: number, implementerMinutesLeft: number): number => Math.min(designMinutesLeft, implementerMinutesLeft - IMPLEMENTER_RESERVE_MINUTES);
+
 /** The files each side owns while a helper builds a slice: the implementer's are locked against the helper, the helper's against the implementer. */
 export interface Locks {
   helper: string[];
@@ -81,8 +87,8 @@ export function delegable(f: DelegationFacts): Delegation {
   if (f.active) return no(`the ui-designer is already building slice ${f.active.slice}; call slice_wait, then delegate again`);
   if (f.attempted.has(id)) return no(`the ui-designer already had slice ${id} once: build it yourself`);
   if (f.designBudget.spent) return no("the design budget is spent: build the slice yourself");
-  if (f.implementerMinutesLeft < MIN_HELPER_MINUTES) return no(`less than ${MIN_HELPER_MINUTES} minutes are left in this run: build the slice yourself`);
   if (f.designBudget.minutesLeft < MIN_HELPER_MINUTES) return no(`less than ${MIN_HELPER_MINUTES} minutes are left of the design budget: build the slice yourself`);
+  if (helperMinutes(f.designBudget.minutesLeft, f.implementerMinutesLeft) < MIN_HELPER_MINUTES) return no(`less than ${MIN_HELPER_MINUTES} minutes would be left for the helper once the implementer keeps ${IMPLEMENTER_RESERVE_MINUTES} of this run's: build the slice yourself`);
   const engine = helperEngine(f);
   if (!engine) return no("the implementer and the ui-designer would both need the Codex login, and no Claude credential is set: build the slice yourself");
   return { ok: true, engine, locks: locksOf(f.slices, id, f.ledger) };

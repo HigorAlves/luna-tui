@@ -831,7 +831,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
 
   let ingested;
   try {
-    ingested = await ingestStageOutput({ outDir: join(runDir, "out"), runId: context.runId, stateDir: deps.stateDir });
+    ingested = await ingestStageOutput({ outDir: join(runDir, "out"), runId: context.runId, stateDir: deps.stateDir, pack });
     if (hasSecrets) ingested = redactDeep(ingested, redact) as typeof ingested;
   } catch (error) {
     const missing = (error as NodeJS.ErrnoException)?.code === "ENOENT";

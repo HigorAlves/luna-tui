@@ -511,6 +511,20 @@ describe("a scope problem gets one fix pass, then a person", () => {
     expect(moved?.payload).toMatchObject({ escalation: "undeclared_scope" });
   });
 
+  it.each(["merge_conflict", "design_budget"] as const)("keeps %s, a fact the machine set on the ui-designer's end, as the decided reason: the Build rewrite to `other` does not touch it, and no model is asked", async (fact) => {
+    const asked: unknown[] = [];
+    const escalated = { outcome: "escalated" as const, detail: { escalation: fact, escalationFact: fact, reason: `the machine says ${fact}`, options: [] } };
+    const decide = async (...args: unknown[]) => (asked.push(args), { reason: { choice: "too_complex", confidence: 0.99 } });
+    const p = new Pipeline(db, (stage) => (stage === "implementing" ? async () => escalated : stubs.runnerFor(stage)), { inline: true, policies: previewOn, hasConfig: () => true, escalationDecide: { decide: decide as never } });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    expect((await p.get(task.id)).state).toBe("escalated");
+    const moved = (await p.events(task.id)).findLast((e) => e.kind === "transition" && e.payload.to === "escalated");
+    expect(moved?.payload).toMatchObject({ escalation: fact });
+    expect(asked).toEqual([]);
+  });
+
   it("does not count a red that is not a scope red (a failing run of any other kind) against the one fix pass", async () => {
     const ran: Array<number> = [];
     const p = new Pipeline(db, (stage) => (stage === "implementing" ? async () => (ran.push(1), ran.length === 1 ? red : { outcome: "fail" as const }) : stubs.runnerFor(stage)), { inline: true, policies: previewOn, hasConfig: () => true });

@@ -23,4 +23,14 @@ describe("designBudget", () => {
   it("ignores a row whose numbers a container could have bent: negative or fractional tokens", () => {
     expect(designBudget([ran(-5, 1), { kind: "design.run", payload: { pack: "design_spec", tokens: 1.5, minutes: 1 } }], limits).tokens).toBeNull();
   });
+  it("counts the ui-designer's helper runs by their build.helper_ended rows, with the other designer runs", () => {
+    const ended = (tokens: number | null, minutes: number) => ({ kind: "build.helper_ended", payload: { slice: 2, attempt: 1, outcome: "pass", tokens, minutes } });
+    expect(designBudget([ran(300_000, 6), ended(400_000, 10)], limits)).toMatchObject({ tokens: 700_000, minutes: 16, minutesLeft: 29, spent: null });
+    expect(designBudget([ended(1_000_001, 1)], limits).spent).toBe("tokens");
+    expect(designBudget([ended(5, 50)], limits)).toMatchObject({ spent: "minutes", minutesLeft: 0 });
+  });
+  it("never counts a helper's row a container wrote under the machine's kind, nor one with bent numbers", () => {
+    expect(designBudget([{ kind: "stage.build.helper_ended", payload: { tokens: 9_999_999, minutes: 99 } }], limits)).toMatchObject({ tokens: null, minutes: 0, spent: null });
+    expect(designBudget([{ kind: "build.helper_ended", payload: { tokens: -4, minutes: -3 } }], limits)).toMatchObject({ tokens: null, minutes: 0 });
+  });
 });
