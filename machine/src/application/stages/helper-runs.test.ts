@@ -257,6 +257,52 @@ describe("helperRuns: following the helper", () => {
   });
 });
 
+describe("helperRuns: a request that is still starting when the run ends", () => {
+  const slowMake = () => {
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    const make = async (...a: unknown[]) => (await gate, { path: `/cards/w.helper-${a[3]}-${a[4]}`, branch: `luna-helper-${a[3]}`, ref: `refs/luna/helper/task1/${a[3]}` });
+    return { open, make };
+  };
+  const cases: Array<[string, (c: ReturnType<typeof helperRuns>) => Promise<unknown>]> = [
+    ["afterRun(fail)", (c) => c.afterRun("fail")],
+    ["afterRun(pass)", (c) => c.afterRun("pass")],
+    ["cancel", (c) => c.cancel()],
+  ];
+  for (const [name, end] of cases) {
+    it(`starts no helper when ${name} began before its workspace was made, and removes that workspace`, async () => {
+      const slow = slowMake();
+      const t = setup({ helperWorkspace: { make: slow.make as never, remove: async (path: string) => void t.removed.push(path) } });
+      const asked = ask(t.coordinator);
+      await tick();
+      const ending = end(t.coordinator);
+      await tick();
+      slow.open();
+      expect(await asked).toEqual({ ok: false, error: "the run has ended" });
+      await ending;
+      expect(t.c.calls).toEqual([]);
+      expect(t.removed).toEqual(["/cards/w.helper-2-1"]);
+      expect(t.coordinator.status()).toBeNull();
+      expect(t.coordinator.delegatedLocks()).toEqual([]);
+    });
+  }
+
+  it("refuses a request that arrives after the run ended, without touching the importer", async () => {
+    const t = setup();
+    await t.coordinator.cancel();
+    expect(await ask(t.coordinator)).toEqual({ ok: false, error: "the run has ended" });
+    expect(t.log).toEqual([]);
+    expect(t.made).toEqual([]);
+  });
+
+  it("stops waiting for a request that never finishes", async () => {
+    const t = setup({ helperWorkspace: { make: () => new Promise(() => {}), remove: async () => {} } as never });
+    void ask(t.coordinator);
+    await tick();
+    await expect(t.coordinator.cancel()).resolves.toBeUndefined();
+  });
+});
+
 describe("helperRuns: cancelling", () => {
   it("aborts the helper, waits for it, records cancelled and removes the workspace", async () => {
     const t = setup();

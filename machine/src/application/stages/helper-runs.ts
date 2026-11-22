@@ -274,7 +274,29 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
     })();
   }
 
-  async function onHelperRequest(request: HelperRequest): Promise<HelperAnswer> {
+  /** Set the moment the run ends (`afterRun`, `cancel`): no helper starts after it. */
+  let closed = false;
+  const ENDED: HelperAnswer = { ok: false, error: "the run has ended" };
+  const inflight = new Set<Promise<unknown>>();
+
+  /** Waits (bounded) for the requests that were already starting, so none slips in between the end and the walk over `helpers`. */
+  async function drain(): Promise<void> {
+    if (inflight.size === 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([Promise.allSettled([...inflight]), new Promise<void>((resolve) => (timer = setTimeout(resolve, deps.cancelWaitMs ?? CANCEL_WAIT_MS)))]);
+    clearTimeout(timer);
+  }
+
+  function onHelperRequest(request: HelperRequest): Promise<HelperAnswer> {
+    if (closed) return Promise.resolve(ENDED);
+    const running = startHelper(request);
+    inflight.add(running);
+    const done = () => void inflight.delete(running);
+    running.then(done, done);
+    return running;
+  }
+
+  async function startHelper(request: HelperRequest): Promise<HelperAnswer> {
     const slice = request.slice;
     if (!Number.isInteger(slice) || slice < 1) return { ok: false, error: `${JSON.stringify(slice)} is not a slice number` };
     const refuse = async (reason: string): Promise<HelperAnswer> => {
@@ -283,11 +305,14 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
       return { ok: false, error: reason };
     };
     const synced = await deps.importer.sync();
+    if (closed) return ENDED;
     if (!synced.ok) return refuse(`your commits could not be taken in yet (${synced.reason}); call slice_list, then delegate again`);
     const base = synced.head;
     const ledger = await readLedger(deps.outDir);
+    if (closed) return ENDED;
     if (!ledger) return refuse("the slice ledger could not be read; build the slice yourself");
     const facts = await deps.facts();
+    if (closed) return ENDED;
     const current = active();
     const decision = delegable({ ...facts, ledger, sliceId: slice, active: current ? { slice: current.slice } : null, attempted });
     if (!decision.ok) return refuse(decision.reason);
@@ -297,19 +322,31 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
     try {
       workspace = await deps.helperWorkspace.make(deps.cardPath, base, deps.taskId, slice, attempt);
     } catch (error) {
-      return refuse(`the helper's workspace could not be made: ${error instanceof Error ? error.message : String(error)}`);
+      return closed ? ENDED : refuse(`the helper's workspace could not be made: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (closed) {
+      // The run ended while the workspace was being made: nobody would cancel a helper started now.
+      await deps.helperWorkspace.remove(workspace.path).catch((error) => deps.log?.(`helper workspace not removed: ${msg(error)}`));
+      return ENDED;
     }
     const minutes = helperMinutes(facts.designBudget.minutesLeft, facts.implementerMinutesLeft);
     const h: Helper = { slice, attempt, base, ref: workspace.ref, workspace: workspace.path, locks: decision.locks, state: "running", controller: linkedController(), settled: Promise.resolve(), removed: false, deadline: now() + minutes * 60_000, engine: decision.engine, branch: workspace.branch, planned: { title: planned.title, touchpoints: planned.touchpoints, acceptance: planned.acceptance }, message: request.message.slice(0, 2000) };
     helpers.set(slice, h);
     attempted.add(slice);
     await setState(h, "running");
+    if (closed) {
+      await setState(h, "cancelled");
+      await release(h);
+      return ENDED;
+    }
     await row("build.helper_started", { slice, base, branch: workspace.ref, engine: decision.engine, attempt, locks: decision.locks });
     launch(h, runOf(h), contextOf(h, minutes));
     return { ok: true, handle: `${deps.taskId}/${slice}`, branch: workspace.ref, base, locks: decision.locks.helper };
   }
 
   async function cancel(): Promise<void> {
+    closed = true;
+    if (inflight.size > 0) await drain();
     const out = [...helpers.values()].filter((h) => LIVE.has(h.state));
     for (const h of out) h.controller.abort();
     await Promise.all(
@@ -494,6 +531,8 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
     onPickRequest,
     onPickAck,
     async afterRun(outcome) {
+      closed = true;
+      if (inflight.size > 0) await drain();
       if (outcome !== "pass") await cancel();
       else {
         for (const h of [...helpers.values()].filter((x) => LIVE.has(x.state))) await finish(h).catch((error) => deps.log?.(`helper not landed: ${msg(error)}`));
