@@ -16,7 +16,7 @@ import { designSteps } from "../../domain/verify-order.ts";
 import { type ManifestRow, boundedArtifacts, manifestRows } from "../../domain/e2e-manifest.ts";
 import { blockerSetKey } from "../../domain/finding-sets.ts";
 import { type Unplaced } from "../../domain/design-parity.ts";
-import { capturePlan, citedWithoutViewport } from "../../domain/parity-plan.ts";
+import { capturePlan, citedWithoutViewport, overCap } from "../../domain/parity-plan.ts";
 import { approvedScenarios, designSpecOf } from "../../domain/stage-input.ts";
 import { type ScenarioRow, scenarioFindings } from "../../domain/send-back.ts";
 import { type OpenAppInput, type OpenAppResult, type OpenPreviewResult, e2eModeOf } from "../app-session.ts";
@@ -308,7 +308,7 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
     /** The design parity review after the audit: its findings are classified with the audit's and joined in the design report; confident blockers fail the run. */
     const parityStep: AfterBrowserStep = async ({ parity, previous }) => {
       if (!parity || !deps.designParity) return null;
-      const out = await deps.designParity(context, parity, citedWithoutViewport(approved, spec));
+      const out = await deps.designParity(context, parity, [...citedWithoutViewport(approved, spec), ...overCap(approved, spec).map((t) => ({ scenario: t.scenario, frame: t.frame, viewport: t.viewport.name, state: t.state, reason: "over the capture cap" }))]);
       if (!out) return null;
       if ("escalate" in out) return { key: "parity", escalate: out.escalate };
       const audit = (previous ?? []).find((o) => o.key === "a11y")?.detail as { level?: "A" | "AA" | "AAA"; mode?: "gate" | "advisory"; findings?: Finding[] } | undefined;

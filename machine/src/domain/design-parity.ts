@@ -21,10 +21,16 @@ export interface SettledParity {
   notes: string[];
 }
 
-/** A browser scenario that cites a frame the spec gives no viewport: there is nothing to capture, but the frame still counts (see `citedWithoutViewport`). */
+/**
+ * A browser scenario that cites a frame the machine will not capture, but the frame still counts: the spec gives it no viewport (see `citedWithoutViewport`), or its target
+ * is over the capture cap (see `overCap`, which names the viewport, the state and the reason).
+ */
 export interface Unplaced {
   scenario: string;
   frame: string;
+  viewport?: string;
+  state?: PairRow["state"];
+  reason?: string;
 }
 
 export function settleParity(answer: DesignParityAnswer | null, { plan, spec, captures, bar, unplaced = [] }: { plan: CapturePlan; spec: DesignSpec | null; captures: ParityCapture[]; bar: number; unplaced?: Unplaced[] }): SettledParity {
@@ -53,10 +59,10 @@ export function settleParity(answer: DesignParityAnswer | null, { plan, spec, ca
     };
   });
   // A cited frame with no viewport cannot be captured, so it is never in the plan; it is not compared, and a cited frame that is not compared opens the gate.
-  for (const { scenario, frame: id } of unplaced) {
+  for (const { scenario, frame: id, viewport, state, reason } of unplaced) {
     const spot = frameOf(id);
     const first = spot?.states.find((s) => s.nodeId !== null) ?? spot?.states[0];
-    frames.push({ frame: id, name: spot?.name ?? id, node: first?.nodeId ?? id, scenario, viewport: "unknown", state: first?.state ?? "default", status: "not_compared", reason: "the spec gives this frame no viewport", capture: null, render: null, diff: null, pair: null, diffRatio: null });
+    frames.push({ frame: id, name: spot?.name ?? id, node: (state ? spot?.states.find((s) => s.state === state)?.nodeId : first?.nodeId) ?? id, scenario, viewport: viewport ?? "unknown", state: state ?? first?.state ?? "default", status: "not_compared", reason: reason ?? "the spec gives this frame no viewport", capture: null, render: null, diff: null, pair: null, diffRatio: null });
   }
   for (const id of plan.uncited) {
     const spot = frameOf(id);

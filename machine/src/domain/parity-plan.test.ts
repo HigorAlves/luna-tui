@@ -1,7 +1,7 @@
 import { MAX_CAPTURES } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { capturePlan, citedWithoutViewport } from "./parity-plan.ts";
+import { capturePlan, citedWithoutViewport, overCap } from "./parity-plan.ts";
 
 const desktop = { width: 1440, height: 900 };
 const designed = (state: string, nodeId: string | null = "1:1") => ({ state, nodeId, suggestion: null });
@@ -48,6 +48,9 @@ describe("capturePlan", () => {
     const plan = capturePlan(scenarios as never, many);
     expect(plan.targets).toHaveLength(MAX_CAPTURES);
     expect(plan.notes).toEqual([expect.stringContaining(`${30 - MAX_CAPTURES} captures over the cap`)]);
+    // The frames left out are still cited: they come back as targets, so the settle can list them as not compared.
+    const over = overCap(scenarios as never, many);
+    expect(over.map((t) => t.scenario)).toEqual(Array.from({ length: 30 - MAX_CAPTURES }, (_, i) => `S${MAX_CAPTURES + i}`));
   });
 });
 

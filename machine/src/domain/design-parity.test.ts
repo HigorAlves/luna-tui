@@ -91,3 +91,12 @@ describe("settleParity: a cited frame with no viewport", () => {
     expect(s.frames.map((f) => [f.frame, f.scenario, f.status])).toEqual([["12:34", "S1", "compared"], ["20:1", "S2", "not_compared"], ["20:1", null, "not_compared"]]);
   });
 });
+
+describe("settleParity: targets over the capture cap", () => {
+  it("are not compared, with the cap as the reason, and fire the gate", () => {
+    const left = { scenario: "S9", frame: "12:34", viewport: "1440x900", state: "hover" as const, reason: "over the capture cap" };
+    const s = settleParity(answer() as never, { plan: onlyDefault, spec, captures, bar: 0.75, unplaced: [left] });
+    expect(s.frames.filter((f) => f.scenario === "S9")).toEqual([expect.objectContaining({ frame: "12:34", viewport: "1440x900", state: "hover", status: "not_compared", reason: "over the capture cap", capture: null })]);
+    expect(s.gate.why).toContain("not_compared");
+  });
+});
