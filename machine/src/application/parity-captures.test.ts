@@ -44,6 +44,21 @@ describe("collectCaptures", () => {
     expect(big.captures).toEqual([]);
     expect(big.notes.join("\n")).toMatch(/S1\/1440x900-hover.*over the 32 byte cap/);
   });
+  it("refuses a capture reached through a linked folder, and its styles", async () => {
+    const { qa, out } = setup();
+    const host = join(root, "host");
+    mkdirSync(host);
+    writeFileSync(join(host, "1440x900-default.png"), PNG);
+    writeFileSync(join(host, "1440x900-default.styles.json"), JSON.stringify([style]));
+    rmSync(join(qa, "parity", "S1"), { recursive: true });
+    symlinkSync(host, join(qa, "parity", "S1"));
+    const r = await collectCaptures(qa, plan, out);
+    expect(r.captures).toEqual([]);
+    expect(r.missing).toHaveLength(2);
+    expect(r.notes.join("\n")).toMatch(/S1\/1440x900-default.*outside/);
+    expect(existsSync(join(out, "S1", "1440x900-default.png"))).toBe(false);
+    expect(existsSync(join(out, "S1", "1440x900-default.styles.json"))).toBe(false);
+  });
   it("keeps a capture whose styles are missing or do not parse, with styles null", async () => {
     const { qa, out } = setup();
     writeFileSync(join(qa, "parity", "S1", "1440x900-default.png"), PNG);

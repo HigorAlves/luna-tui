@@ -4,10 +4,10 @@
 // with its guard's decision, usage); only the facts for the task's log are taken from it, the
 // rest stays in the file.
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, realpath } from "node:fs/promises";
 
 import { copyRegularFile, readRegularFile } from "../../adapters/fs/bounded.ts";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, sep } from "node:path";
 
 import { isReservedKind } from "../../domain/reserved-kinds.ts";
 import { type ArtifactKind, StageOutput, isStreamEvent } from "@hardness/contracts";
@@ -105,10 +105,21 @@ export async function ingestStageOutput(opts: {
     // evidence stage (runs/<id>/files/qa/) and the board expect them.
     const dest = join(base, artifact.path.replace(/^files\//, ""));
     const src = join(outDir, artifact.path);
+    // The path is the container's word: it stays inside /out by its text (relative, no ..) and by where its folder really is (no linked directory on the way).
+    const skip = (reason: string) => events.push({ at: new Date().toISOString(), kind: "note", payload: { skipped: true, path: artifact.path, label: artifact.label, reason } });
+    if (isAbsolute(artifact.path) || artifact.path.split(/[\\/]/).includes("..")) {
+      skip("path outside the output folder");
+      continue;
+    }
+    const [realOut, realParent] = await Promise.all([realpath(outDir), realpath(dirname(src)).catch(() => null)]);
+    if (realParent !== null && realParent !== realOut && !realParent.startsWith(realOut + sep)) {
+      skip("path outside the output folder");
+      continue;
+    }
     // The container wrote /out: a link there would make the copy read whatever host file it points at.
     const info = await lstat(src).catch(() => null);
     if (info && !info.isFile()) {
-      events.push({ at: new Date().toISOString(), kind: "note", payload: { skipped: true, path: artifact.path, label: artifact.label, reason: "not a regular file" } });
+      skip("not a regular file");
       continue;
     }
     try {
