@@ -230,16 +230,16 @@ function pickedOf(events: readonly EventRow[]): Array<{ slice: number; shas: str
 
 type HelperRow = { kind: string; payload: Record<string, unknown>; at: Date };
 
-/** Where one slice's latest helper stands, from the machine's rows after the newest start: a pick is `committed`, a second conflict `merge_conflict`, a first one waits for its re-run, a refusal is `refused`, a pass nobody took yet is `returned`, anything else that ended is `failed` (or `cancelled` when the run said so). */
-function helperStateOf(rows: readonly HelperRow[]): HelperState {
-  if (rows.some((r) => r.kind === "build.helper_picked")) return "committed";
-  const last = rows.findLast((r) => r.kind !== "build.helper_ended" && r.kind !== "build.helper_started");
-  if (last?.kind === "build.helper_refused") return "refused";
-  if (last?.kind === "build.helper_conflict") return typeof last.payload.attempt === "number" && last.payload.attempt >= 2 ? "merge_conflict" : "conflict_rerun";
-  const ended = rows.findLast((r) => r.kind === "build.helper_ended");
-  if (!ended) return "running";
-  if (ended.payload.outcome === "pass") return "returned";
-  return ended.payload.outcome === "cancelled" ? "cancelled" : "failed";
+/** Where one slice's latest helper stands, from the machine's rows since its newest start, by the last of them: a pick is `committed`, a refusal `refused`, a second conflict `merge_conflict`, a first one `conflict_rerun` (the re-run writes no start row of its own), a pass nobody took yet `returned`, any other end `failed` (or `cancelled` when the run said so). The attempt is the one that row belongs to. */
+function helperStateOf(rows: readonly HelperRow[]): { state: HelperState; attempt: number } {
+  const last = rows.at(-1)!;
+  // A conflict of attempt 1 is followed by attempt 2, which has no start row of its own.
+  const attempt = Math.max(1, ...rows.map((r) => (typeof r.payload.attempt === "number" ? (r.kind === "build.helper_conflict" ? Math.min(2, r.payload.attempt + 1) : r.payload.attempt) : 1)));
+  if (rows.some((r) => r.kind === "build.helper_picked")) return { state: "committed", attempt };
+  if (last.kind === "build.helper_refused") return { state: "refused", attempt };
+  if (last.kind === "build.helper_conflict") return { state: attempt >= 2 && last.payload.attempt === 2 ? "merge_conflict" : "conflict_rerun", attempt };
+  if (last.kind === "build.helper_ended") return { state: last.payload.outcome === "pass" ? "returned" : last.payload.outcome === "cancelled" ? "cancelled" : "failed", attempt };
+  return { state: "running", attempt };
 }
 
 /** Each slice's owner and the latest helper, from the machine's own rows. A slice is the ui-designer's while its helper is out, when its commits are waiting to be picked and once they landed; any other end gives it back to the implementer. */
@@ -265,16 +265,16 @@ function helpersOf(events: readonly EventRow[]): { slices: NonNullable<BuildProg
       latest = { slice, at, branch, attempt };
     } else if (owned.has(slice) || kind === "build.helper_picked") (owned.get(slice) ?? owned.set(slice, []).get(slice)!).push({ kind, payload, at });
   }
-  const states = new Map([...owned].filter(([, rows]) => rows.length > 0).map(([slice, rows]) => [slice, helperStateOf(rows)] as const));
+  const stands = new Map([...owned].filter(([, rows]) => rows.length > 0).map(([slice, rows]) => [slice, helperStateOf(rows)] as const));
   const picked = new Map(pickedOf(events).map((p) => [p.slice, p.shas]));
   const slices = [...sliceIds].sort((a, b) => a - b).map((slice) => {
-    const state = states.get(slice);
+    const state = stands.get(slice)?.state;
     const shas = picked.get(slice);
     const owner = state === "running" || state === "returned" || state === "conflict_rerun" || state === "committed" || shas ? ("ui-designer" as const) : ("implementer" as const);
     return { slice, owner, ...(shas ? { picked: shas } : {}) };
   });
-  const state = latest ? states.get(latest.slice) : undefined;
-  return { slices, helper: latest && state ? { slice: latest.slice, state, attempt: latest.attempt, branch: latest.branch, startedAt: latest.at.toISOString() } : null };
+  const stand = latest ? stands.get(latest.slice) : undefined;
+  return { slices, helper: latest && stand ? { slice: latest.slice, state: stand.state, attempt: stand.attempt, branch: latest.branch, startedAt: latest.at.toISOString() } : null };
 }
 
 const SCENE_ID = /^[A-Za-z0-9_-]{1,40}$/;

@@ -280,6 +280,14 @@ describe("buildProgressOf: the ui-designer helper (RFC 0013, phase 5)", () => {
     expect(rerun.slices).toContainEqual({ slice: 2, owner: "ui-designer" });
   });
 
+  it("follows the re-run after a first conflict, which writes no start row: its end tells the state, and the attempt is 2", () => {
+    const ended = (attempt: number, outcome: string) => event("build.helper_ended", { slice: 2, attempt, outcome, tokens: null, minutes: 1 });
+    const conflict = event("build.helper_conflict", { slice: 2, attempt: 1 });
+    expect(progress([started(2), ended(1, "pass"), conflict, ended(2, "pass")]).helper).toMatchObject({ state: "returned", attempt: 2 });
+    expect(progress([started(2), ended(1, "pass"), conflict, ended(2, "fail")]).helper).toMatchObject({ state: "failed", attempt: 2 });
+    expect(progress([started(2), ended(1, "pass"), conflict]).helper).toMatchObject({ state: "conflict_rerun", attempt: 2 });
+  });
+
   it("follows the second attempt of a re-run", () => {
     const p = progress([started(2), event("build.helper_conflict", { slice: 2, attempt: 1 }), started(2, 2)]);
     expect(p.helper).toMatchObject({ slice: 2, state: "running", attempt: 2 });

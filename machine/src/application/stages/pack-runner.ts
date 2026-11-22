@@ -309,8 +309,10 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
 /** What the container's own result file says the run ended as, before the machine has ingested it: only a clean pass is "pass". */
 async function peekOutcome(file: string): Promise<StageOutcome> {
   try {
-    const result = JSON.parse(await readRegularFile(file, 4 * 1024 * 1024)) as { ok?: unknown; outcome?: unknown };
+    const result = JSON.parse(await readRegularFile(file, 4 * 1024 * 1024)) as { ok?: unknown; outcome?: unknown; answer?: { kind?: unknown } | null };
     if (result.ok === false) return "fail";
+    // Runners before the `escalated` outcome reported a stop on purpose as a pass with an escalated answer; ingest reads it as escalated, so does this (a returned helper must not land on it).
+    if (result.outcome === "pass" && result.answer?.kind === "escalated") return "escalated";
     return result.outcome === "pass" || result.outcome === "needs_input" || result.outcome === "test_change" || result.outcome === "escalated" ? result.outcome : "fail";
   } catch {
     return "fail";

@@ -232,8 +232,9 @@ export function helperTools(options: HelperToolsOptions) {
         if (problem) return { error: problem };
         const now = stateOf(slice);
         if (row.status === "committed") return { state: "committed", attempt: now?.attempt ?? 1, ...(now?.summary ? { summary: now.summary } : {}) };
-        if (now && now.state !== "running") return now;
-        if (Date.now() >= until) return { state: "running", attempt: now?.attempt ?? 1, ...(now?.summary ? { summary: now.summary } : {}) };
+        // The helper building again after a conflict is still at work: the wait goes on, as it does for a running one.
+        if (now && now.state !== "running" && now.state !== "conflict_rerun") return now;
+        if (Date.now() >= until) return { state: now?.state ?? "running", attempt: now?.attempt ?? 1, ...(now?.summary ? { summary: now.summary } : {}) };
         await new Promise((resolve) => setTimeout(resolve, Math.min(250, Math.max(POLL_MS, until - Date.now()))));
       }
     },

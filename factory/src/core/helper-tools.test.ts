@@ -138,6 +138,20 @@ describe("slice_wait", () => {
     expect(await luna.call("slice_wait", { slice: 3, waitSeconds: 5 })).toEqual({ state: "refused", attempt: 2, summary: "it touched your files" });
   });
 
+  it("keeps waiting while the machine has the helper building again after a conflict, and answers when the state moves on", async () => {
+    const { luna, checks } = scratch();
+    void delegateOk(checks);
+    await luna.call("slice_delegate", { slice: 3 });
+    state(checks, 3, { state: "conflict_rerun", attempt: 2 });
+    setTimeout(() => state(checks, 3, { state: "refused", attempt: 2, summary: "no" }), 300);
+    const t = Date.now();
+    expect(await luna.call("slice_wait", { slice: 3, waitSeconds: 5 })).toEqual({ state: "refused", attempt: 2, summary: "no" });
+    expect(Date.now() - t).toBeGreaterThanOrEqual(250);
+    // and when the time is up it says so, in the machine's own word
+    state(checks, 3, { state: "conflict_rerun", attempt: 2 });
+    expect(await luna.call("slice_wait", { slice: 3, waitSeconds: 1 })).toEqual({ state: "conflict_rerun", attempt: 2 });
+  });
+
   it("caps the wait at 240 seconds by its input", async () => {
     const { luna } = scratch();
     expect(await luna.call("slice_wait", { slice: 3, waitSeconds: 241 })).toMatchObject({ error: expect.stringContaining("waitSeconds") });
