@@ -424,7 +424,6 @@ export async function buildRealStages(
     // Build: a tests step (one failing, tagged test per scenario, committed by the machine) runs before the implementer.
     implementing: buildTestsStep({
       implement: (context, extra) => runAgent(deps, context, "implementing", extra),
-      runHelper: (context, extra) => runAgent(deps, context, "ui_design", extra),
       runWriter: (context, extra) => runAgent(deps, context, "build_tests", extra.plan ? { plan: extra.plan } : {}),
       judgeRed: async (check, repoPath) => {
         const policy = repoPath ? await policies.for(repoPath) : null;
