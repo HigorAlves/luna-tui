@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { type EngineId, type Ledger, type Slice, stepsOfAnswer } from "@hardness/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { type HelperRunsDeps, helperRuns } from "./helper-runs.ts";
+import { HELPER_START_LIMIT_MS, type HelperRunsDeps, helperRuns } from "./helper-runs.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 
 const BASE = "a".repeat(40);
@@ -165,6 +165,42 @@ describe("helperRuns: starting a helper", () => {
     expect(t.rows.map((r) => r.kind)).toEqual(["build.helper_refused"]);
     expect(t.c.calls).toEqual([]);
     expect(t.coordinator.delegatedLocks()).toEqual([]);
+  });
+});
+
+describe("helperRuns: a start that comes too late for the factory (L8-5)", () => {
+  const slowMake = (clock: { t: number }, took: number) => ({
+    make: async (...a: unknown[]) => ((clock.t += took), { path: `/cards/w.helper-${a[3]}-${a[4]}`, branch: `luna-helper-${a[3]}`, ref: `refs/luna/helper/task1/${a[3]}` }),
+    remove: async () => {},
+  }) as never;
+
+  it("gives a slow clone up: the workspace is removed, no run starts, the answer is ok:false", async () => {
+    const clock = { t: 1_000_000 };
+    const removedPaths: string[] = [];
+    const t = setup({ clock: () => clock.t, helperWorkspace: { ...slowMake(clock, HELPER_START_LIMIT_MS + 1_000), remove: async (path: string) => void removedPaths.push(path) } as never });
+    expect(await ask(t.coordinator)).toEqual({ ok: false, error: expect.stringContaining("too long") });
+    expect(removedPaths).toEqual(["/cards/w.helper-2-1"]);
+    expect(t.c.calls).toEqual([]);
+    expect(t.coordinator.delegatedLocks()).toEqual([]);
+    expect(t.coordinator.status()).toBeNull();
+  });
+
+  it("makes no workspace when the sync alone used the time", async () => {
+    const clock = { t: 1_000_000 };
+    const t = setup({ clock: () => clock.t, importer: { sync: async () => ((clock.t += HELPER_START_LIMIT_MS + 1_000), { ok: true as const, head: BASE, changed: false }) } });
+    expect(await ask(t.coordinator)).toEqual({ ok: false, error: expect.stringContaining("too long") });
+    expect(t.made).toEqual([]);
+  });
+
+  it("starts the helper when the clone took less than the limit", async () => {
+    const clock = { t: 1_000_000 };
+    const t = setup({ clock: () => clock.t, helperWorkspace: slowMake(clock, HELPER_START_LIMIT_MS - 1_000) });
+    expect(await ask(t.coordinator)).toMatchObject({ ok: true });
+    expect(t.c.calls).toHaveLength(1);
+  });
+
+  it("makes the limit 75 s, inside the factory's 90 s wait", () => {
+    expect(HELPER_START_LIMIT_MS).toBe(75_000);
   });
 });
 

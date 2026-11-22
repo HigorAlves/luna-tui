@@ -34,6 +34,8 @@ const LIVE: ReadonlySet<HelperState> = new Set(["running", "returned", "picking"
 const LEDGER_CAP = 4 * 1024 * 1024;
 const SUMMARY_CAP = 300;
 const CANCEL_WAIT_MS = 30_000;
+/** The factory stops waiting for the machine's answer to `slice_delegate` at 90 s; a helper that would start later than this after the request was seen is given up. */
+export const HELPER_START_LIMIT_MS = 75_000;
 
 /** What the pack runner's helper run takes besides the context (slice 79): its own workspace and what it builds. */
 export interface HelperRunExtra extends Pick<AgentExtra, "design" | "scenarioTests" | "testsFiles" | "inlineTests"> {
@@ -85,6 +87,8 @@ export interface HelperRunsDeps {
   /** The shas the machine picked onto this card's branch on earlier runs (its own `build.helper_picked` rows). */
   priorPicked?: Iterable<string>;
   now?: () => number;
+  /** The wall clock the age of a helper request is measured on (`Date.now` by default). */
+  clock?: () => number;
   /** How long `cancel` waits for the helper to settle; 30 s by default. */
   cancelWaitMs?: number;
   log?: (line: string) => void;
@@ -301,6 +305,7 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
   }
 
   async function startHelper(request: HelperRequest): Promise<HelperAnswer> {
+    const seen = (deps.clock ?? Date.now)();
     const slice = request.slice;
     if (!Number.isInteger(slice) || slice < 1) return { ok: false, error: `${JSON.stringify(slice)} is not a slice number` };
     const refuse = async (reason: string): Promise<HelperAnswer> => {
@@ -317,6 +322,8 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
     if (!ledger) return refuse("the slice ledger could not be read; build the slice yourself");
     const facts = await deps.facts();
     if (closed) return ENDED;
+    // A slow sync has used the time already: no workspace is made for an answer the factory will not wait for.
+    if ((deps.clock ?? Date.now)() - seen > HELPER_START_LIMIT_MS) return refuse("the helper took too long to start; build the slice yourself");
     const current = active();
     const decision = delegable({ ...facts, ledger, sliceId: slice, active: current ? { slice: current.slice } : null, attempted });
     if (!decision.ok) return refuse(decision.reason);
@@ -332,6 +339,11 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
       // The run ended while the workspace was being made: nobody would cancel a helper started now.
       await deps.helperWorkspace.remove(workspace.path).catch((error) => deps.log?.(`helper workspace not removed: ${msg(error)}`));
       return ENDED;
+    }
+    if ((deps.clock ?? Date.now)() - seen > HELPER_START_LIMIT_MS) {
+      // The factory has stopped waiting (90 s) and told the agent to build the slice itself: a helper started now would work on a slice nobody waits for.
+      await deps.helperWorkspace.remove(workspace.path).catch((error) => deps.log?.(`helper workspace not removed: ${msg(error)}`));
+      return refuse("the helper took too long to start; build the slice yourself");
     }
     const minutes = helperMinutes(facts.designBudget.minutesLeft, facts.implementerMinutesLeft);
     const h: Helper = { slice, attempt, base, ref: workspace.ref, workspace: workspace.path, locks: decision.locks, state: "running", controller: linkedController(), settled: Promise.resolve(), removed: false, deadline: now() + minutes * 60_000, engine: decision.engine, branch: workspace.branch, planned: { title: planned.title, touchpoints: planned.touchpoints, acceptance: planned.acceptance }, message: request.message.slice(0, 2000) };
