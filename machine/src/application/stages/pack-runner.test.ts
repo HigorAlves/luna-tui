@@ -2,7 +2,7 @@ import { RepoImageError } from "../repo-images.ts";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, mkdtempSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -2065,6 +2065,12 @@ describe("the ui-designer's own run (RFC 0013, phase 5)", () => {
     expect(result.workspace).toBeUndefined();
   });
 
+  it("gives the helper no session folder of the implementer's: it never resumes or writes the implementer's trail", async () => {
+    const { base, ws } = await made();
+    await runAgent(deps(box()), helperContext(), "ui_design", { workspace: ws, helper: helperFor(base) });
+    expect(seen!.sessionMount).toBeUndefined();
+    expect((seen!.mounts ?? []).some((m) => m.host.includes(`${sep}session`))).toBe(false);
+  });
   it("starts from the helper's context: its slice and locks, the plan with the approved spec, the design and a ledger of its one slice", async () => {
     const { base, ws } = await made();
     const design = { refs: [{ kind: "figma", url: "https://figma.com/file/x" }] } as never;

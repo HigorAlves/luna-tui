@@ -874,7 +874,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     name: container,
     attach: Boolean(resume),
     // The verifier never sees the card's shared agent session: it reviews from the plan, the scenarios and the Build Report, not the implementer's trail.
-    ...(pack === "verifying" ? {} : { sessionMount }),
+    // Nor does a ui-designer helper (it reads third-party design text and runs beside the implementer): it could plant settings or a transcript the implementer resumes.
+    ...(pack === "verifying" || helperRun ? {} : { sessionMount }),
     cacheVolume: cacheVolumeFor(task.repoPath, size.cacheTrust),
     image: BROWSER_PACKS.has(pack) ? deps.qaImage : pack === "recording" ? (deps.videoImage ?? deps.qaImage) : stageImage,
     runDir,
