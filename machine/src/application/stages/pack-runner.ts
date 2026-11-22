@@ -159,10 +159,17 @@ const isFile = (path: string): boolean => {
   }
 };
 
+/** The branch the machine gives a helper's workspace (`helperBranch` in adapters/git/helper.ts). */
+const HELPER_BRANCH = /^luna-helper-\d{1,6}$/;
+
 /** The packs that drive the QA target in the browser (RFC 0013): they run in the QA image, hold the one target's credential and may reach its hosts. */
 const BROWSER_PACKS: ReadonlySet<PackId> = new Set<PackId>(["e2e", "a11y_audit"]);
 
 export interface AgentExtra {
+  /** ui_design (RFC 0013, phase 5): the helper's own workspace, made by the machine at the card's tip. Used instead of the task's; never persisted to it. */
+  workspace?: { path: string; branch: string };
+  /** ui_design: the slice it builds, the implementer's message, the base it starts from and the files each side owns. */
+  helper?: StageInput["context"]["helper"];
   /** ci_watch: what the host fetched about the PR's CI, since the sandbox has no GitHub credential. */
   ci?: CiContext | null;
   /** reviewing: the PR's diff, files and comments, fetched by the host. */
@@ -360,8 +367,10 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   // checked when the worktree was made, and the link cannot change while the worktree exists,
   // so a later issue-type change in Jira does not rename what is already pushed.
   const owned = await ownedWorkspace(task, task.repoPath, deps.worktreesDir, policy.jira?.branch);
-  const persisted = Boolean(task.branch && task.worktreePath) && !extra.checkout;
-  const workspace: Workspace = extra.checkout ? { branch: "", path: task.repoPath } : persisted ? { branch: task.branch!, path: task.worktreePath! } : owned;
+  // The ui-designer works in a workspace of its own, made by the machine; the task's is not its own and is never written.
+  const helperRun = pack === "ui_design" && extra.workspace !== undefined && extra.helper !== undefined && !extra.checkout;
+  const persisted = Boolean(task.branch && task.worktreePath) && !extra.checkout && !helperRun;
+  const workspace: Workspace = helperRun ? { ...extra.workspace! } : extra.checkout ? { branch: "", path: task.repoPath } : persisted ? { branch: task.branch!, path: task.worktreePath! } : owned;
   // The branch is a structural gate: whatever a task row says, a writable stage only ever
   // commits to a branch the pipeline owns: a `task/` branch, the one it named for a linked
   // task (the branch it persisted carries the issue key or the task id, never a protected
@@ -372,7 +381,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const protectedBranch = limits.writable && !extra.checkout && (PROTECTED_BRANCHES.has(workspace.branch) || workspace.branch === (await defaultBranch(task.repoPath)));
   if (
     limits.writable &&
-    (protectedBranch || (!workspace.branch.startsWith(TASK_BRANCH_PREFIX) && workspace.branch !== prBranch && workspace.branch !== owned.branch && !ownsPersisted(workspace.branch)))
+    (protectedBranch || (!helperRun && !workspace.branch.startsWith(TASK_BRANCH_PREFIX) && workspace.branch !== prBranch && workspace.branch !== owned.branch && !ownsPersisted(workspace.branch)) || (helperRun && !HELPER_BRANCH.test(workspace.branch)))
   ) {
     return {
       outcome: "fail",
@@ -386,13 +395,13 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   // A card still on a linked worktree moves to a workspace of its own before its next run: branch and commits kept, uncommitted work carried over.
   if (!extra.checkout && persisted && !isClone(workspace.path)) await moveToClone(task.repoPath, workspace);
   let stackedOn: { branch: string } | undefined;
-  if (!extra.checkout && deps.baseFor && !isClone(workspace.path)) {
+  if (!extra.checkout && !helperRun && deps.baseFor && !isClone(workspace.path)) {
     const answer = await deps.baseFor(task);
     if (answer?.state === "gone") return { outcome: "fail", detail: { error: answer.reason } };
     if (answer?.state === "open") stackedOn = { branch: answer.branch };
     else if (answer?.state === "merged") await deps.clearBase?.(task.id);
   }
-  if (!extra.checkout) {
+  if (!extra.checkout && !helperRun) {
     try {
       await ensureClone(task.repoPath, workspace, stackedOn);
     } catch (error) {
@@ -415,9 +424,13 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   // The task's own engine for the pack, else luna.yaml's, else the default; a re-attached run
   // keeps the engine its container started on, and a fallback after a usage limit runs the engine
   // the machine handed it (which logs why). An engine passed over is logged with why.
+  // The ui-designer runs on the implementer's engine when the pack allows it, else on its own default (the implementer may be on a login only one run can hold).
+  const helperEngine: EngineId | null = helperRun ? (context.engine && PACKS.ui_design.engines.allowed.includes(context.engine) ? context.engine : PACKS.ui_design.engines.default) : null;
   let choice: { engine: EngineId; reason: string | null; note?: string } = resume?.engine
     ? { engine: resume.engine, reason: null }
-    : context.engine
+    : helperEngine
+      ? { engine: helperEngine, reason: null }
+      : context.engine
       ? { engine: context.engine, reason: null }
       : await pickEngine(deps.credentials, PACKS[pack], task.stages ?? null, policy.engines, task.repoPath);
   // The reviewer is another model family than the implementer when that family's credential is on the machine and nobody named an engine for it.
@@ -432,7 +445,9 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const blind = visionProblem(PACKS[pack], choice.engine);
   if (blind) throw new Error(`${blind}: refused before the container started`);
   // The repo's effort for the pack, when the engine that runs can serve it; else the pack's own, with why.
-  const effortChoice = chooseEffort({ pack: PACKS[pack], engine: choice.engine, config: policy.effort });
+  // The ui-designer takes the effort the repo asks for the implementer (a helper has no entry of its own: `effortsProblem` refuses one).
+  const effortConfig = helperRun && policy.effort?.implementing ? { ...policy.effort, ui_design: policy.effort.implementing } : policy.effort;
+  const effortChoice = chooseEffort({ pack: PACKS[pack], engine: choice.engine, config: effortConfig });
   const engineEvents = [
     ...(choice.reason ? [{ at: new Date().toISOString(), kind: "engine", payload: { pack, engine: choice.engine, reason: choice.reason } }] : []),
     ...(effortChoice.reason ? [{ at: new Date().toISOString(), kind: "engine", payload: { pack, engine: choice.engine, reason: effortChoice.reason } }] : []),
@@ -469,6 +484,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     ...(extra.plan ? { plan: extra.plan } : {}),
     ...(extra.questions ? { questions: extra.questions } : {}),
     ...(extra.design ? { design: extra.design } : {}),
+    ...(helperRun ? { helper: extra.helper! } : {}),
     ...(extra.a11yLevel ? { a11yLevel: extra.a11yLevel } : {}),
     ...(extra.parityPlan ? { parityPlan: extra.parityPlan } : {}),
     ...(extra.parity ? { parity: extra.parity } : {}),
@@ -566,16 +582,18 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const scopeStart = scopeFrom && input.plan != null && task.repoPath && pack === "implementing" && !extra.checkout ? await guard(() => scopeStartOf(workspace.path, task.repoPath!, scopeFrom)) : scopeFrom;
   // The machine's side of the checks the implementer asks for: a red slice and the change's scope.
   const checks =
-    pack === "implementing" && !extra.checkout
+    (pack === "implementing" || helperRun) && !extra.checkout
       ? buildChecks({
           outDir: join(runDir, "out"),
           repoPath: task.repoPath,
           worktree: workspace.path,
           // The feature route measures the scope over the card's whole change, so a fix run that changes nothing still sees what an earlier run committed: from the vetted tests commit, else the commit the card's first implementing run started from (the machine's own stage_runs row; the first run's own start, read by the host before the container ran). Never from a ref or a later run's commit: with none of them the check fails closed. A route with no plan keeps the run's own commit.
-          inputCommit: scopeStart,
+          // The helper is measured from the base it started at, over its one slice's files, and holds none of the implementer's.
+          inputCommit: helperRun ? extra.helper!.base : scopeStart,
           slices: input.plan?.slices ?? [],
-          planned: plannedFiles(input.plan),
-          planPresent: input.plan != null,
+          planned: helperRun ? [...extra.helper!.slice.touchpoints] : plannedFiles(input.plan),
+          planPresent: helperRun || input.plan != null,
+          ...(helperRun ? { locks: () => ({ other: [...extra.helper!.locks.theirs], owner: "implementer" as const }) } : {}),
           ...(extra.scenarioTests?.length ? { scenarioTests: extra.scenarioTests } : {}),
           ...(extra.testsFiles?.length ? { protectedPaths: extra.testsFiles } : {}),
           ...(extra.inlineTests?.length ? { inlineTests: extra.inlineTests } : {}),
@@ -625,6 +643,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       onCommitted: async (slice) => {
         if (!checks) return;
         await importer?.sync();
+        // The helper's commits are the machine's to pick: no checkpoint push of its workspace, and no red truth on the implementer's records.
+        if (helperRun) return;
         await checks.onGreen(slice).catch((error: Error) => void context.note?.(`red_check truth: ${error.message}`).catch(() => {}));
         if (!hostExec) return;
         pushing = pushing.then(async () => {
@@ -789,7 +809,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     outcome: "fail",
     ...(engineEvents.length ? { events: engineEvents } : {}),
     // A checkout run has no workspace of the task's own to record.
-    ...(extra.checkout ? {} : { workspace: { branch: workspace.branch, worktreePath: workspace.path } }),
+    ...(extra.checkout || helperRun ? {} : { workspace: { branch: workspace.branch, worktreePath: workspace.path } }),
     run: { containerId: container, transcriptPath: sandbox.transcriptPath, inputCommit },
   };
   // However this run ends without a clean, committed answer, the next attempt should not

@@ -170,8 +170,10 @@ export function buildStageInput(opts: {
   qaTargets?: QaTarget[];
   /** For implementing and verifying: the repo's checks from luna.yaml. */
   checks?: CheckSpec[] | null;
-  /** For design_spec: the card's design reference, composed by the machine. */
+  /** For design_spec and ui_design: the card's design reference, composed by the machine. */
   design?: DesignContext | null;
+  /** For ui_design: the slice it builds, the files each side owns and the base it starts from; its ledger is seeded with that one slice. */
+  helper?: StageInput["context"]["helper"];
   /** For a11y_audit: the WCAG level to audit against; AA when absent. */
   a11yLevel?: "AA" | "AAA";
   /** e2e: the captures the browser run is asked to take for the frames its scenarios cite. */
@@ -214,11 +216,14 @@ export function buildStageInput(opts: {
   const underReview = reviewed
     ? { brief: reviewed.brief, criteria: reviewed.criteria, assumptions: reviewed.assumptions, ...(designer ? {} : { slices: reviewed.slices }), ...(reviewed.rollback !== undefined ? { rollback: reviewed.rollback } : {}) }
     : null;
-  const plan = approvedPlan(approvals) ?? underReview;
+  const approved = approvedPlan(approvals) ?? underReview;
+  // The ui-designer reads the approved spec in its plan (`context.plan.designSpec`).
+  const spec = pack === "ui_design" ? designSpecOf(approvals) : null;
+  const plan = approved && spec ? { ...approved, designSpec: spec } : approved;
   const scaled = budgetFor(pack, plan?.slices?.length ?? 0);
   const { maxTurns } = scaled;
   // Build's budget: a run never outlives the minutes the card has left.
-  const timeoutMs = opts.budgetMinutes !== undefined && (pack === "implementing" || pack === "build_tests") ? Math.floor(Math.min(scaled.timeoutMs, Math.max(1, opts.budgetMinutes) * MINUTE)) : scaled.timeoutMs;
+  const timeoutMs = opts.budgetMinutes !== undefined && (pack === "implementing" || pack === "build_tests" || pack === "ui_design") ? Math.floor(Math.min(scaled.timeoutMs, Math.max(1, opts.budgetMinutes) * MINUTE)) : scaled.timeoutMs;
   // A budget left in fractions of a minute gives a fraction of a millisecond: the stage input takes whole ones (`invalid stage input: limits.timeoutMs`).
   return {
     schema: 3,
@@ -258,12 +263,12 @@ export function buildStageInput(opts: {
           ? browserCases(approvedCases(approvals))
           : pack === "verifying"
           ? withoutBrowserCases(approvedCases(approvals))
-          : pack === "video_script" || pack === "video_fix" || pack === "recording" || (pack === "implementing" && !opts.holdoutCases)
+          : pack === "video_script" || pack === "video_fix" || pack === "recording" || ((pack === "implementing" || pack === "ui_design") && !opts.holdoutCases)
           ? approvedCases(approvals)
           : pack === "build_tests"
             ? approvedScenarios(approvals)
             : [],
-      ...(pack === "implementing" && opts.scenarioTests?.length ? { scenarioTests: opts.scenarioTests } : {}),
+      ...((pack === "implementing" || pack === "ui_design") && opts.scenarioTests?.length ? { scenarioTests: opts.scenarioTests } : {}),
       ...(pack === "implementing" && opts.sweepFailures?.length ? { sweepFailures: opts.sweepFailures.slice(0, SWEEP_FAILURES_MAX).map((f) => ({ name: safe(f.name).slice(0, 60), tail: safe(f.tail.slice(-SWEEP_TAIL_CAP)).slice(-SWEEP_TAIL_CAP) })) } : {}),
       baseCommit: opts.baseCommit ?? null,
       ...((pack === "implementing" || pack === "verifying") && plan && isDocsOnly((plan.slices ?? []).flatMap((s) => (s as { touchpoints?: string[] }).touchpoints ?? [])) ? { docsOnly: true } : {}),
@@ -278,13 +283,14 @@ export function buildStageInput(opts: {
       ...(pack === "a11y_audit" ? { a11y: { level: opts.a11yLevel ?? "AA" } } : {}),
       ...(pack === "e2e" && opts.parityPlan ? { parityPlan: opts.parityPlan } : {}),
       ...(pack === "design_parity" && opts.parity ? { parity: opts.parity } : {}),
-      ...(pack === "design_spec" && opts.design ? { design: opts.design } : {}),
+      ...((pack === "design_spec" || pack === "ui_design") && opts.design ? { design: opts.design } : {}),
+      ...(pack === "ui_design" && opts.helper ? { helper: opts.helper, ledger: { schema: 1 as const, slices: [{ id: opts.helper.slice.id, title: opts.helper.slice.title, status: "pending" as const, commit: null }] } } : {}),
       ...(pack === "question_council" && opts.questions ? { questions: opts.questions } : {}),
       ...(pack === "verifying" && opts.blastRadius?.length ? { blastRadius: opts.blastRadius } : {}),
       ...(pack === "verifying" && opts.coverage ? { coverage: opts.coverage } : {}),
       ...((pack === "e2e" || pack === "a11y_audit" || pack === "recording") && opts.qaTargets ? { qaTargets: opts.qaTargets } : {}),
       ...(VIDEO_PACKS.has(pack) && opts.video ? { video: opts.video } : {}),
-      ...((pack === "implementing" || pack === "verifying") && opts.checks ? { checks: opts.checks } : {}),
+      ...((pack === "implementing" || pack === "verifying" || pack === "ui_design") && opts.checks ? { checks: opts.checks } : {}),
       ...((pack === "reviewing" || pack === "compliance_review") && opts.review ? { review: opts.review } : {}),
       ...(pack === "compliance_review" && opts.compliance ? { compliance: opts.compliance } : {}),
       ...(pack === "docs_drift" && opts.docsDrift ? { docsDrift: opts.docsDrift } : {}),

@@ -7,6 +7,7 @@
 // Everything comes through `deps`: no Docker, no Postgres. The pick handshake (`onPickRequest`, `onPickAck`), the one re-run and `merge_conflict` live in the
 // same state: a helper that is `returned` holds the tip and the commits it will pick; `picking` holds the pending `{ P, tip, picked }` too. The three mailbox
 // queues run concurrently, so every step that reads or moves the card's branch goes through `serial`.
+import type { AgentExtra } from "./pack-runner.ts";
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -35,7 +36,7 @@ const SUMMARY_CAP = 300;
 const CANCEL_WAIT_MS = 30_000;
 
 /** What the pack runner's helper run takes besides the context (slice 79): its own workspace and what it builds. */
-export interface HelperRunExtra {
+export interface HelperRunExtra extends Pick<AgentExtra, "design" | "scenarioTests" | "testsFiles" | "inlineTests"> {
   workspace: { path: string; branch: string };
   helper: NonNullable<StageInput["context"]["helper"]>;
 }

@@ -14,7 +14,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CredentialWaitError, type Credentials, NoCredentialError, fixedCredentials } from "../../adapters/credentials/index.ts";
 import { envHash } from "../../domain/env-hash.ts";
 import { machineGitDir } from "../../adapters/git/machine-repo.ts";
-import { HOST_GIT } from "../../adapters/git/worktree.ts";
+import { HOST_GIT, headCommit } from "../../adapters/git/worktree.ts";
+import { ensureClone } from "../../adapters/git/clone.ts";
+import { helperWorkspace } from "../../adapters/git/helper.ts";
 import { DEFAULT_POLICY } from "../../domain/policy.ts";
 import type { TaskRow } from "../../domain/task.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
@@ -2004,5 +2006,135 @@ describe("the MCP bridge in a stage (RFC 0013)", () => {
     await runAgent(d, context("triage"), "triage");
     expect(made).toBe(0);
     expect(extraMounts(seen!).some((m) => m.container === "/design")).toBe(false);
+  });
+});
+
+describe("the ui-designer's own run (RFC 0013, phase 5)", () => {
+  const SLICE = 3;
+  const helperFor = (base: string, over: Record<string, unknown> = {}) => ({
+    slice: { id: SLICE, title: "The card page", touchpoints: ["page.tsx"], acceptance: ["the page renders"] },
+    message: "build the page",
+    base,
+    locks: { mine: ["page.tsx"], theirs: ["api.ts"] },
+    attempt: 1 as const,
+    ...over,
+  });
+  /** The card's workspace W on `task/card`, and the helper's fresh workspace M' beside it, as the coordinator makes them. */
+  async function made() {
+    writeFileSync(join(repo, "api.ts"), "api\n");
+    writeFileSync(join(repo, "page.tsx"), "page\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "files");
+    const cardPath = join(root, "worktrees", "card");
+    await ensureClone(repo, { branch: "task/card", path: cardPath });
+    const base = await headCommit(cardPath);
+    const ws = await helperWorkspace.make(cardPath, base, context("implementing").task.id, SLICE, 1);
+    return { cardPath, base, ws: { path: ws.path, branch: ws.branch } };
+  }
+  const helperContext = (over: Partial<StageContext> = {}): StageContext => ({ ...context("implementing"), engine: "claude:sonnet", ...over });
+  /** A container that lets `act` work in the folder, bundles what it committed as the factory does, and ends. */
+  const box = (act: (run: SandboxRun) => Promise<void> | void = () => {}) => async (run: SandboxRun): Promise<SandboxResult> => {
+    seen = run;
+    run.onStarted?.("c1");
+    mkdirSync(join(run.runDir, "out", "bundles"), { recursive: true });
+    const started = agent(run.worktree, "rev-parse", "HEAD");
+    await act(run);
+    if (agent(run.worktree, "rev-parse", "HEAD") !== started) agent(run.worktree, "bundle", "create", join(run.runDir, "out", "bundles", "1.bundle"), `${started}..HEAD`);
+    writeFileSync(join(run.runDir, "out", "result.json"), JSON.stringify(output()));
+    writeFileSync(join(run.runDir, "out", "events.jsonl"), "");
+    return { exitCode: 0, timedOut: false, aborted: false, transcriptPath: join(run.runDir, "t.log") };
+  };
+  const commitPage = (run: SandboxRun, file = "page.tsx") => {
+    writeFileSync(join(run.worktree, file), "page v2\n");
+    agent(run.worktree, "add", "-A");
+    agent(run.worktree, "commit", "-q", "-m", "ui");
+    return agent(run.worktree, "rev-parse", "HEAD");
+  };
+  const input = () => seen!.input as unknown as StageInput;
+
+  it("runs in the helper's workspace: its commits land on luna-helper-<slice> there, the card's branch is untouched, nothing is published and the task keeps its workspace", async () => {
+    const { cardPath, base, ws } = await made();
+    let tip = "";
+    const result = await runAgent(deps(box((run) => void (tip = commitPage(run)))), helperContext(), "ui_design", { workspace: ws, helper: helperFor(base) });
+    expect(result.outcome).toBe("pass");
+    expect(seen!.worktree).toBe(ws.path);
+    expect(git(ws.path, "rev-parse", "refs/heads/luna-helper-3")).toBe(tip);
+    expect(git(cardPath, "rev-parse", "refs/heads/task/card")).toBe(base);
+    expect(() => git(repo, "rev-parse", "--verify", "refs/heads/luna-helper-3")).toThrow();
+    expect(() => git(repo, "rev-parse", "--verify", "refs/heads/task/card")).toThrow();
+    expect(result.workspace).toBeUndefined();
+  });
+
+  it("starts from the helper's context: its slice and locks, the plan with the approved spec, the design and a ledger of its one slice", async () => {
+    const { base, ws } = await made();
+    const design = { refs: [{ kind: "figma", url: "https://figma.com/file/x" }] } as never;
+    await runAgent(deps(box()), helperContext(), "ui_design", { workspace: ws, helper: helperFor(base), design });
+    expect(input().pack).toBe("ui_design");
+    expect(input().context.helper).toEqual(helperFor(base));
+    expect(input().context.design).toEqual(design);
+    expect(input().context.ledger).toEqual({ schema: 1, slices: [{ id: SLICE, title: "The card page", status: "pending", commit: null }] });
+    expect(input().task.branch).toBe("luna-helper-3");
+  });
+
+  it("measures the helper's scope from the base it started at, plans only its slice's files and locks the implementer's", async () => {
+    const { base, ws } = await made();
+    const asked: Array<{ planned?: string[] }> = [];
+    let scope: { facts: { changed: string[]; lockedTouched: Array<{ path: string; owner: string }> } } | undefined;
+    const sandbox = box(async (run) => {
+      commitPage(run, "api.ts");
+      // the factory bundles a commit as it lands, before the machine is asked about it
+      agent(run.worktree, "bundle", "create", join(run.runDir, "out", "bundles", "1.bundle"), "HEAD~1..HEAD");
+      const checks = join(run.runDir, "out", "checks");
+      mkdirSync(checks, { recursive: true });
+      writeFileSync(join(checks, "scope-request.json"), JSON.stringify({ diffSummary: "ui", outOfMap: [] }));
+      const file = join(checks, "scope.json");
+      for (let i = 0; i < 400 && !existsSync(file); i++) await new Promise((r) => setTimeout(r, 10));
+      scope = JSON.parse(readFileSync(file, "utf8"));
+    });
+    const decide = (async (_pack: string, check: { planned?: string[] }) => (asked.push(check), null)) as never;
+    await runAgent({ ...deps(sandbox), decide, watchEvery: 5 } as AgentDeps, helperContext(), "ui_design", { workspace: ws, helper: helperFor(base) });
+    expect(scope?.facts.changed).toEqual(["api.ts"]);
+    expect(scope?.facts.lockedTouched).toEqual([{ path: "api.ts", owner: "implementer" }]);
+  });
+
+  it("only syncs the importer when its slice commits: no checkpoint push, and the commit still arrives", async () => {
+    const { base, ws } = await made();
+    const hostExec = vi.fn(async () => ({ code: 0, stdout: "", stderr: "" }));
+    let tip = "";
+    const sandbox = box(async (run) => {
+      tip = commitPage(run);
+      writeFileSync(join(run.runDir, "out", "ledger.json"), JSON.stringify({ schema: 1, slices: [{ id: SLICE, title: "The card page", status: "committed", commit: tip }] }));
+      await new Promise((r) => setTimeout(r, 150));
+    });
+    await runAgent({ ...deps(sandbox), hostExec, watchEvery: 5 }, helperContext(), "ui_design", { workspace: ws, helper: helperFor(base) });
+    expect(hostExec).not.toHaveBeenCalled();
+    expect(git(ws.path, "rev-parse", "refs/heads/luna-helper-3")).toBe(tip);
+  });
+
+  describe("its engine and effort", () => {
+    it("runs on the implementer's engine when the pack allows it", async () => {
+      const { base, ws } = await made();
+      await runAgent(deps(box()), helperContext({ engine: "claude:opus" }), "ui_design", { workspace: ws, helper: helperFor(base) });
+      expect(input().engine).toBe("claude:opus");
+    });
+
+    it("runs on the pack's default when the implementer's engine is not one the pack allows", async () => {
+      const { base, ws } = await made();
+      await runAgent(deps(box()), helperContext({ engine: "codex:sol" }), "ui_design", { workspace: ws, helper: helperFor(base) });
+      expect(input().engine).toBe(PACKS.ui_design.engines.default);
+    });
+
+    it("runs at the effort the repo's luna.yaml sets for the implementer", async () => {
+      const { base, ws } = await made();
+      writeFileSync(join(repo, "luna.yaml"), "effort:\n  implementing: high\n");
+      await runAgent(deps(box()), helperContext(), "ui_design", { workspace: ws, helper: helperFor(base) });
+      expect(input().effort).toBe("high");
+    });
+
+    it("keeps the pack's own effort when the repo sets none", async () => {
+      const { base, ws } = await made();
+      await runAgent(deps(box()), helperContext(), "ui_design", { workspace: ws, helper: helperFor(base) });
+      expect(input().effort).toBeUndefined();
+    });
   });
 });
