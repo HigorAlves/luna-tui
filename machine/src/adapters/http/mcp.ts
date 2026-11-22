@@ -93,6 +93,8 @@ export function createMcpApi({ mcp, store, redirectUrl }: { mcp: Mcp; store: Tok
       const provider = providerFor(server, state);
       const result = await auth(provider, { serverUrl: server.url!, ...(server.credential.kind === "oauth" && server.credential.scopes ? { scope: server.credential.scopes.join(" ") } : {}) });
       if (result === "AUTHORIZED") return { authorizeUrl: null, state };
+      // The browser is needed, so what is stored did not work: until the callback stores fresh tokens the server is logged out.
+      await store.remove(server.name, { keepClient: true });
       logins.set(state, { server: server.name, provider });
       return { authorizeUrl: provider.pendingAuthorization()?.href ?? null, state };
     },

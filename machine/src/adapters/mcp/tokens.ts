@@ -18,7 +18,8 @@ export interface TokenStore {
   save(server: string, tokens: OAuthTokens): Promise<void>;
   loadClient(server: string): Promise<OAuthClientInformationMixed | null>;
   saveClient(server: string, info: OAuthClientInformationMixed): Promise<void>;
-  remove(server: string): Promise<void>;
+  /** Removes the tokens and the registered client; `keepClient` keeps the client for a login still to finish. */
+  remove(server: string, options?: { keepClient?: boolean }): Promise<void>;
 }
 
 /** Tokens at `<stateDir>/mcp/<server>.json`, the registered client at `<server>.client.json`, both 0600. */
@@ -44,9 +45,9 @@ export function fileTokenStore(stateDir: string): TokenStore {
     save: async (server, tokens) => write(`${server}.json`, tokens),
     loadClient: async (server) => read<OAuthClientInformationMixed>(`${server}.client.json`),
     saveClient: async (server, info) => write(`${server}.client.json`, info),
-    remove: async (server) => {
+    remove: async (server, options) => {
       rmSync(join(root, `${server}.json`), { force: true });
-      rmSync(join(root, `${server}.client.json`), { force: true });
+      if (!options?.keepClient) rmSync(join(root, `${server}.client.json`), { force: true });
     },
   };
 }
