@@ -6666,14 +6666,14 @@ impl App {
                 (None, _) => self.notify("no ticket selected", true),
                 (_, Err(error)) => self.notify(error, true),
                 (Some(id), Ok((finding, reason))) => {
-                    let kind = if name == "waive" {
-                        "not_a_difference"
+                    let (kind, done) = if name == "waive" {
+                        ("not_a_difference", "finding waived")
                     } else {
-                        "accepted"
+                        ("accepted", "difference accepted")
                     };
                     self.act(
                         |m| m.waive_design_finding(&id, &finding, kind, &reason),
-                        "finding waived",
+                        done,
                     )
                 }
             },
@@ -9504,7 +9504,7 @@ mod tests {
         );
         assert_eq!(
             app.toast.as_ref().map(|t| t.text.as_str()),
-            Some("only a setup, plan, tests or escalation go back")
+            Some("only a setup, plan, tests, design sign-off or escalation go back")
         );
         app.handle_key(KeyEvent::from(KeyCode::Char('%')));
         assert!(matches!(app.mode, Mode::Help { .. }));
@@ -12448,6 +12448,63 @@ mod task_view_command_tests {
             assert_eq!(
                 calls[0].1,
                 serde_json::json!({ "kind": kind, "reason": reason })
+            );
+        }
+    }
+
+    /// A machine that answers every call with this task.
+    fn machine_answering(task: serde_json::Value) -> Machine {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(v) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = v.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut raw = vec![0; length];
+                let _ = reader.read_exact(&mut raw);
+                let body = task.to_string();
+                let _ = reader.into_inner().write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        Machine::at(&format!("http://{addr}"))
+    }
+
+    #[test]
+    fn accept_says_the_difference_was_accepted_and_waive_says_it_was_waived() {
+        for (line, toast) in [
+            ("waive D1a2b3c4 same token", "finding waived"),
+            ("accept D1a2b3c4 brand allows it", "difference accepted"),
+        ] {
+            let (mut app, open, _, _) = two_cards();
+            let task = crate::testkit::task_json(
+                &open,
+                "t",
+                "awaiting_design",
+                "Verify",
+                serde_json::json!({}),
+            );
+            app.machine = machine_answering(task);
+            command(&mut app, line);
+            assert_eq!(
+                app.toast.as_ref().map(|t| (t.text.as_str(), t.error)),
+                Some((toast, false)),
+                "{line}"
             );
         }
     }
