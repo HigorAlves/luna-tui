@@ -71,6 +71,15 @@ describe("settleParity", () => {
     const b = settle(answer({ findings: [{ ...finding("should_fix"), title: "Colour of pay is off" }] })).findings[0]!.id;
     expect(a).toBe(b);
   });
+  it("keeps a waived finding marked, out of the blockers and the gate's reasons", () => {
+    const id = settleDefault(answer({ findings: [finding("blocker")] })).findings[0]!.id!;
+    const s = settleParity(answer({ findings: [finding("blocker"), { ...finding("should_fix"), element: "a.cancel", title: "Cancel" }] }) as never, { plan: onlyDefault, spec, captures, bar: 0.75, waived: new Set([id]) });
+    expect(s.findings.map((f) => [f.severity, f.resolution ?? null])).toEqual([["blocker", { status: "waived", by: "person" }], ["should_fix", null]]);
+    expect(s.blockers).toBe(0);
+    expect(s.gate.why).toEqual(["open_findings"]);
+    const only = settleParity(answer({ findings: [finding("blocker")] }) as never, { plan: onlyDefault, spec, captures, bar: 0.75, waived: new Set([id]) });
+    expect(only.gate).toEqual({ fires: false, why: [] });
+  });
   it("lists the most severe findings first and keeps at most 40", () => {
     const many = Array.from({ length: 45 }, (_, i) => ({ ...finding("nit"), element: `li.row-${i}`, title: `Row ${i}` }));
     const s = settle(answer({ findings: [...many, { ...finding("blocker"), element: "li.last", title: "Last" }] }));

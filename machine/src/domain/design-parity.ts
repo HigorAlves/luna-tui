@@ -33,7 +33,15 @@ export interface Unplaced {
   reason?: string;
 }
 
-export function settleParity(answer: DesignParityAnswer | null, { plan, spec, captures, bar, unplaced = [] }: { plan: CapturePlan; spec: DesignSpec | null; captures: ParityCapture[]; bar: number; unplaced?: Unplaced[] }): SettledParity {
+/** A finding a person already waived on this card stays waived in the next round: it is marked, and the rules below never count it as open. */
+export function markWaived(findings: readonly Finding[], waived: ReadonlySet<string> | undefined): Finding[] {
+  if (!waived || waived.size === 0) return [...findings];
+  return findings.map((f) => (f.id !== undefined && waived.has(f.id) ? { ...f, resolution: { status: "waived" as const, by: "person" } } : f));
+}
+
+export const isWaived = (f: Finding): boolean => f.resolution?.status === "waived";
+
+export function settleParity(answer: DesignParityAnswer | null, { plan, spec, captures, bar, unplaced = [], waived }: { plan: CapturePlan; spec: DesignSpec | null; captures: ParityCapture[]; bar: number; unplaced?: Unplaced[]; waived?: ReadonlySet<string> }): SettledParity {
   const notes: string[] = [];
   const frameOf = (id: string) => spec?.frames.find((f) => f.id === id);
   const frames: PairRow[] = plan.targets.map((t) => {
@@ -102,7 +110,7 @@ export function settleParity(answer: DesignParityAnswer | null, { plan, spec, ca
     mapped.push(normaliseFinding({ ...base, id: parityFindingId({ frame: f.frame, node: row.node, kind: f.kind, element: f.element }) }));
   }
   // The same difference twice is one finding, at the higher severity; the most severe come first, and the list is capped.
-  const findings = mergeDuplicateFindings(mapped)
+  const findings = markWaived(mergeDuplicateFindings(mapped), waived)
     .map((f, i) => ({ f, i }))
     .sort((a, b) => (SEVERITY_RANK[a.f.severity] ?? 3) - (SEVERITY_RANK[b.f.severity] ?? 3) || a.i - b.i)
     .map(({ f }) => f)
@@ -110,9 +118,10 @@ export function settleParity(answer: DesignParityAnswer | null, { plan, spec, ca
 
   const confidence = answer?.confidence ?? 0;
   const designInput = answer?.designInput ?? "missing";
-  const blockers = findings.filter((f) => f.severity === "blocker" && f.confidence >= BLOCKER_CONFIDENCE).length;
+  const open = findings.filter((f) => !isWaived(f));
+  const blockers = open.filter((f) => f.severity === "blocker" && f.confidence >= BLOCKER_CONFIDENCE).length;
   const why: GateWhy[] = [];
-  if (findings.some((f) => f.severity === "should_fix" || (f.severity === "blocker" && f.confidence < BLOCKER_CONFIDENCE))) why.push("open_findings");
+  if (open.some((f) => f.severity === "should_fix" || (f.severity === "blocker" && f.confidence < BLOCKER_CONFIDENCE))) why.push("open_findings");
   if (confidence < bar || designInput !== "complete") why.push("low_confidence");
   if (frames.some((f) => f.scenario !== null && f.status === "not_compared")) why.push("not_compared");
   return { frames, findings, confidence, designInput, blockers, gate: { fires: why.length > 0, why }, notes };

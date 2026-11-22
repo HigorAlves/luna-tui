@@ -4659,6 +4659,15 @@ describe("the design sign-off's answers (RFC 0013 phase 3)", () => {
     expect(learned).toEqual([expect.objectContaining({ pack: "finding_classify", recordId: "rec-1", label: { severity: { choice: "nit" } }, kind: "person", source: "design_waived", taskId: id })]);
   });
 
+  it("remembers a waiver for the card's next round: the ids a person waived come back from the machine's own rows", async () => {
+    const p = make();
+    const id = await atGate(p);
+    expect(await p.designWaived(id)).toEqual([]);
+    await p.waiveDesignFinding(id, "D1", { kind: "accepted", reason: "brand allows it" });
+    await p.waiveDesignFinding(id, "D2", { kind: "not_a_difference", reason: "same token" });
+    expect(await p.designWaived(id)).toEqual(["D1", "D2"]);
+  });
+
   it("passes a waiver's reason through safe() and keeps it out of the event stream", async () => {
     const p = make();
     const id = await atGate(p);

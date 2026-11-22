@@ -3556,6 +3556,11 @@ export class Pipeline {
     return (await this.events(id)).filter((e) => e.kind === "build.helper_picked").flatMap((e) => (Array.isArray(e.payload.picked) ? e.payload.picked.filter((sha): sha is string => typeof sha === "string") : []));
   }
 
+  /** The ids of the design findings a person waived on this card, from its own `design.waived` rows: a later round that raises one again keeps it waived. */
+  async designWaived(id: string): Promise<string[]> {
+    return [...new Set((await this.events(id)).filter((e) => e.kind === "design.waived").flatMap((e) => (typeof e.payload.id === "string" ? [e.payload.id] : [])))];
+  }
+
   /** Whether a person turned the designer agents off for this card (approving a `design_budget` escalation with design off). */
   async designCardOff(id: string): Promise<boolean> {
     return (await this.events(id)).some((e) => e.kind === "design.card_off");

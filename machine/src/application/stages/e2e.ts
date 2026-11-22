@@ -15,7 +15,7 @@ import type { DesignBudget } from "../../domain/design-budget.ts";
 import { designSteps } from "../../domain/verify-order.ts";
 import { type ManifestRow, boundedArtifacts, manifestRows } from "../../domain/e2e-manifest.ts";
 import { blockerSetKey } from "../../domain/finding-sets.ts";
-import { type Unplaced } from "../../domain/design-parity.ts";
+import { type Unplaced, isWaived, markWaived } from "../../domain/design-parity.ts";
 import { capturePlan, citedWithoutViewport, overCap } from "../../domain/parity-plan.ts";
 import { approvedScenarios, designSpecOf } from "../../domain/stage-input.ts";
 import { type ScenarioRow, scenarioFindings } from "../../domain/send-back.ts";
@@ -70,6 +70,8 @@ export interface E2eDeps {
   design?: {
     settings: (repoPath: string | null, taskId: string) => Promise<{ off: boolean; cardOff: boolean; level: "AA" | "AAA"; mode: "gate" | "advisory" }>;
     budget?: (taskId: string) => Promise<DesignBudget>;
+    /** The ids of the findings a person waived on this card in an earlier round (its `design.waived` rows); a finding raised again with one of them stays waived. */
+    waived?: (taskId: string) => Promise<string[]>;
   };
   /**
    * The design parity review (RFC 0013, phase 3), run after the audit when the browser run took captures: the captures the plan asked for and the cited frames with
@@ -299,11 +301,14 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
       }
       const mapped = a11yFindings(parsed.data.findings, settings);
       // Two rules or two states on one criterion, selector and page are one problem for Build: they merge, at the higher severity.
-      const findings = mergeDuplicateFindings(mapped.findings);
-      const blocking = verdictOf(findings) === "fail";
+      // A finding a person already waived on this card stays waived: it is shown, never counted, never sent back.
+      const waived = new Set(deps.design?.waived ? await deps.design.waived(context.task.id) : []);
+      const findings = markWaived(mergeDuplicateFindings(mapped.findings), waived);
+      const open = findings.filter((f) => !isWaived(f));
+      const blocking = verdictOf(open) === "fail";
       // Build's own rule: blockers with the budget spent after the run go to a person, not back to Build.
       if (blocking && spentAfter && deps.design?.budget) return { key: "a11y", escalate: { ...designBudgetEscalation(await deps.design.budget(context.task.id)), usage: result.usage } };
-      return { key: "a11y", detail: { level: settings.level, mode: settings.mode, findings, pages: parsed.data.pages, notes: mapped.notes }, findings, blocking, usage: result.usage };
+      return { key: "a11y", detail: { level: settings.level, mode: settings.mode, findings, pages: parsed.data.pages, notes: mapped.notes }, findings: open, blocking, usage: result.usage };
     };
     /** The design parity review after the audit: its findings are classified with the audit's and joined in the design report; confident blockers fail the run. */
     const parityStep: AfterBrowserStep = async ({ parity, previous }) => {
@@ -319,9 +324,9 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
         .map(({ f }) => f)
         .slice(0, DESIGN_FINDINGS_MAX);
       const repoPath = context.task.repoPath ?? null;
-      const { classified } = await classifyFindings({ decide: deps.decide ?? null, repoPath, decisions: (await deps.overrides?.(repoPath)) ?? {}, excerpt: async (f) => designExcerpt(f) }, merged);
+      const { classified } = await classifyFindings({ decide: deps.decide ?? null, repoPath, decisions: (await deps.overrides?.(repoPath)) ?? {}, excerpt: async (f) => designExcerpt(f) }, merged.filter((f) => !isWaived(f)));
       const counts = { blocker: 0, should_fix: 0, nit: 0, waived: 0 };
-      for (const f of auditFindings) counts[severityOf(f.severity)]++;
+      for (const f of auditFindings) counts[isWaived(f) ? "waived" : severityOf(f.severity)]++;
       const design: VerifyDesignReport = {
         wcag: audit?.level ?? null,
         a11y: audit?.mode ? { mode: audit.mode, counts } : null,
@@ -330,7 +335,8 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
         ...(classified.length > 0 ? { classified: classified.map(({ id, recordId }) => ({ id, ...(recordId ? { recordId } : {}) })) } : {}),
         gate: out.gate,
       };
-      const blocking = blockerSetKey(out.findings) !== null;
+      const open = out.findings.filter((f) => !isWaived(f));
+      const blocking = blockerSetKey(open) !== null;
       // Build's own rule, as for the audit: blockers with the budget spent after the run go to a person, not back to Build.
       if (blocking && out.spentAfter && deps.design?.budget) return { key: "parity", escalate: { ...designBudgetEscalation(await deps.design.budget(context.task.id)), usage: out.usage } };
       return {
@@ -338,7 +344,7 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
         // The browser run's own detail.parity (the plan, the captures, what is missing) stays; the review's settle joins it.
         detail: { ...parity, ...out.report, notes: [...parity.notes, ...out.notes] },
         also: { design },
-        findings: out.findings,
+        findings: open,
         blocking,
         usage: out.usage,
       };

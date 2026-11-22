@@ -98,6 +98,8 @@ import { type ShipGateProbe, shipGateProbe } from "../application/ship-gate-prob
 export interface DesignDecisions {
   budget?: (taskId: string) => Promise<DesignBudget>;
   cardOff?: (taskId: string) => Promise<boolean>;
+  /** The ids of the findings a person waived on a card (its `design.waived` rows): a later round that raises one again keeps it waived. */
+  waived?: (taskId: string) => Promise<string[]>;
   /** The shas the machine picked onto a card's branch for the ui-designer on earlier runs (its own `build.helper_picked` rows). */
   picked?: (taskId: string) => Promise<string[]>;
 }
@@ -577,6 +579,7 @@ export async function buildRealStages(
             get budget() {
               return designDecisions?.budget;
             },
+            waived: async (taskId) => (designDecisions?.waived ? designDecisions.waived(taskId) : []),
           },
           // The design parity review after the audit (RFC 0013, phase 3): a read-only sub-run over the captures, then the frame | build pairs on the host.
           designParity: (context, parity, unplaced) =>
@@ -589,6 +592,7 @@ export async function buildRealStages(
                 get budget() {
                   return designDecisions?.budget;
                 },
+                waived: async (taskId) => (designDecisions?.waived ? designDecisions.waived(taskId) : []),
                 stateDir: config.stateDir,
               },
               context,

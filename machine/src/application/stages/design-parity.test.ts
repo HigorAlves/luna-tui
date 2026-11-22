@@ -93,4 +93,15 @@ describe("runDesignParity", () => {
     const out = await runDesignParity(deps({ budget }), ctx, parity);
     expect(out).toMatchObject({ usage: { tokens: { input: 10, output: 5 } }, spentAfter: true });
   });
+
+  it("counts a finding a person already waived on this card under waived, and keeps it out of the blockers and the gate", async () => {
+    const found = { level: "blocker", kind: "token", frame: "F1", node: "x", element: "button.pay", viewport: "1440x900", state: "default", expected: "a", actual: "b", title: "t", why: "w", confidence: 0.9 };
+    const run = async () => ({ outcome: "pass" as const, detail: { answer: { ...answer, findings: [found] } } });
+    const first = (await runDesignParity(deps({ run }), ctx, parity)) as { findings: Array<{ id: string }> };
+    expect(first.findings).toHaveLength(1);
+    const asked: string[] = [];
+    const again = await runDesignParity(deps({ run, waived: async (id: string) => (asked.push(id), [first.findings[0]!.id]) }), ctx, parity);
+    expect(asked).toEqual(["t1"]);
+    expect(again).toMatchObject({ gate: { fires: false }, report: { counts: { blocker: 0, should_fix: 0, nit: 0, waived: 1 } }, findings: [{ resolution: { status: "waived", by: "person" } }] });
+  });
 });

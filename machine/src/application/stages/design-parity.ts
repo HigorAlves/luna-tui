@@ -4,12 +4,12 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
-import { DesignParityAnswer, type DesignSpec, type Finding, type PairRow, type VerifyDesignReport } from "@hardness/contracts";
+import { DesignParityAnswer, type DesignSpec, type Finding, type PairRow, type VerifyDesignReport, severityOf } from "@hardness/contracts";
 
 import type { CredentialMount } from "../../adapters/credentials/index.ts";
 import type { PairResult } from "../../adapters/image/parity-pairs.ts";
 import type { DesignBudget } from "../../domain/design-budget.ts";
-import { type SettledParity, type Unplaced, settleParity } from "../../domain/design-parity.ts";
+import { type SettledParity, type Unplaced, isWaived, settleParity } from "../../domain/design-parity.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 import { designRun } from "./design-run.ts";
 import type { ParityRun } from "./e2e.ts";
@@ -26,6 +26,8 @@ export interface DesignParityDeps {
   bar: (repoPath: string | null) => Promise<number>;
   /** Puts a frame render beside its capture (`pairImages`); absent, no pair is made and the rows keep what the reviewer said. */
   pair?: (input: { render: string; capture: string; outDir: string; name: string }) => Promise<PairResult>;
+  /** The ids of the findings a person waived on this card in an earlier round (its `design.waived` rows); they stay waived. */
+  waived?: (taskId: string) => Promise<string[]>;
   /** The card's design budget; a spent budget starts no run. */
   budget?: (taskId: string) => Promise<DesignBudget>;
   /** The machine's state dir: the sub-run's folder is `<stateDir>/runs/<runId>-parity`. */
@@ -90,7 +92,8 @@ export async function runDesignParity(deps: DesignParityDeps, context: StageCont
     if (parsed?.success) answer = parsed.data;
     else notes.push(`the design review gave no usable answer: ${result.outcome !== "pass" ? String(result.detail?.reason ?? result.detail?.error ?? result.outcome) : "its answer did not parse"}`);
   }
-  const settled = settleParity(answer, { plan: parity.plan, spec, captures: parity.captures, bar, unplaced });
+  const waived = new Set(deps.waived ? await deps.waived(context.task.id) : []);
+  const settled = settleParity(answer, { plan: parity.plan, spec, captures: parity.captures, bar, unplaced, waived });
   notes.push(...settled.notes);
 
   // The reviewer's paths are the container's: the machine maps them to its own files, then pairs each compared frame. What is not there is not compared.
@@ -122,7 +125,7 @@ export async function runDesignParity(deps: DesignParityDeps, context: StageCont
   if (frames.some((f) => f.scenario !== null && f.status === "not_compared") && !why.includes("not_compared")) why.push("not_compared");
 
   const counts = { blocker: 0, should_fix: 0, nit: 0, waived: 0 };
-  for (const f of settled.findings) counts[f.severity as "blocker" | "should_fix" | "nit"]++;
+  for (const f of settled.findings) counts[isWaived(f) ? "waived" : severityOf(f.severity)]++;
   return {
     report: { ran, runId: ran ? subId : null, confidence: answer ? settled.confidence : ran ? 0 : null, bar, designInput: settled.designInput, frames, counts, summary: answer?.summary ?? "" },
     findings: settled.findings,
