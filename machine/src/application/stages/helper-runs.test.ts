@@ -566,6 +566,34 @@ describe("helperRuns: a conflict", () => {
   });
 });
 
+describe("helperRuns: a re-run that is still being made when the run ends", () => {
+  it("starts no second helper and removes its workspace (L7-1)", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const removedPaths: string[] = [];
+    const t = await returned({
+      helperWorkspace: {
+        make: async (...a: unknown[]) => {
+          if (a[4] === 2) await gate;
+          return { path: `/cards/w.helper-2-${a[4]}`, branch: "luna-helper-2", ref: "refs/luna/helper/task1/2" };
+        },
+        remove: async (path: string) => void removedPaths.push(path),
+      } as never,
+    });
+    t.setPick({ ok: false, conflict: true, files: ["src/ui/Card.tsx"] });
+    const pick = pickReq(t);
+    await tick();
+    const ended = t.coordinator.cancel();
+    await tick();
+    release();
+    await pick;
+    await ended;
+    expect(t.c.calls).toHaveLength(1);
+    expect(removedPaths).toContain("/cards/w.helper-2-2");
+    expect(await stateOf(2)).toMatchObject({ state: "cancelled" });
+  });
+});
+
 describe("helperRuns: the end of the run, after a pass", () => {
   it("waits for a running helper, picks onto the card's tip, moves the branch and updates the folder; the helper is not cancelled", async () => {
     const t = setup();

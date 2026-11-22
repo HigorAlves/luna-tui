@@ -209,9 +209,12 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
 
   /** One operation at a time on the card's branch: the three mailbox queues run concurrently. */
   let chain: Promise<unknown> = Promise.resolve();
+  let queued = 0;
   const serial = <T>(fn: () => Promise<T>): Promise<T> => {
+    queued++;
     const run = chain.then(fn, fn);
     chain = run.catch(() => {});
+    void chain.then(() => void queued--);
     return run;
   };
 
@@ -347,6 +350,12 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
   async function cancel(): Promise<void> {
     closed = true;
     if (inflight.size > 0) await drain();
+    // A step on the card's branch that is under way (a re-run being made) settles before the helpers are read.
+    if (queued > 0) {
+      let waited: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([chain, new Promise<void>((resolve) => (waited = setTimeout(resolve, deps.cancelWaitMs ?? CANCEL_WAIT_MS)))]);
+      clearTimeout(waited);
+    }
     const out = [...helpers.values()].filter((h) => LIVE.has(h.state));
     for (const h of out) h.controller.abort();
     await Promise.all(
@@ -399,6 +408,11 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
     } catch (error) {
       await fail(h, `the ui-designer's commits conflict with yours and its second workspace could not be made: ${msg(error)}`);
       return `the ui-designer's commits conflict with yours in ${filesOf(files)}, and a re-run could not start: build the slice yourself`;
+    }
+    if (closed || h.state === "cancelled") {
+      // The run ended while the workspace was being made: nobody would cancel a helper started now.
+      await deps.helperWorkspace.remove(workspace.path).catch((error) => deps.log?.(`helper workspace not removed: ${msg(error)}`));
+      return ENDED.error;
     }
     Object.assign(h, { attempt, base: P, ref: workspace.ref, workspace: workspace.path, branch: workspace.branch, removed: false, tip: undefined, commits: undefined, controller: linkedController(), deadline: now() + minutes * 60_000 });
     await setState(h, "conflict_rerun");
