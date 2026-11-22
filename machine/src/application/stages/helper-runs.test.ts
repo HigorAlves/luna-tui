@@ -77,6 +77,7 @@ function setup(over: Partial<HelperRunsDeps> = {}) {
     },
     takeHelperCommits: async (...a) => (taken.push(a), take),
     runHelper: c.runHelper,
+    runExtra: () => ({}),
     emit: async (kind, payload) => void rows.push({ kind, payload }),
     now: (() => { let t = 0; return () => (t += 120_000); })(),
     cancelWaitMs: 50,
@@ -101,6 +102,23 @@ describe("helperRuns: starting a helper", () => {
     expect(t.rows).toEqual([{ kind: "build.helper_refused", payload: { slice: 1, reason: expect.stringContaining("not a pure UI slice") } }]);
     expect(t.made).toEqual([]);
     expect(t.c.calls).toEqual([]);
+  });
+
+  it("hands each helper run the implementer's design, scenario tests, tests-commit files and inline tests", async () => {
+    const carried = { design: { refs: [] }, scenarioTests: [{ scenario: "S1", file: "a.test.ts" }], testsFiles: ["a.test.ts"], inlineTests: ["lib.rs"] };
+    const t = setup({ runExtra: () => carried });
+    await ask(t.coordinator);
+    expect(t.c.calls[0]!.extra).toMatchObject(carried);
+  });
+
+  it("reports the latest helper's state and, once landed, the shas the machine picked for it", async () => {
+    const none = setup();
+    expect(none.coordinator.status()).toBeNull();
+    const t = await returned();
+    expect(t.coordinator.status()).toEqual({ slice: 2, state: "returned", attempt: 1 });
+    await pickReq(t);
+    await ackReq(t);
+    expect(t.coordinator.status()).toEqual({ slice: 2, state: "committed", attempt: 1, picked: [PICKED] });
   });
 
   it("refuses a slice number that is not a whole number in the plan, and an importer that cannot take the implementer's commits in", async () => {

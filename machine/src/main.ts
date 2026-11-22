@@ -804,6 +804,7 @@ if (packRuns) shipDecisions.decide = async (pack, ship) => tagged(await ownCalls
 buildDecisions.budget = (taskId) => pipeline.buildBudgetState(taskId);
 designDecisions.budget = (taskId) => pipeline.designBudgetState(taskId);
 designDecisions.cardOff = (taskId) => pipeline.designCardOff(taskId);
+designDecisions.picked = (taskId) => pipeline.helperPicked(taskId);
 if (packRuns)
   buildDecisions.decide = async (pack, check, repoPath) => {
     const out = await ownCalls(packRuns).run({ pack, context: { check }, stage: "build" }, "build");

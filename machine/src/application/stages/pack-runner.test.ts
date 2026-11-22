@@ -2138,3 +2138,176 @@ describe("the ui-designer's own run (RFC 0013, phase 5)", () => {
     });
   });
 });
+
+describe("the implementer's side of the ui-designer (RFC 0013, phase 5)", () => {
+  const FIGMA = "https://www.figma.com/design/ABCDEFGHIJ1234/Page?node-id=1-2";
+  const uiPlan = { brief: "b", criteria: [], assumptions: [], slices: [{ title: "The page", est_loc: 20, touchpoints: ["page.tsx"], acceptance: ["it renders"] }] };
+  const apiPlan = { ...uiPlan, slices: [{ title: "The api", est_loc: 20, touchpoints: ["api.ts"], acceptance: ["it answers"] }] };
+  const withPlan = (plan: unknown, over: Partial<StageContext> = {}, description = `Build it. ${FIGMA}`): StageContext => {
+    const base = context("implementing");
+    return {
+      ...base,
+      engine: "claude:sonnet",
+      task: { ...base.task, description } as never,
+      approvals: [{ id: "ap1", kind: "awaiting_approval", decision: "approved", requested: plan } as never],
+      ...over,
+    };
+  };
+  const input = () => seen!.input as unknown as StageInput;
+  const policies = (over: Record<string, unknown> = {}) => ({ policies: { for: async () => ({ ...DEFAULT_POLICY, ...over }) } as never });
+  /** A coordinator that records what it was built with and answers as told. */
+  function coordinator(over: Partial<import("./helper-runs.ts").HelperRuns> = {}) {
+    const built: Array<import("./helper-runs.ts").HelperRunsDeps> = [];
+    const calls: string[] = [];
+    const runs: import("./helper-runs.ts").HelperRuns = {
+      onHelperRequest: async (r) => ({ ok: true, handle: `h/${r.slice}`, branch: "refs/luna/helper/x", base: "b", locks: ["page.tsx"] }),
+      onPickRequest: async () => ({ ok: false, error: "no" }),
+      onPickAck: async () => ({ ok: false, reason: "no" }),
+      afterRun: async (outcome) => (calls.push(`afterRun ${outcome}`), null),
+      cancel: async () => void calls.push("cancel"),
+      picked: () => new Set<string>(),
+      delegatedLocks: () => [],
+      status: () => null,
+      ...over,
+    };
+    return { runs, built, calls, factory: (d: import("./helper-runs.ts").HelperRunsDeps) => (built.push(d), runs) };
+  }
+  const commitWeb = () => {
+    for (const [file, text] of [["index.html", "<html></html>\n"], ["page.tsx", "page\n"], ["api.ts", "api\n"]] as const) writeFileSync(join(repo, file), text);
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "web");
+  };
+  const run = (d: Partial<AgentDeps>, context: StageContext, extra = {}) => runAgent({ ...deps(fakeSandbox(output())), ...d } as AgentDeps, context, "implementing", extra);
+
+  it("says the implementer may delegate when the card has a design, a UI slice and budget, and builds the coordinator before the container starts", async () => {
+    commitWeb();
+    const c = coordinator();
+    let builtBeforeStart = false;
+    const sandbox = async (r: SandboxRun) => ((builtBeforeStart = c.built.length === 1), fakeSandbox(output())(r));
+    await run({ helperRuns: c.factory, sandbox }, withPlan(uiPlan));
+    expect(builtBeforeStart).toBe(true);
+    expect(input().context.delegation).toEqual({ available: true, helper: { role: "ui-designer", engine: "claude:sonnet" } });
+    const d = c.built[0]!;
+    expect(d).toMatchObject({ taskId: context("implementing").task.id, signal: expect.any(AbortSignal) });
+    expect(d.outDir).toBe(join(seen!.runDir, "out"));
+    expect(d.branch).toMatch(/^task\//);
+  });
+
+  it("gives the coordinator the machine's facts: the plan, the card's design, the budget, and the tests commit's files as protected", async () => {
+    commitWeb();
+    const c = coordinator();
+    const budget = async () => ({ spent: false, minutesLeft: 40, tokens: null, tokensCounted: false, minutes: 0, limits: { max_tokens: 1, max_minutes: 40 }, } as never);
+    await run({ helperRuns: c.factory, design: { budget } }, withPlan(uiPlan, { budgetMinutes: 30 }), { testsFiles: ["t.test.ts"], scenarioTests: [{ scenario: "S1", file: "t.test.ts" }], inlineTests: ["lib.rs"] });
+    const d = c.built[0]!;
+    const facts = await d.facts();
+    expect(facts.slices.map((s) => s.touchpoints)).toEqual([["page.tsx"]]);
+    expect(facts.webRoots).toEqual([""]);
+    expect(facts.designRef).toEqual({ refs: [{ fileKey: "ABCDEFGHIJ1234", nodeIds: ["1:2"], page: null, from: "issue" }] });
+    expect(facts).toMatchObject({ designOff: false, implementerEngine: "claude:sonnet", repoEngine: null, designBudget: { spent: false, minutesLeft: 40 }, protectedPaths: ["t.test.ts"] });
+    expect(facts.implementerMinutesLeft).toBeGreaterThan(29);
+    expect(facts.implementerMinutesLeft).toBeLessThanOrEqual(30);
+    expect(d.runExtra()).toMatchObject({ scenarioTests: [{ scenario: "S1", file: "t.test.ts" }], testsFiles: ["t.test.ts"], inlineTests: ["lib.rs"] });
+    expect(d.priorPicked).toBeDefined();
+  });
+
+  it("answers the container's helper request through the build watch", async () => {
+    commitWeb();
+    const c = coordinator();
+    const answers: unknown[] = [];
+    const sandbox = async (r: SandboxRun) => {
+      r.onStarted?.("c1");
+      const checks = join(r.runDir, "out", "checks");
+      mkdirSync(checks, { recursive: true });
+      writeFileSync(join(checks, "helper-request-a1b2c3d4-1.json"), JSON.stringify({ n: 1, slice: 1, message: "go" }));
+      const file = join(checks, "helper-answer-a1b2c3d4-1.json");
+      for (let i = 0; i < 400 && !existsSync(file); i++) await new Promise((res) => setTimeout(res, 10));
+      answers.push(JSON.parse(readFileSync(file, "utf8")));
+      return fakeSandbox(output())(r);
+    };
+    await run({ helperRuns: c.factory, sandbox, watchEvery: 5 }, withPlan(uiPlan));
+    expect(answers).toEqual([{ ok: true, handle: expect.stringContaining("/1"), branch: "refs/luna/helper/x", base: "b", locks: ["page.tsx"] }]);
+  });
+
+  it("says no and builds nothing when the repo turns design off", async () => {
+    commitWeb();
+    const c = coordinator();
+    await run({ helperRuns: c.factory, ...policies({ design: "off" }) }, withPlan(uiPlan));
+    expect(input().context.delegation).toEqual({ available: false, reason: "design is off for this repo" });
+    expect(c.built).toHaveLength(0);
+  });
+
+  it.each([
+    ["the card has no design reference", uiPlan, "no design here", "the card has no design reference"],
+    ["the plan has no pure UI slice", apiPlan, `Build it. ${FIGMA}`, "no slice of the plan is a pure UI slice"],
+  ])("says no and builds nothing when %s", async (_why, plan, description, reason) => {
+    commitWeb();
+    const c = coordinator();
+    await run({ helperRuns: c.factory }, withPlan(plan, {}, description));
+    expect(input().context.delegation).toEqual({ available: false, reason });
+    expect(c.built).toHaveLength(0);
+  });
+
+  it("says no when the design budget is spent", async () => {
+    commitWeb();
+    const c = coordinator();
+    const budget = async () => ({ spent: "minutes", minutesLeft: 0 }) as never;
+    await run({ helperRuns: c.factory, design: { budget } }, withPlan(uiPlan));
+    expect(input().context.delegation).toEqual({ available: false, reason: "the design budget is spent" });
+    expect(c.built).toHaveLength(0);
+  });
+
+  it("lands the helper after a pass, before the run's result is used; a merge_conflict overrides whatever the agent answered", async () => {
+    commitWeb();
+    const c = coordinator({ afterRun: async (o) => (c.calls.push(`afterRun ${o}`), { escalate: "merge_conflict", reason: "slice 1 conflicts in a.ts" }), status: () => ({ slice: 1, state: "merge_conflict", attempt: 2 }) });
+    const result = await run({ helperRuns: c.factory }, withPlan(uiPlan));
+    expect(c.calls).toEqual(["afterRun pass"]);
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "merge_conflict", escalationFact: "merge_conflict", reason: "slice 1 conflicts in a.ts", options: [], helper: { slice: 1, state: "merge_conflict", attempt: 2 } });
+  });
+
+  it("overrides a failed answer with merge_conflict too", async () => {
+    commitWeb();
+    const c = coordinator({ afterRun: async () => ({ escalate: "merge_conflict", reason: "r" }) });
+    const result = await run({ helperRuns: c.factory, sandbox: fakeSandbox(output({ ok: false, outcome: "fail", error: "x" })) }, withPlan(uiPlan));
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "merge_conflict", escalationFact: "merge_conflict" });
+  });
+
+  it("escalates design_budget only after a pass", async () => {
+    commitWeb();
+    const spent = () => coordinator({ afterRun: async () => ({ escalate: "design_budget", reason: "spent" }) });
+    const passed = spent();
+    const ok = await run({ helperRuns: passed.factory }, withPlan(uiPlan));
+    expect(ok.outcome).toBe("escalated");
+    expect(ok.detail).toMatchObject({ escalation: "design_budget", escalationFact: "design_budget", reason: "spent", options: [] });
+    const failed = spent();
+    const bad = await run({ helperRuns: failed.factory, sandbox: fakeSandbox(output({ ok: false, outcome: "fail", error: "x" })) }, withPlan(uiPlan));
+    expect(bad.outcome).toBe("fail");
+    expect(bad.detail).not.toHaveProperty("escalationFact");
+  });
+
+  it("tells afterRun the run failed when the container timed out, and cancels the helper before the credential is released", async () => {
+    commitWeb();
+    const { credentials, log } = (() => {
+      const log: string[] = [];
+      const credentials: Credentials = { check: async () => ({ available: true }), prepare: async () => ({ env: {}, mounts: [], release: async () => void log.push("release") }) };
+      return { credentials, log };
+    })();
+    const c = coordinator({ cancel: async () => void log.push("cancel"), afterRun: async (o) => (log.push(`afterRun ${o}`), null), status: () => ({ slice: 1, state: "cancelled", attempt: 1 }) });
+    const sandbox = async (): Promise<SandboxResult> => ({ exitCode: 1, timedOut: true, aborted: false, transcriptPath: join(root, "t.log") });
+    const result = await run({ helperRuns: c.factory, credentials, sandbox }, withPlan(uiPlan));
+    expect(log.indexOf("cancel")).toBeGreaterThan(-1);
+    expect(log.indexOf("cancel")).toBeLessThan(log.indexOf("release"));
+    expect(log).toContain("afterRun fail");
+    expect(result.outcome).toBe("fail");
+    expect(result.detail).toMatchObject({ helper: { slice: 1, state: "cancelled", attempt: 1 } });
+  });
+
+  it("leaves a run with no helper as it was: no helper detail, no coordinator call at all when nothing is delegable", async () => {
+    commitWeb();
+    const c = coordinator();
+    const result = await run({ helperRuns: c.factory }, withPlan(apiPlan));
+    expect(result.detail).not.toHaveProperty("helper");
+    expect(c.calls).toEqual([]);
+  });
+});

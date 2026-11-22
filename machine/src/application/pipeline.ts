@@ -3551,6 +3551,11 @@ export class Pipeline {
     return designBudget(await this.events(id), designSettings((await this.policyFor(task.repoPath)).design).budget);
   }
 
+  /** The shas the machine picked onto the card's branch for the ui-designer, from its own `build.helper_picked` rows (RFC 0013, phase 5). */
+  async helperPicked(id: string): Promise<string[]> {
+    return (await this.events(id)).filter((e) => e.kind === "build.helper_picked").flatMap((e) => (Array.isArray(e.payload.picked) ? e.payload.picked.filter((sha): sha is string => typeof sha === "string") : []));
+  }
+
   /** Whether a person turned the designer agents off for this card (approving a `design_budget` escalation with design off). */
   async designCardOff(id: string): Promise<boolean> {
     return (await this.events(id)).some((e) => e.kind === "design.card_off");

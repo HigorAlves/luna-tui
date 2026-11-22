@@ -98,6 +98,8 @@ import { type ShipGateProbe, shipGateProbe } from "../application/ship-gate-prob
 export interface DesignDecisions {
   budget?: (taskId: string) => Promise<DesignBudget>;
   cardOff?: (taskId: string) => Promise<boolean>;
+  /** The shas the machine picked onto a card's branch for the ui-designer on earlier runs (its own `build.helper_picked` rows). */
+  picked?: (taskId: string) => Promise<string[]>;
 }
 
 export interface RealStagesResult {
@@ -355,6 +357,8 @@ export async function buildRealStages(
     // The MCP servers a pack may bridge (RFC 0013): one client per stage run.
     mcpFor: mcpFactory(config).mcpFor,
     mcpUntrusted: config.mcp.untrusted,
+    // The implementer's ui-designer helper reads the design budget, a card's "design off" and the earlier picks at call time (bound late in main.ts).
+    design: designDecisions,
     watcher,
     exec: checksExec,
     hostExec: exec,

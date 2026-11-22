@@ -174,6 +174,8 @@ export function buildStageInput(opts: {
   design?: DesignContext | null;
   /** For ui_design: the slice it builds, the files each side owns and the base it starts from; its ledger is seeded with that one slice. */
   helper?: StageInput["context"]["helper"];
+  /** For implementing: whether it may hand a UI slice to the ui-designer, and why not (the machine's own composition). */
+  delegation?: StageInput["context"]["delegation"];
   /** For a11y_audit: the WCAG level to audit against; AA when absent. */
   a11yLevel?: "AA" | "AAA";
   /** e2e: the captures the browser run is asked to take for the frames its scenarios cite. */
@@ -284,6 +286,7 @@ export function buildStageInput(opts: {
       ...(pack === "e2e" && opts.parityPlan ? { parityPlan: opts.parityPlan } : {}),
       ...(pack === "design_parity" && opts.parity ? { parity: opts.parity } : {}),
       ...((pack === "design_spec" || pack === "ui_design") && opts.design ? { design: opts.design } : {}),
+      ...(pack === "implementing" && opts.delegation ? { delegation: opts.delegation } : {}),
       ...(pack === "ui_design" && opts.helper ? { helper: opts.helper, ledger: { schema: 1 as const, slices: [{ id: opts.helper.slice.id, title: opts.helper.slice.title, status: "pending" as const, commit: null }] } } : {}),
       ...(pack === "question_council" && opts.questions ? { questions: opts.questions } : {}),
       ...(pack === "verifying" && opts.blastRadius?.length ? { blastRadius: opts.blastRadius } : {}),

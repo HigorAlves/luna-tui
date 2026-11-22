@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { AnswerScenario, AnswerStep, type CapturePlan, type DesignSpec, type ParityCapture, type CiContext, type ComplianceReviewContext, type CoverageSummary, type DesignContext, type DocsDriftContext, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, visionProblem, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
+import { designSettings, writableHelper, AnswerScenario, AnswerStep, type CapturePlan, type DesignSpec, type ParityCapture, type CiContext, type ComplianceReviewContext, type CoverageSummary, type DesignContext, type DocsDriftContext, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, visionProblem, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -9,7 +9,14 @@ import { basename, join, relative } from "node:path";
 import { readRegularFile } from "../../adapters/fs/bounded.ts";
 import { removeNestedRepositories } from "../../adapters/git/machine-repo.ts";
 import { bundleImporter } from "../../adapters/git/bundles.ts";
+import { advanceBranch, helperWorkspace, landInWorktree, pickBundle, pickOnto, takeHelperCommits } from "../../adapters/git/helper.ts";
+import { cardOf } from "../../domain/card-fields.ts";
+import { isUiSlice } from "../../domain/delegation.ts";
+import type { DesignBudget } from "../../domain/design-budget.ts";
+import { designRefOf } from "../../domain/design-ref.ts";
+import { webRoots } from "./e2e.ts";
 import type { TaskRow } from "../../domain/task.ts";
+import type { StageOutcome } from "../../domain/transition.ts";
 import { ensureClone, isClone, isFreshWorkspace, moveToClone, publishBranch, refreshScratch } from "../../adapters/git/clone.ts";
 import {
   type Workspace,
@@ -59,6 +66,7 @@ import { readScenarioReds } from "./scenario-reds.ts";
 import type { TruthSink } from "../decision-truth.ts";
 import { type McpCallRow, bridgeFor, cappedRow, DESIGN_MOUNT, mcpAnswers } from "./design-bridge.ts";
 import type { Mcp } from "../mcp.ts";
+import { type HelperRuns, type HelperRunsDeps, type HelperEscalation, helperRuns } from "./helper-runs.ts";
 import { type Decide, buildChecks, buildWatch, cardSearchAnswers, loopAnswers } from "./build-watch.ts";
 import { type CardHit, sourceKindOf } from "../../domain/card-search.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
@@ -93,6 +101,10 @@ export interface AgentDeps {
   mcpFor?: () => Mcp;
   /** `allow` gives an untrusted card's stage bridged tools too (`untrusted: allow` in mcp.yaml); the default refuses. */
   mcpUntrusted?: "allow" | "deny";
+  /** The designer agents' budget, a card's "design off" and the shas the machine picked for the card on earlier runs (RFC 0013); read at call time, bound late. Absent, no budget applies. */
+  design?: { budget?: (taskId: string) => Promise<DesignBudget>; cardOff?: (taskId: string) => Promise<boolean>; picked?: (taskId: string) => Promise<string[]> };
+  /** The coordinator of the ui-designer helper (tests pass their own). */
+  helperRuns?: typeof helperRuns;
   /** Replaces the docker sandbox; tests pass a fake. */
   sandbox?: (run: SandboxRun) => Promise<SandboxResult>;
   /** The list of hosts each run may reach; absent (`MACHINE_EGRESS=off`, tests) a run joins an ordinary bridge as before the allow-list. */
@@ -278,7 +290,8 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   // The image the stage's sandbox runs in is chosen once, inside the run, and carried out here: the record of Build's environment names it, never a second resolution.
   const chosen: { image?: string } = {};
   const ran = { container: false };
-  const result = await runAgentIn(deps, context, pack, extra, chosen, ran);
+  const helper: HelperHold = {};
+  const result = withHelper(await runAgentIn(deps, context, pack, extra, chosen, ran, helper), helper);
   // The container's run is folded into the economy before anything else starts in the folder: the next container of a Build overwrites its events.
   if (ran.container) await foldRun(deps, context, pack, result);
   // The environment a passing Build ran in: the run's own record, and the Build Report's `envHash`.
@@ -291,6 +304,37 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     console.warn(`could not record the Build's environment: ${(error as Error).message}`);
     return result;
   }
+}
+
+/** What the container's own result file says the run ended as, before the machine has ingested it: only a clean pass is "pass". */
+async function peekOutcome(file: string): Promise<StageOutcome> {
+  try {
+    const result = JSON.parse(await readRegularFile(file, 4 * 1024 * 1024)) as { ok?: unknown; outcome?: unknown };
+    if (result.ok === false) return "fail";
+    return result.outcome === "pass" || result.outcome === "needs_input" || result.outcome === "test_change" || result.outcome === "escalated" ? result.outcome : "fail";
+  } catch {
+    return "fail";
+  }
+}
+
+/** What the implementing run keeps of its helper's coordinator, for the end of the run. */
+interface HelperHold {
+  runs?: HelperRuns;
+  /** The machine's own decision at the end of the run (set once, after the container ended). */
+  escalation?: HelperEscalation | null;
+}
+
+/** The run's result with the helper's part: its state in `detail.helper`, and the escalation the machine's facts decide over whatever the agent answered (D8): `merge_conflict` always, `design_budget` only after a pass. Without a helper the result is returned as it is. */
+function withHelper(result: StageResult, hold: HelperHold): StageResult {
+  const status = hold.runs?.status();
+  const e = hold.escalation;
+  if (!status && !e) return result;
+  const detail = { ...result.detail, ...(status ? { helper: status } : {}) };
+  if (e && (e.escalate === "merge_conflict" || result.outcome === "pass")) {
+    // `escalation` alone is rewritten to `other` by Build; the fact keeps the reason (decideBuildEscalation).
+    return { ...result, outcome: "escalated", detail: { ...detail, escalation: e.escalate, escalationFact: e.escalate, reason: e.reason, options: [] } };
+  }
+  return { ...result, detail };
 }
 
 /** The containers a run folder has held in this process, for the ordinal that tells them apart. */
@@ -329,7 +373,7 @@ async function foldRun(deps: AgentDeps, context: StageContext, pack: PackId, res
 /** The cards whose untrusted run has been said on the task, so it is said once. */
 const untrustedNoted = new Set<string>();
 
-async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}, chosen: { image?: string } = {}, ran: { container: boolean } = { container: false }): Promise<StageResult> {
+async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}, chosen: { image?: string } = {}, ran: { container: boolean } = { container: false }, helperHold: HelperHold = {}): Promise<StageResult> {
   const { task } = context;
   if (!task.repoPath) {
     throw new Error("the task has no repoPath; create it with a repo to run real stages");
@@ -518,6 +562,27 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     history: extra.history ?? ((pack === "implementing" || pack === "reviewing_memory") && deps.history ? await deps.history(task.id) : null),
   });
 
+  // The implementer's helper (RFC 0013, phase 5): whether it may hand a UI slice to the ui-designer, from the machine's own facts.
+  const delegating = pack === "implementing" && !extra.checkout && writableHelper(PACKS.implementing) !== null;
+  const planned = (input.plan?.slices ?? []).flatMap((slice) => {
+    const parsed = Slice.safeParse(slice);
+    return parsed.success ? [parsed.data] : [];
+  });
+  const designSettingsOf = designSettings(policy.design);
+  const designRef = delegating ? (extra.design ?? designRefOf({ text: `${task.title}\n${task.description}`, attachments: cardOf(task).attachments, settings: designSettingsOf })) : null;
+  if (delegating) {
+    const reason = await (async (): Promise<string | null> => {
+      if (designSettingsOf.off) return "design is off for this repo";
+      if (await deps.design?.cardOff?.(task.id).catch(() => false)) return "design is off for this card";
+      if (!designRef) return "the card has no design reference";
+      if ((await deps.design?.budget?.(task.id).catch(() => null))?.spent) return "the design budget is spent";
+      const roots = await webRoots(workspace.path);
+      return planned.some((slice) => isUiSlice(slice.touchpoints, roots)) ? null : "no slice of the plan is a pure UI slice";
+    })();
+    const writer = writableHelper(PACKS.implementing)!;
+    input.context.delegation = reason ? { available: false, reason } : { available: true, helper: { role: writer.role, engine: writer.engine } };
+  }
+
   // Watches the transcript as it streams: a loop on one call is stopped before it spends the turn budget.
   const detector = new StuckDetector();
   // The SDK's session transcripts live per task on the host: a session outlives the attempt,
@@ -554,6 +619,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       throw error;
     }
   };
+  const identity = limits.writable ? await guard(() => gitIdentity(task.repoPath!)) : null;
   // What the run commits comes back as bundles in /out/bundles, read like a fetch from an untrusted server: the host never reads the agent's own repository.
   const importer = extra.checkout
     ? null
@@ -580,6 +646,57 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   // Where the scope is measured from (see the comment below), moved past default-branch history the branch merged since (`scopeStartOf`).
   const scopeFrom = input.plan != null ? (extra.scopeBase ?? context.firstInputCommit ?? (context.attempt === 1 ? inputCommit : null)) : inputCommit;
   const scopeStart = scopeFrom && input.plan != null && task.repoPath && pack === "implementing" && !extra.checkout ? await guard(() => scopeStartOf(workspace.path, task.repoPath!, scopeFrom)) : scopeFrom;
+  // The implementer's helper (RFC 0013, phase 5): made before the container starts, with the build watch's handlers below (the watch snapshots the checks folder when it is built).
+  const startedAt = Date.now();
+  const helperCoordinator: HelperRuns | null =
+    input.context.delegation?.available && importer
+      ? (deps.helperRuns ?? helperRuns)({
+          taskId: task.id,
+          cardPath: workspace.path,
+          outDir: join(runDir, "out"),
+          context,
+          signal: context.signal,
+          importer,
+          facts: async () => {
+            const budget = await deps.design?.budget?.(task.id).catch(() => null);
+            const off = designSettingsOf.off || Boolean(await deps.design?.cardOff?.(task.id).catch(() => false));
+            const claude = PACKS.ui_design.engines.allowed.find((e) => credentialOwner(e) === "claude");
+            return {
+              slices: planned,
+              webRoots: await webRoots(workspace.path),
+              designRef,
+              designOff: off,
+              designBudget: { spent: Boolean(budget?.spent), minutesLeft: budget?.minutesLeft ?? Number.POSITIVE_INFINITY },
+              implementerMinutesLeft: Math.max(0, input.limits.timeoutMs / MINUTE - (Date.now() - startedAt) / MINUTE),
+              implementerEngine: choice.engine,
+              repoEngine: policy.engines.ui_design ?? null,
+              claudeAvailable: claude ? (await deps.credentials.check(claude, { repo: task.repoPath }).catch(() => ({ available: false }))).available : false,
+              protectedPaths: extra.testsFiles ?? [],
+            };
+          },
+          helperWorkspace,
+          takeHelperCommits,
+          branch: workspace.branch,
+          identity: identity ?? { name: "Luna Machine", email: "luna@localhost" },
+          git: { pickOnto, pickBundle, advanceBranch, landInWorktree },
+          publish: async () => {
+            const shown = await publishBranch(task.repoPath!, workspace.path, workspace.branch);
+            return shown.ok ? { ok: true } : { ok: false, note: shown.note };
+          },
+          note: async (text) => void (await context.note?.(text)),
+          runHelper: (helperContext, helperExtra) => runAgent(deps, helperContext, "ui_design", helperExtra),
+          runExtra: () => ({
+            ...(designRef ? { design: designRef } : {}),
+            ...(extra.scenarioTests?.length ? { scenarioTests: extra.scenarioTests } : {}),
+            ...(extra.testsFiles?.length ? { testsFiles: extra.testsFiles } : {}),
+            ...(extra.inlineTests?.length ? { inlineTests: extra.inlineTests } : {}),
+          }),
+          emit: context.emit ?? (async () => {}),
+          priorPicked: (await deps.design?.picked?.(task.id).catch(() => [])) ?? [],
+          log: (line) => void context.note?.(line).catch(() => {}),
+        })
+      : null;
+  helperHold.runs = helperCoordinator ?? undefined;
   // The machine's side of the checks the implementer asks for: a red slice and the change's scope.
   const checks =
     (pack === "implementing" || helperRun) && !extra.checkout
@@ -594,6 +711,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
           planned: helperRun ? [...extra.helper!.slice.touchpoints] : plannedFiles(input.plan),
           planPresent: helperRun || input.plan != null,
           ...(helperRun ? { locks: () => ({ other: [...extra.helper!.locks.theirs], owner: "implementer" as const }) } : {}),
+          ...(helperCoordinator ? { locks: () => ({ other: helperCoordinator.delegatedLocks(), owner: "ui-designer" as const }), picked: helperCoordinator.picked } : {}),
           ...(extra.scenarioTests?.length ? { scenarioTests: extra.scenarioTests } : {}),
           ...(extra.testsFiles?.length ? { protectedPaths: extra.testsFiles } : {}),
           ...(extra.inlineTests?.length ? { inlineTests: extra.inlineTests } : {}),
@@ -639,13 +757,16 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       ...(checks ? { onRed: async (...a: Parameters<typeof checks.onRed>) => (await importer?.sync(), checks.onRed(...a)), onScopeRequest: async (...a: Parameters<typeof checks.onScopeRequest>) => (await importer?.sync(), checks.onScopeRequest(...a)) } : {}),
       ...(cardSearch ? { onCardSearch: cardSearch.onCardSearch } : {}),
       ...(loopJudge ? { onLoopRequest: loopJudge.onLoopRequest } : {}),
+      ...(helperCoordinator ? { onHelperRequest: helperCoordinator.onHelperRequest, onPickRequest: helperCoordinator.onPickRequest, onPickAck: helperCoordinator.onPickAck } : {}),
       ...(design ? { onMcpRequest: design.answer, onMcpCapped: (request: Parameters<typeof cappedRow>[0]) => void design!.log(cappedRow(request)) } : {}),
       onCommitted: async (slice) => {
         if (!checks) return;
-        await importer?.sync();
+        // A slice the ui-designer built and the machine already picked onto the branch: its tip is the machine's, so there is no bundle to take in and no red truth on the implementer.
+        const handed = slice.owner === "ui-designer" && slice.commit != null && helperCoordinator?.picked().has(slice.commit) === true;
+        if (!handed) await importer?.sync();
         // The helper's commits are the machine's to pick: no checkpoint push of its workspace, and no red truth on the implementer's records.
         if (helperRun) return;
-        await checks.onGreen(slice).catch((error: Error) => void context.note?.(`red_check truth: ${error.message}`).catch(() => {}));
+        if (!handed) await checks.onGreen(slice).catch((error: Error) => void context.note?.(`red_check truth: ${error.message}`).catch(() => {}));
         if (!hostExec) return;
         pushing = pushing.then(async () => {
           // One push per tip: two slices committed on the same HEAD need one checkpoint, and a tip
@@ -720,7 +841,6 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const egress = deps.egress
     ? await guard(() => deps.egress!.for({ repoPath: task.repoPath, kind: egressKindOf(found), owners: [...new Set(owners)], ...(credential.relay ? { relayed: ["claude" as const] } : {}), targets: found.kind !== "decision" && found.network === "full" && (BROWSER_PACKS.has(pack) || pack === "recording") ? targetHosts(input.context.qaTargets ?? []) : [] }))
     : undefined;
-  const identity = limits.writable ? await guard(() => gitIdentity(task.repoPath!)) : null;
   // The bridged design tools (RFC 0013): only for a pack that names some, in a repo that has not turned them off, with a client of this run's own.
   const designDir = join(runDir, "design");
   const grants = (found.kind === "decision" ? [] : found.access.bridge);
@@ -783,7 +903,17 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       void deps.watcher.follow(task.id, `#${task.id.slice(0, 8)} ${basename(task.repoPath!)} · ${task.title}`, workspace.path, name);
     },
     onLine: (line) => detector.feed(line),
-  }).finally(async () => {
+  }).then(
+    async (ended) => {
+      // An abort, a timeout or a stuck stop ends the helper before the credential goes: nobody is left holding files for a run that is over.
+      if (ended.aborted || ended.timedOut || ended.stuck) await helperCoordinator?.cancel().catch(() => {});
+      return ended;
+    },
+    async (error) => {
+      await helperCoordinator?.cancel().catch(() => {});
+      throw error;
+    },
+  ).finally(async () => {
     // A fake or resumed sandbox may never call onStarted; the watch still covers its run.
     startWatch();
     await (watch as ReturnType<typeof buildWatch> | null)?.stop();
@@ -796,6 +926,11 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     const broken = envBrokenDetail(error);
     if (!broken) throw error;
     return { outcome: "escalated", detail: broken };
+  }
+  // The helper's end (RFC 0013, D7, D8): after a pass its commits are picked onto the branch and put in the folder, before the run's own commits are taken in below; after anything else it is cancelled.
+  if (helperCoordinator) {
+    const ended = sandbox.aborted || sandbox.timedOut || sandbox.stuck ? "fail" : await peekOutcome(join(runDir, "out", "result.json"));
+    helperHold.escalation = await helperCoordinator.afterRun(ended).catch((error: Error) => (void context.note?.(`the helper's end failed: ${safe(error.message).slice(0, 200)}`).catch(() => {}), null));
   }
   // A run that had secrets: what its tools wrote into the files it left is cleaned before anything reads the packet, and every string of
   // what is ingested below is cleaned where it is made.

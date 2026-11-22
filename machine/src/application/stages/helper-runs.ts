@@ -78,6 +78,8 @@ export interface HelperRunsDeps {
   note?: (text: string) => Promise<void>;
   /** The helper's own run in the pack runner (slice 79). */
   runHelper(context: StageContext, extra: HelperRunExtra): Promise<StageResult>;
+  /** What each helper run takes from the implementer's own run: the card's design, its scenario tests, the tests commit's files and the Rust files with inline tests. */
+  runExtra(): Pick<HelperRunExtra, "design" | "scenarioTests" | "testsFiles" | "inlineTests">;
   emit: NonNullable<StageContext["emit"]>;
   /** The shas the machine picked onto this card's branch on earlier runs (its own `build.helper_picked` rows). */
   priorPicked?: Iterable<string>;
@@ -102,6 +104,8 @@ export interface HelperRuns extends HelperCoordinator {
   picked(): ReadonlySet<string>;
   /** The files the helper holds while it has its slice: the implementer must not touch them. */
   delegatedLocks(): string[];
+  /** Where the run's latest helper stands, for the run's `detail.helper`; null when none was started. `picked` is what the machine put on the branch for it. */
+  status(): { slice: number; state: HelperState; attempt: number; picked?: string[] } | null;
 }
 
 interface Helper {
@@ -127,6 +131,8 @@ interface Helper {
   branch: string;
   planned: { title: string; touchpoints: string[]; acceptance: string[] };
   message: string;
+  /** The shas the machine made on the card's branch for this helper. */
+  pickedShas?: string[];
 }
 
 /** A line of a model's or container's text, for the state file: one line, cleaned, capped. */
@@ -189,6 +195,7 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
   });
 
   const runOf = (h: Helper, conflict?: { files: string[] }): HelperRunExtra => ({
+    ...deps.runExtra(),
     workspace: { path: h.workspace, branch: h.branch },
     helper: {
       slice: { id: h.slice, title: h.planned.title, touchpoints: h.planned.touchpoints, acceptance: h.planned.acceptance },
@@ -381,6 +388,7 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
   /** The branch moved to the helper's picked commits: record every sha the machine made, then show the branch. */
   async function landed(h: Helper, onto: string, tip: string, picked: string[]): Promise<void> {
     for (const sha of picked) pickedShas.add(sha);
+    h.pickedShas = picked;
     await row("build.helper_picked", { slice: h.slice, base: h.base, helperTip: h.tip ?? "", onto, picked, tip });
     const shown = await deps.publish?.().catch((error): { ok: false; note: string } => ({ ok: false, note: `the branch could not be shown: ${msg(error)}` }));
     if (shown && !shown.ok) await deps.note?.(`slice ${h.slice}: ${shown.note}`).catch(() => {});
@@ -496,5 +504,9 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
     cancel,
     picked: () => pickedShas,
     delegatedLocks: () => [...new Set([...helpers.values()].filter((h) => LIVE.has(h.state)).flatMap((h) => h.locks.helper))],
+    status() {
+      const h = [...helpers.values()].at(-1);
+      return h ? { slice: h.slice, state: h.state, attempt: h.attempt, ...(h.pickedShas?.length ? { picked: [...h.pickedShas] } : {}) } : null;
+    },
   };
 }

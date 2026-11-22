@@ -4538,6 +4538,15 @@ describe("the design budget", () => {
     expect((await p.designBudgetState(task.id)).spent).toBe("tokens");
   });
 
+  it("lists the shas the machine picked for the ui-designer, from its own rows", async () => {
+    const p = new Pipeline(db, (stage) => stubs.runnerFor(stage), { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    expect(await p.helperPicked(task.id)).toEqual([]);
+    await p.record(task.id, "build.helper_picked", { slice: 2, base: "a", helperTip: "b", onto: "a", picked: ["c1", "c2"], tip: "c2" });
+    await p.record(task.id, "build.helper_picked", { slice: 3, base: "c2", helperTip: "d", onto: "c2", picked: ["c3", 7], tip: "c3" });
+    expect(await p.helperPicked(task.id)).toEqual(["c1", "c2", "c3"]);
+  });
+
   it("gives the card a fresh design budget when a person approves a design_budget escalation", async () => {
     const ran: string[] = [];
     const p = new Pipeline(db, escalating(ran), { inline: true, policies: previewOn, hasConfig: () => true });
