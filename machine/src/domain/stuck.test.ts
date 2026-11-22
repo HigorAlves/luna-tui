@@ -32,4 +32,17 @@ describe("StuckDetector", () => {
     const lines = ["→ Bash npm test", "fails again", "→ Bash npm test", "hm", "→ Bash npm test", "→ Bash npm test"];
     expect(feedAll(lines)).toMatch(/same call 4 times/);
   });
+
+  it("does not flag the wait tool, however often the implementer polls a helper (L8-3)", () => {
+    // The line `callTarget` prints for `slice_wait {slice: 2}`: no target, only the arguments' fingerprint. Eve serves the tool bare.
+    for (const wait of ["→ mcp__luna__slice_wait ·1a2b3c4d", "→ slice_wait ·1a2b3c4d"]) {
+      expect(feedAll(Array(SAME_CALL_LIMIT * 3).fill(wait))).toBeNull();
+      expect(feedAll(Array(ALTERNATING_LIMIT).fill(["→ Read /work/src/Card.tsx", wait]).flat())).toBeNull();
+    }
+  });
+
+  it("still flags a different luna tool repeated, and names the wait tool exactly", () => {
+    expect(feedAll(Array(SAME_CALL_LIMIT).fill("→ mcp__luna__slice_list ·1a2b3c4d"))).toContain("the same call");
+    expect(feedAll(Array(SAME_CALL_LIMIT).fill("→ mcp__luna__slice_waiting ·1a2b3c4d"))).toContain("the same call");
+  });
 });
