@@ -1,9 +1,10 @@
 // The e2e stage: skip repos with no web surface and changes that touch none of it; otherwise
 // run the e2e pack in the QA image and turn its verdict into a pass or a fail for the e2e loop.
 import { touchesRenderedSurface } from "../../domain/rendered.ts";
-import { readFile, readdir, rm, stat } from "node:fs/promises";
+import { lstat, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 
+import { readRegularFile } from "../../adapters/fs/bounded.ts";
 import { branchBase, diffNameStatus, headCommit } from "../../adapters/git/worktree.ts";
 import { A11yAuditAnswer, type CapturePlan, type DecisionOverrides, type Finding, type VerifyDesignReport, mergeDuplicateFindings, severityOf } from "@hardness/contracts";
 
@@ -123,17 +124,19 @@ const SKIP_DIRS = new Set(["node_modules", "dist", "build", "target", "vendor"])
 /** Where a monorepo keeps its apps: one level of these is scanned for a web package.json. */
 const WORKSPACE_DIRS = ["apps", "packages", "services", "sites"];
 
-const isFile = (path: string) => stat(path).then((s) => s.isFile(), () => false);
+/** A regular file, not a link: the worktree is written by a container, so nothing here follows a link or opens a FIFO. */
+const isFile = (path: string) => lstat(path).then((s) => s.isFile(), () => false);
+const PACKAGE_JSON_CAP = 1024 * 1024;
 
 async function webPackage(dir: string): Promise<boolean> {
   try {
-    const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8")) as Record<string, unknown>;
+    const pkg = JSON.parse(await readRegularFile(join(dir, "package.json"), PACKAGE_JSON_CAP)) as Record<string, unknown>;
     const scripts = (pkg.scripts ?? {}) as Record<string, unknown>;
     if (WEB_SCRIPTS.some((name) => typeof scripts[name] === "string")) return true;
     const deps = { ...((pkg.dependencies ?? {}) as object), ...((pkg.devDependencies ?? {}) as object) };
     return WEB_FRAMEWORKS.some((name) => name in deps);
   } catch {
-    return false; // no package.json, or not JSON
+    return false; // no package.json, or a link, FIFO, oversized file or not JSON
   }
 }
 

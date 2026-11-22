@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -67,6 +68,40 @@ describe("webRoots", () => {
     expect(await webRoots(dir)).toEqual(["apps/web"]);
     pkg({ name: "root", scripts: { dev: "vite" } });
     expect(await webRoots(dir)).toEqual(["", "apps/web"]);
+  });
+});
+
+describe("webRoots on a worktree the container wrote", () => {
+  const web = JSON.stringify({ name: "web", dependencies: { vite: "7" } });
+  it("does not block on a FIFO package.json, and takes no root from it", async () => {
+    mkdirSync(join(dir, "apps", "x"), { recursive: true });
+    try {
+      execFileSync("mkfifo", [join(dir, "apps", "x", "package.json")]);
+      execFileSync("mkfifo", [join(dir, "package.json")]);
+    } catch {
+      return; // no mkfifo here
+    }
+    const result = await Promise.race([webRoots(dir), new Promise<string>((r) => setTimeout(() => r("hung"), 3000))]);
+    expect(result).toEqual([]);
+  });
+  it("does not follow a package.json link to a file outside", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "e2e-out-"));
+    writeFileSync(join(outside, "package.json"), web);
+    symlinkSync(join(outside, "package.json"), join(dir, "package.json"));
+    mkdirSync(join(dir, "apps", "x"), { recursive: true });
+    symlinkSync(join(outside, "package.json"), join(dir, "apps", "x", "package.json"));
+    expect(await webRoots(dir)).toEqual([]);
+  });
+  it("does not walk a linked apps dir", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "e2e-out-"));
+    mkdirSync(join(outside, "w"));
+    writeFileSync(join(outside, "w", "package.json"), web);
+    symlinkSync(outside, join(dir, "apps"));
+    expect(await webRoots(dir)).toEqual([]);
+  });
+  it("treats an oversized package.json as absent", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "big", dependencies: { vite: "7" }, pad: "x".repeat(1024 * 1024 + 10) }));
+    expect(await webRoots(dir)).toEqual([]);
   });
 });
 
