@@ -16,6 +16,7 @@
 //   pnpm eval prune-runs [--older-than 30]                    removes run folders under evals/.runs older than that many days
 //   pnpm eval propose --repo <abs path> [--machine <url>] [--dry-run]   posts the scorecards to the machine, which drafts a luna.yaml proposal card for the repo
 //   pnpm eval admit --pack <p> --engine <e> --against <claude:*> [--write]   whether the engine may join a pack that reads images: its saved baseline against Claude's; exits 0 on a pass, 1 on a fail, 2 on a missing baseline
+//   pnpm eval build-helper --engine <claude:*> [--case <id>]... [--no-baseline] [--dry] [--image <tag>]   `implementing` on 3 cards (a logic slice and a UI slice) with the ui-designer helper, and with delegation off; reports both slices committed, scope, picks, conflicts and wall clock. Local only
 //   pnpm eval scorecard                    evals/scorecard.md over every decision baseline
 //   pnpm eval defaults [--write] [--except <pack>...]              the default per slot by the scorecard's rule; --write updates contracts/src/decision-defaults.json
 import { DECISION_DEFAULTS, EngineId, PACKS, PackId, decisionEngines } from "@hardness/contracts";
@@ -237,6 +238,40 @@ if (command === "harvest") {
     console.log(`admission record written: ${file.slice(EVALS.length + 1)}`);
   }
   process.exit(verdict.code);
+} else if (command === "build-helper") {
+  const { values } = parseArgs({ args: process.argv.slice(3), options: { engine: { type: "string" }, case: { type: "string", multiple: true }, "no-baseline": { type: "boolean", default: false }, dry: { type: "boolean", default: false }, image: { type: "string", default: process.env.RUNNER_IMAGE ?? "hardness-runner:dev" } } });
+  const engine = EngineId.safeParse(values.engine).data ?? fail(`--engine must be one of ${EngineId.options.join(", ")}`);
+  if (!PACKS.implementing.engines.allowed.includes(engine)) fail(`--engine must be one of implementing's engines: ${PACKS.implementing.engines.allowed.join(", ")}`);
+  const { caseReport, loadBuildCases, renderDry, renderReport } = await import("./src/build-helper.ts");
+  let found;
+  try {
+    found = loadBuildCases(EVALS, values.case ?? []);
+  } catch (error) {
+    fail((error as Error).message);
+  }
+  if (values.dry) {
+    console.log(renderDry(found, !values["no-baseline"]));
+    process.exit(0);
+  }
+  // Local only, like every eval: it needs the stage image and a model credential, and it starts real containers.
+  const found1 = await machineCredentials().check(engine);
+  if (!found1.available) fail(`${engine}: ${found1.reason}`);
+  if (!(await imageExists(values.image!))) fail(`no image ${values.image}: build it with \`pnpm --filter @hardness/machine runner:build\``);
+  const { runBuildTrial } = await import("./src/build-helper-run.ts");
+  const options = { engine, image: values.image!, root: resolve(EVALS, "..") };
+  const reports = [];
+  for (const c of found) {
+    console.log(`${c.id}: running with the helper on`);
+    const delegated = await runBuildTrial(c, "on", options);
+    let baseline = null;
+    if (!values["no-baseline"]) {
+      console.log(`${c.id}: running with delegation off`);
+      baseline = await runBuildTrial(c, "off", options);
+    }
+    reports.push(caseReport(c, delegated, baseline));
+  }
+  console.log(renderReport(engine, reports));
+  process.exit(reports.every((r) => r.pass) ? 0 : 1);
 } else if (command === "scorecard" || command === "defaults") {
   const { values } = parseArgs({ args: process.argv.slice(3), options: { write: { type: "boolean", default: false }, except: { type: "string", multiple: true, default: [] } } });
   const cards = loadBaselines(EVALS);

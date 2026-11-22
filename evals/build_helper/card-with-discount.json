@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "id": "card-with-discount",
+  "uiCase": "card-hover-focus",
+  "title": "The cart total applies a percent discount",
+  "description": "The cart total takes an optional percent discount and the product card shows its hover and focus states.",
+  "logic": {
+    "title": "Total applies a percent discount",
+    "touchpoints": [
+      "src/cart/total.ts",
+      "test/cart/total.test.ts"
+    ],
+    "acceptance": [
+      "total(lines, 10) takes 10 percent off, rounded to whole cents",
+      "a discount of 0 or none changes nothing"
+    ]
+  }
+}

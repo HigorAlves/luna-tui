@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "count",
+      "path": "commits",
+      "min": 1
+    },
+    {
+      "kind": "count",
+      "path": "escalation",
+      "max": 0
+    },
+    {
+      "kind": "mentions",
+      "path": "files[]",
+      "words": [
+        "src/ui/CartPanel.ts"
+      ]
+    },
+    {
+      "kind": "avoids",
+      "path": "files[]",
+      "words": [
+        "src/cart/total.ts",
+        "src/ui/ProductCard.ts",
+        "package.json",
+        "test/ui/cart-panel.test.ts"
+      ]
+    },
+    {
+      "kind": "mentions",
+      "path": "summary",
+      "words": [
+        "empty",
+        "error"
+      ],
+      "any": true
+    },
+    {
+      "kind": "mentions",
+      "path": "summary",
+      "words": [
+        "--color-error",
+        "--color-text"
+      ],
+      "any": true
+    }
+  ],
+  "rubric": "The slice builds the empty state (the text 'Your cart is empty' as a polite status) and the error state ('We could not load your cart' as an alert, in the error colour) that the spec draws. A good answer names only src/ui/CartPanel.ts, says the scenario tests pass, and uses the spec's token names (--color-error, --color-text). A real error is an invented state (a loading or a disabled state the spec does not draw), an invented message or colour, a change to a locked file (src/cart/total.ts, src/ui/ProductCard.ts), or an escalation for a fully specified slice. Do not credit anything the answer does not say."
+}

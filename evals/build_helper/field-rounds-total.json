@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "id": "field-rounds-total",
+  "uiCase": "field-a11y",
+  "title": "The cart total rounds half up",
+  "description": "The cart total rounds fractional cents half up and the checkout email field is labelled, described and announces its error.",
+  "logic": {
+    "title": "Total rounds half up to whole cents",
+    "touchpoints": [
+      "src/cart/total.ts",
+      "test/cart/total.test.ts"
+    ],
+    "acceptance": [
+      "a fractional cent total rounds half up",
+      "a whole-cent total is unchanged"
+    ]
+  }
+}

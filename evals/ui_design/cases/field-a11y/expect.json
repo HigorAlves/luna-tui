@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "count",
+      "path": "commits",
+      "min": 1
+    },
+    {
+      "kind": "count",
+      "path": "escalation",
+      "max": 0
+    },
+    {
+      "kind": "mentions",
+      "path": "files[]",
+      "words": [
+        "src/ui/EmailField.ts"
+      ]
+    },
+    {
+      "kind": "avoids",
+      "path": "files[]",
+      "words": [
+        "src/cart/total.ts",
+        "package.json",
+        "test/ui/email-field.test.ts"
+      ]
+    },
+    {
+      "kind": "mentions",
+      "path": "summary",
+      "words": [
+        "aria",
+        "label"
+      ],
+      "any": true
+    },
+    {
+      "kind": "mentions",
+      "path": "summary",
+      "words": [
+        "--color-error",
+        "--space-4"
+      ],
+      "any": true
+    }
+  ],
+  "rubric": "The slice builds the email field and its accessibility note: the label tied to the input (for/id), aria-describedby naming the hint and, on error, the error, aria-invalid, and the error as a role alert in the error colour. A good answer names only src/ui/EmailField.ts, says the scenario tests pass, and uses the spec's token names (--color-error, --space-4) with no raw value. A real error is dropping the a11y note, an invented value or state, a change to a locked file (src/cart/total.ts) or to the test, or an escalation for a fully specified slice. Do not credit anything the answer does not say."
+}

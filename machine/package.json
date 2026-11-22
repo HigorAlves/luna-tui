@@ -4,6 +4,8 @@
   "type": "module",
   "exports": {
     "./run-once": "./src/application/stages/run-once.ts",
+    "./pack-runner": "./src/application/stages/pack-runner.ts",
+    "./exec": "./src/adapters/process/exec.ts",
     "./design-bridge": "./src/application/stages/design-bridge.ts",
     "./mcp-replay": "./src/adapters/mcp/replay.ts",
     "./credentials": "./src/adapters/credentials/index.ts",

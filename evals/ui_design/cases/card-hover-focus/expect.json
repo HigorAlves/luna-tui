@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "count",
+      "path": "commits",
+      "min": 1
+    },
+    {
+      "kind": "count",
+      "path": "escalation",
+      "max": 0
+    },
+    {
+      "kind": "mentions",
+      "path": "files[]",
+      "words": [
+        "src/ui/ProductCard.ts"
+      ]
+    },
+    {
+      "kind": "avoids",
+      "path": "files[]",
+      "words": [
+        "src/cart/total.ts",
+        "package.json",
+        "test/ui/product-card.test.ts"
+      ]
+    },
+    {
+      "kind": "mentions",
+      "path": "summary",
+      "words": [
+        "hover",
+        "focus"
+      ],
+      "any": true
+    },
+    {
+      "kind": "mentions",
+      "path": "summary",
+      "words": [
+        "--color-primary-hover",
+        "--focus-ring"
+      ],
+      "any": true
+    }
+  ],
+  "rubric": "The slice builds the product card with the two states the spec draws: hover (the border and the title in color/primary-hover) and keyboard focus (a visible 2px ring in color/primary, offset 2). A good answer names the files it changed, which are only src/ui/ProductCard.ts, and says the scenario tests in test/ui/product-card.test.ts pass. It uses the spec's token names (the CSS variables --color-primary-hover and --focus-ring) and writes no raw colour or size of its own. A real error is an invented value the spec does not give, a state the spec lacks, a state of the spec left out, a change to src/cart/total.ts, package.json or the test file, or an escalation for a slice the spec fully covers. Do not credit anything the answer does not say."
+}

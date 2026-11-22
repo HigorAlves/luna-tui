@@ -132,3 +132,51 @@ describe("design_parity cases (RFC 0013)", () => {
     }
   });
 });
+
+describe("ui_design cases (RFC 0013, phase 5): hand-written fixtures", () => {
+  const cases = loadCases(EVALS, "ui_design");
+
+  it("has the card, the states and the form-field cases", () => {
+    expect(cases.map((c) => c.id)).toEqual(["card-hover-focus", "field-a11y", "panel-empty-error"]);
+  });
+
+  it.each(cases.map((c) => [c.id, c] as const))("%s: one UI slice on the fixture repo, its spec replays, its own files and the implementer's are disjoint", async (id, c) => {
+    const helper = c.input.context.helper!;
+    const spec = c.input.context.plan!.designSpec!;
+    expect(c.input.pack).toBe("ui_design");
+    expect(c.input.task.repoPath).toBe("fixtures/golden-ui");
+    expect(helper.attempt).toBe(1);
+    expect(helper.locks.mine).toEqual(helper.slice.touchpoints);
+    expect(helper.locks.mine.filter((f) => helper.locks.theirs.includes(f))).toEqual([]);
+    for (const f of helper.locks.theirs) expect(existsSync(join(EVALS, "..", c.input.task.repoPath, f)) || f.startsWith("src/ui/"), f).toBe(true);
+    // The scenario test is in the fixture, red until the slice is built, and is not a file the helper may change.
+    const test = c.input.context.scenarioTests![0]!.file;
+    expect(existsSync(join(EVALS, "..", c.input.task.repoPath, test)), test).toBe(true);
+    expect(c.input.context.ledger?.slices).toEqual([{ id: helper.slice.id, title: helper.slice.title, status: "pending", commit: null }]);
+    expect(spec.tokens.color.length).toBeGreaterThan(0);
+    expect(c.expect.rubric, id).toMatch(/invented|invent/);
+    expect(c.expect.rubric, id).toMatch(/locked|src\/cart\/total\.ts/);
+    // The frames and the tokens replay: nothing connects.
+    const mcp = replayMcp(mcpServersOf(c.mcpDir!), c.mcpDir!);
+    const ref = c.input.context.design!.refs[0]!;
+    for (const tool of ["get_design_context", "get_metadata", "get_variable_defs", "get_code_connect_map"]) {
+      const answer = await mcp.callTool("figma", tool, { fileKey: ref.fileKey, nodeId: ref.nodeIds[0] });
+      expect(answer.ok, `${id} ${tool}`).toBe(true);
+    }
+    // Every state the spec draws replays too.
+    for (const frame of spec.frames) for (const s of frame.states) if (s.nodeId) expect((await mcp.callTool("figma", "get_design_context", { fileKey: ref.fileKey, nodeId: s.nodeId })).ok, `${id} ${s.nodeId}`).toBe(true);
+  });
+
+  it("passes a good answer and fails one that touches a locked file or escalates", () => {
+    for (const c of cases) {
+      const helper = c.input.context.helper!;
+      const mine = helper.slice.touchpoints[0]!;
+      const words = JSON.stringify(c.expect.checks);
+      const tokens = (words.match(/--[a-z-]+/g) ?? []).slice(0, 2).join(" and ");
+      const good = { summary: `Built ${mine}: every state of the spec, with ${tokens} and the aria attributes, label and hover and focus and empty and error behaviour; the scenario tests pass`, commits: ["a".repeat(40)], files: [mine], notes: "" };
+      for (const check of c.expect.checks) expect(runCheck(good, check).pass, `${c.id}: ${runCheck(good, check).check}`).toBe(true);
+      const bad = [{ ...good, files: [mine, helper.locks.theirs[0]!] }, { ...good, escalation: "too_complex" }, { ...good, commits: [] }];
+      for (const answer of bad) expect(c.expect.checks.some((check) => !runCheck(answer, check).pass), c.id).toBe(true);
+    }
+  });
+});
