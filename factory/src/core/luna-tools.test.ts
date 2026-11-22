@@ -169,6 +169,28 @@ describe("bridged tools", () => {
     expect(await second).toMatchObject({ text: "b" });
   });
 
+  it("answers a bridged call the machine never answers with a failure, not skipped", async () => {
+    const { luna } = setup({ checkWaitMs: 60 });
+    expect(await luna.call("figma_get_screenshot", {})).toEqual({ ok: false, error: "timed out waiting for the machine" });
+  });
+
+  it("writes the next bridged call's request only once the one before it has its answer, and starts its wait then", async () => {
+    const { checksDir, luna } = setup({ checkWaitMs: 400 });
+    const first = luna.call("figma_get_screenshot", { nodeId: "1:1" });
+    const second = luna.call("figma_get_screenshot", { nodeId: "2:2" });
+    const r1 = await waitForFile(checksDir, /^mcp-request-(\w+)-1\.json$/);
+    // the machine is busy with the first for longer than the second's own wait would have lasted
+    await new Promise((r) => setTimeout(r, 300));
+    expect(readdirSync(checksDir).some((f) => /^mcp-request-\w+-2\.json$/.test(f))).toBe(false);
+    writeFileSync(join(checksDir, `mcp-answer-${r1.match[1]}-1.json`), JSON.stringify({ ok: true, text: "a" }));
+    expect(await first).toMatchObject({ text: "a" });
+    const r2 = await waitForFile(checksDir, /^mcp-request-\w+-2\.json$/);
+    expect(JSON.parse(readFileSync(r2.path, "utf8")).args).toEqual({ nodeId: "2:2" });
+    await new Promise((r) => setTimeout(r, 300));
+    writeFileSync(join(checksDir, `mcp-answer-${r1.match[1]}-2.json`), JSON.stringify({ ok: true, text: "b" }));
+    expect(await second).toMatchObject({ text: "b" });
+  });
+
   it("refuses a bridged name the stage was not given", async () => {
     expect(await setup({ bridge: [] }).luna.call("figma_get_screenshot", {})).toEqual({ error: "no luna tool figma_get_screenshot" });
   });
