@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { lunaHandlers } from "./luna-tools.ts";
 
@@ -114,6 +114,27 @@ describe("slice_delegate", () => {
     const { luna } = scratch(60);
     expect(await luna.call("slice_delegate", { slice: 3 })).toEqual({ ok: false, error: "no one answered; build the slice yourself" });
     expect(luna.state.ledger.slices[2]!.owner).toBeUndefined();
+  });
+
+  it("reads the answer once more when the wait has run out, and takes an ok that landed in the last instant", async () => {
+    const { luna, checks } = scratch(1000);
+    const real = Date.now.bind(Date);
+    let calls = 0;
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => {
+      calls++;
+      if (calls !== 2) return real() + (calls > 2 ? 10_000 : 0);
+      // the wait has just run out, and the machine's answer lands in the same instant
+      const req = readdirSync(checks).find((f) => f.startsWith("helper-request-"))!;
+      const [, nonce, n] = /^helper-request-([0-9a-f]{8})-(\d+)\.json$/.exec(req)!;
+      writeFileSync(join(checks, `helper-answer-${nonce}-${n}.json`), JSON.stringify({ ok: true, handle: "h1", locks: ["page.tsx"] }));
+      return real() + 10_000;
+    });
+    try {
+      expect(await luna.call("slice_delegate", { slice: 3 })).toMatchObject({ ok: true, handle: "h1" });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(luna.state.ledger.slices[2]!.owner).toBe("ui-designer");
   });
 
   it("refuses a slice that is not in the ledger, and writes no request", async () => {

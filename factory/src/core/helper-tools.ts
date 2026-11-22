@@ -237,7 +237,8 @@ export function helperTools(options: HelperToolsOptions) {
       const row = slices().find((s) => s.id === slice);
       if (!row) return { error: `no slice ${slice}; call slice_list` };
       const asked = request("helper-request", "helper-answer", { slice, message: message ?? "" });
-      const answer = await awaitJson(asked.answer, options.checkWaitMs);
+      // The machine may answer in the last instant of the wait: the file is read once more before the slice is given up.
+      const answer = (await awaitJson(asked.answer, options.checkWaitMs)) ?? (await awaitJson(asked.answer, 0));
       if (!answer) return { ok: false, error: "no one answered; build the slice yourself" };
       if (answer.ok === true) {
         row.owner = "ui-designer";
