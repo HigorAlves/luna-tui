@@ -35,7 +35,10 @@ export interface HelperRunExtra {
 }
 
 /** What the machine knows when the implementer asks, read fresh each time: the plan, the card's design, the budgets, the engines. */
-export type HelperFacts = Pick<DelegationFacts, "slices" | "webRoots" | "designRef" | "designOff" | "designBudget" | "implementerMinutesLeft" | "implementerEngine" | "repoEngine" | "claudeAvailable">;
+export type HelperFacts = Pick<DelegationFacts, "slices" | "webRoots" | "designRef" | "designOff" | "designBudget" | "implementerMinutesLeft" | "implementerEngine" | "repoEngine" | "claudeAvailable"> & {
+  /** Every path of the card's tests commit: the helper may not change one (slice 80 reads them from the run's `testsFiles`). */
+  protectedPaths?: readonly string[];
+};
 
 export interface HelperRunsDeps {
   taskId: string;
@@ -156,7 +159,8 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
       await release(h);
       return;
     }
-    const taken = await deps.takeHelperCommits(deps.cardPath, h.workspace, deps.taskId, h.slice, h.base, { locked: h.locks.implementer }).catch((error): { ok: false; reason: "fetch_failed"; detail: string } => ({ ok: false, reason: "fetch_failed", detail: error instanceof Error ? error.message : String(error) }));
+    const protectedPaths = await deps.facts().then((f) => f.protectedPaths ?? []).catch(() => []);
+    const taken = await deps.takeHelperCommits(deps.cardPath, h.workspace, deps.taskId, h.slice, h.base, { locked: h.locks.implementer, allowed: h.locks.helper, protectedPaths }).catch((error): { ok: false; reason: "fetch_failed"; detail: string } => ({ ok: false, reason: "fetch_failed", detail: error instanceof Error ? error.message : String(error) }));
     if (taken.ok) {
       h.tip = taken.tip;
       h.commits = taken.commits;
@@ -164,8 +168,8 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
       return;
     }
     // D4: a helper that still touched the implementer's files is refused, and the slice goes back to the implementer.
-    if (taken.reason === "locked_file") {
-      const reason = line(`the ui-designer touched files the implementer holds: ${(taken.files ?? [taken.detail]).join(", ")}; the slice is yours`);
+    if (taken.reason === "locked_file" || taken.reason === "out_of_slice") {
+      const reason = line(taken.reason === "locked_file" ? `the ui-designer touched files the implementer holds: ${(taken.files ?? [taken.detail]).join(", ")}; the slice is yours` : `the ui-designer touched files outside its slice: ${(taken.files ?? [taken.detail]).join(", ")}; the slice is yours`);
       await row("build.helper_refused", { slice: h.slice, reason });
       await setState(h, "refused", reason);
     } else {

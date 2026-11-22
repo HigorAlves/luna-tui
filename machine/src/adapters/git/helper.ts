@@ -14,6 +14,7 @@ import picomatch from "picomatch";
 import { exec } from "../process/exec.ts";
 import { freshClone, removeClone } from "./clone.ts";
 import { machineGitDir } from "./machine-repo.ts";
+import { MANIFEST } from "../../domain/delegation.ts";
 import { HOST_GIT } from "./worktree.ts";
 
 export { advanceBranch } from "./bundles.ts";
@@ -77,7 +78,7 @@ export const helperWorkspace = {
 
 export type TakeResult =
   | { ok: true; tip: string; commits: string[] }
-  | { ok: false; reason: "no_branch" | "fetch_failed" | "not_descendant" | "merge_commit" | "gitlink" | "too_many" | "locked_file"; detail: string; files?: string[] };
+  | { ok: false; reason: "no_branch" | "fetch_failed" | "not_descendant" | "merge_commit" | "gitlink" | "too_many" | "locked_file" | "out_of_slice"; detail: string; files?: string[] };
 
 const refuse = (reason: Extract<TakeResult, { ok: false }>["reason"], detail: string, files?: string[]): TakeResult => ({ ok: false, reason, detail, ...(files ? { files } : {}) });
 
@@ -91,13 +92,20 @@ function heldBy(path: string, locked: readonly string[]): boolean {
   });
 }
 
+/** What a helper's take refuses whatever the slice plans: manifests and lockfiles, anything under `.github/`, and `protectedPaths`. */
+const alwaysRefused = (path: string, protectedPaths: readonly string[]): boolean => MANIFEST.test(path) || path.startsWith(".github/") || protectedPaths.includes(path);
+
+const dirOf = (path: string): string => path.slice(0, Math.max(0, path.lastIndexOf("/")));
+
 /**
  * Fetches the helper's branch from its repository `M'` into the card's `M` (as `bringBack` fetches, with every object checked) and
  * moves the helper ref to its tip, after checks: the tip descends from `base`, `base..tip` has no merge, no gitlink (in any commit)
  * and at most MAX_HELPER_COMMITS commits, and no commit touches a file of `options.locked` (the implementer's; a rename away counts).
+ * With `options.allowed` (the slice's planned files), every touched path must be a planned path or a file new at `base` in a directory of a planned
+ * file; a manifest, a lockfile, anything under `.github/` and `options.protectedPaths` are refused as `out_of_slice` even when planned.
  * A refusal leaves the helper ref where it was. Never throws for a helper's own doing.
  */
-export async function takeHelperCommits(cardPath: string, helperPath: string, task: string, slice: number, base: string, options: { locked?: readonly string[] } = {}): Promise<TakeResult> {
+export async function takeHelperCommits(cardPath: string, helperPath: string, task: string, slice: number, base: string, options: { locked?: readonly string[]; allowed?: readonly string[]; protectedPaths?: readonly string[] } = {}): Promise<TakeResult> {
   assertNames(task, slice);
   if (!SHA.test(base)) return refuse("fetch_failed", "the base is not a commit id");
   const git = (...args: string[]) => exec("git", [...HOST_GIT, "--git-dir=" + machineGitDir(cardPath), ...args]);
@@ -124,11 +132,24 @@ export async function takeHelperCommits(cardPath: string, helperPath: string, ta
     // A nested repository would make host git start a child in the folder and read its own configuration: refused in any commit, not only in the net change.
     const raw = await git("log", "--raw", "--no-renames", "--ignore-submodules=none", "--format=", range);
     if (raw.code !== 0 || /^:\d{6} 160000 /m.test(raw.stdout)) return refuse("gitlink", raw.code !== 0 ? "the helper's changes could not be read" : "the helper's commits add or change a nested repository (a gitlink, mode 160000)");
-    if (options.locked?.length) {
+    if (options.locked?.length || options.allowed) {
       const names = await git("log", "--name-only", "--no-renames", "--format=", "-z", range);
       if (names.code !== 0) return refuse("fetch_failed", "the helper's files could not be read");
-      const files = [...new Set(names.stdout.split("\0").map((l) => l.trim()).filter(Boolean))].filter((f) => heldBy(f, options.locked!));
-      if (files.length > 0) return refuse("locked_file", `the helper's commits touch ${files.length} file(s) the implementer holds`, files);
+      const touched = [...new Set(names.stdout.split("\0").map((l) => l.replace(/^\n/, "")).filter(Boolean))];
+      const held = touched.filter((f) => options.locked?.length && heldBy(f, options.locked));
+      if (held.length > 0) return refuse("locked_file", `the helper's commits touch ${held.length} file(s) the implementer holds`, held);
+      if (options.allowed) {
+        const planned = new Set(options.allowed.map((p) => p.replace(/^\.\//, "")));
+        const dirs = new Set([...planned].map(dirOf));
+        const stray: string[] = [];
+        for (const f of touched) {
+          if (alwaysRefused(f, options.protectedPaths ?? [])) stray.push(f);
+          else if (planned.has(f)) continue;
+          else if (dirs.has(dirOf(f)) && (await git("cat-file", "-e", `${base}:${f}`)).code !== 0) continue;
+          else stray.push(f);
+        }
+        if (stray.length > 0) return refuse("out_of_slice", `the helper's commits touch ${stray.length} file(s) outside its slice`, stray);
+      }
     }
     const moved = await git("update-ref", helperRef(task, slice), tip);
     if (moved.code !== 0) return refuse("fetch_failed", `could not record the helper's tip: ${firstLine(moved)}`);

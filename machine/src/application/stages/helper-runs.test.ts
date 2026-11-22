@@ -129,7 +129,7 @@ describe("helperRuns: following the helper", () => {
     expect(t.coordinator.delegatedLocks()).toEqual(["src/ui/Card.tsx", "src/ui/Card.test.tsx"]);
     t.c.settle({ outcome: "pass", usage: { turns: 4, costUsd: null, tokens: { input: 300_000, output: 20_000 } } as never });
     await tick();
-    expect(t.taken).toEqual([["/cards/w", "/cards/w.helper-2-1", "task1", 2, BASE, { locked: ["src/api/card.ts", "src/api/card.test.ts", "src/ui/Page.tsx", "src/ui/Card.css"] }]]);
+    expect(t.taken).toEqual([["/cards/w", "/cards/w.helper-2-1", "task1", 2, BASE, { locked: ["src/api/card.ts", "src/api/card.test.ts", "src/ui/Page.tsx", "src/ui/Card.css"], allowed: plan[1]!.touchpoints, protectedPaths: [] }]]);
     expect(await stateOf(2)).toMatchObject({ state: "returned", attempt: 1 });
     expect(t.rows.map((r) => r.kind)).toEqual(["build.helper_started", "build.helper_ended"]);
     expect(t.rows[1]!.payload).toEqual({ slice: 2, attempt: 1, outcome: "pass", tokens: 320_000, minutes: 2 });
@@ -170,6 +170,26 @@ describe("helperRuns: following the helper", () => {
     expect(await stateOf(2)).toMatchObject({ state: "refused", summary: expect.stringContaining("src/api/card.ts") });
     expect(t.rows.map((r) => r.kind)).toEqual(["build.helper_started", "build.helper_ended", "build.helper_refused"]);
     expect(t.rows.at(-1)!.payload).toEqual({ slice: 2, reason: expect.stringContaining("src/api/card.ts") });
+    expect(t.coordinator.delegatedLocks()).toEqual([]);
+    expect(t.removed).toEqual(["/cards/w.helper-2-1"]);
+  });
+
+  it("takes the helper's commits against the implementer's locks, the slice's planned files and the protected test paths", async () => {
+    const t = setup({ facts: async () => ({ ...(await setup().deps.facts()), protectedPaths: ["src/ui/Card.scenario.test.ts"] }) });
+    await ask(t.coordinator);
+    t.c.settle({ outcome: "pass" });
+    await tick();
+    expect(t.taken[0]!.at(-1)).toEqual({ locked: ["src/api/card.ts", "src/api/card.test.ts", "src/ui/Page.tsx", "src/ui/Card.css"], allowed: plan[1]!.touchpoints, protectedPaths: ["src/ui/Card.scenario.test.ts"] });
+  });
+
+  it("treats a take that went outside the slice like a locked file (D4): refused, a refusal row, the workspace freed", async () => {
+    const t = setup();
+    t.setTake({ ok: false, reason: "out_of_slice", detail: "touches 1 file outside its slice", files: ["package.json"] });
+    await ask(t.coordinator);
+    t.c.settle({ outcome: "pass" });
+    await tick();
+    expect(await stateOf(2)).toMatchObject({ state: "refused", summary: expect.stringContaining("package.json") });
+    expect(t.rows.map((r) => r.kind)).toEqual(["build.helper_started", "build.helper_ended", "build.helper_refused"]);
     expect(t.coordinator.delegatedLocks()).toEqual([]);
     expect(t.removed).toEqual(["/cards/w.helper-2-1"]);
   });

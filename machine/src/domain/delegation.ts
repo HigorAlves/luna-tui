@@ -20,7 +20,8 @@ export interface Locks {
   implementer: string[];
 }
 
-const MANIFEST = /(^|\/)(package\.json|pnpm-lock\.yaml|Cargo\.toml|go\.mod)$|\.lock$/;
+/** A manifest or a lockfile: a dependency change is the implementer's, and the machine never takes one from a helper. */
+export const MANIFEST = /(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|bun\.lockb|Cargo\.toml|go\.mod|\.npmrc|\.yarnrc(\.yml)?|\.pnpmfile\.cjs)$|\.lock$/;
 
 /** A pure UI slice (D2): every planned file that is not a test renders, and none is a manifest or a lockfile. A dependency change is the implementer's. */
 export function isUiSlice(touchpoints: readonly string[], webRoots: string[]): boolean {

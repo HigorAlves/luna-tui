@@ -246,6 +246,55 @@ describe("pickOnto", () => {
   });
 });
 
+describe("takeHelperCommits: the slice's own files only", () => {
+  const allowed = ["src/ui/Card.tsx", "src/ui/Card.test.tsx"];
+
+  it("accepts the planned files and a new file beside one", async () => {
+    const f = await fixture();
+    commit(f.helper, { "src/ui/Card.tsx": "card\n", "src/ui/Card.css": "css\n" }, "feat(ui): card");
+    expect(await takeHelperCommits(f.card, f.helper, TASK, 3, f.tests, { allowed })).toMatchObject({ ok: true });
+  });
+
+  it("refuses a modified manifest, even when the slice names it", async () => {
+    const f = await fixture();
+    commit(f.card, { "package.json": "{}\n" }, "chore: manifest");
+    const g = await helperWorkspace.make(f.card, mgit(f.card, "rev-parse", `refs/heads/${f.branch}`), TASK, 3, 2);
+    commit(g.path, { "package.json": '{"scripts":{"postinstall":"x"}}\n' }, "feat: post");
+    expect(await takeHelperCommits(f.card, g.path, TASK, 3, mgit(f.card, "rev-parse", `refs/heads/${f.branch}`), { allowed: [...allowed, "package.json"] })).toMatchObject({ ok: false, reason: "out_of_slice", files: ["package.json"] });
+  });
+
+  it("refuses a new workflow file under .github, even beside a planned one", async () => {
+    const f = await fixture();
+    commit(f.helper, { ".github/workflows/x.yml": "on: push\n" }, "ci: x");
+    expect(await takeHelperCommits(f.card, f.helper, TASK, 3, f.tests, { allowed: [...allowed, ".github/workflows/y.yml"] })).toMatchObject({ ok: false, reason: "out_of_slice", files: [".github/workflows/x.yml"] });
+  });
+
+  it("refuses a modified file no slice planned (even beside a planned one: only a new file passes) and a new file elsewhere", async () => {
+    const f = await fixture();
+    commit(f.helper, { "src/index.ts": "changed\n", "src/other/New.tsx": "n\n" }, "feat: more");
+    expect(await takeHelperCommits(f.card, f.helper, TASK, 3, f.tests, { allowed })).toMatchObject({ ok: false, reason: "out_of_slice", files: ["src/index.ts", "src/other/New.tsx"] });
+    const h = await helperWorkspace.make(f.card, f.tests, TASK, 3, 3);
+    commit(h.path, { "src/index.ts": "changed\n" }, "feat: beside");
+    expect(await takeHelperCommits(f.card, h.path, TASK, 3, f.tests, { allowed: [...allowed, "src/card.test.ts"] })).toMatchObject({ ok: false, reason: "out_of_slice", files: ["src/index.ts"] });
+    const g = await helperWorkspace.make(f.card, f.tests, TASK, 3, 2);
+    commit(g.path, { "src/ui/Card.tsx": "card\n" }, "feat: card");
+    commit(g.path, { "src/ui/Card.tsx": "card\n", "src/ui/Other.tsx": "o\n" }, "feat: other");
+    expect(await takeHelperCommits(f.card, g.path, TASK, 3, f.tests, { allowed })).toMatchObject({ ok: true });
+  });
+
+  it("refuses a protected test path (the tests commit's files), planned or not", async () => {
+    const f = await fixture();
+    commit(f.helper, { "src/card.test.ts": "weaker\n" }, "test: weaker");
+    expect(await takeHelperCommits(f.card, f.helper, TASK, 3, f.tests, { allowed: [...allowed, "src/card.test.ts"], protectedPaths: ["src/card.test.ts"] })).toMatchObject({ ok: false, reason: "out_of_slice", files: ["src/card.test.ts"] });
+  });
+
+  it("names a non-ASCII path as it is", async () => {
+    const f = await fixture();
+    commit(f.helper, { "src/ui/Botão.tsx": "b\n", "lib/Ação.ts": "a\n" }, "feat: b");
+    expect(await takeHelperCommits(f.card, f.helper, TASK, 3, f.tests, { allowed })).toMatchObject({ ok: false, reason: "out_of_slice", files: ["lib/Ação.ts"] });
+  });
+});
+
 describe("advanceBranch", () => {
   it("moves the branch from one commit to another by compare-and-swap and puts the index in step", async () => {
     const f = await fixture();
@@ -262,6 +311,19 @@ describe("advanceBranch", () => {
     const other = commit(f.helper, { "src/ui/Card.tsx": "card\n" }, "feat: card");
     await takeHelperCommits(f.card, f.helper, TASK, 3, f.tests);
     expect(await advanceBranch(f.card, f.branch, f.tests, other)).toEqual({ ok: false, reason: "moved" });
+    expect(mgit(f.card, "rev-parse", `refs/heads/${f.branch}`)).toBe(p2);
+  });
+});
+
+describe("advanceBranch: only forward", () => {
+  it("refuses a `to` that is an ancestor of from or a sibling of it, and the branch stays", async () => {
+    const f = await fixture();
+    const sibling = commit(f.helper, { "src/ui/Card.tsx": "card\n" }, "feat: card");
+    await takeHelperCommits(f.card, f.helper, TASK, 3, f.tests);
+    const p2 = commit(f.card, { "src/server.ts": "s\n" }, "feat: server");
+    // An ancestor (the card's earlier commit) is a step back, a sibling (the helper's own line) is no descendant.
+    expect(await advanceBranch(f.card, f.branch, p2, f.tests)).toEqual({ ok: false, reason: "invalid" });
+    expect(await advanceBranch(f.card, f.branch, p2, sibling)).toEqual({ ok: false, reason: "invalid" });
     expect(mgit(f.card, "rev-parse", `refs/heads/${f.branch}`)).toBe(p2);
   });
 });

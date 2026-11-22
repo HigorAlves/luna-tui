@@ -533,4 +533,16 @@ describe("commitFiles", () => {
     ]);
     expect(await commitFiles(root, two, "HEAD")).toEqual([]);
   });
+
+  it("lists a non-ASCII path as it is, not C-quoted, so a lock on it matches", async () => {
+    const root = workspaceWith("commit-files-utf8-");
+    const from = wgit(root, "rev-parse", "HEAD");
+    mkdirSync(join(root, "src/ui"), { recursive: true });
+    writeFileSync(join(root, "src/ui/Botão.tsx"), "b\n");
+    writeFileSync(join(root, "plain.txt"), "p\n");
+    wgit(root, "add", "-A");
+    wgit(root, "commit", "-q", "-m", "one");
+    const one = wgit(root, "rev-parse", "HEAD");
+    expect(await commitFiles(root, from, "HEAD")).toEqual([{ sha: one, files: ["plain.txt", "src/ui/Botão.tsx"] }]);
+  });
 });

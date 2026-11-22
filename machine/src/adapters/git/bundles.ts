@@ -52,11 +52,13 @@ function copyBounded(from: string, to: string, max: number): string | null {
 /**
  * Moves a card's branch from `from` to `to` by compare-and-swap (`update-ref <ref> <new> <old>`): it moves only if it is still at
  * `from`, else `{ ok: false, reason: "moved" }` and nothing changes. The index follows the branch (the folder is not touched): a folder
- * that equals the tip then shows no change. The caller checked that `to` descends from `from`: the branch moves only by fast-forward.
+ * that equals the tip then shows no change. `to` must descend from `from` (checked here, `merge-base --is-ancestor`): the branch moves only by fast-forward, else `invalid`.
  */
 export async function advanceBranch(cardPath: string, branch: string, from: string, to: string): Promise<{ ok: true } | { ok: false; reason: "moved" | "invalid" }> {
   if (!isBranchName(branch) || !/^[0-9a-f]{40,64}$/.test(from) || !/^[0-9a-f]{40,64}$/.test(to)) return { ok: false, reason: "invalid" };
   const git = (...args: string[]) => exec("git", [...HOST_GIT, ...at(cardPath), ...args]);
+  // The branch moves only forward: `to` must descend from `from` (a commit is its own ancestor, so a no-op move passes).
+  if ((await git("merge-base", "--is-ancestor", from, to)).code !== 0) return { ok: false, reason: "invalid" };
   const moved = await git("update-ref", `refs/heads/${branch}`, to, from);
   if (moved.code !== 0) return { ok: false, reason: "moved" };
   await git("read-tree", to);
