@@ -2191,6 +2191,7 @@ describe("the implementer's side of the ui-designer (RFC 0013, phase 5)", () => 
       cancel: async () => void calls.push("cancel"),
       picked: () => new Set<string>(),
       delegatedLocks: () => [],
+      delegatedLockSets: () => [],
       status: () => null,
       ...over,
     };

@@ -34,6 +34,10 @@ export interface ScopeFacts {
 export interface ScopeLocks {
   other: readonly string[];
   owner?: "implementer" | "ui-designer";
+  /** The commit these files are held from: only commits in `since..HEAD` are judged against them (a commit before it could not have known the lock). Absent: the card's tests commit. */
+  since?: string;
+  /** The commits of that window, each with its files; filled by the caller, which reads them from `since`. Absent: the commits `scopeFacts` was given. */
+  commits?: readonly { sha: string; files: readonly string[] }[];
 }
 
 export type ScopeSeverity = "blocker" | "should_fix" | "nit";
@@ -167,7 +171,7 @@ export function scopeFacts(input: { nameStatus: string; addedLines: AddedLine[];
   /** An approved plan exists: an empty planned list then switches nothing off (every changed file is undeclared). */
   planPresent?: boolean;
   /** Files another agent holds, each commit of this side with its files, and the shas the machine itself picked onto the branch (never attributed to this side). */
-  locks?: ScopeLocks; commits?: readonly { sha: string; files: readonly string[] }[]; picked?: ReadonlySet<string> }): ScopeFacts {
+  locks?: ScopeLocks | readonly ScopeLocks[]; commits?: readonly { sha: string; files: readonly string[] }[]; picked?: ReadonlySet<string> }): ScopeFacts {
   const changed = changedOf(input.nameStatus);
   const declared = new Set(input.declared.map((d) => d.path));
   const deleted = new Set(input.nameStatus.split("\n").filter((l) => l.startsWith("D\t")).map((l) => l.slice(2)));
@@ -188,15 +192,18 @@ export function scopeFacts(input: { nameStatus: string; addedLines: AddedLine[];
 }
 
 /** A commit the machine picked is the other side's work, whoever's container is running: only the machine's own shas decide, never a claim a container made. */
-function lockedTouchedOf(locks: ScopeLocks | undefined, commits: readonly { sha: string; files: readonly string[] }[], picked: ReadonlySet<string>): ScopeFacts["lockedTouched"] {
-  if (!locks || locks.other.length === 0) return [];
-  const owner = locks.owner ?? "ui-designer";
-  const seen = new Set<string>();
-  for (const commit of commits) {
-    if (picked.has(commit.sha)) continue;
-    for (const file of commit.files) if (isPlanned(file, [...locks.other])) seen.add(file);
+function lockedTouchedOf(locks: ScopeLocks | readonly ScopeLocks[] | undefined, commits: readonly { sha: string; files: readonly string[] }[], picked: ReadonlySet<string>): ScopeFacts["lockedTouched"] {
+  const sets: readonly ScopeLocks[] = locks === undefined ? [] : "other" in locks ? [locks] : locks;
+  const seen = new Map<string, ScopeFacts["lockedTouched"][number]>();
+  for (const set of sets) {
+    if (set.other.length === 0) continue;
+    const owner = set.owner ?? "ui-designer";
+    for (const commit of set.commits ?? commits) {
+      if (picked.has(commit.sha)) continue;
+      for (const file of commit.files) if (isPlanned(file, [...set.other])) seen.set(`${owner}\0${file}`, { path: file, owner });
+    }
   }
-  return [...seen].map((path) => ({ path, owner }));
+  return [...seen.values()];
 }
 
 function weakenedOf(removed: AddedLine[], added: AddedLine[], nameStatus: string, scenarioTests: readonly { scenario: string; file: string }[], protectedPaths: readonly string[], inlineTests: readonly string[] = []): string[] {

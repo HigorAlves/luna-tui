@@ -658,7 +658,7 @@ export interface BuildChecksDeps {
   truth?: TruthSink | null;
   taskId?: string;
   /** The other agent's files (RFC 0013, phase 5), read when asked: the delegated slice's touchpoints on the implementer's run, the implementer's on the helper's (`owner: "implementer"`). */
-  locks?: () => ScopeLocks;
+  locks?: () => ScopeLocks | readonly ScopeLocks[];
   /** The shas the machine itself picked onto the branch (its own `build.helper_picked` rows), read when asked so a pick during the run counts. Empty on the helper's run. */
   picked?: () => ReadonlySet<string>;
   git: { nameStatus(from: string, to: string): Promise<string>; diff(from: string, to: string): Promise<string>;
@@ -727,9 +727,13 @@ export function buildChecks(deps: BuildChecksDeps) {
     const repo = !protects && deps.repoFiles && touchedTests.length ? await deps.repoFiles(touchedTests).catch(() => new Set(touchedTests)) : new Set(touchedTests);
     const harness = new Set(touchedTests.filter((p) => !repo.has(p)));
     const removedLines = removedLinesOf(diff).filter((l) => !harness.has(l.path));
-    const locks = deps.locks?.();
-    const commits = locks && locks.other.length > 0 && deps.git.commitFiles ? await deps.git.commitFiles(deps.inputCommit, "HEAD") : [];
-    const facts = sanitizeFacts(scopeFacts({ nameStatus, addedLines, removedLines, ...(locks ? { locks, commits, picked: deps.picked?.() ?? new Set<string>() } : {}), planned: deps.planned, declared, planPresent: deps.planPresent === true, ...(deps.scenarioTests?.length ? { scenarioTests: deps.scenarioTests } : {}), ...(deps.protectedPaths?.length ? { protectedPaths: deps.protectedPaths } : {}), ...(deps.inlineTests?.length ? { inlineTests: deps.inlineTests } : {}) }));
+    const held = deps.locks?.();
+    const sets: readonly ScopeLocks[] = held === undefined ? [] : "other" in held ? [held] : held;
+    const commitFiles = deps.git.commitFiles;
+    const from = deps.inputCommit;
+    // Each lock is judged against the commits since it began (a helper's, since its base), not the whole change; none is read for a card with no lock.
+    const locks = await Promise.all(sets.map(async (l) => (l.other.length > 0 && commitFiles ? { ...l, commits: await commitFiles(l.since ?? from, "HEAD") } : l)));
+    const facts = sanitizeFacts(scopeFacts({ nameStatus, addedLines, removedLines, ...(sets.length > 0 ? { locks, picked: deps.picked?.() ?? new Set<string>() } : {}), planned: deps.planned, declared, planPresent: deps.planPresent === true, ...(deps.scenarioTests?.length ? { scenarioTests: deps.scenarioTests } : {}), ...(deps.protectedPaths?.length ? { protectedPaths: deps.protectedPaths } : {}), ...(deps.inlineTests?.length ? { inlineTests: deps.inlineTests } : {}) }));
     if (harness.size === 0) return facts;
     return { ...facts, removedTests: facts.removedTests.filter((p) => !harness.has(p)), undeclared: facts.undeclared.filter((p) => !harness.has(p)) };
   };

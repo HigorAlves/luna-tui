@@ -217,6 +217,7 @@ describe("helperRuns: following the helper", () => {
     expect(t.rows.map((r) => r.kind)).toEqual(["build.helper_started", "build.helper_ended"]);
     expect(t.rows[1]!.payload).toEqual({ slice: 2, attempt: 1, outcome: "pass", tokens: 320_000, minutes: 2 });
     expect(t.coordinator.delegatedLocks()).toEqual(["src/ui/Card.tsx", "src/ui/Card.test.tsx"]);
+    expect(t.coordinator.delegatedLockSets()).toEqual([{ files: ["src/ui/Card.tsx", "src/ui/Card.test.tsx"], base: BASE }]);
     expect(t.removed).toEqual([]);
   });
 

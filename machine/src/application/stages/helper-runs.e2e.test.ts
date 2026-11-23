@@ -407,6 +407,36 @@ describe("the ui-designer helper end to end (RFC 0013, phase 5)", () => {
     expect(progress.slices).toContainEqual({ slice: 2, owner: "implementer" });
   }, 25_000);
 
+  it("a file the implementer committed before the helper started is not a violation once the helper's pick lands on it", async () => {
+    const release = gate();
+    let waited: Record<string, any> = {};
+    let verdict: Record<string, any> = {};
+    const r = await rig({
+      plan: [slice("The price api", ["src/api/price.ts", "src/ui/Price.tsx"]), VIEW],
+      implementer: async (c) => {
+        await c.init([1, 2]);
+        // slice 1 is committed (and shares the view's file) before slice 2 goes to the helper
+        await c.finish(1, "src/ui/Price.tsx", "export const Price = () => 'logic';\nexport const label = 'a';\n");
+        expect(await c.call("slice_delegate", { slice: 2 })).toMatchObject({ ok: true });
+        release.open();
+        waited = await c.call("slice_wait", { slice: 2, waitSeconds: 15 });
+        writeFileSync(join(c.checks, "scope-request.json"), JSON.stringify({ diffSummary: "x", outOfMap: [] }));
+        for (let i = 0; i < 600 && !existsSync(join(c.checks, "scope.json")); i++) await new Promise((res) => setTimeout(res, 10));
+        verdict = JSON.parse(readFileSync(join(c.checks, "scope.json"), "utf8"));
+      },
+      helper: async (run) => {
+        await release.promise;
+        writeFileSync(join(run.worktree, "src/ui/Price.tsx"), "export const Price = () => 'two';\nexport const label = 'a';\n// ui\n");
+        agent(run.worktree, "add", "-A");
+        agent(run.worktree, "commit", "-q", "-m", "ui: the price view");
+      },
+    });
+    expect(waited).toMatchObject({ state: "committed" });
+    expect(verdict.facts.lockedTouched).toEqual([]);
+    expect(JSON.stringify(verdict.problems ?? [])).not.toContain("src/ui/Price.tsx");
+    expect(r.result.outcome).toBe("pass");
+  }, 25_000);
+
   it("a lock violation: the implementer commits the helper's file, and the machine's scope check flags a locked_file blocker (the factory itself says wait)", async () => {
     const release = gate();
     let tool: Record<string, any> = {};
