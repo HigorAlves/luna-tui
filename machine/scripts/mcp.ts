@@ -27,7 +27,7 @@ async function api<T>(method: string, path: string): Promise<T> {
   return JSON.parse(text) as T;
 }
 
-type Row = { name: string; transport: string; loggedIn: boolean; loginPending: boolean; tools: string[]; reachable: boolean };
+type Row = { name: string; transport: string; loggedIn: boolean; loginPending: boolean; loginFailed: boolean; tools: string[]; reachable: boolean };
 const status = () => api<Row[]>("GET", "/mcp");
 
 function table(rows: Row[]): string {
@@ -53,8 +53,9 @@ try {
       for (;;) {
         const row = (await status()).find((r) => r.name === server);
         if (row && !row.loginPending) {
-          if (row.loggedIn) break;
-          throw new Error(`${server}: the login ended and the server is still logged out (the login expired, or it failed); run pnpm mcp login ${server} again`);
+          // `loginFailed` first: with an old token stored the server reads as logged in although this login stored nothing.
+          if (row.loggedIn && !row.loginFailed) break;
+          throw new Error(`${server}: the login did not finish (it expired, or it failed)${row.loggedIn ? "; the token stored before it is still there" : ""}; run pnpm mcp login ${server} again`);
         }
         if (Date.now() >= until) throw new Error(`${server}: the login was not finished within ${LOGIN_MS / 60_000} minutes, so it is still waiting for the browser; run pnpm mcp login ${server} again`);
         await new Promise((resolve) => setTimeout(resolve, POLL_MS));

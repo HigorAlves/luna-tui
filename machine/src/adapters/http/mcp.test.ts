@@ -41,8 +41,8 @@ describe("GET /mcp", () => {
     const res = await build(fake().api).request("http://127.0.0.1:4317/mcp", { headers: auth });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual([
-      { name: "figma", transport: "http", loggedIn: false, loginPending: false, tools: [], reachable: false },
-      { name: "local", transport: "http", loggedIn: true, loginPending: false, tools: ["get_metadata"], reachable: true },
+      { name: "figma", transport: "http", loggedIn: false, loginPending: false, loginFailed: false, tools: [], reachable: false },
+      { name: "local", transport: "http", loggedIn: true, loginPending: false, loginFailed: false, tools: ["get_metadata"], reachable: true },
     ]);
   });
   it("needs the bearer token", async () => {
@@ -146,6 +146,31 @@ describe("loginPending", () => {
     expect(await pending(app)).toBe(false);
     expect((await app.request("http://127.0.0.1:4317/mcp/figma/callback?code=abc&state=s1")).status).toBe(400);
     expect(did.filter((d) => d.startsWith("finish"))).toEqual([]);
+  });
+  it("says the last login failed after a callback that failed or a state nobody finished, until the next login starts", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const row = async (app: ReturnType<typeof build>) => ((await (await app.request("http://127.0.0.1:4317/mcp", { headers: auth })).json()) as Array<{ name: string; loginPending: boolean; loginFailed: boolean }>).find((r) => r.name === "figma")!;
+    const { api } = fake();
+    const app = build(api);
+    expect((await row(app)).loginFailed).toBe(false);
+    // nobody finished it: an old token would still read as logged in, so the status has to say the login did not happen
+    await start(app);
+    expect(await row(app)).toMatchObject({ loginPending: true, loginFailed: false });
+    vi.advanceTimersByTime(LOGIN_TTL_MS + 1000);
+    expect(await row(app)).toMatchObject({ loginPending: false, loginFailed: true });
+    // the next login clears it, and a callback that fails sets it again
+    await start(app);
+    expect(await row(app)).toMatchObject({ loginPending: true, loginFailed: false });
+    api.finishLogin = async () => {
+      throw new Error("denied");
+    };
+    await app.request("http://127.0.0.1:4317/mcp/figma/callback?code=abc&state=s1");
+    expect(await row(app)).toMatchObject({ loginPending: false, loginFailed: true });
+    // a login that finishes clears it
+    api.finishLogin = async () => {};
+    await start(app);
+    await app.request("http://127.0.0.1:4317/mcp/figma/callback?code=abc&state=s1");
+    expect(await row(app)).toMatchObject({ loginPending: false, loginFailed: false });
   });
   it("is false for a login that did not need the browser", async () => {
     const { api } = fake();
