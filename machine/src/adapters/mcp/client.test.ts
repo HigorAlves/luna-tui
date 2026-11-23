@@ -1,5 +1,7 @@
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { CallToolRequestSchema, ErrorCode, McpError as RpcError } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
@@ -47,6 +49,92 @@ describe("createMcp", () => {
   });
   it("refuses a tool the machine does not declare", async () => {
     expect(await (await connected()).callTool("fixture", "hidden", {})).toEqual({ ok: false, error: "fixture: hidden is not bridged" });
+  });
+});
+
+describe("createMcp after the connection dies", () => {
+  it("connects again on the next call instead of keeping the dead client", async () => {
+    const servers: McpServer[] = [];
+    let connects = 0;
+    const mcp = createMcp([declared], {
+      token: async () => null,
+      transportFor: () => {
+        connects++;
+        const [client, server] = InMemoryTransport.createLinkedPair();
+        const s = fixtureServer();
+        servers.push(s);
+        void s.connect(server);
+        return client;
+      },
+    });
+    expect(await mcp.callTool("fixture", "echo", { word: "a" })).toMatchObject({ ok: true, text: "a" });
+    await servers[0]!.close();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(await mcp.callTool("fixture", "echo", { word: "b" })).toMatchObject({ ok: true, text: "b" });
+    expect(connects).toBe(2);
+  });
+});
+
+describe("createMcp evicts only for a transport failure", () => {
+  /** A transport whose send fails once armed, with the pipe still open: a thrown transport error, not a close. */
+  function flaky() {
+    const connects: Array<{ failNext: () => void }> = [];
+    const mcp = createMcp([declared], {
+      token: async () => null,
+      transportFor: () => {
+        const [client, server] = InMemoryTransport.createLinkedPair();
+        void fixtureServer().connect(server);
+        let fail = false;
+        const send = client.send.bind(client);
+        client.send = async (message, options) => {
+          if (fail) {
+            fail = false;
+            throw new Error("socket hang up");
+          }
+          return send(message, options);
+        };
+        connects.push({ failNext: () => (fail = true) });
+        return client;
+      },
+    });
+    return { mcp, connects };
+  }
+  it("callTool reconnects on the next call after a thrown transport error on an open transport", async () => {
+    const { mcp, connects } = flaky();
+    expect(await mcp.callTool("fixture", "echo", { word: "a" })).toMatchObject({ ok: true });
+    connects[0]!.failNext();
+    expect(await mcp.callTool("fixture", "echo", { word: "b" })).toMatchObject({ ok: false, error: expect.stringContaining("socket hang up") });
+    expect(await mcp.callTool("fixture", "echo", { word: "c" })).toMatchObject({ ok: true, text: "c" });
+    expect(connects).toHaveLength(2);
+  });
+  it("listTools reconnects on the next call after a thrown transport error on an open transport", async () => {
+    const { mcp, connects } = flaky();
+    expect(await mcp.listTools("fixture")).not.toEqual([]);
+    connects[0]!.failNext();
+    await expect(mcp.listTools("fixture")).rejects.toThrow("socket hang up");
+    expect((await mcp.listTools("fixture")).map((t) => t.tool)).toContain("echo");
+    expect(connects).toHaveLength(2);
+  });
+  it("a JSON-RPC error (InvalidParams) leaves the connection alone", async () => {
+    let connects = 0;
+    const mcp = createMcp([declared], {
+      token: async () => null,
+      transportFor: () => {
+        connects++;
+        const [client, server] = InMemoryTransport.createLinkedPair();
+        const s = new Server({ name: "fixture", version: "1.0.0" }, { capabilities: { tools: {} } });
+        s.setRequestHandler(CallToolRequestSchema, async (req) => {
+          if (req.params.name === "boom") throw new RpcError(ErrorCode.InvalidParams, "bad arguments");
+          return { content: [{ type: "text", text: "fine" }] };
+        });
+        void s.connect(server);
+        return client;
+      },
+    });
+    expect(await mcp.callTool("fixture", "echo", {})).toMatchObject({ ok: true, text: "fine" });
+    expect(await mcp.callTool("fixture", "boom", {})).toMatchObject({ ok: false, error: expect.stringContaining("bad arguments") });
+    expect(await mcp.callTool("fixture", "echo", {})).toMatchObject({ ok: true, text: "fine" });
+    expect(connects).toBe(1);
   });
 });
 

@@ -47,7 +47,9 @@ async function browserDriver(pageUrl, { tags }) {
   // A global package is not on an ES module's path: load it from where `npm install -g` put it.
   const { chromium } = createRequire(import.meta.url)(join(dirname(dirname(AXE)), "playwright"));
   const proxy = process.env.HTTPS_PROXY || process.env.https_proxy;
-  const browser = await chromium.launch({ executablePath: "/usr/local/bin/chromium-qa", ...(proxy ? { proxy: { server: proxy } } : {}) });
+  // A browser given a proxy ignores NO_PROXY: the names the machine exempts (the app on the QA network) are handed over as the bypass list.
+  const bypass = (process.env.NO_PROXY || process.env.no_proxy || "").split(",").map((name) => name.trim()).filter(Boolean).join(",");
+  const browser = await chromium.launch({ executablePath: "/usr/local/bin/chromium-qa", ...(proxy ? { proxy: { server: proxy, ...(bypass ? { bypass } : {}) } } : {}) });
   try {
     const page = await browser.newPage();
     await page.goto(pageUrl, { waitUntil: "load", timeout: 60_000 });

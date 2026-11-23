@@ -8,6 +8,10 @@ export const SAME_CALL_LIMIT = 4;
 /** Two tool calls alternating this many times (A B A B A B): the red-green loop that never turns green. */
 export const ALTERNATING_LIMIT = 6;
 
+/** The call that waits for the ui-designer (`slice_wait`, up to minutes a call): polling it is not a loop. Eve serves the luna tools bare. */
+const WAIT_TOOLS: ReadonlySet<string> = new Set(["mcp__luna__slice_wait", "slice_wait"]);
+const isWait = (call: string): boolean => WAIT_TOOLS.has(call.split(/\s/, 1)[0]!);
+
 export class StuckDetector {
   private readonly calls: string[] = [];
 
@@ -17,13 +21,13 @@ export class StuckDetector {
     const call = line.slice(2).trim();
     this.calls.push(call);
     const n = this.calls.length;
-    if (n >= SAME_CALL_LIMIT && this.calls.slice(-SAME_CALL_LIMIT).every((c) => c === call)) {
+    if (n >= SAME_CALL_LIMIT && !isWait(call) && this.calls.slice(-SAME_CALL_LIMIT).every((c) => c === call)) {
       return `the same call ${SAME_CALL_LIMIT} times in a row: ${call}`;
     }
     if (n >= ALTERNATING_LIMIT) {
       const tail = this.calls.slice(-ALTERNATING_LIMIT);
       const [a, b] = tail;
-      if (a !== b && tail.every((c, i) => c === (i % 2 === 0 ? a : b))) {
+      if (a !== b && !isWait(a!) && !isWait(b!) && tail.every((c, i) => c === (i % 2 === 0 ? a : b))) {
         return `alternating between two calls ${ALTERNATING_LIMIT} times: ${a} / ${b}`;
       }
     }

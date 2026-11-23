@@ -257,6 +257,9 @@ export async function unpushedCommits(path: string): Promise<string[]> {
   return out.code === 0 ? out.stdout.split("\n").map((l) => l.trim()).filter(Boolean) : [];
 }
 
+/** The helper clones (`<card>.helper-<slice>-<attempt>`) a run of this process holds: the boot sweep leaves them alone. */
+export const inUseClones = new Set<string>();
+
 /** Removes a workspace and its repository. */
 export function removeClone(path: string): void {
   rmSync(path, { recursive: true, force: true });
@@ -339,10 +342,11 @@ export const hostBaselineWorkspace = {
 
 /**
  * What a crash can leave and nothing else removes, cleared at boot: the scratch folders beside the work folders (`<folder>.scratch`, where an
- * agent's repository is made) and the copies of bundles the host was reading (`<state>/repos/in`). Answers what it removed.
+ * agent's repository is made), a ui-designer helper's clones (`<folder>.helper-<slice>-<attempt>`) and the copies of bundles the host was reading (`<state>/repos/in`). Answers what it removed.
  */
 export async function removeLeftovers(workspacesDir: string): Promise<string[]> {
   const removed: string[] = [];
+  const HELPER_CLONE = /\.helper-\d+-\d+$/;
   const drop = (path: string) => {
     rmSync(path, { recursive: true, force: true });
     removed.push(path);
@@ -355,7 +359,15 @@ export async function removeLeftovers(workspacesDir: string): Promise<string[]> 
   }
   try {
     for (const repo of readdirSync(workspacesDir)) {
-      for (const name of readdirSync(join(workspacesDir, repo))) if (name.endsWith(".scratch")) drop(join(workspacesDir, repo, name));
+      for (const name of readdirSync(join(workspacesDir, repo))) {
+        const path = join(workspacesDir, repo, name);
+        if (name.endsWith(".scratch")) drop(path);
+        // A ui-designer helper's clone (and its repository) a crash left; one a run of this process holds is not a leftover.
+        else if (HELPER_CLONE.test(name) && !inUseClones.has(path)) {
+          removeClone(path);
+          removed.push(path);
+        }
+      }
     }
   } catch {
     // none

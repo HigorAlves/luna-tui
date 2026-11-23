@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { type EngineId, type Ledger, type Slice, stepsOfAnswer } from "@hardness/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { type HelperRunsDeps, helperRuns } from "./helper-runs.ts";
+import { HELPER_START_LIMIT_MS, type HelperRunsDeps, helperRuns } from "./helper-runs.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 
 const BASE = "a".repeat(40);
@@ -50,6 +50,7 @@ function setup(over: Partial<HelperRunsDeps> = {}) {
   let advance: Awaited<ReturnType<HelperRunsDeps["git"]["advanceBranch"]>> = { ok: true };
   let land: Awaited<ReturnType<HelperRunsDeps["git"]["landInWorktree"]>> = { ok: true };
   let hold: Promise<void> = Promise.resolve();
+  let descends = false;
   const calls: unknown[][] = [];
   const log: string[] = [];
   const abort = new AbortController();
@@ -67,6 +68,8 @@ function setup(over: Partial<HelperRunsDeps> = {}) {
       pickBundle: async (...a) => (calls.push(["pickBundle", ...a]), await writeFile(a[3], "bundle bytes"), { ok: true as const }),
       advanceBranch: async (...a) => (log.push("advance"), calls.push(["advanceBranch", ...a]), await hold, advance),
       landInWorktree: async (...a) => (calls.push(["landInWorktree", ...a]), land),
+      isAncestor: async (_card, a, b) => a === b || descends,
+      dropHelperRefs: async (...a) => void calls.push(["dropHelperRefs", ...a]),
     },
     publish: async () => (calls.push(["publish"]), { ok: true as const }),
     note: async (text) => void calls.push(["note", text]),
@@ -86,6 +89,7 @@ function setup(over: Partial<HelperRunsDeps> = {}) {
   return {
     deps, rows, removed, made, taken, c, abort, calls, log,
     setTake: (t: typeof take) => (take = t), spend: () => (spent = true),
+    setDescends: (d: boolean) => (descends = d),
     setHead: (h: string) => (head = h), setPick: (p: typeof pick) => (pick = p), setAdvance: (a: typeof advance) => (advance = a), setLand: (l: typeof land) => (land = l),
     holdAdvance: () => { let release!: () => void; hold = new Promise<void>((r) => (release = r)); return () => { release(); hold = Promise.resolve(); }; },
     coordinator: helperRuns(deps),
@@ -165,6 +169,42 @@ describe("helperRuns: starting a helper", () => {
   });
 });
 
+describe("helperRuns: a start that comes too late for the factory (L8-5)", () => {
+  const slowMake = (clock: { t: number }, took: number): HelperRunsDeps["helperWorkspace"] => ({
+    make: async (...a: unknown[]) => ((clock.t += took), { path: `/cards/w.helper-${a[3]}-${a[4]}`, branch: `luna-helper-${a[3]}`, ref: `refs/luna/helper/task1/${a[3]}` }),
+    remove: async () => {},
+  });
+
+  it("gives a slow clone up: the workspace is removed, no run starts, the answer is ok:false", async () => {
+    const clock = { t: 1_000_000 };
+    const removedPaths: string[] = [];
+    const t = setup({ clock: () => clock.t, helperWorkspace: { ...slowMake(clock, HELPER_START_LIMIT_MS + 1_000), remove: async (path) => void removedPaths.push(path) } });
+    expect(await ask(t.coordinator)).toEqual({ ok: false, error: expect.stringContaining("too long") });
+    expect(removedPaths).toEqual(["/cards/w.helper-2-1"]);
+    expect(t.c.calls).toEqual([]);
+    expect(t.coordinator.delegatedLocks()).toEqual([]);
+    expect(t.coordinator.status()).toBeNull();
+  });
+
+  it("makes no workspace when the sync alone used the time", async () => {
+    const clock = { t: 1_000_000 };
+    const t = setup({ clock: () => clock.t, importer: { sync: async () => ((clock.t += HELPER_START_LIMIT_MS + 1_000), { ok: true as const, head: BASE, changed: false }) } });
+    expect(await ask(t.coordinator)).toEqual({ ok: false, error: expect.stringContaining("too long") });
+    expect(t.made).toEqual([]);
+  });
+
+  it("starts the helper when the clone took less than the limit", async () => {
+    const clock = { t: 1_000_000 };
+    const t = setup({ clock: () => clock.t, helperWorkspace: slowMake(clock, HELPER_START_LIMIT_MS - 1_000) });
+    expect(await ask(t.coordinator)).toMatchObject({ ok: true });
+    expect(t.c.calls).toHaveLength(1);
+  });
+
+  it("makes the limit 75 s, inside the factory's 90 s wait", () => {
+    expect(HELPER_START_LIMIT_MS).toBe(75_000);
+  });
+});
+
 describe("helperRuns: following the helper", () => {
   it("takes the commits of a pass and goes to returned, logging how it ended; its files stay locked until it is picked", async () => {
     const t = setup();
@@ -177,6 +217,7 @@ describe("helperRuns: following the helper", () => {
     expect(t.rows.map((r) => r.kind)).toEqual(["build.helper_started", "build.helper_ended"]);
     expect(t.rows[1]!.payload).toEqual({ slice: 2, attempt: 1, outcome: "pass", tokens: 320_000, minutes: 2 });
     expect(t.coordinator.delegatedLocks()).toEqual(["src/ui/Card.tsx", "src/ui/Card.test.tsx"]);
+    expect(t.coordinator.delegatedLockSets()).toEqual([{ files: ["src/ui/Card.tsx", "src/ui/Card.test.tsx"], base: BASE }]);
     expect(t.removed).toEqual([]);
   });
 
@@ -430,11 +471,13 @@ describe("helperRuns: the pick", () => {
     const t = await returned();
     await pickReq(t);
     expect(await ackReq(t)).toEqual({ ok: true });
+    expect(await stateOf(2)).toEqual({ state: "committed", attempt: 1, commit: PICKED });
     expect(named(t, "advanceBranch")).toEqual([["advanceBranch", "/cards/w", "luna/card", BASE, PICKED]]);
     expect(t.rows.at(-1)).toEqual({ kind: "build.helper_picked", payload: { slice: 2, base: BASE, helperTip: TIP, onto: BASE, picked: [PICKED], tip: PICKED } });
     expect(named(t, "publish")).toHaveLength(1);
     expect(await stateOf(2)).toMatchObject({ state: "committed" });
-    expect(t.coordinator.delegatedLocks()).toEqual([]);
+    // L7-4: a slice the helper built and the machine picked stays the helper's for the whole run.
+    expect(t.coordinator.delegatedLocks()).toEqual(["src/ui/Card.tsx", "src/ui/Card.test.tsx"]);
     expect(t.removed).toEqual(["/cards/w.helper-2-1"]);
     expect([...t.coordinator.picked()]).toEqual([PICKED]);
     // No folder update inside the run: the container did its own merge.
@@ -512,6 +555,81 @@ describe("helperRuns: the pick", () => {
   });
 });
 
+describe("helperRuns: a pick that landed", () => {
+  it("is not picked again when an ack lands while the end of the run waits its turn (L7-2)", async () => {
+    const t = await returned();
+    await pickReq(t);
+    const release = t.holdAdvance();
+    const ack = ackReq(t);
+    await tick();
+    const end = t.coordinator.afterRun("pass");
+    await tick();
+    release();
+    expect(await ack).toEqual({ ok: true });
+    expect(await end).toBeNull();
+    expect(named(t, "pickOnto")).toHaveLength(1);
+    expect(named(t, "advanceBranch")).toHaveLength(1);
+    expect(t.rows.filter((r) => r.kind === "build.helper_picked")).toHaveLength(1);
+    expect(await stateOf(2)).toMatchObject({ state: "committed" });
+  });
+
+  it("is not picked again at the end of the run when the card's tip descends from the picked tip (L7-3)", async () => {
+    const t = await returned();
+    await pickReq(t);
+    // The ack was lost; the factory merged the picked tip and the implementer committed on top of it.
+    t.setHead("7".repeat(40));
+    t.setDescends(true);
+    expect(await t.coordinator.afterRun("pass")).toBeNull();
+    expect(named(t, "pickOnto")).toHaveLength(1);
+    expect(t.rows.filter((r) => r.kind === "build.helper_picked")).toEqual([{ kind: "build.helper_picked", payload: { slice: 2, base: BASE, helperTip: TIP, onto: BASE, picked: [PICKED], tip: PICKED } }]);
+    expect(await stateOf(2)).toMatchObject({ state: "committed" });
+  });
+
+  it("counts an ack as landed when the branch moved on past the picked tip (L7-3)", async () => {
+    const t = await returned();
+    await pickReq(t);
+    t.setAdvance({ ok: false, reason: "moved" });
+    t.setHead("7".repeat(40));
+    t.setDescends(true);
+    expect(await ackReq(t)).toEqual({ ok: true });
+    expect(await stateOf(2)).toMatchObject({ state: "committed" });
+    expect(t.rows.filter((r) => r.kind === "build.helper_picked")).toHaveLength(1);
+    expect(t.coordinator.picked().has(PICKED)).toBe(true);
+  });
+});
+
+describe("helperRuns: the helper's refs (L7-7)", () => {
+  const dropped = ["dropHelperRefs", "/cards/w", "task1", 2];
+
+  it("deletes them once the pick has landed, by the ack and at the end of the run", async () => {
+    const acked = await returned();
+    await pickReq(acked);
+    expect(named(acked, "dropHelperRefs")).toEqual([]);
+    await ackReq(acked);
+    expect(named(acked, "dropHelperRefs")).toEqual([dropped]);
+    const ended = await returned();
+    await ended.coordinator.afterRun("pass");
+    expect(named(ended, "dropHelperRefs")).toEqual([dropped]);
+  });
+
+  it("keeps them for a helper that did not land (failed, cancelled, a re-run), so a person can read its commits", async () => {
+    const failed = setup();
+    await ask(failed.coordinator);
+    failed.c.settle({ outcome: "fail", detail: { error: "boom" } });
+    await tick();
+    expect(named(failed, "dropHelperRefs")).toEqual([]);
+    const cancelled = setup();
+    await ask(cancelled.coordinator);
+    await cancelled.coordinator.cancel();
+    expect(named(cancelled, "dropHelperRefs")).toEqual([]);
+    const conflict = await returned();
+    conflict.setPick({ ok: false, conflict: true, files: ["src/ui/Card.tsx"] });
+    await pickReq(conflict);
+    expect(await stateOf(2)).toMatchObject({ state: "conflict_rerun" });
+    expect(named(conflict, "dropHelperRefs")).toEqual([]);
+  });
+});
+
 describe("helperRuns: a conflict", () => {
   const P = "8".repeat(40);
 
@@ -529,6 +647,8 @@ describe("helperRuns: a conflict", () => {
     expect(t.c.calls[1]!.extra.helper).toMatchObject({ attempt: 2, base: P, conflict: { files: ["src/ui/Card.tsx"] } });
     expect(t.c.calls[1]!.extra.workspace).toEqual({ path: "/cards/w.helper-2-2", branch: "luna-helper-2" });
     expect(t.coordinator.delegatedLocks()).toEqual(["src/ui/Card.tsx", "src/ui/Card.test.tsx"]);
+    // The lock still begins where the helper first started: the implementer's commit that conflicted (between BASE and P) stays judged.
+    expect(t.coordinator.delegatedLockSets()).toEqual([{ files: ["src/ui/Card.tsx", "src/ui/Card.test.tsx"], base: BASE }]);
     // The second run returns; this time it picks clean.
     t.setPick({ ok: true, picked: [PICKED], tip: PICKED });
     t.c.settle({ outcome: "pass" });
@@ -566,6 +686,34 @@ describe("helperRuns: a conflict", () => {
   });
 });
 
+describe("helperRuns: a re-run that is still being made when the run ends", () => {
+  it("starts no second helper and removes its workspace (L7-1)", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const removedPaths: string[] = [];
+    const t = await returned({
+      helperWorkspace: {
+        make: async (...a: unknown[]) => {
+          if (a[4] === 2) await gate;
+          return { path: `/cards/w.helper-2-${a[4]}`, branch: "luna-helper-2", ref: "refs/luna/helper/task1/2" };
+        },
+        remove: async (path: string) => void removedPaths.push(path),
+      } as never,
+    });
+    t.setPick({ ok: false, conflict: true, files: ["src/ui/Card.tsx"] });
+    const pick = pickReq(t);
+    await tick();
+    const ended = t.coordinator.cancel();
+    await tick();
+    release();
+    await pick;
+    await ended;
+    expect(t.c.calls).toHaveLength(1);
+    expect(removedPaths).toContain("/cards/w.helper-2-2");
+    expect(await stateOf(2)).toMatchObject({ state: "cancelled" });
+  });
+});
+
 describe("helperRuns: the end of the run, after a pass", () => {
   it("waits for a running helper, picks onto the card's tip, moves the branch and updates the folder; the helper is not cancelled", async () => {
     const t = setup();
@@ -590,6 +738,9 @@ describe("helperRuns: the end of the run, after a pass", () => {
   it("lands a helper that already returned the same way", async () => {
     const t = await returned();
     expect(await t.coordinator.afterRun("pass")).toBeNull();
+    expect(await stateOf(2)).toMatchObject({ state: "committed", commit: PICKED });
+    // L7-4: the files stay locked once landed, for the scope checks that run after the end of the run.
+    expect(t.coordinator.delegatedLocks()).toEqual(["src/ui/Card.tsx", "src/ui/Card.test.tsx"]);
     expect(named(t, "landInWorktree")).toHaveLength(1);
     expect(await stateOf(2)).toMatchObject({ state: "committed" });
   });

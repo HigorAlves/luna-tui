@@ -15,6 +15,8 @@ const BUNDLE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,100}\.bundle$/;
 const PICKED_REF = /^refs\/luna\/helper\/[A-Za-z0-9._/-]+-picked$/;
 /** Where the picked tip is fetched to, so the fast-forward names a commit and never a branch the bundle chose. */
 const PICK_REF = "refs/luna/pick";
+/** The endings after which the machine no longer holds the slice for the helper. */
+const HANDED_BACK = new Set(["refused", "failed", "cancelled", "merge_conflict"]);
 const HOLDING = new Set(["running", "returned", "picking", "conflict_rerun"]);
 /** Git for a repository the agent wrote in: no hook, no replaced objects, no external helper, no submodule recursion. */
 const HARD = ["--no-optional-locks", "--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=", "-c", "diff.external=", "-c", "submodule.recurse=false", "-c", "protocol.ext.allow=never"];
@@ -90,7 +92,7 @@ export function helperTools(options: HelperToolsOptions) {
     }
   };
   /** The tip of a pick merged into /work whose confirmation has not come: finished by `syncPicks` once the machine says committed. */
-  const pending = new Map<number, { tip: string; note: string }>();
+  const pending = new Map<number, { tip: string; note: string; before: string }>();
   const held = (): LedgerSlice[] => slices().filter((s) => s.owner === "ui-designer" && s.status !== "committed");
   /** A request file `<kind>-<nonce>-<n>.json` and the path its answer is read from. */
   const request = (kind: string, answered: string, body: Record<string, unknown>): { n: number; answer: string } => {
@@ -143,20 +145,33 @@ export function helperTools(options: HelperToolsOptions) {
     }
     const shas = Array.isArray(picked) ? picked.filter((p): p is string => typeof p === "string" && SHA.test(p)) : [];
     const note = `picked by the machine: ${shas.map((s) => s.slice(0, 8)).join(", ") || tip.slice(0, 8)}`;
+    return acknowledge(slice, tip, note, before);
+  };
+
+  /** Tells the machine the tip is merged and finishes the slice on its word; a refusal takes the merge back. Null: done. */
+  const acknowledge = async (slice: LedgerSlice, tip: string, note: string, before: string): Promise<{ error: string } | null> => {
     const ack = request("pick-ack", "pick-done", { slice: slice.id, head: tip });
     const done = await awaitJson(ack.answer, options.checkWaitMs);
     if (!done) {
-      pending.set(slice.id, { tip, note });
+      pending.set(slice.id, { tip, note, before });
       return { error: `the machine has not confirmed the pick of slice ${slice.id} yet; call slice_wait` };
     }
     if (done.ok !== true) {
       // The machine's branch did not move: take the merge back, so /work holds no commit the machine never recorded.
+      // Only while HEAD is still the picked tip: a commit made on top since is the implementer's, and stays.
+      pending.delete(slice.id);
+      let head = "";
+      try {
+        head = git(options.work, ["rev-parse", "HEAD"]);
+      } catch {
+        // unreadable HEAD: leave the branch as it is
+      }
+      if (head !== tip) return { error: `the machine could not move the card's branch, so it did not record slice ${slice.id}'s pick, but the pick is in your branch under your later commits; do not reset, stop and report this to the person` };
       try {
         git(options.work, ["reset", "--keep", before]);
       } catch (error) {
         return { error: `the machine could not move the card's branch, and your branch could not be put back: ${failure(error)}` };
       }
-      pending.delete(slice.id);
       return { error: typeof done.reason === "string" ? `the machine could not move the card's branch: ${done.reason}` : "the machine could not move the card's branch" };
     }
     finish(slice, tip, note);
@@ -191,13 +206,29 @@ export function helperTools(options: HelperToolsOptions) {
   const syncPicks = async (): Promise<string | null> => {
     let problem: string | null = null;
     for (const slice of held()) {
-      const now = stateOf(slice.id)?.state;
+      const seen = stateOf(slice.id);
+      const now = seen?.state;
+      if (now && HANDED_BACK.has(now)) {
+        // The machine gave the slice up: it is the implementer's again, and slice_set works on it.
+        slice.owner = "implementer";
+        slice.status = "pending";
+        slice.note = `the ui-designer's slice, handed back (${now}): ${seen.summary ?? "no summary"}`.slice(0, 300);
+        options.persist();
+        continue;
+      }
       if (now === "committed") {
         const unsettled = settle(slice);
         if (unsettled && !problem) problem = unsettled;
         continue;
       }
-      if (now !== "returned") continue;
+      if (now !== "returned" && now !== "picking") continue;
+      // A pick merged here whose confirmation was lost: the ack goes again before anything new is asked.
+      const lost = pending.get(slice.id);
+      if (lost) {
+        const again = await acknowledge(slice, lost.tip, lost.note, lost.before);
+        if (again && !problem) problem = again.error;
+        continue;
+      }
       let outcome = await pickOnce(slice);
       if (outcome && "retry" in outcome) outcome = await pickOnce(slice);
       if (outcome && "retry" in outcome) outcome = { error: `the machine could not pick slice ${slice.id} twice; call slice_wait again` };
@@ -214,7 +245,8 @@ export function helperTools(options: HelperToolsOptions) {
       const row = slices().find((s) => s.id === slice);
       if (!row) return { error: `no slice ${slice}; call slice_list` };
       const asked = request("helper-request", "helper-answer", { slice, message: message ?? "" });
-      const answer = await awaitJson(asked.answer, options.checkWaitMs);
+      // The machine may answer in the last instant of the wait: the file is read once more before the slice is given up.
+      const answer = (await awaitJson(asked.answer, options.checkWaitMs)) ?? (await awaitJson(asked.answer, 0));
       if (!answer) return { ok: false, error: "no one answered; build the slice yourself" };
       if (answer.ok === true) {
         row.owner = "ui-designer";

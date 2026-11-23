@@ -839,7 +839,9 @@ const SHARED: &[Binding] = &[
             Some(t) if config_proposal(t) => {
                 Avail::Off("a config proposal is approved or rejected, not sent back")
             }
-            Some(_) => Avail::Off("only a setup, plan, tests or escalation go back"),
+            Some(_) => {
+                Avail::Off("only a setup, plan, tests, design sign-off or escalation go back")
+            }
         },
         85,
     ),
@@ -3866,7 +3868,7 @@ mod tests {
         };
         assert_eq!(
             find(&running, "r"),
-            Avail::Off("only a setup, plan, tests or escalation go back")
+            Avail::Off("only a setup, plan, tests, design sign-off or escalation go back")
         );
         assert_eq!(
             find(&running, "w"),
@@ -3993,14 +3995,14 @@ mod tests {
         review.route = "review".to_string();
         assert_eq!(
             find(&app_with(vec![review]), "r"),
-            Avail::Off("only a setup, plan, tests or escalation go back")
+            Avail::Off("only a setup, plan, tests, design sign-off or escalation go back")
         );
         assert_eq!(
             find(
                 &app_with(vec![task("t3", "implementing", true, true, true)]),
                 "r"
             ),
-            Avail::Off("only a setup, plan, tests or escalation go back")
+            Avail::Off("only a setup, plan, tests, design sign-off or escalation go back")
         );
         // An escalated feature card goes back to be planned again; `a` would only retry the stage on the same plan.
         assert_eq!(

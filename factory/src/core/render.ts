@@ -702,7 +702,8 @@ const DELEGATION = `## A UI slice can go to the ui-designer
 - \`slice_delegate {slice, message}\` hands one slice to the ui-designer, a helper that builds it in its own worktree while you go on. Use it only for a slice whose planned files are all UI files: the machine refuses anything else, so take the refusal and build the slice yourself.
 - Go on with your other slices. Never touch a delegated slice's files; \`scope_check\` flags them.
 - Call \`slice_wait {slice}\` before \`scope_check\`: it returns the helper's state and brings its commits onto your branch when it has finished.
-- A \`merge_conflict\` state means its commits conflicted with yours twice: finish your own slices and answer; the machine escalates the card.`;
+- A state of \`refused\`, \`failed\` or \`cancelled\` means the machine gave the slice up: it is yours again, pending, with the machine's summary as its note; build it yourself.
+- A \`merge_conflict\` state means its commits conflicted with yours twice: the slice is yours again in the ledger, but do not build it; finish your own slices and answer, and the machine escalates the card.`;
 
 const helperText = (helper: StageInput["context"]["helper"]) => {
   const list = (files: readonly string[]) => (files.length > 0 ? files.map((f) => `- ${f}`).join("\n") : NONE);

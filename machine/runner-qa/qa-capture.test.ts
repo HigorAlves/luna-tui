@@ -16,6 +16,7 @@ writeFileSync(
   driver,
   `#!/bin/sh
 echo "$1 $2 $3 $4" >> "${dir}/calls.txt"
+[ -n "$HANG" ] && exec sleep 30
 case "$1" in
   screenshot) node -e 'require("fs").writeFileSync(process.argv[1], Buffer.from("89504e470d0a1a0a", "hex"))' "$2" ;;
   eval) node -e 'const r=${JSON.stringify(row(0))};console.log(JSON.stringify(Array.from({length:Number(process.env.ROWS||2)},(_,i)=>({...r,selector:"#b"+i}))))' ;;
@@ -35,14 +36,13 @@ beforeEach(() => {
 
 describe("qa-capture", () => {
   // The settle is an in-page wait through the driver: agent-browser 0.39.2 stalls ~10 s on a screenshot that follows a viewport change after an idle gap.
-  it("captures a scenario's state at the frame's viewport: settle, screenshot, computed styles and a log line", () => {
+  it("captures a scenario's state at the frame's viewport: settle, screenshot, computed styles", () => {
     const r = run(["S1", "desktop", "default", "1440", "900"]);
     expect(r.status).toBe(0);
     expect(readFileSync(join(dir, "calls.txt"), "utf8").trim().split("\n").map((l) => l.split(" ").slice(0, 2).join(" "))).toEqual(["set viewport", expect.stringMatching(/^eval /), expect.stringMatching(/^screenshot /), expect.stringMatching(/^eval /)]);
     expect(readFileSync(join(out, "S1", "desktop-default.png")).subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
     expect(JSON.parse(readFileSync(join(out, "S1", "desktop-default.styles.json"), "utf8"))).toHaveLength(2);
-    const logged = readFileSync(join(out, "captures.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-    expect(logged).toEqual([expect.objectContaining({ scenario: "S1", viewport: "desktop", state: "default", width: 1440, height: 900, elements: 2 })]);
+    expect(existsSync(join(out, "captures.jsonl"))).toBe(false);
     expect(r.stdout).toContain("captured S1 desktop default: 2 elements");
   });
 
@@ -60,6 +60,15 @@ describe("qa-capture", () => {
   ])("refuses %j and writes nothing", (args) => {
     expect(run(args).status).toBe(2);
     expect(existsSync(out)).toBe(false);
+  });
+
+  it("kills a driver that does not answer in time and fails with a clear message, writing no styles", () => {
+    const began = Date.now();
+    const r = run(["S1", "desktop", "default", "1440", "900"], { HANG: "1", QA_CAPTURE_TIMEOUT_MS: "300" });
+    expect(Date.now() - began).toBeLessThan(10_000);
+    expect(r.status).toBe(124);
+    expect(r.stderr).toMatch(/timed out/);
+    expect(existsSync(join(out, "S1", "desktop-default.styles.json"))).toBe(false);
   });
 
   it("passes the driver's failure on and writes no styles", () => {

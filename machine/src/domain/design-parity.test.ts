@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { settleParity } from "./design-parity.ts";
+import { settleParity, waiverHash } from "./design-parity.ts";
 
 const desktop = { name: "1440x900", width: 1440, height: 900 };
 const target = (state: "default" | "hover") => ({ scenario: "S1", frame: "12:34", viewport: desktop, state });
@@ -33,14 +33,87 @@ describe("settleParity", () => {
     expect(s.findings).toEqual([expect.objectContaining({ path: "figma:12:34/12:35", line: 0, severity: "should_fix", category: "design", id: expect.stringMatching(/^D[0-9a-f]{8}$/), body: "Off token. Expected #1A73E8; built #1B74E9 (button.pay).", design: expect.objectContaining({ source: "parity", element: "button.pay", frame: "12:34", node: "12:35" }) })]);
     expect(s.notes).toEqual([expect.stringContaining("99:9")]);
   });
+  it("drops a finding on a state nobody compared (hover, with only default compared) with a note, and does not move it to another state's row", () => {
+    const hover = { ...finding("blocker", 0.95), state: "hover" as const };
+    const s = settle(answer({ frames: [frame("default"), frame("hover")], findings: [hover] }));
+    expect(s.findings).toEqual([]);
+    expect(s.blockers).toBe(0);
+    expect(s.notes).toEqual([expect.stringContaining("hover")]);
+  });
+  it("puts a finding on the row of its frame and state, whatever word the model used for the viewport, and writes the row's own viewport, state and node", () => {
+    const s = settleDefault(answer({ findings: [{ ...finding("blocker"), viewport: "desktop", state: "default" }] }));
+    expect(s.findings).toEqual([expect.objectContaining({ severity: "blocker", design: expect.objectContaining({ viewport: "1440x900", state: "default", node: "12:35" }) })]);
+    expect(s.blockers).toBe(1);
+    expect(s.notes).toEqual([]);
+  });
+  it("gives a finding of the model's own words the same id as one in the plan's words, and a drifting node does not change it", () => {
+    const plain = settleDefault(answer({ findings: [finding("should_fix")] })).findings[0]!.id;
+    const worded = settleDefault(answer({ findings: [{ ...finding("should_fix"), viewport: "desktop", node: "made-up" }] })).findings[0]!.id;
+    expect(worded).toBe(plain);
+  });
+  it("with several compared states, each finding takes the row of its own state, with that row's node", () => {
+    const both = [frame("default"), frame("hover")];
+    const taken = [...captures, { ...captures[0]!, state: "hover" as const, image: "/evidence/parity/S1/1440x900-hover.png" }];
+    const run = (over: Record<string, unknown>) => settleParity(answer({ frames: both, findings: [{ ...finding("should_fix"), viewport: "desktop", ...over }] }) as never, { plan, spec, captures: taken, bar: 0.75 });
+    const hover = run({ state: "hover" });
+    expect(hover.findings[0]!.design).toMatchObject({ viewport: "1440x900", state: "hover", node: "12:36" });
+    expect(hover.notes).toEqual([]);
+    expect(run({ state: "default" }).findings[0]!.design).toMatchObject({ state: "default", node: "12:35" });
+    const focus = run({ state: "focus" });
+    expect(focus.findings).toEqual([]);
+    expect(focus.notes).toEqual([expect.stringContaining("focus")]);
+  });
+  it("drops a finding only when its frame has no compared row at all", () => {
+    const s = settle(answer({ frames: [frame("default", "not_compared")], findings: [{ ...finding("blocker"), viewport: "desktop" }] }));
+    expect(s.findings).toEqual([]);
+    expect(s.notes).toEqual([expect.stringContaining("not compared")]);
+  });
   it("gives the same id to the same difference in every round, whatever its title says", () => {
     const a = settle(answer({ findings: [finding("should_fix")] })).findings[0]!.id;
     const b = settle(answer({ findings: [{ ...finding("should_fix"), title: "Colour of pay is off" }] })).findings[0]!.id;
     expect(a).toBe(b);
   });
+  it("keeps a waived finding marked, out of the blockers and the gate's reasons", () => {
+    const first = settleDefault(answer({ findings: [finding("blocker")] })).findings[0]!;
+    const waived = [{ id: first.id!, hash: waiverHash(first) }];
+    const s = settleParity(answer({ findings: [finding("blocker"), { ...finding("should_fix"), element: "a.cancel", title: "Cancel" }] }) as never, { plan: onlyDefault, spec, captures, bar: 0.75, waived });
+    expect(s.findings.map((f) => [f.severity, f.resolution ?? null])).toEqual([["blocker", { status: "waived", by: "person" }], ["should_fix", null]]);
+    expect(s.blockers).toBe(0);
+    expect(s.gate.why).toEqual(["open_findings"]);
+    const only = settleParity(answer({ findings: [finding("blocker")] }) as never, { plan: onlyDefault, spec, captures, bar: 0.75, waived });
+    expect(only.gate).toEqual({ fires: false, why: [] });
+  });
+  it("lapses a waiver when the built value changed: the same id with a different actual is open again and counts as a blocker", () => {
+    const first = settleDefault(answer({ findings: [finding("blocker")] })).findings[0]!;
+    const waived = [{ id: first.id!, hash: waiverHash(first) }];
+    const worse = settleParity(answer({ findings: [{ ...finding("blocker"), actual: "#FF0000" }] }) as never, { plan: onlyDefault, spec, captures, bar: 0.75, waived });
+    expect(worse.findings[0]!.id).toBe(first.id);
+    expect(worse.findings[0]!.resolution).toBeUndefined();
+    expect(worse.blockers).toBe(1);
+    const same = settleParity(answer({ findings: [{ ...finding("blocker"), actual: "  #1b74e9 ", title: "other words" }] }) as never, { plan: onlyDefault, spec, captures, bar: 0.75, waived });
+    expect(same.blockers).toBe(0);
+  });
+  it("a waiver row with no hash waives nothing", () => {
+    const first = settleDefault(answer({ findings: [finding("blocker")] })).findings[0]!;
+    const s = settleParity(answer({ findings: [finding("blocker")] }) as never, { plan: onlyDefault, spec, captures, bar: 0.75, waived: [{ id: first.id!, hash: "" }] });
+    expect(s.blockers).toBe(1);
+  });
+  it("hashes an accessibility finding by its state and its rule (or judged), not by the auditor's words or its evidence names", () => {
+    const body = (summary: string, tail: string) => ({ body: `${summary} (${tail})` });
+    const axe = waiverHash(body("Low contrast on the note", "state default, axe color-contrast; evidence a.png, axe.json"));
+    expect(waiverHash(body("The note text is too faint (3.1:1)", "state default, axe color-contrast"))).toBe(axe);
+    expect(waiverHash(body("Low contrast on the note", "state  Default , axe color-contrast; evidence b.png"))).toBe(axe);
+    expect(waiverHash(body("Low contrast on the note", "state hover, axe color-contrast"))).not.toBe(axe);
+    expect(waiverHash(body("Low contrast on the note", "state default, axe color-contrast-enhanced"))).not.toBe(axe);
+    const judged = waiverHash(body("The modal traps focus", "state modal, judged; evidence trap.png"));
+    expect(waiverHash(body("Focus cannot leave the dialog", "state modal, judged"))).toBe(judged);
+    expect(waiverHash(body("The modal traps focus", "state modal, axe focus-trap"))).not.toBe(judged);
+    // A body not written by the audit's mapping is hashed whole.
+    expect(waiverHash({ body: "one thing" })).not.toBe(waiverHash({ body: "another thing" }));
+  });
   it("lists the most severe findings first and keeps at most 40", () => {
-    const many = Array.from({ length: 45 }, (_, i) => ({ ...finding("nit"), node: `1:${i}` }));
-    const s = settle(answer({ findings: [...many, { ...finding("blocker"), node: "7:7" }] }));
+    const many = Array.from({ length: 45 }, (_, i) => ({ ...finding("nit"), element: `li.row-${i}`, title: `Row ${i}` }));
+    const s = settle(answer({ findings: [...many, { ...finding("blocker"), element: "li.last", title: "Last" }] }));
     expect(s.findings).toHaveLength(40);
     expect(s.findings[0]!.severity).toBe("blocker");
   });
@@ -89,5 +162,14 @@ describe("settleParity: a cited frame with no viewport", () => {
   it("sits beside the planned frames", () => {
     const s = settleParity(answer() as never, { plan: onlyDefault, spec, captures, bar: 0.75, unplaced: [{ scenario: "S2", frame: "20:1" }] });
     expect(s.frames.map((f) => [f.frame, f.scenario, f.status])).toEqual([["12:34", "S1", "compared"], ["20:1", "S2", "not_compared"], ["20:1", null, "not_compared"]]);
+  });
+});
+
+describe("settleParity: targets over the capture cap", () => {
+  it("are not compared, with the cap as the reason, and fire the gate", () => {
+    const left = { scenario: "S9", frame: "12:34", viewport: "1440x900", state: "hover" as const, reason: "over the capture cap" };
+    const s = settleParity(answer() as never, { plan: onlyDefault, spec, captures, bar: 0.75, unplaced: [left] });
+    expect(s.frames.filter((f) => f.scenario === "S9")).toEqual([expect.objectContaining({ frame: "12:34", viewport: "1440x900", state: "hover", status: "not_compared", reason: "over the capture cap", capture: null })]);
+    expect(s.gate.why).toContain("not_compared");
   });
 });

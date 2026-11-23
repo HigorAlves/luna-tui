@@ -1,7 +1,7 @@
 // `pnpm eval` entry: the subcommands of the ground-truth loop and the scorecard, and the replay run by default.
 //
 //   pnpm eval --pack <p> --engine <e> ...                    replay a pack's cases (run.ts)
-//   pnpm eval harvest --pack <decision> [--since <date>] [--with-truth] [--all]
+//   pnpm eval harvest --pack <decision> [--since <date>] [--with-truth] [--all] [--include-images]   (--include-images: design_parity only)
 //   pnpm eval dataset push --pack <decision> [--queue <id or name>] [--records]
 //   pnpm eval dataset pull --pack <decision> [--write-labels]
 //   pnpm eval records [--task <id>] [--pack <p>] [--since <date>] [--sizes]   one line per decision record: what the machine did, its state, its truth
@@ -16,7 +16,7 @@
 //   pnpm eval prune-runs [--older-than 30]                    removes run folders under evals/.runs older than that many days
 //   pnpm eval propose --repo <abs path> [--machine <url>] [--dry-run]   posts the scorecards to the machine, which drafts a luna.yaml proposal card for the repo
 //   pnpm eval admit --pack <p> --engine <e> --against <claude:*> [--write]   whether the engine may join a pack that reads images: its saved baseline against Claude's; exits 0 on a pass, 1 on a fail, 2 on a missing baseline
-//   pnpm eval build-helper --engine <claude:*> [--case <id>]... [--no-baseline] [--dry] [--image <tag>]   `implementing` on 3 cards (a logic slice and a UI slice) with the ui-designer helper, and with delegation off; reports both slices committed, scope, picks, conflicts and wall clock. Local only
+//   pnpm eval build-helper --engine <e> [--case <id>]... [--no-baseline] [--dry] [--image <tag>]   `implementing` on 3 cards (a logic slice and a UI slice) with the ui-designer helper, and with delegation off; reports both slices committed, scope, picks, conflicts and wall clock. Local only
 //   pnpm eval scorecard                    evals/scorecard.md over every decision baseline
 //   pnpm eval defaults [--write] [--except <pack>...]              the default per slot by the scorecard's rule; --write updates contracts/src/decision-defaults.json
 import { DECISION_DEFAULTS, EngineId, PACKS, PackId, decisionEngines } from "@hardness/contracts";
@@ -81,14 +81,16 @@ async function telemetry() {
 }
 
 if (command === "harvest") {
-  const { values } = parseArgs({ args: process.argv.slice(3), options: { pack: { type: "string" }, since: { type: "string" }, "with-truth": { type: "boolean", default: false }, all: { type: "boolean", default: false } } });
+  const { values } = parseArgs({ args: process.argv.slice(3), options: { pack: { type: "string" }, since: { type: "string" }, "with-truth": { type: "boolean", default: false }, all: { type: "boolean", default: false }, "include-images": { type: "boolean", default: false } } });
   const since = values.since ? new Date(values.since) : undefined;
   if (since && Number.isNaN(since.getTime())) fail("--since must be a date, like 2026-11-01");
   if (values.pack === "design_parity") {
     // Waivers are not decision records: they come from the machine's ground-truth folder, and make cases with their own frame and capture (RFC 0013).
-    const parity = harvestParity({ stateDir: machineStateDir(), out: EVALS, ...(since ? { since } : {}) });
+    const parity = harvestParity({ stateDir: machineStateDir(), out: EVALS, ...(since ? { since } : {}), includeImages: values["include-images"] });
     console.log(`wrote ${parity.written.length}: ${parity.written.join(", ") || "-"}\nkept (already cases) ${parity.kept.length}`);
     for (const r of parity.refused) console.log(`refused ${printable(r.id)}: ${printable(r.reason)}`);
+    for (const image of parity.images) console.log(`image written: ${printable(image)}`);
+    if (parity.images.length > 0) console.log("each image above holds the user's app or design: look at every one before committing it");
     process.exit(0);
   }
   const pack = decisionOf(values.pack);
@@ -242,7 +244,7 @@ if (command === "harvest") {
   const { values } = parseArgs({ args: process.argv.slice(3), options: { engine: { type: "string" }, case: { type: "string", multiple: true }, "no-baseline": { type: "boolean", default: false }, dry: { type: "boolean", default: false }, image: { type: "string", default: process.env.RUNNER_IMAGE ?? "hardness-runner:dev" } } });
   const engine = EngineId.safeParse(values.engine).data ?? fail(`--engine must be one of ${EngineId.options.join(", ")}`);
   if (!PACKS.implementing.engines.allowed.includes(engine)) fail(`--engine must be one of implementing's engines: ${PACKS.implementing.engines.allowed.join(", ")}`);
-  const { caseReport, loadBuildCases, renderDry, renderReport } = await import("./src/build-helper.ts");
+  const { caseReport, loadBuildCases, renderDry, renderReport, untilInterrupted } = await import("./src/build-helper.ts");
   let found;
   try {
     found = loadBuildCases(EVALS, values.case ?? []);
@@ -258,18 +260,24 @@ if (command === "harvest") {
   if (!found1.available) fail(`${engine}: ${found1.reason}`);
   if (!(await imageExists(values.image!))) fail(`no image ${values.image}: build it with \`pnpm --filter @hardness/machine runner:build\``);
   const { runBuildTrial } = await import("./src/build-helper-run.ts");
-  const options = { engine, image: values.image!, root: resolve(EVALS, "..") };
+  // Ctrl-C aborts the run in flight, which stops its containers, and ends the loop.
+  const abort = new AbortController();
+  const options = { engine, image: values.image!, root: resolve(EVALS, ".."), signal: abort.signal };
   const reports = [];
-  for (const c of found) {
-    console.log(`${c.id}: running with the helper on`);
-    const delegated = await runBuildTrial(c, "on", options);
-    let baseline = null;
-    if (!values["no-baseline"]) {
-      console.log(`${c.id}: running with delegation off`);
-      baseline = await runBuildTrial(c, "off", options);
+  await untilInterrupted(abort, async () => {
+    for (const c of found) {
+      if (abort.signal.aborted) break;
+      console.log(`${c.id}: running with the helper on`);
+      const delegated = await runBuildTrial(c, "on", options);
+      let baseline = null;
+      if (!values["no-baseline"] && !abort.signal.aborted) {
+        console.log(`${c.id}: running with delegation off`);
+        baseline = await runBuildTrial(c, "off", options);
+      }
+      reports.push(caseReport(c, delegated, baseline));
     }
-    reports.push(caseReport(c, delegated, baseline));
-  }
+  });
+  if (abort.signal.aborted) console.log("interrupted: the report covers the cases that finished");
   console.log(renderReport(engine, reports));
   process.exit(reports.every((r) => r.pass) ? 0 : 1);
 } else if (command === "scorecard" || command === "defaults") {

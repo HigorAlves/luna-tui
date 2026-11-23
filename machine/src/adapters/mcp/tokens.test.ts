@@ -19,7 +19,7 @@ describe("fileTokenStore", () => {
     expect(await store.load("figma")).toEqual({ access_token: "tok-aaaaaaaaaaaa", token_type: "Bearer" });
   });
 
-  it("keeps the client information, secret included, in <server>.client.json at 0600, and removes both", async () => {
+  it("keeps the client information, secret included, in <server>.client.json at 0600", async () => {
     const d = dir();
     const store = fileTokenStore(d);
     await store.saveClient("figma", { client_id: "cid", client_secret: "sec-bbbbbbbbbbbb" } as never);
@@ -27,10 +27,6 @@ describe("fileTokenStore", () => {
     expect(statSync(file).mode & 0o777).toBe(0o600);
     expect(JSON.parse(readFileSync(file, "utf8")).client_secret).toBe("sec-bbbbbbbbbbbb");
     expect(await store.loadClient("figma")).toMatchObject({ client_id: "cid" });
-    await store.save("figma", { access_token: "t", token_type: "Bearer" });
-    await store.remove("figma");
-    expect(await store.load("figma")).toBeNull();
-    expect(await store.loadClient("figma")).toBeNull();
   });
 });
 
@@ -81,10 +77,6 @@ describe("lunaOAuthProvider", () => {
     expect(p.pendingAuthorization()).toBeNull();
     await p.redirectToAuthorization(new URL("https://auth.example/authorize?state=s1"));
     expect(p.pendingAuthorization()?.href).toBe("https://auth.example/authorize?state=s1");
-  });
-  it("registers with token_endpoint_auth_method none when asked", () => {
-    const p = lunaOAuthProvider(fileTokenStore(dir()), "x", "http://localhost/cb", { authMethod: "none" });
-    expect(p.clientMetadata.token_endpoint_auth_method).toBe("none");
   });
 });
 

@@ -53,10 +53,12 @@ import { homedir } from "node:os";
 import { repoSecrets } from "../adapters/credentials/repo-secrets.ts";
 import { PACKAGE_MANAGER_CONFIG, configFilesChanged } from "../application/install.ts";
 import { InstallFailedError, type InstallInput, type InstallOutcome, ensureInstalled } from "../application/install.ts";
+import { checkGit } from "../adapters/git/helper.ts";
 import { removeNestedRepositories } from "../adapters/git/machine-repo.ts";
 import { ensureClone, isClone, removeClone } from "../adapters/git/clone.ts";
 import { type ProofRig, proofAppDeps } from "../application/config-proof.ts";
 import type { DesignBudget } from "../domain/design-budget.ts";
+import type { Waiver } from "../domain/design-parity.ts";
 import { sandboxSizeOf } from "../domain/sandbox-bounds.ts";
 import { type Trust, trustOf } from "../domain/trust.ts";
 import { runtimeChecker } from "../adapters/docker/runtimes.ts";
@@ -98,6 +100,8 @@ import { type ShipGateProbe, shipGateProbe } from "../application/ship-gate-prob
 export interface DesignDecisions {
   budget?: (taskId: string) => Promise<DesignBudget>;
   cardOff?: (taskId: string) => Promise<boolean>;
+  /** The findings a person waived on a card (their `design.waived` rows: id and hash): a later round that raises the same difference again keeps it waived. */
+  waived?: (taskId: string) => Promise<Waiver[]>;
   /** The shas the machine picked onto a card's branch for the ui-designer on earlier runs (its own `build.helper_picked` rows). */
   picked?: (taskId: string) => Promise<string[]>;
 }
@@ -359,6 +363,8 @@ export async function buildRealStages(
     mcpUntrusted: config.mcp.untrusted,
     // The implementer's ui-designer helper reads the design budget, a card's "design off" and the earlier picks at call time (bound late in main.ts).
     design: designDecisions,
+    // The helper's pick needs git 2.40: the check runs once, the first time a run asks.
+    gitProblem: (() => { let problem: Promise<string | null> | undefined; return () => (problem ??= checkGit()); })(),
     watcher,
     exec: checksExec,
     hostExec: exec,
@@ -419,7 +425,6 @@ export async function buildRealStages(
     // Build: a tests step (one failing, tagged test per scenario, committed by the machine) runs before the implementer.
     implementing: buildTestsStep({
       implement: (context, extra) => runAgent(deps, context, "implementing", extra),
-      runHelper: (context, extra) => runAgent(deps, context, "ui_design", extra),
       runWriter: (context, extra) => runAgent(deps, context, "build_tests", extra.plan ? { plan: extra.plan } : {}),
       judgeRed: async (check, repoPath) => {
         const policy = repoPath ? await policies.for(repoPath) : null;
@@ -577,6 +582,7 @@ export async function buildRealStages(
             get budget() {
               return designDecisions?.budget;
             },
+            waived: async (taskId) => (designDecisions?.waived ? designDecisions.waived(taskId) : []),
           },
           // The design parity review after the audit (RFC 0013, phase 3): a read-only sub-run over the captures, then the frame | build pairs on the host.
           designParity: (context, parity, unplaced) =>
@@ -589,6 +595,7 @@ export async function buildRealStages(
                 get budget() {
                   return designDecisions?.budget;
                 },
+                waived: async (taskId) => (designDecisions?.waived ? designDecisions.waived(taskId) : []),
                 stateDir: config.stateDir,
               },
               context,

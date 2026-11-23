@@ -214,6 +214,22 @@ describe("runPackOnce with bridged tools, a QA image and a QA target (RFC 0013)"
     expect(closed).toHaveBeenCalledOnce();
   });
 
+  it("closes the client when the run ends before the sandbox starts: no credential, a held one, a refused egress list or policy", async () => {
+    const closeAfter = async (deps: Parameters<typeof runPackOnce>[1]) => {
+      const runDir = mkdtempSync(join(tmpdir(), "once-"));
+      const closed = vi.fn(async () => {});
+      const mcp = { servers: () => [], listTools: async () => [], callTool: async () => ({ ok: false as const, error: "x" }), close: closed };
+      await runPackOnce({ name: "c", image: "img", runDir, worktree: runDir, input, engine: "claude:haiku", labels: {}, bridge: { tools, mcp, designDir: join(runDir, "design"), log: () => {} } }, deps).catch(() => {});
+      return closed;
+    };
+    const held = { prepare: async () => { throw new CredentialWaitError("held"); } };
+    const missing = { prepare: async () => { throw new NoCredentialError("claude:haiku"); } };
+    expect(await closeAfter({ credentials: missing })).toHaveBeenCalledOnce();
+    expect(await closeAfter({ credentials: held })).toHaveBeenCalledOnce();
+    expect(await closeAfter({ credentials, egress: { for: async () => { throw new Error("no list"); } } as never })).toHaveBeenCalledOnce();
+    expect(await closeAfter({ credentials, policies: { for: async () => { throw new Error("no policy"); } } as never })).toHaveBeenCalledOnce();
+  });
+
   it("runs in the image it is given, with the QA target's hosts, the secret values and the networks it is handed", async () => {
     const runDir = mkdtempSync(join(tmpdir(), "once-"));
     const asked: unknown[] = [];

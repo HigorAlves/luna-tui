@@ -1941,6 +1941,24 @@ describe("the MCP bridge in a stage (RFC 0013)", () => {
     expect(closed()).toBe(1);
   });
 
+  it("makes the /design folder before the container starts, so the daemon does not create it as root (L1-5)", async () => {
+    const { mcp } = await fixtureMcp();
+    let existed: boolean | undefined;
+    const sandbox = async (run: SandboxRun) => ((existed = existsSync(join(run.runDir, "design"))), fakeSandbox(output())(run));
+    const { deps: d, ctx } = mcpDeps(sandbox, mcp);
+    await withBridge(grant(["echo"]), () => runAgent(d, ctx, "triage"));
+    expect(existed).toBe(true);
+  });
+
+  it("closes the run's client when the /design folder cannot be made", async () => {
+    const { mcp, closed } = await fixtureMcp();
+    const { deps: d, ctx } = mcpDeps(fakeSandbox(output()), mcp);
+    // a file where the folder should go: the machine's mkdir fails after the client is open
+    const blocked = { ...d, mcpFor: () => (mkdirSync(join(d.stateDir, "runs", ctx.runId), { recursive: true }), writeFileSync(join(d.stateDir, "runs", ctx.runId, "design"), ""), mcp) } as AgentDeps;
+    await withBridge(grant(["echo"]), () => runAgent(blocked, ctx, "triage").catch(() => {}));
+    expect(closed()).toBe(1);
+  });
+
   it("writes an image under <runDir>/design and names it by its /design path", async () => {
     const { mcp } = await fixtureMcp();
     const answers: unknown[] = [];
@@ -2173,6 +2191,7 @@ describe("the implementer's side of the ui-designer (RFC 0013, phase 5)", () => 
       cancel: async () => void calls.push("cancel"),
       picked: () => new Set<string>(),
       delegatedLocks: () => [],
+      delegatedLockSets: () => [],
       status: () => null,
       ...over,
     };
@@ -2250,6 +2269,14 @@ describe("the implementer's side of the ui-designer (RFC 0013, phase 5)", () => 
     const c = coordinator();
     await run({ helperRuns: c.factory }, withPlan(plan, {}, description));
     expect(input().context.delegation).toEqual({ available: false, reason });
+    expect(c.built).toHaveLength(0);
+  });
+
+  it("says no and builds nothing when the host's git is older than 2.40 (L7-6)", async () => {
+    commitWeb();
+    const c = coordinator();
+    await run({ helperRuns: c.factory, gitProblem: async () => "git 2.39 is older than 2.40: the helper's pick is not available" }, withPlan(uiPlan));
+    expect(input().context.delegation).toEqual({ available: false, reason: "git is too old for the helper's pick: git 2.39 is older than 2.40: the helper's pick is not available" });
     expect(c.built).toHaveLength(0);
   });
 

@@ -22,6 +22,7 @@ import { freshTestDatabase } from "../test/database.ts";
 import { ApprovalEntity } from "../adapters/persistence/schemas.ts";
 import { ApproverRequiredError, FindingNotFoundError, type BudgetAlert, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, Pipeline, PlanApprovedError, testPathsIn, RejectNotAllowedError, QuestionsCarrySecretError, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "./pipeline.ts";
 import { DEFAULT_POLICY } from "../domain/policy.ts";
+import { waiverHash } from "../domain/design-parity.ts";
 import { approvedPlan, buildStageInput } from "../domain/stage-input.ts";
 import { ensureClone } from "../adapters/git/clone.ts";
 import { commitAll, ensureWorktree, workspaceFor } from "../adapters/git/worktree.ts";
@@ -4572,6 +4573,37 @@ describe("the design budget", () => {
     expect(await p.designCardOff(task.id)).toBe(true);
   });
 
+  it("writes the design rows only once the decision has gone through: a decision that throws leaves the card undecided and design on", async () => {
+    const ran: string[] = [];
+    const p = new Pipeline(db, escalating(ran), { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    const spy = vi.spyOn(p as unknown as { apply: () => Promise<unknown> }, "apply").mockRejectedValueOnce(new Error("boom"));
+    await expect(p.decide(task.id, "approved", undefined, { design: "off" })).rejects.toThrow("boom");
+    spy.mockRestore();
+    expect((await p.get(task.id)).state).toBe("escalated");
+    expect((await p.events(task.id)).filter((e) => e.kind === "design.budget_reset" || e.kind === "design.card_off")).toEqual([]);
+    expect(await p.designCardOff(task.id)).toBe(false);
+  });
+
+  it("does not store or learn a `design: off` given at any gate but a design_budget escalation", async () => {
+    const p = new Pipeline(db, (stage) => (stage === "test_design" ? async () => ({ outcome: "escalated" as const, detail: { escalation: "plan_wrong", reason: "x" } }) : stubs.runnerFor(stage)), { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved", undefined, { design: "off" });
+    const gate = (await p.approvals(task.id)).find((a) => a.kind === "escalated")!;
+    expect(gate.response ?? {}).not.toHaveProperty("design");
+    expect(await p.designCardOff(task.id)).toBe(false);
+  });
+
+  it("keeps `design: off` on the approval of a design_budget escalation, where it is the person's answer", async () => {
+    const p = new Pipeline(db, escalating([]), { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved", undefined, { design: "off" });
+    expect((await p.approvals(task.id)).find((a) => a.kind === "escalated")!.response).toMatchObject({ design: "off" });
+  });
+
   it("leaves a Build-budget escalation without a design reset", async () => {
     const p = new Pipeline(db, (stage) => (stage === "test_design" ? async () => ({ outcome: "escalated" as const, detail: { escalation: "plan_wrong", reason: "x" } }) : stubs.runnerFor(stage)), { inline: true, policies: previewOn, hasConfig: () => true });
     const task = await p.createTask({ title: "Login" });
@@ -4654,9 +4686,58 @@ describe("the design sign-off's answers (RFC 0013 phase 3)", () => {
     expect((await openFindings(p, id)).map((f) => [f.id, f.resolution ?? null])).toEqual([["D1", { status: "waived", by: "person" }], ["D2", null]]);
     const gate = (await p.approvals(id)).find((a) => a.decision === null)!;
     expect((gate.requested.design as { parity: { counts: unknown } }).parity.counts).toEqual({ blocker: 0, should_fix: 1, nit: 0, waived: 1 });
-    expect((await p.events(id)).filter((e) => e.kind === "design.waived").map((e) => e.payload)).toEqual([{ id: "D1", kind: "not_a_difference" }]);
+    expect((await p.events(id)).filter((e) => e.kind === "design.waived").map((e) => e.payload)).toEqual([{ id: "D1", kind: "not_a_difference", hash: expect.stringMatching(/^[0-9a-f]{8}$/) }]);
     expect(truths).toEqual([{ name: expect.stringMatching(new RegExp(`^${id}-D1\\.json$`)), body: expect.objectContaining({ taskId: id, kind: "not_a_difference", reason: "anti-aliasing, same token", parityRunId: "r1-parity", finding: expect.objectContaining({ id: "D1" }), frame: expect.objectContaining({ frame: "F1", status: "compared", capture: "/s/c.png", render: "/s/r.png", pair: "/s/p.png" }) }) }]);
     expect(learned).toEqual([expect.objectContaining({ pack: "finding_classify", recordId: "rec-1", label: { severity: { choice: "nit" } }, kind: "person", source: "design_waived", taskId: id })]);
+  });
+
+  it("a second waiver of the same finding changes nothing: no second row, truth file or label", async () => {
+    const p = make();
+    const id = await atGate(p);
+    await p.waiveDesignFinding(id, "D1", { kind: "not_a_difference", reason: "anti-aliasing, same token" });
+    await p.waiveDesignFinding(id, "D1", { kind: "accepted", reason: "changed my mind" });
+    expect((await p.events(id)).filter((e) => e.kind === "design.waived")).toHaveLength(1);
+    expect(truths).toHaveLength(1);
+    expect(learned).toHaveLength(1);
+    expect((((await p.approvals(id)).find((a) => a.decision === null)!.requested.design) as { parity: { counts: unknown } }).parity.counts).toEqual({ blocker: 0, should_fix: 1, nit: 0, waived: 1 });
+  });
+
+  it("waiving an accessibility finding moves the accessibility counts, by the severity's level, and leaves the parity counts alone", async () => {
+    const p = make();
+    stubs.plan("e2e", { outcome: "pass", detail: { step: "e2e", verdict: "pass", design: { ...design, a11y: { mode: "gate", counts: { blocker: 1, should_fix: 0, nit: 0, waived: 0 } }, findings: [finding("D1", "warning"), { id: "A1", path: "/checkout", line: 0, severity: "error", title: "WCAG 2.1.2", body: "b", confidence: 0.9, category: "accessibility" }] } } });
+    const task = await p.createTask({ title: "Checkout", criteria: ["pay works"] });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    await p.waiveDesignFinding(task.id, "A1", { kind: "accepted", reason: "known" });
+    const counts = (await p.approvals(task.id)).find((a) => a.decision === null)!.requested.design as { a11y: { counts: unknown }; parity: { counts: unknown } };
+    expect(counts.a11y.counts).toEqual({ blocker: 0, should_fix: 0, nit: 0, waived: 1 });
+    expect(counts.parity.counts).toEqual({ blocker: 0, should_fix: 2, nit: 0, waived: 0 });
+    await p.waiveDesignFinding(task.id, "D1", { kind: "accepted", reason: "known" });
+    expect((await p.approvals(task.id)).find((a) => a.decision === null)!.requested.design).toMatchObject({ parity: { counts: { blocker: 0, should_fix: 1, nit: 0, waived: 1 } }, a11y: { counts: { waived: 1 } } });
+  });
+
+  it("remembers a waiver for the card's next round: the ids a person waived come back from the machine's own rows", async () => {
+    const p = make();
+    const id = await atGate(p);
+    expect(await p.designWaived(id)).toEqual([]);
+    await p.waiveDesignFinding(id, "D1", { kind: "accepted", reason: "brand allows it" });
+    await p.waiveDesignFinding(id, "D2", { kind: "not_a_difference", reason: "same token" });
+    expect(await p.designWaived(id)).toEqual([{ id: "D1", hash: expect.stringMatching(/^[0-9a-f]{8}$/) }, { id: "D2", hash: expect.stringMatching(/^[0-9a-f]{8}$/) }]);
+  });
+
+  it("records a hash of the waived finding's expected and actual, normalised, so a changed difference is not covered", async () => {
+    const p = make();
+    const withValues = (actual: string) => ({ ...design, findings: [{ ...finding("D1"), design: { ...finding("D1").design, expected: "#1A73E8", actual } }, finding("D2")] });
+    stubs.plan("e2e", { outcome: "pass", detail: { step: "e2e", verdict: "pass", design: withValues("#1B74E9") } });
+    const task = await p.createTask({ title: "Checkout", criteria: ["pay works"] });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    await p.waiveDesignFinding(task.id, "D1", { kind: "accepted", reason: "ok" });
+    const [row] = await p.designWaived(task.id);
+    const same = waiverHash({ design: { expected: " #1a73e8", actual: "#1B74E9  " } });
+    const worse = waiverHash({ design: { expected: "#1A73E8", actual: "#FF0000" } });
+    expect(row).toEqual({ id: "D1", hash: same });
+    expect(row!.hash).not.toBe(worse);
   });
 
   it("passes a waiver's reason through safe() and keeps it out of the event stream", async () => {

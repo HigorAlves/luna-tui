@@ -213,7 +213,7 @@ async function sweep(): Promise<void> {
   });
   await step("workspace leftovers", async () => {
     const removed = await removeLeftovers(config.worktreesDir);
-    return removed.length > 0 ? `removed ${removed.length} leftover scratch folder(s) and bundle copy(ies)` : null;
+    return removed.length > 0 ? `removed ${removed.length} leftover scratch folder(s), helper clone(s) and bundle copy(ies)` : null;
   });
   await step("kept sandboxes", async () => {
     const removed = await expireKept({ stateDir: config.stateDir, keepHours: FACTORY_DEFAULTS.sandbox.keep_hours });
@@ -804,6 +804,7 @@ if (packRuns) shipDecisions.decide = async (pack, ship) => tagged(await ownCalls
 buildDecisions.budget = (taskId) => pipeline.buildBudgetState(taskId);
 designDecisions.budget = (taskId) => pipeline.designBudgetState(taskId);
 designDecisions.cardOff = (taskId) => pipeline.designCardOff(taskId);
+designDecisions.waived = (taskId) => pipeline.designWaived(taskId);
 designDecisions.picked = (taskId) => pipeline.helperPicked(taskId);
 if (packRuns)
   buildDecisions.decide = async (pack, check, repoPath) => {

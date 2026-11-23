@@ -38,13 +38,13 @@ describe("DesignParityAnswer", () => {
 });
 
 describe("parityFindingId", () => {
-  const at = { frame: "F1", node: "12:34", kind: "token" as const, viewport: "desktop", state: "default" as const };
-  it("is the same in every round for the same place and kind, whatever the title says", () => {
+  const at = { frame: "F1", node: "12:34", kind: "token" as const, element: "button.pay" };
+  it("is the same in every round for the same place and kind, whatever the title or the model's own viewport and state words say", () => {
     expect(parityFindingId(at)).toMatch(/^D[0-9a-f]{8}$/);
     expect(parityFindingId({ ...at })).toBe(parityFindingId(at));
+    expect(parityFindingId({ ...at, viewport: "desktop", state: "hover" } as typeof at)).toBe(parityFindingId(at));
     expect(parityFindingId({ ...at, kind: "layout" })).not.toBe(parityFindingId(at));
-    expect(parityFindingId({ ...at, state: "hover" })).not.toBe(parityFindingId(at));
-    expect(parityFindingId({ ...at, viewport: "mobile" })).not.toBe(parityFindingId(at));
+    expect(parityFindingId({ ...at, element: "button.cancel" })).not.toBe(parityFindingId(at));
     expect(parityFindingId({ ...at, node: "12:35" })).not.toBe(parityFindingId(at));
   });
   it("does not run two fields together", () => {

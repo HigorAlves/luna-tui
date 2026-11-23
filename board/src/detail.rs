@@ -448,7 +448,20 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
             None,
         ),
         Section::Design => {
-            let (lines, row) = design_section_lines(detail, view.cursor);
+            let (lines, line) = design_section_lines(detail, view.cursor);
+            // The pane wraps long finding lines, so the cursor's place is counted in rows, not lines.
+            let row = line.map(|line| {
+                lines
+                    .iter()
+                    .take(line)
+                    .map(|l| {
+                        Paragraph::new(l.clone())
+                            .wrap(Wrap { trim: false })
+                            .line_count(pane_area.width)
+                            .max(1)
+                    })
+                    .sum::<usize>()
+            });
             (Page::of(lines), row)
         }
         Section::Now => (
@@ -1379,6 +1392,10 @@ pub(crate) fn escalation_words(reason: &str) -> String {
         "undeclared_scope" => "it changed files outside its scope".to_string(),
         "head_moved" => "the branch moved under it".to_string(),
         "design_budget" => "the design budget is spent".to_string(),
+        "merge_conflict" => {
+            "the designer's work and the implementer's do not merge: merge them yourself, or send it back"
+                .to_string()
+        }
         "other" => "it needs a person".to_string(),
         unknown => plain(unknown).replace('_', " "),
     }
@@ -4914,6 +4931,58 @@ mod tests {
     }
 
     #[test]
+    fn the_design_cursor_stays_in_view_when_finding_lines_wrap() {
+        let (task, mut detail) = design_gate();
+        let long = "a long title that wraps over several rows of a narrow pane ".repeat(3);
+        let frames: Vec<_> = (0..6)
+            .map(|i| serde_json::json!({"frame": format!("F{i}"), "name": format!("Frame{i}x"), "node": format!("1:{i}"), "scenario": "S1", "viewport": "desktop", "state": "default", "status": "compared", "capture": null, "render": null, "diff": null, "pair": null, "diffRatio": 0.01}))
+            .collect();
+        let findings: Vec<_> = (0..6)
+            .map(|i| serde_json::json!({"id": format!("D{i}"), "path": "p", "line": 0, "severity": "should_fix", "title": long, "body": "b", "confidence": 0.9,
+                "design": {"source": "parity", "frame": format!("F{i}"), "node": format!("1:{i}"), "viewport": "desktop", "state": "default", "kind": "token"}}))
+            .collect();
+        detail.approvals[0].requested = serde_json::json!({"design": {"gate": {"fires": true, "why": ["open_findings"]},
+            "parity": {"frames": frames}, "findings": findings}});
+        for last in 0..6 {
+            let scroll = Cell::new(0);
+            let view = DetailView {
+                task: &task,
+                detail: Some(&detail),
+                section: Section::Design,
+                cursor: last,
+                scroll: &scroll,
+                prs: &[],
+                diff: None,
+                viewport: &Cell::new(0),
+                follow: &Cell::new(true),
+                engines: None,
+                tasks: &[],
+                actions: &[],
+                can: &[],
+                refs: &RefState::default(),
+                hits: &RefCell::new(Vec::new()),
+            };
+            let mut terminal = Terminal::new(TestBackend::new(50, 14)).unwrap();
+            terminal
+                .draw(|f| super::render(f, f.area(), &view))
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let screen: String = (0..14)
+                .map(|y| {
+                    (0..50)
+                        .map(|x| buffer[(x, y)].symbol().to_string())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                screen.contains(&format!("Frame{last}x")),
+                "cursor {last} is off screen:\n{screen}"
+            );
+        }
+    }
+
+    #[test]
     fn a_frame_with_no_pair_opens_its_capture_and_a_waived_finding_says_so() {
         let (_, mut detail) = design_gate();
         let mut requested = design_gate_requested();
@@ -5813,6 +5882,32 @@ mod tests {
             text.contains("bbbbbbb") && text.contains("after a green"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn build_progress_names_the_slices_the_ui_designer_holds_and_the_helper_s_state() {
+        let mut detail: TaskDetail = serde_json::from_str(&detail_json(TASK)).unwrap();
+        detail.build_progress = Some(serde_json::from_str(r#"{"scenarios":[],
+            "budget":{"iterations":1,"tokens":null,"minutes":1.0,"limits":{"max_iterations":15,"max_tokens":2000000,"max_minutes":90}},"lastCheckpoint":null,
+            "slices":[{"slice":1,"owner":"implementer"},{"slice":2,"owner":"ui-designer"},{"slice":3,"owner":"implementer","picked":["aaaaaaaa1111","bbbbbbbb2222"]}],
+            "helper":{"slice":2,"state":"conflict_rerun","attempt":2,"branch":"b","startedAt":"2026-10-22T10:00:00Z"}}"#).unwrap());
+        let text = lines_text(&build_progress_lines(&detail))
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(text.contains("slice 2 ui-designer"), "{text}");
+        assert!(text.contains("slice 3 picked 2 commits"), "{text}");
+        assert!(!text.contains("slice 1"), "{text}");
+        assert!(
+            text.contains("slice 2 conflict rerun") && text.contains("attempt 2"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_merge_conflict_escalation_says_what_a_person_does() {
+        let words = escalation_words("merge_conflict");
+        assert!(words.contains("merge") && words.contains("send"), "{words}");
     }
 
     #[test]

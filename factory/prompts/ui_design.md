@@ -18,6 +18,8 @@ You are `{{agent}}`, attempt {{attempt}}. The worktree `/work` is your own, on y
 
 The first list is yours. The second is the implementer's: never touch it, even to fix an import. A change there goes in your answer's `notes`.
 
+The machine's rule for what you may commit: only your slice's planned files, plus a new file only in the same directory as a planned file. Never a manifest or lockfile, anything under `.github/`, or the card's test files. Anything else makes the machine refuse the whole slice.
+
 ## Files that conflicted (attempt 2 only)
 {{context.helper.conflict}}
 

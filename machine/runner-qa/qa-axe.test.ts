@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -60,6 +60,29 @@ describe("qa-axe", () => {
     expect(out.status).toBe(1);
     expect(out.stderr).toContain("ERR_CONNECTION_REFUSED");
     expect(existsSync(join(dir, "down.json"))).toBe(false);
+  });
+
+  it("launches the browser through the proxy with the names NO_PROXY lists exempt, so an app on the QA network is reached directly", () => {
+    // A stand-in `playwright` where the helper looks for it (beside axe-core): it records what chromium.launch was given.
+    const lib = join(dir, "global", "node_modules");
+    mkdirSync(join(lib, "playwright"), { recursive: true });
+    mkdirSync(join(lib, "axe-core"), { recursive: true });
+    writeFileSync(join(lib, "axe-core", "axe.min.js"), "");
+    const launched = join(dir, "launch.json");
+    writeFileSync(
+      join(lib, "playwright", "index.js"),
+      `const { writeFileSync } = require("node:fs");
+exports.chromium = { launch: async (options) => { writeFileSync(${JSON.stringify(launched)}, JSON.stringify(options)); return { newPage: async () => ({ goto: async () => {}, addScriptTag: async () => {}, evaluate: async () => ({ violations: [] }) }), close: async () => {} }; } };\n`,
+    );
+    const real = (env: Record<string, string>) => spawnSync(process.execPath, [helper, "--url", "http://luna-app:4000/", "--out", join(dir, "proxied.json")], { encoding: "utf8", env: { PATH: process.env.PATH ?? "", QA_AXE_SCRIPT: join(lib, "axe-core", "axe.min.js"), QA_AXE_OUT_ROOT: dir, ...env } });
+    expect(real({ HTTPS_PROXY: "http://10.0.0.2:3128", NO_PROXY: "localhost,127.0.0.1,luna-app,db" }).status).toBe(0);
+    expect(JSON.parse(readFileSync(launched, "utf8")).proxy).toEqual({ server: "http://10.0.0.2:3128", bypass: "localhost,127.0.0.1,luna-app,db" });
+    expect(real({ https_proxy: "http://10.0.0.2:3128", no_proxy: " luna-app , ,db " }).status).toBe(0);
+    expect(JSON.parse(readFileSync(launched, "utf8")).proxy).toEqual({ server: "http://10.0.0.2:3128", bypass: "luna-app,db" });
+    expect(real({ HTTPS_PROXY: "http://10.0.0.2:3128" }).status).toBe(0);
+    expect(JSON.parse(readFileSync(launched, "utf8")).proxy).toEqual({ server: "http://10.0.0.2:3128" });
+    expect(real({}).status).toBe(0);
+    expect(JSON.parse(readFileSync(launched, "utf8")).proxy).toBeUndefined();
   });
 
   it("prints where axe.min.js is, for a script that injects it itself", () => {

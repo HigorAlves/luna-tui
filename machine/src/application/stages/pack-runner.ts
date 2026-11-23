@@ -9,7 +9,7 @@ import { basename, join, relative } from "node:path";
 import { readRegularFile } from "../../adapters/fs/bounded.ts";
 import { removeNestedRepositories } from "../../adapters/git/machine-repo.ts";
 import { bundleImporter } from "../../adapters/git/bundles.ts";
-import { advanceBranch, helperWorkspace, landInWorktree, pickBundle, pickOnto, takeHelperCommits } from "../../adapters/git/helper.ts";
+import { advanceBranch, dropHelperRefs, helperWorkspace, isAncestor, landInWorktree, pickBundle, pickOnto, takeHelperCommits } from "../../adapters/git/helper.ts";
 import { cardOf } from "../../domain/card-fields.ts";
 import { isUiSlice } from "../../domain/delegation.ts";
 import type { DesignBudget } from "../../domain/design-budget.ts";
@@ -103,6 +103,8 @@ export interface AgentDeps {
   mcpUntrusted?: "allow" | "deny";
   /** The designer agents' budget, a card's "design off" and the shas the machine picked for the card on earlier runs (RFC 0013); read at call time, bound late. Absent, no budget applies. */
   design?: { budget?: (taskId: string) => Promise<DesignBudget>; cardOff?: (taskId: string) => Promise<boolean>; picked?: (taskId: string) => Promise<string[]> };
+  /** What is wrong with the host's git for the helper's pick (older than 2.40), or null; absent, nothing is. Delegation is unavailable while it says something. */
+  gitProblem?: () => Promise<string | null>;
   /** The coordinator of the ui-designer helper (tests pass their own). */
   helperRuns?: typeof helperRuns;
   /** Replaces the docker sandbox; tests pass a fake. */
@@ -574,6 +576,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const designRef = delegating ? (extra.design ?? designRefOf({ text: `${task.title}\n${task.description}`, attachments: cardOf(task).attachments, settings: designSettingsOf })) : null;
   if (delegating) {
     const reason = await (async (): Promise<string | null> => {
+      const gitProblem = await deps.gitProblem?.().catch(() => null);
+      if (gitProblem) return `git is too old for the helper's pick: ${gitProblem}`;
       if (designSettingsOf.off) return "design is off for this repo";
       if (await deps.design?.cardOff?.(task.id).catch(() => false)) return "design is off for this card";
       if (!designRef) return "the card has no design reference";
@@ -680,7 +684,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
           takeHelperCommits,
           branch: workspace.branch,
           identity: identity ?? { name: "Luna Machine", email: "luna@localhost" },
-          git: { pickOnto, pickBundle, advanceBranch, landInWorktree },
+          git: { pickOnto, pickBundle, advanceBranch, landInWorktree, isAncestor, dropHelperRefs },
           publish: async () => {
             const shown = await publishBranch(task.repoPath!, workspace.path, workspace.branch);
             return shown.ok ? { ok: true } : { ok: false, note: shown.note };
@@ -713,7 +717,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
           planned: helperRun ? [...extra.helper!.slice.touchpoints] : plannedFiles(input.plan),
           planPresent: helperRun || input.plan != null,
           ...(helperRun ? { locks: () => ({ other: [...extra.helper!.locks.theirs], owner: "implementer" as const }) } : {}),
-          ...(helperCoordinator ? { locks: () => ({ other: helperCoordinator.delegatedLocks(), owner: "ui-designer" as const }), picked: helperCoordinator.picked } : {}),
+          ...(helperCoordinator ? { locks: () => helperCoordinator.delegatedLockSets().map((l) => ({ other: l.files, owner: "ui-designer" as const, since: l.base })), picked: helperCoordinator.picked } : {}),
           ...(extra.scenarioTests?.length ? { scenarioTests: extra.scenarioTests } : {}),
           ...(extra.testsFiles?.length ? { protectedPaths: extra.testsFiles } : {}),
           ...(extra.inlineTests?.length ? { inlineTests: extra.inlineTests } : {}),
@@ -858,6 +862,11 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       throw error;
     }
     if (input.bridge.length > 0) {
+      // The container mounts it read-only: made here, it is the machine's, not a root-owned folder the daemon creates.
+      await mkdir(designDir, { recursive: true }).catch(async (error) => {
+        await mcp.close().catch(() => {});
+        throw error;
+      });
       design = { mcp, answer: mcpAnswers({ mcp, bridge: input.bridge, designDir, log }), log };
     } else {
       await mcp.close().catch(() => {});

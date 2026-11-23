@@ -143,6 +143,8 @@ export const EvidenceConfigV22 = {
 /** The designer agents' defaults (RFC 0013): a design budget per card, and WCAG 2.2 AA as a gate. */
 export const DESIGN_DEFAULTS = { budget: { max_tokens: 1_000_000, max_minutes: 45 }, a11y: { level: "AA", mode: "gate" } } as const;
 
+const NO_BUDGET = "a design budget of 0 would stop every designer run before it starts; write `design: off` to turn the designer agents off";
+
 /** The designer agents' section (RFC 0013). `off` turns them off for the repo. `servers` narrows the machine's MCP servers by name; it never adds one.
  *  `figma` is the fallback design reference, `budget` the designer agents' own tokens and minutes per card, `a11y` the WCAG level and whether the audit gates.
  *  Read by the stage runner, so it is not in `FactoryConfigInput`. */
@@ -151,7 +153,7 @@ export const DesignConfig = z.union([
   z.object({
     servers: z.record(z.string(), z.object({ tools: z.array(z.string()).optional() })).optional(),
     figma: z.object({ file: z.string().regex(FIGMA_FILE_KEY), page: z.string().max(200).optional() }).strict().optional(),
-    budget: section({ max_tokens: count(20_000_000).optional(), max_minutes: minutes(1440).optional() }).optional(),
+    budget: section({ max_tokens: z.number().int().min(1, NO_BUDGET).max(20_000_000).optional(), max_minutes: z.number().positive(NO_BUDGET).max(1440).optional() }).optional(),
     a11y: section({ level: z.enum(["AA", "AAA"]).optional(), mode: z.enum(["gate", "advisory"]).optional() }).optional(),
     /** Design parity (phase 3): `bar` is the confidence under which the sign-off gate fires (default 0.75), `publish` whether the frame | build pairs go on the PR (default `auto`). */
     parity: section({ bar: z.number().min(0).max(1).optional(), publish: z.enum(["auto", "always", "never"]).optional() }).optional(),

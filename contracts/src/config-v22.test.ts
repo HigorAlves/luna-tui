@@ -343,6 +343,15 @@ describe("DesignConfig (phase 2)", () => {
     expect(DesignConfig.safeParse({ a11y: { mode: "warn" } }).success).toBe(false);
     expect(DesignConfig.safeParse({ budget: { max_tokens: 50_000_000 } }).success).toBe(false);
   });
+  it("refuses a design budget of 0 and points to `design: off`; an unset limit is still no limit", () => {
+    for (const budget of [{ max_tokens: 0 }, { max_minutes: 0 }]) {
+      const parsed = DesignConfig.safeParse({ budget });
+      expect(parsed.success).toBe(false);
+      expect(parsed.error?.issues[0]?.message).toContain("design: off");
+    }
+    expect(DesignConfig.safeParse({ budget: { max_tokens: 1 } }).success).toBe(true);
+    expect(DesignConfig.parse({ budget: {} })).toEqual({ budget: {} });
+  });
   it("fills the defaults: 1M tokens and 45 minutes a card, WCAG AA as a gate", () => {
     expect(designSettings(undefined)).toEqual({ off: false, figma: null, budget: { max_tokens: 1_000_000, max_minutes: 45 }, a11y: { level: "AA", mode: "gate" } });
     expect(designSettings({ budget: { max_minutes: 10 } }).budget).toEqual({ max_tokens: 1_000_000, max_minutes: 10 });

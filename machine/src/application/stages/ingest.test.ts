@@ -77,6 +77,33 @@ describe("ingestStageOutput", () => {
     await rm(secret);
   });
 
+  it("skips an artifact reached through a linked directory under /out: the copy would read the host folder it points at", async () => {
+    const host = join(outDir, "..", `ingest-host-${process.pid}`);
+    await mkdir(host, { recursive: true });
+    await writeFile(join(host, "S1.png"), "host file");
+    await mkdir(join(outDir, "files", "qa"), { recursive: true });
+    await symlink(host, join(outDir, "files", "qa", "parity"));
+    await writeFile(join(outDir, "result.json"), JSON.stringify(output({ artifacts: [{ kind: "screenshot", path: "files/qa/parity/S1.png", label: "via-link", sha256: "" }] })));
+    await writeFile(join(outDir, "events.jsonl"), "");
+    const { artifacts, events } = await ingestStageOutput({ outDir, runId: "r-dir", stateDir });
+    expect(artifacts).toEqual([]);
+    expect(existsSync(join(stateDir, "runs", "r-dir", "files", "qa", "parity", "S1.png"))).toBe(false);
+    expect(events.some((e) => e.kind === "note" && (e.payload as { skipped?: boolean }).skipped === true)).toBe(true);
+    await rm(host, { recursive: true });
+  });
+
+  it("skips an artifact path with a .. segment or an absolute path", async () => {
+    const secret = join(outDir, "..", `ingest-up-${process.pid}.md`);
+    await writeFile(secret, "outside /out");
+    await writeFile(join(outDir, "result.json"), JSON.stringify(output({ artifacts: [{ kind: "report", path: `files/../../${secret.split("/").at(-1)}`, label: "up", sha256: "" }, { kind: "report", path: secret, label: "abs", sha256: "" }] })));
+    await writeFile(join(outDir, "events.jsonl"), "");
+    const { artifacts, events } = await ingestStageOutput({ outDir, runId: "r-path", stateDir });
+    expect(artifacts).toEqual([]);
+    expect(events.filter((e) => e.kind === "note" && (e.payload as { skipped?: boolean }).skipped === true)).toHaveLength(2);
+    expect(existsSync(join(stateDir, "runs", "r-path"))).toBe(false);
+    await rm(secret);
+  });
+
   it("parses the result, events and copies artifacts with a computed sha256", async () => {
     const body = "hello report";
     await mkdir(join(outDir, "files"), { recursive: true });

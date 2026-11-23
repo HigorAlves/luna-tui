@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { waiverHash } from "../../domain/design-parity.ts";
 import { runDesignParity } from "./design-parity.ts";
 
 const desktop = { name: "1440x900", width: 1440, height: 900 };
@@ -29,6 +30,12 @@ describe("runDesignParity", () => {
     expect(out).toMatchObject({ report: { ran: true, runId: "r1-parity", confidence: 0.9, bar: 0.75, designInput: "complete", summary: "clean", counts: { blocker: 0, should_fix: 0, nit: 0, waived: 0 } }, gate: { fires: false } });
     // The rows carry host paths; with no pairing wired there is no pair.
     expect((out as { report: { frames: unknown[] } }).report.frames).toEqual([expect.objectContaining({ status: "compared", capture: "/state/runs/r1/parity/S1/1440x900-default.png", render: "/state/runs/r1-parity/design/1-0.png", pair: null })]);
+  });
+
+  it("starts no sub-run when the machine holds no capture: every planned row is not compared, no capture", async () => {
+    const none = { ...parity, captures: [] };
+    const out = await runDesignParity(deps({ run: async () => { throw new Error("ran"); } }), ctx, none);
+    expect(out).toMatchObject({ report: { ran: false, runId: null, frames: [{ frame: "F1", status: "not_compared", reason: "no capture" }] }, gate: { fires: true, why: expect.arrayContaining(["not_compared"]) } });
   });
 
   it("pairs each compared frame from host paths: the container paths are mapped", async () => {
@@ -86,5 +93,16 @@ describe("runDesignParity", () => {
     const budget = async () => ({ tokens: 0, tokensCounted: true, minutes: 0, spent: ++calls > 1 ? ("tokens" as const) : null, limits: { max_tokens: 5, max_minutes: 60 } });
     const out = await runDesignParity(deps({ budget }), ctx, parity);
     expect(out).toMatchObject({ usage: { tokens: { input: 10, output: 5 } }, spentAfter: true });
+  });
+
+  it("counts a finding a person already waived on this card under waived, and keeps it out of the blockers and the gate", async () => {
+    const found = { level: "blocker", kind: "token", frame: "F1", node: "x", element: "button.pay", viewport: "1440x900", state: "default", expected: "a", actual: "b", title: "t", why: "w", confidence: 0.9 };
+    const run = async () => ({ outcome: "pass" as const, detail: { answer: { ...answer, findings: [found] } } });
+    const first = (await runDesignParity(deps({ run }), ctx, parity)) as { findings: Array<{ id: string; body: string; design: unknown }> };
+    expect(first.findings).toHaveLength(1);
+    const asked: string[] = [];
+    const again = await runDesignParity(deps({ run, waived: async (id: string) => (asked.push(id), [{ id: first.findings[0]!.id, hash: waiverHash(first.findings[0]! as never) }]) }), ctx, parity);
+    expect(asked).toEqual(["t1"]);
+    expect(again).toMatchObject({ gate: { fires: false }, report: { counts: { blocker: 0, should_fix: 0, nit: 0, waived: 1 } }, findings: [{ resolution: { status: "waived", by: "person" } }] });
   });
 });

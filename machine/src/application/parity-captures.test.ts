@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { collectCaptures } from "./parity-captures.ts";
 
-const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452000005a000000384", "hex");
+const pngOf = (width: number) => Buffer.concat([PNG.subarray(0, 16), Buffer.from([width >>> 24, (width >>> 16) & 255, (width >>> 8) & 255, width & 255]), PNG.subarray(20)]);
 const desktop = { name: "1440x900", width: 1440, height: 900 };
 const plan = { targets: [{ scenario: "S1", frame: "12:34", viewport: desktop, state: "default" as const }, { scenario: "S1", frame: "12:34", viewport: desktop, state: "hover" as const }], uncited: [], notes: [] };
 const style = { selector: "#pay", text: "Pay", color: "rgb(0, 0, 0)", background: "x", fontFamily: "Inter", fontSize: "16px", fontWeight: "600", lineHeight: "24px", letterSpacing: "normal", padding: "0", margin: "0", gap: "normal", borderRadius: "8px", rect: { x: 0, y: 0, w: 1, h: 1 } };
@@ -43,6 +44,31 @@ describe("collectCaptures", () => {
     const big = await collectCaptures(qa, plan, out, { maxBytes: 32 });
     expect(big.captures).toEqual([]);
     expect(big.notes.join("\n")).toMatch(/S1\/1440x900-hover.*over the 32 byte cap/);
+  });
+  it("refuses a capture reached through a linked folder, and its styles", async () => {
+    const { qa, out } = setup();
+    const host = join(root, "host");
+    mkdirSync(host);
+    writeFileSync(join(host, "1440x900-default.png"), PNG);
+    writeFileSync(join(host, "1440x900-default.styles.json"), JSON.stringify([style]));
+    rmSync(join(qa, "parity", "S1"), { recursive: true });
+    symlinkSync(host, join(qa, "parity", "S1"));
+    const r = await collectCaptures(qa, plan, out);
+    expect(r.captures).toEqual([]);
+    expect(r.missing).toHaveLength(2);
+    expect(r.notes.join("\n")).toMatch(/S1\/1440x900-default.*outside/);
+    expect(existsSync(join(out, "S1", "1440x900-default.png"))).toBe(false);
+    expect(existsSync(join(out, "S1", "1440x900-default.styles.json"))).toBe(false);
+  });
+  it("refuses a PNG whose width is not the viewport's, and takes a whole multiple of it (device pixel ratio)", async () => {
+    const { qa, out } = setup();
+    writeFileSync(join(qa, "parity", "S1", "1440x900-default.png"), pngOf(1000));
+    writeFileSync(join(qa, "parity", "S1", "1440x900-hover.png"), pngOf(2880));
+    const r = await collectCaptures(qa, plan, out);
+    expect(r.captures.map((c) => c.state)).toEqual(["hover"]);
+    expect(r.missing.map((t) => t.state)).toEqual(["default"]);
+    expect(r.notes.join("\n")).toMatch(/S1\/1440x900-default.*width 1000.*1440/);
+    expect(existsSync(join(out, "S1", "1440x900-default.png"))).toBe(false);
   });
   it("keeps a capture whose styles are missing or do not parse, with styles null", async () => {
     const { qa, out } = setup();

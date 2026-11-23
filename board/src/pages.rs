@@ -862,6 +862,45 @@ pub(crate) fn now_page(
                 Span::styled(plain(&s.state), style),
             ]));
         }
+        let held: Vec<&crate::model::SliceOwner> = p
+            .slices
+            .iter()
+            .filter(|s| s.owner == "ui-designer" || !s.picked.is_empty())
+            .collect();
+        if !held.is_empty() || p.helper.is_some() {
+            main.extend([Line::default(), title("Designer")]);
+        }
+        for s in held {
+            let mut parts = Vec::new();
+            if s.owner == "ui-designer" {
+                parts.push(plain(&s.owner));
+            }
+            if !s.picked.is_empty() {
+                parts.push(format!(
+                    "picked {} commit{}",
+                    s.picked.len(),
+                    if s.picked.len() == 1 { "" } else { "s" }
+                ));
+            }
+            main.push(Line::from(vec![
+                Span::styled(
+                    format!("  {:<11}", format!("slice {}", s.slice)),
+                    theme::label(),
+                ),
+                Span::raw(parts.join(" · ")),
+            ]));
+        }
+        if let Some(h) = &p.helper {
+            main.push(Line::from(vec![
+                Span::styled(format!("  {:<11}", "helper"), theme::label()),
+                Span::raw(format!(
+                    "slice {} {} · attempt {}",
+                    h.slice,
+                    plain(&h.state).replace('_', " "),
+                    h.attempt
+                )),
+            ]));
+        }
         let b = &p.budget;
         main.extend([Line::default(), title("Budget")]);
         main.push(budget_row(

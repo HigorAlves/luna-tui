@@ -6,7 +6,7 @@ import { looksLikeTestPath } from "../domain/locked-files.ts";
 import { trustOf } from "../domain/trust.ts";
 import { z } from "zod";
 
-import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, TERMINAL, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, SplitChild, coverageOf, criteriaOf, sizeLimits, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type CardSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, maxRisk, reviseCriteria, stepOf, stepsOfAnswer, stronger, RUN_OR_GATE, designSettings } from "@hardness/contracts";
+import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, TERMINAL, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, SplitChild, coverageOf, criteriaOf, sizeLimits, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type CardSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, maxRisk, reviseCriteria, stepOf, stepsOfAnswer, stronger, RUN_OR_GATE, designSettings, severityOf } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -39,6 +39,7 @@ import { pickEngine } from "./engine.ts";
 import type { TaskUsage } from "./task-store.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
 import { blockerSetKey } from "../domain/finding-sets.ts";
+import { type Waiver, waiverHash } from "../domain/design-parity.ts";
 import { type RetroOutputs, acceptedMisses, appendAddedFinding, appendDismissedFinding, retroTruthOf, writeRetroTruth } from "./retro-outputs.ts";
 import { EMITTABLE, type StageContext, type StageResult, type StageRunner } from "./ports.ts";
 import { shippedEvent } from "./ship-loop.ts";
@@ -351,6 +352,8 @@ interface Extra {
   onlyFrom?: ReadonlySet<TaskState>;
   /** Checked under the row lock against the gate as it is now, before anything moves; throws to refuse. */
   guard?: (open: ApprovalRow | null) => Promise<void>;
+  /** Events written in the same transaction as the move, after it: they exist only if the decision went through, and before the next stage reads them. */
+  record?: Array<{ kind: string; payload: Record<string, unknown> }>;
 }
 
 /** A stage run a restart found still running in its container: drive it from where it is. */
@@ -993,21 +996,26 @@ export class Pipeline {
       const at = findings.findIndex((f) => objectOf(f)?.id === findingId);
       if (!design || at < 0) throw new FindingNotFoundError(findingId);
       const finding = objectOf(findings[at])!;
-      const already = objectOf(finding.resolution)?.status === "waived";
+      // Waived once is waived: a second answer changes nothing and leaves no row, truth file or label.
+      if (objectOf(finding.resolution)?.status === "waived") return null;
       const next = findings.map((f, i) => (i === at ? { ...finding, resolution: { status: "waived", by: "person" } } : f));
-      // The counts are of what is still open: a waiver moves one finding from its level to `waived`.
+      // The counts are of what is still open: a waiver moves one finding from its level to `waived`, in the counts of the part that raised it.
       const parity = objectOf(design.parity);
-      const counts = objectOf(parity?.counts);
-      const level = typeof finding.severity === "string" ? finding.severity : "";
-      const moved = parity && counts && !already && typeof counts.waived === "number" && typeof counts[level] === "number" ? { ...counts, [level]: Math.max(0, (counts[level] as number) - 1), waived: counts.waived + 1 } : counts;
-      await tx.updateApprovalRequested(gate, { ...gate.requested, design: { ...design, findings: next, ...(parity ? { parity: { ...parity, ...(moved ? { counts: moved } : {}) } } : {}) } });
+      const a11y = objectOf(design.a11y);
+      const source = objectOf(finding.design)?.source ?? (finding.category === "accessibility" ? "a11y" : "parity");
+      const part = source === "a11y" ? a11y : parity;
+      const counts = objectOf(part?.counts);
+      const level = severityOf(typeof finding.severity === "string" ? finding.severity : "");
+      const moved = part && counts && typeof counts.waived === "number" && typeof counts[level] === "number" ? { ...counts, [level]: Math.max(0, (counts[level] as number) - 1), waived: counts.waived + 1 } : counts;
+      await tx.updateApprovalRequested(gate, { ...gate.requested, design: { ...design, findings: next, ...(source === "a11y" && a11y ? { a11y: { ...a11y, ...(moved ? { counts: moved } : {}) } } : {}), ...(source !== "a11y" && parity ? { parity: { ...parity, ...(moved ? { counts: moved } : {}) } } : {}) } });
       const frames = Array.isArray(parity?.frames) ? parity.frames : [];
       const loc = objectOf(finding.design);
       const frame = frames.find((f) => objectOf(f)?.frame === loc?.frame && (loc?.viewport === undefined || objectOf(f)?.viewport === loc.viewport) && (loc?.state === undefined || objectOf(f)?.state === loc.state)) ?? frames.find((f) => objectOf(f)?.frame === loc?.frame) ?? null;
       const record = (Array.isArray(design.classified) ? design.classified : []).map(objectOf).find((c) => c?.id === findingId)?.recordId;
       return { task, gate, finding, frame, parityRunId: typeof parity?.runId === "string" ? parity.runId : null, recordId: typeof record === "string" ? record : null };
     });
-    await this.log(id, "design.waived", { id: findingId, kind: input.kind });
+    if (!waived) return;
+    await this.log(id, "design.waived", { id: findingId, kind: input.kind, hash: waiverHash(waived.finding) });
     if (this.designTruth && (await this.truthKept(waived.task))) {
       try {
         const path = await this.designTruth(waived.task, `${truthName(id)}-${truthName(findingId)}.json`, { taskId: id, gate: waived.gate.id, finding: waived.finding, frame: waived.frame, kind: input.kind, reason: safe(input.reason).slice(0, 500), parityRunId: waived.parityRunId, at: new Date().toISOString() });
@@ -1812,10 +1820,13 @@ export class Pipeline {
     // Without one, the next Build reads the same spent budget and escalates again, and approving can never move the card.
     if (escalated && wanted === "approved" && budgetWasSpent(escalated.requested)) await this.log(id, "build.budget_reset", { reason: "a person approved the card past its spent budget" });
     // "The design budget is spent: a person decides": approving gives a fresh design budget; approving with design off also skips the designer agents for this card.
-    if (escalated && wanted === "approved" && escalated.requested.escalation === "design_budget") {
-      await this.log(id, "design.budget_reset", { reason: "a person approved the card past its spent design budget" });
-      if (response?.design === "off") await this.log(id, "design.card_off", { reason: "a person turned design off for this card" });
+    // The rows are written with the move itself, so a decision that does not go through leaves neither. `design: "off"` is that approval's answer alone: at any other gate it is dropped.
+    const atBudget = escalated !== undefined && wanted === "approved" && escalated.requested.escalation === "design_budget";
+    if (response && "design" in response && !atBudget) {
+      const { design: _dropped, ...rest } = response;
+      response = Object.keys(rest).length > 0 ? rest : undefined;
     }
+    const designRows = atBudget ? [{ kind: "design.budget_reset", payload: { reason: "a person approved the card past its spent design budget" } }, ...(response?.design === "off" ? [{ kind: "design.card_off", payload: { reason: "a person turned design off for this card" } }] : [])] : [];
     // A person approving a plan made after Build already ran has decided the card builds that plan: its Build counts from a fresh budget.
     // Otherwise the runs spent on the old plan (and its bounces) escalate the new one before it starts, and the stronger model's one run is burnt.
     if (before.state === "awaiting_approval" && wanted === "approved" && !options.auto && (await this.events(id)).some((e) => e.kind === "stage.finished" && e.payload.stage === "implementing")) {
@@ -1823,7 +1834,7 @@ export class Pipeline {
     }
     // The design sign-off: what a person answered there (and what they left open) is ground truth, written once the decision has gone through.
     const signoff = before.state === "awaiting_design" && !options.auto ? (await this.approvals(id)).find((a) => a.kind === "awaiting_design" && a.decision === null) : undefined;
-    const moved = await this.decideNow(id, wanted, reason, response, options);
+    const moved = await this.decideNow(id, wanted, reason, response, { ...options, ...(designRows.length > 0 ? { record: designRows } : {}) });
     if (signoff) await this.keepDesignSignoff(moved, signoff, wanted === "changes_requested" ? "sent_back" : wanted, reason);
     if (escalated) await this.keepEscalationTruth(moved, escalated.id);
     if (escalated) await this.confirmEscalationReason(id, escalated);
@@ -1835,7 +1846,7 @@ export class Pipeline {
     wanted: "approved" | "changes_requested" | "rejected" | "sent_back",
     reason?: string,
     response?: Record<string, unknown>,
-    options: { approver?: string; auto?: boolean } = {},
+    options: { approver?: string; auto?: boolean; record?: Extra["record"] } = {},
   ): Promise<TaskRow> {
     const { approver } = options;
     const decision: "approved" | "sent_back" | "rejected" = wanted === "changes_requested" ? "sent_back" : wanted;
@@ -1937,7 +1948,7 @@ export class Pipeline {
     // The watch's release question says so on its approval; the preview gate (and a gate stored before this wave) has no such word.
     const shipGate = task.state === "awaiting_ship" && (await this.approvals(id)).find((a) => a.kind === "awaiting_ship" && a.decision === null)?.requested.gate === "ship_approval" ? ({ gate: "ship_approval" } as const) : {};
     const event: PipelineEvent = decision === "approved" ? { type: "approved", ...shipGate } : { type: "sent_back", from: outcome === undefined || isSplitOutcome(outcome) ? "plan" : "triage", ...shipGate };
-    const moved = await this.dispatch(id, event, { decision: record, ...(guard ? { guard } : {}) });
+    const moved = await this.dispatch(id, event, { decision: record, ...(guard ? { guard } : {}), ...(options.record ? { record: options.record } : {}) });
     if (decision === "approved" && open && outcome === undefined) await this.keepGroundTruth(moved, open.id);
     // A split gate sent back leaves no half-made children behind: they were never started and are not wanted.
     if (decision === "sent_back" && open && isSplitOutcome(outcome)) await this.archiveSplitLeftovers(id, open);
@@ -3233,7 +3244,7 @@ export class Pipeline {
   }
 
   private async apply(id: string, event: PipelineEvent, extra: Extra): Promise<Step> {
-    const { step, logged } = await this.store.withTaskLock(id, async (task, tx) => {
+    const { step, logged, recorded } = await this.store.withTaskLock(id, async (task, tx) => {
       if (extra.onlyFrom && !extra.onlyFrom.has(task.state)) throw new TaskMovedError(id, task.state, extra.onlyFrom);
       const step = transition(task, event);
       const open = extra.decision ? await tx.findOpenApproval(id) : null;
@@ -3268,6 +3279,8 @@ export class Pipeline {
         ...(criteria ? { criteria } : {}),
       });
 
+      const recorded: Awaited<ReturnType<typeof tx.recordEvent>>[] = [];
+      for (const row of extra.record ?? []) recorded.push(await tx.recordEvent({ taskId: id, kind: row.kind, stageRunId: null, payload: row.payload }));
       if (open && extra.decision) {
         await tx.decideApproval(open, {
           decision: extra.decision.decision,
@@ -3282,10 +3295,11 @@ export class Pipeline {
           requested: { ...extra.detail, ...(BEFORE_BUILD.has(step.effect.gate as TaskState) && cardOf(task).ticketChanged ? { ticketChanged: cardOf(task).ticketChanged } : {}), ...(step.reason ? { reason: step.reason } : {}), ...(step.escalation ? { escalation: step.escalation } : {}), ...(step.failures ? { failures: step.failures } : {}) },
         });
       }
-      return { step, logged };
+      return { step, logged, recorded };
     });
 
     this.onEvent(logged);
+    for (const row of recorded) this.onEvent(row);
     // The questions the machine built from the signals (fixed text, enum values, numbers) go out by themselves as one comment for the card's
     // own source. A question an agent wrote stays on the board until a person taps `p` (`postQuestions`): it may quote what the agent read.
     const asked = extra.detail?.questions;
@@ -3554,6 +3568,12 @@ export class Pipeline {
   /** The shas the machine picked onto the card's branch for the ui-designer, from its own `build.helper_picked` rows (RFC 0013, phase 5). */
   async helperPicked(id: string): Promise<string[]> {
     return (await this.events(id)).filter((e) => e.kind === "build.helper_picked").flatMap((e) => (Array.isArray(e.payload.picked) ? e.payload.picked.filter((sha): sha is string => typeof sha === "string") : []));
+  }
+
+  /** The design findings a person waived on this card (id and a hash of what each said), from its own `design.waived` rows: a later round that raises the same difference again keeps it waived. A row with no hash is left out. */
+  async designWaived(id: string): Promise<Waiver[]> {
+    const rows = (await this.events(id)).filter((e) => e.kind === "design.waived").flatMap((e) => (typeof e.payload.id === "string" && typeof e.payload.hash === "string" && e.payload.hash !== "" ? [{ id: e.payload.id, hash: e.payload.hash }] : []));
+    return rows.filter((r, i) => rows.findIndex((o) => o.id === r.id && o.hash === r.hash) === i);
   }
 
   /** Whether a person turned the designer agents off for this card (approving a `design_budget` escalation with design off). */

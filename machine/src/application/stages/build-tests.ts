@@ -1,6 +1,5 @@
 // Build's tests step: before the implementer runs, a test writer makes one failing test per approved scenario, tagged `@scenario:<id>`.
 // The machine checks the diff by script (`scenarioTags`), makes the commit itself, and only then runs the implementer. The feature route only.
-import type { HelperRunExtra } from "./helper-runs.ts";
 import { type CheckContext, Plan, type PlanContext } from "@hardness/contracts";
 
 import { approvedScenarios } from "../../domain/stage-input.ts";
@@ -29,8 +28,6 @@ export interface TestsDiff {
 export interface BuildTestsDeps {
   /** The implementer, handed the tests the step made (by scenario). */
   implement: (context: StageContext, extra: { scenarioTests?: { scenario: string; file: string }[]; /** Source files that hold Rust's inline tests, which the implementer may change. */ inlineTests?: string[]; sweepFailures?: { name: string; tail: string }[]; scopeBase?: string; /** Every path of the tests commit: none may change without a person. */ testsFiles?: string[] }) => Promise<StageResult>;
-  /** The ui-designer's own run for a delegated slice (RFC 0013, phase 5): the pack runner on `ui_design`, in the helper's workspace. */
-  runHelper?: (context: StageContext, extra: HelperRunExtra) => Promise<StageResult>;
   /** The test writer, as a sub-run; a second round carries what the first left out as `plan.review`. */
   runWriter: (context: StageContext, extra: { plan?: PlanContext }) => Promise<StageResult>;
   /** The red_check decision for one scenario's test; `skipped` when it did not answer in time (it never blocks). `problems` are what a confident no said is wrong. */

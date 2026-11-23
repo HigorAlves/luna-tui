@@ -342,7 +342,7 @@ The machine keeps an image that a tool returns only up to 3 MiB, at most 8 a cal
 | Command | What it does |
 |---|---|
 | `pnpm mcp status` | lists the declared servers: transport, whether a token is saved, whether the server answers, its tools |
-| `pnpm mcp login <server>` | asks the machine for the authorization URL, opens it in the host's browser, and waits for the redirect (`MACHINE_PUBLIC_URL`, else the machine's port). The tokens are kept in `<MACHINE_STATE_DIR>/mcp/<server>.json` |
+| `pnpm mcp login <server>` | asks the machine for the authorization URL, opens it in the host's browser, and waits for the redirect (`MACHINE_PUBLIC_URL`, else the machine's port). It waits until the machine says the login is over (`loginPending` in `GET /mcp`). It fails when the login did not finish (`loginFailed`), even with an older token still stored. A login is good for ten minutes, and a new one replaces the server's earlier one. The tokens are kept in `<MACHINE_STATE_DIR>/mcp/<server>.json` |
 
 `pnpm mcp` talks to the machine API at `MACHINE_URL` (default `http://localhost:4317`) with `MACHINE_API_TOKEN`, else `~/.config/hardness/machine-api-token`. A server that refuses dynamic client registration (Figma's remote server) needs a client registered by hand, saved as `<MACHINE_STATE_DIR>/mcp/<server>.client.json`, which the login reads.
 
@@ -361,8 +361,8 @@ RFC 0013, phase 2. Two agent packs read a card's design: `design_spec` and `a11y
 | `design.a11y.mode` | `gate` | `gate`: axe `critical` and `serious` findings and every judged failure block. `advisory`: every finding is `should_fix` and nothing blocks |
 | `design.parity.bar` | `0.75` | the confidence (0 to 1) under which the parity reviewer opens the `awaiting_design` gate. |
 | `design.parity.publish` | `auto` | whether the frame | build pair images go on the PR and into Evidence. `auto`: only when GitHub says the repository is private. A public repository, or one whose visibility cannot be read (no token, no GitHub remote), counts as public. `always`: publish. `never`: list the pairs on the board only |
-| `design.budget.max_tokens` | `1000000` | the tokens the designer agents may spend on one card |
-| `design.budget.max_minutes` | `45` | the minutes the designer agents may run on one card |
+| `design.budget.max_tokens` | `1000000` | the tokens the designer agents may spend on one card. `0` is a config error: use `design: off` |
+| `design.budget.max_minutes` | `45` | the minutes the designer agents may run on one card. `0` is a config error: use `design: off` |
 
 The machine finds a card's design in the Figma links of the issue or ticket and its attachments. Else it uses `design.figma`.
 
@@ -372,8 +372,8 @@ The spec runs in Plan, before the planner, on a card with a design reference or 
 
 RFC 0013, phase 3. When a change touches rendered files and the card has a design reference, the browser run also captures each UI scenario, and a `design_parity` reviewer compares it with the Figma frame. Open findings, a frame that could not be compared, or a confidence under `design.parity.bar` stop the card at `awaiting_design`. It is a gate in Verify, and `design: off` turns it off with the other designer steps. See "Design parity and the sign-off gate" in [architecture.md](architecture.md).
 
-- **Waive.** `POST /tasks/:id/design/findings/:findingId/waive` takes `{ kind: "not_a_difference" | "accepted", reason }`, a reason of 3 to 500 characters. The board's `:waive <finding id> <reason>` and `:accept <finding id> <reason>` call it. The board's Design page, in the rail at the gate, shows each frame beside its build. Approve (`a`) and send back with a note (`r`) are the ordinary decision.
-- **Ground truth.** On a repo that keeps ground truth, a waiver is written to `<MACHINE_STATE_DIR>/ground-truth/design_parity/<task>-<finding>.json` and a sign-off to `<task>-<gate>.json`. The reasons pass the machine's text cap and escaping first. `pnpm eval harvest --pack design_parity [--since <date>]` turns the waivers into eval cases ([evals/README.md](../evals/README.md)).
+- **Waive.** `POST /tasks/:id/design/findings/:findingId/waive` takes `{ kind: "not_a_difference" | "accepted", reason }`, a reason of 3 to 500 characters. The board's `:waive <finding id> <reason>` and `:accept <finding id> <reason>` call it. The board's Design page, in the rail at the gate, shows each frame beside its build. Approve (`a`) and send back with a note (`r`) are the ordinary decision. A waiver holds in later rounds while the difference is the same. That means the same finding, with the same expected and built values (parity) or the same state and axe rule (accessibility). A changed value opens the finding again.
+- **Ground truth.** On a repo that keeps ground truth, a waiver is written to `<MACHINE_STATE_DIR>/ground-truth/design_parity/<task>-<finding>.json` and a sign-off to `<task>-<gate>.json`. The reasons pass the machine's text cap and escaping first. `pnpm eval harvest --pack design_parity --include-images [--since <date>]` turns the waivers into eval cases ([evals/README.md](../evals/README.md)). A case copies a screenshot of the app and a render of the frame, so without `--include-images` the command writes nothing.
 - **Kept at sign-off** is not stored. It is derived: the findings on an approved gate that are not waived.
 - **Publishing and visibility.** `publish: auto` asks the GitHub port, `GitHub.repoPrivate(slug)`. It answers `true`, `false` or null; the no-token adapter answers null, and null counts as public. So a machine with no GitHub token never publishes a pair under `auto`.
 - **Known gap.** The ship monitor's restack rebuilds the PR body without the card's facts. The Design & accessibility block drops then, as the findings already did.
@@ -390,8 +390,9 @@ RFC 0013, phase 5. On a card with a design reference, `implementing` may hand a 
 | pick requests, pick acks | `12` per run each | the pick handshake's own cap |
 | helper commits | `20` | the most commits the machine takes from one helper |
 | `slice_wait` | `240` s at most | one wait; it returns `running` after that and the agent asks again |
+| `HELPER_START_LIMIT_MS` | `75` s | the machine gives up on a helper that has not started by then (a slow sync or clone), inside the factory's 90 s wait for the answer |
 
-The helper runs at `effort.implementing` of the repo's `luna.yaml` (there is no per-task effort), on `claude:sonnet` or the repo's `engines.ui_design`. Its tokens and minutes count against `design.budget`, not Build's budget.
+The helper runs at `effort.implementing` of the repo's `luna.yaml` (there is no per-task effort), on `claude:sonnet` or the repo's `engines.ui_design`. Its tokens and minutes count against `design.budget`, not Build's budget. The pick needs git 2.40 or later on the machine. On an older git the machine turns delegation off, tells the implementer, and the implementer builds every slice itself.
 
 Delegation is off, with the reason given to the implementer, when:
 

@@ -7,7 +7,8 @@ import { join } from "node:path";
 
 const BASE = (process.env.MACHINE_URL ?? "http://localhost:4317").replace(/\/+$/, "");
 const POLL_MS = 2_000;
-const LOGIN_MS = 120_000;
+/** As long as the machine keeps a login state good. */
+const LOGIN_MS = 10 * 60_000;
 
 function apiToken(): string | null {
   if (process.env.MACHINE_API_TOKEN) return process.env.MACHINE_API_TOKEN;
@@ -26,7 +27,7 @@ async function api<T>(method: string, path: string): Promise<T> {
   return JSON.parse(text) as T;
 }
 
-type Row = { name: string; transport: string; loggedIn: boolean; tools: string[]; reachable: boolean };
+type Row = { name: string; transport: string; loggedIn: boolean; loginPending: boolean; loginFailed: boolean; tools: string[]; reachable: boolean };
 const status = () => api<Row[]>("GET", "/mcp");
 
 function table(rows: Row[]): string {
@@ -48,9 +49,15 @@ try {
       if (process.platform === "darwin") execFile("open", [authorizeUrl], () => {});
       console.log(`Open this URL to log in to ${server}:\n${authorizeUrl}`);
       const until = Date.now() + LOGIN_MS;
+      // An old token reads as logged in while the browser flow is open, so wait for the machine to say the login is over.
       for (;;) {
-        if ((await status()).find((r) => r.name === server)?.loggedIn) break;
-        if (Date.now() >= until) throw new Error(`${server}: no login within ${LOGIN_MS / 60_000} minutes`);
+        const row = (await status()).find((r) => r.name === server);
+        if (row && !row.loginPending) {
+          // `loginFailed` first: with an old token stored the server reads as logged in although this login stored nothing.
+          if (row.loggedIn && !row.loginFailed) break;
+          throw new Error(`${server}: the login did not finish (it expired, or it failed)${row.loggedIn ? "; the token stored before it is still there" : ""}; run pnpm mcp login ${server} again`);
+        }
+        if (Date.now() >= until) throw new Error(`${server}: the login was not finished within ${LOGIN_MS / 60_000} minutes, so it is still waiting for the browser; run pnpm mcp login ${server} again`);
         await new Promise((resolve) => setTimeout(resolve, POLL_MS));
       }
       console.log(`Logged in to ${server}.`);

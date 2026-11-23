@@ -294,6 +294,14 @@ describe("scopeFacts: files another agent holds (RFC 0013, phase 5)", () => {
     expect(scopeFacts({ ...base, locks: { other: [] }, commits }).lockedTouched).toEqual([]);
   });
 
+  it("judges each lock set by its own commits: a commit before a helper started does not count against that helper's files", () => {
+    const before = { sha: "old", files: ["src/ui/Card.tsx"] };
+    const after = { sha: "new", files: ["src/ui/parts/Row.tsx"] };
+    const sets = [{ other: ["src/ui/Card.tsx"], commits: [after] }, { other: ["src/ui/parts/"], commits: [after] }];
+    expect(scopeFacts({ ...base, locks: sets, commits: [before, after] }).lockedTouched).toEqual([{ path: "src/ui/parts/Row.tsx", owner: "ui-designer" }]);
+    expect(scopeFacts({ ...base, locks: [{ other: ["src/ui/Card.tsx"], commits: [before, after] }] }).lockedTouched).toEqual([{ path: "src/ui/Card.tsx", owner: "ui-designer" }]);
+  });
+
   it("is a blocker, and a file brought in by a pick is planned, never undeclared", () => {
     const facts = scopeFacts({ ...base, nameStatus: "M\tsrc/a.ts\nA\tsrc/ui/Card.tsx", planned: ["src/a.ts", "src/ui/Card.tsx"], locks, commits, picked: new Set(["bbb"]) });
     const issues = scopeIssues(facts, []);

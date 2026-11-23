@@ -17,7 +17,7 @@ import { type EngineId, Ledger, type StageInput, oneLine } from "@hardness/contr
 
 import { readRegularFile } from "../../adapters/fs/bounded.ts";
 import type { ImportResult } from "../../adapters/git/bundles.ts";
-import { type advanceBranch, type helperWorkspace, type landInWorktree, type pickBundle, type pickOnto, pickedRef, type takeHelperCommits } from "../../adapters/git/helper.ts";
+import { type advanceBranch, type helperWorkspace, type dropHelperRefs, type isAncestor, type landInWorktree, type pickBundle, type pickOnto, pickedRef, type takeHelperCommits } from "../../adapters/git/helper.ts";
 import { type DelegationFacts, type Locks, MIN_HELPER_MINUTES, delegable, helperMinutes } from "../../domain/delegation.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { type HelperEventKind, type HelperPayloads, helperEnded } from "../../domain/helper-events.ts";
@@ -34,6 +34,8 @@ const LIVE: ReadonlySet<HelperState> = new Set(["running", "returned", "picking"
 const LEDGER_CAP = 4 * 1024 * 1024;
 const SUMMARY_CAP = 300;
 const CANCEL_WAIT_MS = 30_000;
+/** The factory stops waiting for the machine's answer to `slice_delegate` at 90 s; a helper that would start later than this after the request was seen is given up. */
+export const HELPER_START_LIMIT_MS = 75_000;
 
 /** What the pack runner's helper run takes besides the context (slice 79): its own workspace and what it builds. */
 export interface HelperRunExtra extends Pick<AgentExtra, "design" | "scenarioTests" | "testsFiles" | "inlineTests"> {
@@ -72,6 +74,9 @@ export interface HelperRunsDeps {
     pickBundle: typeof pickBundle;
     advanceBranch: typeof advanceBranch;
     landInWorktree: typeof landInWorktree;
+    isAncestor: typeof isAncestor;
+    /** Deletes the helper's refs in the card's repository. */
+    dropHelperRefs: typeof dropHelperRefs;
   };
   /** Shows the card's branch in the user's repository after the machine moved it (the pack runner's `publishBranch`); a refusal is a note. */
   publish?: () => Promise<{ ok: true } | { ok: false; note: string }>;
@@ -84,6 +89,8 @@ export interface HelperRunsDeps {
   /** The shas the machine picked onto this card's branch on earlier runs (its own `build.helper_picked` rows). */
   priorPicked?: Iterable<string>;
   now?: () => number;
+  /** The wall clock the age of a helper request is measured on (`Date.now` by default). */
+  clock?: () => number;
   /** How long `cancel` waits for the helper to settle; 30 s by default. */
   cancelWaitMs?: number;
   log?: (line: string) => void;
@@ -102,8 +109,10 @@ export interface HelperRuns extends HelperCoordinator {
   cancel(): Promise<void>;
   /** The shas the machine picked onto the card's branch: earlier runs' and this one's. Read when asked. */
   picked(): ReadonlySet<string>;
-  /** The files the helper holds while it has its slice: the implementer must not touch them. */
+  /** The files of every slice the helper holds or has had picked in this run: the implementer must not touch them. */
   delegatedLocks(): string[];
+  /** The same files per helper, with the card commit that helper first started from: its lock binds only the implementer commits after it. */
+  delegatedLockSets(): { files: string[]; base: string }[];
   /** Where the run's latest helper stands, for the run's `detail.helper`; null when none was started. `picked` is what the machine put on the branch for it. */
   status(): { slice: number; state: HelperState; attempt: number; picked?: string[] } | null;
 }
@@ -112,6 +121,8 @@ interface Helper {
   slice: number;
   attempt: 1 | 2;
   base: string;
+  /** The card commit the helper first started from: its lock begins there, and a re-run (a later `base`) does not move it. */
+  lockedFrom: string;
   ref: string;
   workspace: string;
   locks: Locks;
@@ -162,9 +173,9 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
     await Promise.resolve(deps.emit(kind, { ...payload })).catch(() => {});
   };
 
-  const setState = async (h: Helper, state: HelperState, summary?: string): Promise<void> => {
+  const setState = async (h: Helper, state: HelperState, summary?: string, commit?: string): Promise<void> => {
     h.state = state;
-    const file = JSON.stringify({ state, attempt: h.attempt, ...(summary ? { summary } : {}) });
+    const file = JSON.stringify({ state, attempt: h.attempt, ...(summary ? { summary } : {}), ...(commit ? { commit } : {}) });
     await writeMailbox(deps.outDir, `helper-state-${h.slice}.json`, file).catch((error) => deps.log?.(`helper state not written: ${error instanceof Error ? error.message : String(error)}`));
   };
 
@@ -209,9 +220,12 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
 
   /** One operation at a time on the card's branch: the three mailbox queues run concurrently. */
   let chain: Promise<unknown> = Promise.resolve();
+  let queued = 0;
   const serial = <T>(fn: () => Promise<T>): Promise<T> => {
+    queued++;
     const run = chain.then(fn, fn);
     chain = run.catch(() => {});
+    void chain.then(() => void queued--);
     return run;
   };
 
@@ -297,6 +311,7 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
   }
 
   async function startHelper(request: HelperRequest): Promise<HelperAnswer> {
+    const seen = (deps.clock ?? Date.now)();
     const slice = request.slice;
     if (!Number.isInteger(slice) || slice < 1) return { ok: false, error: `${JSON.stringify(slice)} is not a slice number` };
     const refuse = async (reason: string): Promise<HelperAnswer> => {
@@ -313,6 +328,8 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
     if (!ledger) return refuse("the slice ledger could not be read; build the slice yourself");
     const facts = await deps.facts();
     if (closed) return ENDED;
+    // A slow sync has used the time already: no workspace is made for an answer the factory will not wait for.
+    if ((deps.clock ?? Date.now)() - seen > HELPER_START_LIMIT_MS) return refuse("the helper took too long to start; build the slice yourself");
     const current = active();
     const decision = delegable({ ...facts, ledger, sliceId: slice, active: current ? { slice: current.slice } : null, attempted });
     if (!decision.ok) return refuse(decision.reason);
@@ -329,8 +346,13 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
       await deps.helperWorkspace.remove(workspace.path).catch((error) => deps.log?.(`helper workspace not removed: ${msg(error)}`));
       return ENDED;
     }
+    if ((deps.clock ?? Date.now)() - seen > HELPER_START_LIMIT_MS) {
+      // The factory has stopped waiting (90 s) and told the agent to build the slice itself: a helper started now would work on a slice nobody waits for.
+      await deps.helperWorkspace.remove(workspace.path).catch((error) => deps.log?.(`helper workspace not removed: ${msg(error)}`));
+      return refuse("the helper took too long to start; build the slice yourself");
+    }
     const minutes = helperMinutes(facts.designBudget.minutesLeft, facts.implementerMinutesLeft);
-    const h: Helper = { slice, attempt, base, ref: workspace.ref, workspace: workspace.path, locks: decision.locks, state: "running", controller: linkedController(), settled: Promise.resolve(), removed: false, deadline: now() + minutes * 60_000, engine: decision.engine, branch: workspace.branch, planned: { title: planned.title, touchpoints: planned.touchpoints, acceptance: planned.acceptance }, message: request.message.slice(0, 2000) };
+    const h: Helper = { slice, attempt, base, lockedFrom: base, ref: workspace.ref, workspace: workspace.path, locks: decision.locks, state: "running", controller: linkedController(), settled: Promise.resolve(), removed: false, deadline: now() + minutes * 60_000, engine: decision.engine, branch: workspace.branch, planned: { title: planned.title, touchpoints: planned.touchpoints, acceptance: planned.acceptance }, message: request.message.slice(0, 2000) };
     helpers.set(slice, h);
     attempted.add(slice);
     await setState(h, "running");
@@ -347,6 +369,12 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
   async function cancel(): Promise<void> {
     closed = true;
     if (inflight.size > 0) await drain();
+    // A step on the card's branch that is under way (a re-run being made) settles before the helpers are read.
+    if (queued > 0) {
+      let waited: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([chain, new Promise<void>((resolve) => (waited = setTimeout(resolve, deps.cancelWaitMs ?? CANCEL_WAIT_MS)))]);
+      clearTimeout(waited);
+    }
     const out = [...helpers.values()].filter((h) => LIVE.has(h.state));
     for (const h of out) h.controller.abort();
     await Promise.all(
@@ -400,6 +428,11 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
       await fail(h, `the ui-designer's commits conflict with yours and its second workspace could not be made: ${msg(error)}`);
       return `the ui-designer's commits conflict with yours in ${filesOf(files)}, and a re-run could not start: build the slice yourself`;
     }
+    if (closed || h.state === "cancelled") {
+      // The run ended while the workspace was being made: nobody would cancel a helper started now.
+      await deps.helperWorkspace.remove(workspace.path).catch((error) => deps.log?.(`helper workspace not removed: ${msg(error)}`));
+      return "the run has ended: build the slice yourself";
+    }
     Object.assign(h, { attempt, base: P, ref: workspace.ref, workspace: workspace.path, branch: workspace.branch, removed: false, tip: undefined, commits: undefined, controller: linkedController(), deadline: now() + minutes * 60_000 });
     await setState(h, "conflict_rerun");
     launch(h, runOf(h, { files }), contextOf(h, minutes));
@@ -431,6 +464,8 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
     const shown = await deps.publish?.().catch((error): { ok: false; note: string } => ({ ok: false, note: `the branch could not be shown: ${msg(error)}` }));
     if (shown && !shown.ok) await deps.note?.(`slice ${h.slice}: ${shown.note}`).catch(() => {});
     h.pending = undefined;
+    // The machine's picks are on the branch: the helper's refs have done their work. A helper that did not land keeps its ref, for a person to read.
+    await deps.git.dropHelperRefs(deps.cardPath, deps.taskId, h.slice).catch((error) => deps.log?.(`helper refs not deleted: ${msg(error)}`));
   }
 
   async function onPickRequest(request: PickRequest): Promise<PickAnswer> {
@@ -479,9 +514,19 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
       };
       if (request.head !== pending.tip) return drop("your head is not the picked tip");
       const moved = await deps.git.advanceBranch(deps.cardPath, deps.branch, pending.P, pending.tip).catch((error): { ok: false; reason: string } => ({ ok: false, reason: msg(error) }));
-      if (!moved.ok) return drop(`the card's branch ${moved.reason === "moved" ? "moved" : "could not move"} since the pick (${moved.reason}); bundle again and call slice_wait`);
+      if (!moved.ok) {
+        // The factory merged the tip and the implementer committed on top of it: the pick is on the branch already.
+        const head = await deps.importer.sync().then((r) => (r.ok ? r.head : null)).catch(() => null);
+        if (head && (await deps.git.isAncestor(deps.cardPath, pending.tip, head).catch(() => false))) {
+          await landed(h, pending.P, pending.tip, pending.picked);
+          await setState(h, "committed", undefined, pending.tip);
+          await release(h);
+          return { ok: true };
+        }
+        return drop(`the card's branch ${moved.reason === "moved" ? "moved" : "could not move"} since the pick (${moved.reason}); bundle again and call slice_wait`);
+      }
       await landed(h, pending.P, pending.tip, pending.picked);
-      await setState(h, "committed");
+      await setState(h, "committed", undefined, pending.tip);
       await release(h);
       return { ok: true };
     });
@@ -500,13 +545,16 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
       return;
     }
     await serial(async () => {
+      // An ack may have landed this pick while the call waited its turn.
+      if (h.state !== "returned" && h.state !== "picking") return;
       const synced = await deps.importer.sync();
       if (!synced.ok) return fail(h, `the card's commits could not be taken in: ${synced.reason}`);
       const P = synced.head;
-      // The factory merged the picked tip and its last bundle came in: the branch is there already.
-      if (h.pending && P === h.pending.tip) {
-        await landed(h, h.pending.P, h.pending.tip, h.pending.picked);
-        await setState(h, "committed");
+      // The factory merged the picked tip and its last bundle came in (the branch may have moved on since): the pick is there already.
+      if (h.pending && (P === h.pending.tip || (await deps.git.isAncestor(deps.cardPath, h.pending.tip, P).catch(() => false)))) {
+        const { P: onto, tip, picked } = h.pending;
+        await landed(h, onto, tip, picked);
+        await setState(h, "committed", undefined, tip);
         return release(h);
       }
       h.pending = undefined;
@@ -521,7 +569,7 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
         const reason = line(`the ui-designer's slice ${h.slice} is on the branch, but your folder has local changes in ${filesOf(folder.files)}; a person merges them`);
         escalation ??= { escalate: "merge_conflict", reason };
         await setState(h, "merge_conflict", reason);
-      } else await setState(h, "committed");
+      } else await setState(h, "committed", undefined, made.tip);
       await release(h);
     });
   }
@@ -543,7 +591,9 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
     },
     cancel,
     picked: () => pickedShas,
-    delegatedLocks: () => [...new Set([...helpers.values()].filter((h) => LIVE.has(h.state)).flatMap((h) => h.locks.helper))],
+    // A slice the helper has (live) or had picked onto the branch (committed) is its for the whole run; one handed back to the implementer is not.
+    delegatedLocks: () => [...new Set([...helpers.values()].filter((h) => LIVE.has(h.state) || h.state === "committed").flatMap((h) => h.locks.helper))],
+    delegatedLockSets: () => [...helpers.values()].filter((h) => LIVE.has(h.state) || h.state === "committed").map((h) => ({ files: [...h.locks.helper], base: h.lockedFrom })),
     status() {
       const h = [...helpers.values()].at(-1);
       return h ? { slice: h.slice, state: h.state, attempt: h.attempt, ...(h.pickedShas?.length ? { picked: [...h.pickedShas] } : {}) } : null;

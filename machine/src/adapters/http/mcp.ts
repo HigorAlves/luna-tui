@@ -1,7 +1,8 @@
 // The MCP routes (RFC 0013): which servers the machine bridges and whether each is logged in, a login that
 // hands back the authorize URL, and the OAuth callback the browser lands on. The callback is the one route
 // with no bearer token (a redirect cannot carry one); it finishes only a login this machine started, by the
-// `state` it issued, once. No token value ever reaches a response.
+// `state` it issued, once, within ten minutes. `GET /mcp` says a login is pending while such a state is outstanding, and that the last one failed when its callback
+// failed or nobody finished it (an old token still reads as logged in, so `loggedIn` alone cannot say). No token value ever reaches a response.
 import { randomBytes } from "node:crypto";
 import type { McpServerConfig } from "@hardness/contracts";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
@@ -20,6 +21,8 @@ export interface McpApi {
 }
 
 const REACH_MS = 5_000;
+/** How long a login state stays good: past it the browser flow is abandoned, and its entry is dropped. */
+export const LOGIN_TTL_MS = 10 * 60_000;
 const within = <T>(promise: Promise<T>, ms: number): Promise<T> => {
   let timer: NodeJS.Timeout;
   const timeout = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error("timed out")), ms)));
@@ -29,24 +32,43 @@ const within = <T>(promise: Promise<T>, ms: number): Promise<T> => {
 const page = (message: string): string => `<!doctype html><meta charset="utf-8"><title>Luna</title><body style="font-family:system-ui;margin:3rem"><p>${message}</p></body>`;
 const escape = (s: string): string => s.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
 
-/** The states this process issued, by server: a callback finishes only one of them, once. */
-const issued = new WeakMap<McpApi, Map<string, string>>();
+/** A state this process issued: the server it is for, whether a callback already took it (it is kept until that callback settles, so the login still reads as pending), and the timer that drops it. */
+interface Issued {
+  server: string;
+  used: boolean;
+  timer: NodeJS.Timeout;
+}
+
+/** What this process knows of its logins: the states it issued (a callback finishes only one of them, once), and the servers whose last login ended with no new tokens. */
+interface Logins {
+  states: Map<string, Issued>;
+  failed: Set<string>;
+}
+
+const issued = new WeakMap<McpApi, Logins>();
 
 /** Before the API guard: the callback, the only unauthenticated MCP route. */
 export function mountMcpCallback(app: Hono, api: McpApi): void {
-  const states = new Map<string, string>();
-  issued.set(api, states);
+  const logins: Logins = { states: new Map(), failed: new Set() };
+  const { states, failed } = logins;
+  issued.set(api, logins);
   app.get("/mcp/:server/callback", async (c) => {
     const name = c.req.param("server");
     const state = c.req.query("state") ?? "";
     const code = c.req.query("code") ?? "";
     const server = api.mcp.servers().find((s) => s.name === name);
-    if (!server || !code || !state || states.get(state) !== name) return c.html(page("This login was not started by this machine."), 400);
-    states.delete(state);
+    const entry = states.get(state);
+    if (!server || !code || !state || !entry || entry.server !== name || entry.used) return c.html(page("This login was not started by this machine."), 400);
+    entry.used = true;
     try {
       await api.finishLogin(server, code, state);
+      failed.delete(name);
     } catch {
+      failed.add(name);
       return c.html(page(`Login to ${escape(name)} failed. Run pnpm mcp login ${escape(name)} again.`), 502);
+    } finally {
+      clearTimeout(entry.timer);
+      states.delete(state);
     }
     return c.html(page(`Logged in to ${escape(name)}. You can close this tab.`));
   });
@@ -54,14 +76,15 @@ export function mountMcpCallback(app: Hono, api: McpApi): void {
 
 /** After the API guard: status and login. */
 export function mountMcpRoutes(app: Hono, api: McpApi): void {
-  const states = issued.get(api) ?? new Map<string, string>();
+  const { states, failed } = issued.get(api) ?? { states: new Map<string, Issued>(), failed: new Set<string>() };
   app.get("/mcp", async (c) =>
     c.json(
       await Promise.all(
         api.mcp.servers().map(async (server) => {
           const loggedIn = await api.loggedIn(server).catch(() => false);
           const tools = loggedIn ? await within(api.mcp.listTools(server.name), REACH_MS).then((list) => list.map((t) => t.tool), () => null) : null;
-          return { name: server.name, transport: server.transport, loggedIn, tools: tools ?? [], reachable: tools !== null };
+          const loginPending = [...states.values()].some((entry) => entry.server === server.name);
+          return { name: server.name, transport: server.transport, loggedIn, loginPending, loginFailed: failed.has(server.name), tools: tools ?? [], reachable: tools !== null };
         }),
       ),
     ),
@@ -71,7 +94,20 @@ export function mountMcpRoutes(app: Hono, api: McpApi): void {
     if (!server) return c.json({ error: "no_server", message: `no MCP server ${c.req.param("server")} on this machine` }, 404);
     if (server.credential.kind !== "oauth") return c.json({ error: "not_oauth", message: `${server.name} does not log in through OAuth` }, 409);
     const { authorizeUrl, state } = await api.startLogin(server);
-    if (authorizeUrl !== null) states.set(state, server.name);
+    // A new login replaces the server's earlier one: its state is dropped, and how it ended is forgotten.
+    for (const [old, entry] of states) {
+      if (entry.server !== server.name || entry.used) continue;
+      clearTimeout(entry.timer);
+      states.delete(old);
+    }
+    failed.delete(server.name);
+    if (authorizeUrl !== null) {
+      const timer = setTimeout(() => {
+        if (states.delete(state)) failed.add(server.name);
+      }, LOGIN_TTL_MS);
+      timer.unref();
+      states.set(state, { server: server.name, used: false, timer });
+    }
     return c.json({ authorizeUrl });
   });
 }
@@ -93,7 +129,9 @@ export function createMcpApi({ mcp, store, redirectUrl }: { mcp: Mcp; store: Tok
       const provider = providerFor(server, state);
       const result = await auth(provider, { serverUrl: server.url!, ...(server.credential.kind === "oauth" && server.credential.scopes ? { scope: server.credential.scopes.join(" ") } : {}) });
       if (result === "AUTHORIZED") return { authorizeUrl: null, state };
+      // The browser is needed: what is stored stays until the callback stores fresh tokens, so a login nobody finishes logs nothing out.
       logins.set(state, { server: server.name, provider });
+      setTimeout(() => logins.delete(state), LOGIN_TTL_MS).unref();
       return { authorizeUrl: provider.pendingAuthorization()?.href ?? null, state };
     },
     async finishLogin(server, code, state) {

@@ -101,10 +101,10 @@ export type PairRow = z.infer<typeof PairRow>;
 /** The file a capture is stored under, relative to the parity folder, without its extension. */
 export const captureKey = (t: { scenario: string; viewport: { name: string } | string; state: string }): string => `${t.scenario}/${typeof t.viewport === "string" ? t.viewport : t.viewport.name}-${t.state}`;
 
-/** A short stable id (`D` and eight hex digits, FNV-1a) from where the difference is and what kind it is, never the title: `blockerSetKey` then sees the same set in every round. */
-export function parityFindingId(at: { frame: string; node: string; kind: string; viewport: string; state: string }): string {
+/** A short stable id (`D` and eight hex digits, FNV-1a) from where the difference is and what kind it is, never the title or the reviewer's own words for the viewport and state: `blockerSetKey` then sees the same set in every round, and a waiver holds. The node is the plan row's. */
+export function parityFindingId(at: { frame: string; node: string; kind: string; element: string }): string {
   let h = 0x811c9dc5;
-  for (const ch of [at.frame, at.node, at.kind, at.viewport, at.state].join("\n")) {
+  for (const ch of [at.frame, at.node, at.kind, at.element].join("\n")) {
     h ^= ch.codePointAt(0) ?? 0;
     h = Math.imul(h, 0x01000193) >>> 0;
   }

@@ -1,8 +1,8 @@
 // The capture library behind `qa-capture` (CLI over agent-browser) and a Playwright script (RFC 0013, phase 3): it sets the frame's viewport, takes the screenshot
 // and records the computed styles of what is on screen, in one fixed format. The e2e agent decides when to capture; this code decides how, so the reviewer compares
 // computed values, never an agent's description of them. `capture(page, args, { dir })` takes anything shaped like a Playwright page (`setViewportSize`, `screenshot`,
-// `evaluate`). Outputs under `<dir>/<scenario>/<viewport>-<state>.png` and `.styles.json`, and one line per capture in `<dir>/captures.jsonl`.
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+// `evaluate`). Outputs under `<dir>/<scenario>/<viewport>-<state>.png` and `.styles.json`.
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const STATES = ["default", "hover", "focus", "disabled", "loading", "empty", "error"];
@@ -88,6 +88,5 @@ export async function capture(page, args, { dir }) {
   await page.screenshot({ path: `${base}.png`, fullPage: false });
   const rows = (await page.evaluate(STYLE_PROBE)).slice(0, MAX_ELEMENTS).map(shaped);
   writeFileSync(`${base}.styles.json`, `${JSON.stringify(rows)}\n`);
-  appendFileSync(join(dir, "captures.jsonl"), `${JSON.stringify({ scenario, viewport, state, width, height, elements: rows.length, at: new Date().toISOString() })}\n`);
   return { elements: rows.length };
 }

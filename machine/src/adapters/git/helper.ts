@@ -12,7 +12,7 @@ import { renameSync, rmSync } from "node:fs";
 import picomatch from "picomatch";
 
 import { exec } from "../process/exec.ts";
-import { freshClone, removeClone } from "./clone.ts";
+import { freshClone, inUseClones, removeClone } from "./clone.ts";
 import { machineGitDir } from "./machine-repo.ts";
 import { MANIFEST } from "../../domain/delegation.ts";
 import { HOST_GIT } from "./worktree.ts";
@@ -66,13 +66,20 @@ export const helperWorkspace = {
     const path = `${cardPath}.helper-${slice}-${attempt}`;
     const branch = helperBranch(slice);
     removeClone(path);
-    await freshClone(cardPath, base, branch, path);
-    const set = await exec("git", [...HOST_GIT, "--git-dir=" + machineGitDir(cardPath), "update-ref", ref, base]);
-    if (set.code !== 0) throw new Error(`could not record ${ref}: ${firstLine(set)}`);
+    inUseClones.add(path);
+    try {
+      await freshClone(cardPath, base, branch, path);
+      const set = await exec("git", [...HOST_GIT, "--git-dir=" + machineGitDir(cardPath), "update-ref", ref, base]);
+      if (set.code !== 0) throw new Error(`could not record ${ref}: ${firstLine(set)}`);
+    } catch (error) {
+      inUseClones.delete(path);
+      throw error;
+    }
     return { path, branch, ref };
   },
   async remove(path: string): Promise<void> {
     removeClone(path);
+    inUseClones.delete(path);
   },
 };
 
@@ -197,6 +204,17 @@ export async function pickOnto(cardPath: string, onto: string, commits: readonly
     if (set.code !== 0) return fail(`could not record the picked tip: ${firstLine(set)}`);
   }
   return { ok: true, picked, tip };
+}
+
+/** Whether `ancestor` is `descendant` or one of its ancestors in the card's repository; false on anything else, a bad id included. */
+export async function isAncestor(cardPath: string, ancestor: string, descendant: string): Promise<boolean> {
+  if (!SHA.test(ancestor) || !SHA.test(descendant)) return false;
+  return (await exec("git", [...HOST_GIT, "--git-dir=" + machineGitDir(cardPath), "merge-base", "--is-ancestor", ancestor, descendant])).code === 0;
+}
+
+/** Deletes the helper's ref and its picked ref once its pick has landed or it is released for good; nothing there is no error. */
+export async function dropHelperRefs(cardPath: string, task: string, slice: number): Promise<void> {
+  for (const ref of [helperRef(task, slice), pickedRef(task, slice)]) await exec("git", [...HOST_GIT, "--git-dir=" + machineGitDir(cardPath), "update-ref", "-d", ref]);
 }
 
 /** A bundle of `tipRef` over `from` (what the implementer's container fetches), written to a temporary name beside `dest` and renamed into place. */

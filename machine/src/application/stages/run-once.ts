@@ -68,6 +68,15 @@ export type OneRunResult = { output: StageOutput; error: null } | { output: null
 /** Runs `run.input` once. A missing credential rejects (NoCredentialError); every other failure,
  *  a credential another run held past the timeout included, is in `error`. */
 export async function runPackOnce(run: OneRun, deps: OneRunDeps): Promise<OneRunResult> {
+  // The bridge's client (and a stdio server's child) is closed however the run ends, a rejection before the container starts included.
+  try {
+    return await runOnce(run, deps);
+  } finally {
+    await run.bridge?.mcp.close().catch(() => {});
+  }
+}
+
+async function runOnce(run: OneRun, deps: OneRunDeps): Promise<OneRunResult> {
   let credential;
   try {
     credential = await deps.credentials.prepare(run.engine, run.runDir, { signal: run.signal, timeoutMs: run.credentialWaitMs ?? run.input.limits.timeoutMs });
@@ -119,7 +128,6 @@ export async function runPackOnce(run: OneRun, deps: OneRunDeps): Promise<OneRun
     })
     .finally(async () => {
       await (watch as ReturnType<typeof buildWatch> | null)?.stop();
-      await bridge?.mcp.close().catch(() => {});
       await credential.release();
     });
   if (result.aborted) return { output: null, error: "aborted" };

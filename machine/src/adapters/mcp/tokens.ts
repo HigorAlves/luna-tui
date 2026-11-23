@@ -2,7 +2,7 @@
 // one resolver for a `ref` credential. No value is ever logged or put in an error message.
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { chmodSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { McpServerConfig } from "@hardness/contracts";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
@@ -18,7 +18,6 @@ export interface TokenStore {
   save(server: string, tokens: OAuthTokens): Promise<void>;
   loadClient(server: string): Promise<OAuthClientInformationMixed | null>;
   saveClient(server: string, info: OAuthClientInformationMixed): Promise<void>;
-  remove(server: string): Promise<void>;
 }
 
 /** Tokens at `<stateDir>/mcp/<server>.json`, the registered client at `<server>.client.json`, both 0600. */
@@ -44,10 +43,6 @@ export function fileTokenStore(stateDir: string): TokenStore {
     save: async (server, tokens) => write(`${server}.json`, tokens),
     loadClient: async (server) => read<OAuthClientInformationMixed>(`${server}.client.json`),
     saveClient: async (server, info) => write(`${server}.client.json`, info),
-    remove: async (server) => {
-      rmSync(join(root, `${server}.json`), { force: true });
-      rmSync(join(root, `${server}.client.json`), { force: true });
-    },
   };
 }
 
@@ -56,7 +51,7 @@ export interface OAuthProvider extends OAuthClientProvider {
   pendingAuthorization(): URL | null;
 }
 
-export function lunaOAuthProvider(store: TokenStore, server: string, redirectUrl: string, options: { scope?: string; authMethod?: "client_secret_post" | "none" } = {}): OAuthProvider {
+export function lunaOAuthProvider(store: TokenStore, server: string, redirectUrl: string, options: { scope?: string } = {}): OAuthProvider {
   let verifier = "";
   let pending: URL | null = null;
   return {
@@ -69,7 +64,7 @@ export function lunaOAuthProvider(store: TokenStore, server: string, redirectUrl
         redirect_uris: [redirectUrl],
         grant_types: ["authorization_code", "refresh_token"],
         response_types: ["code"],
-        token_endpoint_auth_method: options.authMethod ?? "client_secret_post",
+        token_endpoint_auth_method: "client_secret_post",
         ...(options.scope ? { scope: options.scope } : {}),
       };
     },

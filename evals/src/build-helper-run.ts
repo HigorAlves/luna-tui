@@ -2,7 +2,7 @@
 // but with the real runtimes: the docker sandbox, the machine's credentials and egress, the real helper coordinator and the replayed design servers.
 // Local only, like every eval; it needs a model credential and the stage image. Its report shaping is tested in build-helper.test.ts.
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdtempSync, realpathSync } from "node:fs";
+import { cpSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -31,9 +31,11 @@ export interface BuildRunOptions {
   root: string;
   /** Where each run's scratch folder is made. */
   scratch?: string;
+  /** Aborts the run (Ctrl-C): the pack runner stops its containers when it fires. */
+  signal?: AbortSignal;
 }
 
-/** One card's `implementing` run: on a fresh copy of the fixture repo, with delegation on or off. Returns what the run left; the scratch folder stays under the OS temp dir, so a failed case can be read. */
+/** One card's `implementing` run: on a fresh copy of the fixture repo, with delegation on or off. Returns what the run left; the scratch folder stays under the OS temp dir when the run did not pass, so a failed case can be read, and is deleted after a pass. */
 export async function runBuildTrial(c: LoadedBuildCase, delegation: "on" | "off", options: BuildRunOptions): Promise<BuildTrial> {
   if (!c.repoPath.startsWith(FIXTURE_PREFIX)) throw new Error(`${c.id}: the repository ${c.repoPath} is not a fixture`);
   const root = realpathSync(mkdtempSync(join(options.scratch ?? tmpdir(), `build-helper-${c.id}-${delegation}-`)));
@@ -67,7 +69,6 @@ export async function runBuildTrial(c: LoadedBuildCase, delegation: "on" | "off"
   } as unknown as AgentDeps;
 
   const rows: BuildTrial["rows"] = [];
-  const abort = new AbortController();
   const link = `https://www.figma.com/design/${c.fileKey}/eval?node-id=${c.nodeId.replace(":", "-")}`;
   const context = {
     task: { id: TASK, title: c.title, description: `${c.description} ${link}`, criteria: c.slices.map((s) => s.title), repoPath: repo, source: null, branch: null, worktreePath: null },
@@ -75,7 +76,7 @@ export async function runBuildTrial(c: LoadedBuildCase, delegation: "on" | "off"
     attempt: 1,
     runId: `build-helper-${c.id}-${delegation}`,
     approvals: [{ id: "ap1", kind: "awaiting_approval", decision: "approved", requested: { brief: c.description, criteria: [], assumptions: [], slices: c.slices, design: { spec: c.spec } } }],
-    signal: abort.signal,
+    signal: options.signal ?? new AbortController().signal,
     engine: options.engine,
     budgetMinutes: 30,
     emit: async (kind: string, payload: unknown) => void rows.push({ kind, payload: payload as Record<string, unknown> }),
@@ -96,6 +97,7 @@ export async function runBuildTrial(c: LoadedBuildCase, delegation: "on" | "off"
     }
   }
   const detail = (result.detail ?? {}) as { escalation?: unknown };
+  if (result.outcome === "pass") rmSync(root, { recursive: true, force: true });
   return {
     delegation,
     outcome: result.outcome,

@@ -1,8 +1,8 @@
 // The capture intake (RFC 0013, phase 3): what `qa-capture` wrote under the QA packet's `parity/` folder is untrusted (the container wrote it), so each file is checked
 // on the host before it is copied into the machine's own folder, the one mounted for the reviewer at /evidence/parity.
 import { constants } from "node:fs";
-import { chmod, lstat, mkdir, open, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { chmod, lstat, mkdir, open, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, join, sep } from "node:path";
 
 import { CaptureTarget, type CapturePlan, type ParityCapture, StyleRow, captureKey } from "@hardness/contracts";
 import { z } from "zod";
@@ -10,6 +10,8 @@ import { z } from "zod";
 import { copyRegularFile, readRegularFile } from "../adapters/fs/bounded.ts";
 
 const PNG_MAGIC = Buffer.from("89504e470d0a1a0a", "hex");
+/** The PNG magic, then the IHDR chunk's length and type (8 bytes), its width (4) and its height (4). */
+const IHDR_END = 24;
 const MOUNT = "/evidence/parity";
 const Styles = z.array(StyleRow).max(300);
 
@@ -36,6 +38,7 @@ async function head(path: string, length: number): Promise<Buffer> {
 /** Takes in the captures the plan asked for: a regular, non-link file under `maxBytes` that starts with the PNG magic. Nothing outside `<qaDir>/parity` is read. */
 export async function collectCaptures(qaDir: string, plan: CapturePlan, outDir: string, { maxBytes = 8 * 1024 * 1024, maxStyleBytes = 2 * 1024 * 1024 } = {}): Promise<Collected> {
   const result: Collected = { captures: [], missing: [], notes: [] };
+  const root = await realpath(join(qaDir, "parity")).catch(() => null);
   for (const target of plan.targets) {
     // The key becomes a path: it is built from parts that were checked by pattern, even though the plan is the machine's own.
     if (!CaptureTarget.safeParse(target).success) {
@@ -50,6 +53,16 @@ export async function collectCaptures(qaDir: string, plan: CapturePlan, outDir: 
       result.missing.push(target);
       result.notes.push(`${key}: ${why}`);
     };
+    // A linked folder on the way (`parity/S1 -> elsewhere`) would make the PNG and the styles below come from outside `<qaDir>/parity`.
+    const folder = root === null ? null : await realpath(dirname(from)).catch(() => null);
+    if (folder === null) {
+      result.missing.push(target);
+      continue;
+    }
+    if (folder !== root && !folder.startsWith(root + sep)) {
+      refuse("its folder is outside the capture folder");
+      continue;
+    }
     const info = await lstat(from).catch(() => null);
     if (!info) {
       result.missing.push(target);
@@ -64,8 +77,15 @@ export async function collectCaptures(qaDir: string, plan: CapturePlan, outDir: 
       continue;
     }
     try {
-      if (!(await head(from, PNG_MAGIC.length)).equals(PNG_MAGIC)) {
+      const header = await head(from, IHDR_END);
+      if (!header.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)) {
         refuse("not a PNG");
+        continue;
+      }
+      // The file name is the container's word for what it shows: the image's own width must agree with the viewport, or be a whole multiple of it (device pixel ratio).
+      const width = header.length >= IHDR_END ? header.readUInt32BE(IHDR_END - 8) : 0;
+      if (width === 0 || width % target.viewport.width !== 0) {
+        refuse(`its width ${width} does not fit the viewport width ${target.viewport.width}`);
         continue;
       }
       await mkdir(dirname(to), { recursive: true });

@@ -21,13 +21,56 @@ export interface SettledParity {
   notes: string[];
 }
 
-/** A browser scenario that cites a frame the spec gives no viewport: there is nothing to capture, but the frame still counts (see `citedWithoutViewport`). */
+/**
+ * A browser scenario that cites a frame the machine will not capture, but the frame still counts: the spec gives it no viewport (see `citedWithoutViewport`), or its target
+ * is over the capture cap (see `overCap`, which names the viewport, the state and the reason).
+ */
 export interface Unplaced {
   scenario: string;
   frame: string;
+  viewport?: string;
+  state?: PairRow["state"];
+  reason?: string;
 }
 
-export function settleParity(answer: DesignParityAnswer | null, { plan, spec, captures, bar, unplaced = [] }: { plan: CapturePlan; spec: DesignSpec | null; captures: ParityCapture[]; bar: number; unplaced?: Unplaced[] }): SettledParity {
+/** A waiver as the `design.waived` rows keep it: the finding's id and a short hash of what it said, so a waiver covers that difference and no other. */
+export interface Waiver {
+  id: string;
+  hash: string;
+}
+
+const normalised = (text: unknown): string => (typeof text === "string" ? text.trim().toLowerCase().replace(/\s+/g, " ") : "");
+
+/** The tail the audit's mapping (`a11yFindings`) writes on an accessibility finding's body: the state, then the axe rule or `judged`, then the evidence file names. */
+const A11Y_TAIL = /^[\s\S]*\(state (.*?), (axe [^;)]+|judged)(?:; evidence [^)]*)?\)$/;
+
+/**
+ * A short hash (eight hex digits, FNV-1a) of what defines the difference, normalised (trimmed, lower-cased, whitespace collapsed): a parity finding's expected and built values;
+ * an accessibility finding's state and its axe rule (or `judged`), read from the tail of its body. The auditor's summary is its own words and the evidence names are new
+ * every round, so neither is hashed: with the id (criterion, selector, page) the state and the rule say which failure it is. A body with no such tail is hashed whole.
+ */
+export function waiverHash(f: { design?: unknown; body?: unknown }): string {
+  const at = f.design && typeof f.design === "object" ? (f.design as { expected?: unknown; actual?: unknown }) : null;
+  const body = typeof f.body === "string" ? f.body : "";
+  const tail = A11Y_TAIL.exec(body);
+  const text = at && (typeof at.expected === "string" || typeof at.actual === "string") ? [normalised(at.expected), normalised(at.actual)] : tail ? [normalised(tail[1]), normalised(tail[2])] : [normalised(body)];
+  let h = 0x811c9dc5;
+  for (const ch of text.join("\n")) {
+    h ^= ch.codePointAt(0) ?? 0;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}
+
+/** A finding a person already waived on this card stays waived in the next round: it is marked, and the rules below never count it as open. It must match a waiver by id and by hash; a waiver with no hash covers nothing. */
+export function markWaived(findings: readonly Finding[], waived: readonly Waiver[] | undefined): Finding[] {
+  if (!waived || waived.length === 0) return [...findings];
+  return findings.map((f) => (f.id !== undefined && waived.some((w) => w.id === f.id && w.hash !== "" && w.hash === waiverHash(f)) ? { ...f, resolution: { status: "waived" as const, by: "person" } } : f));
+}
+
+export const isWaived = (f: Finding): boolean => f.resolution?.status === "waived";
+
+export function settleParity(answer: DesignParityAnswer | null, { plan, spec, captures, bar, unplaced = [], waived }: { plan: CapturePlan; spec: DesignSpec | null; captures: ParityCapture[]; bar: number; unplaced?: Unplaced[]; waived?: readonly Waiver[] }): SettledParity {
   const notes: string[] = [];
   const frameOf = (id: string) => spec?.frames.find((f) => f.id === id);
   const frames: PairRow[] = plan.targets.map((t) => {
@@ -53,10 +96,10 @@ export function settleParity(answer: DesignParityAnswer | null, { plan, spec, ca
     };
   });
   // A cited frame with no viewport cannot be captured, so it is never in the plan; it is not compared, and a cited frame that is not compared opens the gate.
-  for (const { scenario, frame: id } of unplaced) {
+  for (const { scenario, frame: id, viewport, state, reason } of unplaced) {
     const spot = frameOf(id);
     const first = spot?.states.find((s) => s.nodeId !== null) ?? spot?.states[0];
-    frames.push({ frame: id, name: spot?.name ?? id, node: first?.nodeId ?? id, scenario, viewport: "unknown", state: first?.state ?? "default", status: "not_compared", reason: "the spec gives this frame no viewport", capture: null, render: null, diff: null, pair: null, diffRatio: null });
+    frames.push({ frame: id, name: spot?.name ?? id, node: (state ? spot?.states.find((s) => s.state === state)?.nodeId : first?.nodeId) ?? id, scenario, viewport: viewport ?? "unknown", state: state ?? first?.state ?? "default", status: "not_compared", reason: reason ?? "the spec gives this frame no viewport", capture: null, render: null, diff: null, pair: null, diffRatio: null });
   }
   for (const id of plan.uncited) {
     const spot = frameOf(id);
@@ -71,8 +114,16 @@ export function settleParity(answer: DesignParityAnswer | null, { plan, spec, ca
       notes.push(`dropped a finding on frame ${f.frame}, which the capture plan does not hold`);
       continue;
     }
+    // A finding stands only where the machine holds the capture and the reviewer compared it: otherwise it is a claim about a build nobody looked at.
+    // A spec frame has one viewport, so the machine's own plan picks the row by frame and state (an enum); the model's words for the viewport are not read.
+    const rows = frames.filter((r) => r.scenario !== null && r.status === "compared" && r.frame === f.frame);
+    const row = rows.find((r) => r.state === f.state);
+    if (!row) {
+      notes.push(rows.length === 0 ? `dropped a finding on frame ${f.frame} (${f.state}), which was not compared` : `dropped a finding on frame ${f.frame}, state ${f.state}, which nobody compared`);
+      continue;
+    }
     const base = {
-      path: `figma:${f.frame}/${f.node}`,
+      path: `figma:${f.frame}/${row.node}`,
       line: 0,
       severity: f.level,
       title: f.title,
@@ -81,12 +132,12 @@ export function settleParity(answer: DesignParityAnswer | null, { plan, spec, ca
       category: "design" as const,
       criterion_ref: null,
       suggested_fix: null,
-      design: { source: "parity" as const, frame: f.frame, node: f.node, element: f.element, viewport: f.viewport, state: f.state, kind: f.kind, expected: f.expected, actual: f.actual },
+      design: { source: "parity" as const, frame: f.frame, node: row.node, element: f.element, viewport: row.viewport, state: row.state, kind: f.kind, expected: f.expected, actual: f.actual },
     };
-    mapped.push(normaliseFinding({ ...base, id: parityFindingId(f) }));
+    mapped.push(normaliseFinding({ ...base, id: parityFindingId({ frame: f.frame, node: row.node, kind: f.kind, element: f.element }) }));
   }
   // The same difference twice is one finding, at the higher severity; the most severe come first, and the list is capped.
-  const findings = mergeDuplicateFindings(mapped)
+  const findings = markWaived(mergeDuplicateFindings(mapped), waived)
     .map((f, i) => ({ f, i }))
     .sort((a, b) => (SEVERITY_RANK[a.f.severity] ?? 3) - (SEVERITY_RANK[b.f.severity] ?? 3) || a.i - b.i)
     .map(({ f }) => f)
@@ -94,9 +145,10 @@ export function settleParity(answer: DesignParityAnswer | null, { plan, spec, ca
 
   const confidence = answer?.confidence ?? 0;
   const designInput = answer?.designInput ?? "missing";
-  const blockers = findings.filter((f) => f.severity === "blocker" && f.confidence >= BLOCKER_CONFIDENCE).length;
+  const open = findings.filter((f) => !isWaived(f));
+  const blockers = open.filter((f) => f.severity === "blocker" && f.confidence >= BLOCKER_CONFIDENCE).length;
   const why: GateWhy[] = [];
-  if (findings.some((f) => f.severity === "should_fix" || (f.severity === "blocker" && f.confidence < BLOCKER_CONFIDENCE))) why.push("open_findings");
+  if (open.some((f) => f.severity === "should_fix" || (f.severity === "blocker" && f.confidence < BLOCKER_CONFIDENCE))) why.push("open_findings");
   if (confidence < bar || designInput !== "complete") why.push("low_confidence");
   if (frames.some((f) => f.scenario !== null && f.status === "not_compared")) why.push("not_compared");
   return { frames, findings, confidence, designInput, blockers, gate: { fires: why.length > 0, why }, notes };

@@ -91,6 +91,8 @@ export interface LunaToolsOptions {
   bridge?: BridgedTool[];
   /** The implementer's repository (`/work`): with `checksDir` it switches the ui-designer tools on (RFC 0013, phase 5). */
   work?: string;
+  /** What the machine says about delegation for this run (`input.context.delegation`): when it is unavailable the helper tools answer at once with its reason. */
+  delegation?: { available: boolean; reason?: string | undefined } | undefined;
   /** Writes the run's commits as a bundle for the machine now; the pick handshake sends it before it asks for the helper's. */
   bundleNow?: () => void;
 }
@@ -140,6 +142,7 @@ export function lunaHandlers(options: LunaToolsOptions) {
   const helper = options.checksDir && options.work
     ? helperTools({ checksDir: options.checksDir, work: options.work, ledger: () => state.ledger, persist, emit: options.emit, bundleNow: options.bundleNow ?? (() => {}), checkWaitMs: options.checkWaitMs ?? 0 })
     : null;
+  const refusal = options.delegation && !options.delegation.available ? { ok: false, error: options.delegation.reason ?? "delegation is not available in this run" } : null;
   /** A returned helper slice is picked before the tool answers; an error of the pick rides on the answer. */
   const picked = async <T>(result: () => T | Promise<T>): Promise<T | (T & { pickError: string })> => {
     const problem = (await helper?.syncPicks()) ?? null;
@@ -229,8 +232,8 @@ export function lunaHandlers(options: LunaToolsOptions) {
       return { recorded: true };
     },
     slice_list: () => picked(() => state.ledger),
-    slice_delegate: (args) => (helper ? helper.delegate(args) : { error: "not available in this run" }),
-    slice_wait: (args) => (helper ? helper.wait(args) : { error: "not available in this run" }),
+    slice_delegate: (args) => (refusal ?? (helper ? helper.delegate(args) : { error: "not available in this run" })),
+    slice_wait: (args) => (refusal ?? (helper ? helper.wait(args) : { error: "not available in this run" })),
     decision_get: ({ key }) => {
       const hits = options.decisions.filter((d) => d.decision === key || key in (d.answers ?? {}));
       return hits.length > 0 ? hits : { decided: null };
@@ -241,13 +244,22 @@ export function lunaHandlers(options: LunaToolsOptions) {
   // an earlier run's leftovers out; the machine reads only the names this run was given.
   const nonce = randomBytes(4).toString("hex");
   let sent = 0;
-  const bridged = async (b: BridgedTool, args: unknown): Promise<unknown> => {
-    if (!options.checksDir) return { skipped: true };
-    const n = ++sent;
-    mkdirSync(options.checksDir, { recursive: true });
-    note({ kind: "note", payload: { phase: "design.mcp_call", server: b.server, tool: b.tool, n } });
-    writeFileSync(join(options.checksDir, `mcp-request-${nonce}-${n}.json`), JSON.stringify({ n, server: b.server, tool: b.tool, args: args ?? {} }));
-    return awaitFile<unknown>(join(options.checksDir, `mcp-answer-${nonce}-${n}.json`), options.checkWaitMs ?? 0, (p) => (p && typeof p === "object" ? p : null), { skipped: true });
+  // The machine answers bridged calls one at a time, so the factory's go one at a time too: a call's request is written
+  // when the one before it has its answer (or has timed out), and its own wait starts then.
+  let bridgeQueue: Promise<unknown> = Promise.resolve();
+  const bridged = (b: BridgedTool, args: unknown): Promise<unknown> => {
+    if (!options.checksDir) return Promise.resolve({ skipped: true });
+    const dir = options.checksDir;
+    const run = async (): Promise<unknown> => {
+      const n = ++sent;
+      mkdirSync(dir, { recursive: true });
+      note({ kind: "note", payload: { phase: "design.mcp_call", server: b.server, tool: b.tool, n } });
+      writeFileSync(join(dir, `mcp-request-${nonce}-${n}.json`), JSON.stringify({ n, server: b.server, tool: b.tool, args: args ?? {} }));
+      return awaitFile<unknown>(join(dir, `mcp-answer-${nonce}-${n}.json`), options.checkWaitMs ?? 0, (p) => (p && typeof p === "object" ? p : null), { ok: false, error: "timed out waiting for the machine" });
+    };
+    const result = bridgeQueue.then(run, run);
+    bridgeQueue = result.catch(() => {});
+    return result;
   };
 
   const call = async (tool: string, args: unknown): Promise<unknown> => {

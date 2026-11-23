@@ -108,6 +108,8 @@ pub struct Finding {
     pub title: String,
     #[serde(default)]
     pub body: String,
+    #[serde(default)]
+    pub suggested_fix: Option<String>,
 }
 
 /// What `:spec` or `:audit` asked, kept while the repo picker is open.
@@ -163,6 +165,9 @@ pub fn report_lines(report: &DesignReport) -> Vec<String> {
                     out.push(format!("  {}", finding.title));
                     if !finding.body.is_empty() {
                         out.push(format!("    {}", finding.body));
+                    }
+                    if let Some(fix) = finding.suggested_fix.as_deref().filter(|f| !f.is_empty()) {
+                        out.push(format!("    fix: {fix}"));
                     }
                 }
             }
@@ -252,6 +257,9 @@ pub fn card_text(report: &DesignReport, repo: Option<&str>) -> TicketText {
                 if !finding.body.is_empty() {
                     description.push_str(&format!("  {}\n", finding.body));
                 }
+                if let Some(fix) = finding.suggested_fix.as_deref().filter(|f| !f.is_empty()) {
+                    description.push_str(&format!("  Fix: {fix}\n"));
+                }
             }
             (format!("Fix accessibility of {target}"), description)
         }
@@ -324,6 +332,24 @@ mod tests {
             lines
                 .iter()
                 .any(|l| l.contains("trap (state modal, judged)"))
+        );
+    }
+
+    #[test]
+    fn a_suggested_fix_shows_in_the_report_and_in_the_card() {
+        let report: DesignReport = serde_json::from_value(serde_json::json!({
+            "kind": "audit", "target": "staging", "level": "AA", "mode": "gate", "notes": [],
+            "findings": [{ "severity": "blocker", "title": "t", "body": "b", "suggested_fix": "give the modal an Escape handler" }]
+        })).unwrap();
+        assert!(
+            report_lines(&report)
+                .join("\n")
+                .contains("give the modal an Escape handler")
+        );
+        assert!(
+            card_text(&report, None)
+                .description
+                .contains("give the modal an Escape handler")
         );
     }
 

@@ -693,6 +693,15 @@ describe("scope_check and the files another agent holds", () => {
     expect((await c.finalFacts([])).lockedTouched).toEqual([]);
   });
 
+  it("reads each lock set's commits from its own base: a helper's lock never sees commits before the helper started", async () => {
+    const out = mkdtempSync(join(tmpdir(), "build-locks-since-"));
+    const asked: string[] = [];
+    const commitFiles = async (from: string) => (asked.push(from), from === "helperbase" ? [] : [{ sha: "old", files: ["src/ui/Card.tsx"] }]);
+    const c = checks(out, null, { planPresent: true, planned: ["src/a.ts", "src/ui/Card.tsx"], locks: () => [{ other: ["src/ui/Card.tsx"], since: "helperbase" }], git: { nameStatus: async () => "M\tsrc/a.ts", diff: async () => "", commitFiles } });
+    expect((await c.finalFacts([])).lockedTouched).toEqual([]);
+    expect(asked).toEqual(["helperbase"]);
+  });
+
   it("on the helper's run the locks are the implementer's and nothing counts as picked", async () => {
     const out = mkdtempSync(join(tmpdir(), "build-locks-helper-"));
     const c = checks(out, null, { planPresent: true, planned: ["src/a.ts"], locks: () => ({ other: ["src/a.ts"], owner: "implementer" }), git: { nameStatus: async () => "M\tsrc/a.ts", diff: async () => "", commitFiles } });
