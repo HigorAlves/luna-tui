@@ -111,7 +111,7 @@ export interface HelperRuns extends HelperCoordinator {
   picked(): ReadonlySet<string>;
   /** The files of every slice the helper holds or has had picked in this run: the implementer must not touch them. */
   delegatedLocks(): string[];
-  /** The same files per helper, with the card commit that helper started from: its lock binds only the implementer commits after it. */
+  /** The same files per helper, with the card commit that helper first started from: its lock binds only the implementer commits after it. */
   delegatedLockSets(): { files: string[]; base: string }[];
   /** Where the run's latest helper stands, for the run's `detail.helper`; null when none was started. `picked` is what the machine put on the branch for it. */
   status(): { slice: number; state: HelperState; attempt: number; picked?: string[] } | null;
@@ -121,6 +121,8 @@ interface Helper {
   slice: number;
   attempt: 1 | 2;
   base: string;
+  /** The card commit the helper first started from: its lock begins there, and a re-run (a later `base`) does not move it. */
+  lockedFrom: string;
   ref: string;
   workspace: string;
   locks: Locks;
@@ -350,7 +352,7 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
       return refuse("the helper took too long to start; build the slice yourself");
     }
     const minutes = helperMinutes(facts.designBudget.minutesLeft, facts.implementerMinutesLeft);
-    const h: Helper = { slice, attempt, base, ref: workspace.ref, workspace: workspace.path, locks: decision.locks, state: "running", controller: linkedController(), settled: Promise.resolve(), removed: false, deadline: now() + minutes * 60_000, engine: decision.engine, branch: workspace.branch, planned: { title: planned.title, touchpoints: planned.touchpoints, acceptance: planned.acceptance }, message: request.message.slice(0, 2000) };
+    const h: Helper = { slice, attempt, base, lockedFrom: base, ref: workspace.ref, workspace: workspace.path, locks: decision.locks, state: "running", controller: linkedController(), settled: Promise.resolve(), removed: false, deadline: now() + minutes * 60_000, engine: decision.engine, branch: workspace.branch, planned: { title: planned.title, touchpoints: planned.touchpoints, acceptance: planned.acceptance }, message: request.message.slice(0, 2000) };
     helpers.set(slice, h);
     attempted.add(slice);
     await setState(h, "running");
@@ -591,7 +593,7 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
     picked: () => pickedShas,
     // A slice the helper has (live) or had picked onto the branch (committed) is its for the whole run; one handed back to the implementer is not.
     delegatedLocks: () => [...new Set([...helpers.values()].filter((h) => LIVE.has(h.state) || h.state === "committed").flatMap((h) => h.locks.helper))],
-    delegatedLockSets: () => [...helpers.values()].filter((h) => LIVE.has(h.state) || h.state === "committed").map((h) => ({ files: [...h.locks.helper], base: h.base })),
+    delegatedLockSets: () => [...helpers.values()].filter((h) => LIVE.has(h.state) || h.state === "committed").map((h) => ({ files: [...h.locks.helper], base: h.lockedFrom })),
     status() {
       const h = [...helpers.values()].at(-1);
       return h ? { slice: h.slice, state: h.state, attempt: h.attempt, ...(h.pickedShas?.length ? { picked: [...h.pickedShas] } : {}) } : null;

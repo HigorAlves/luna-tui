@@ -647,6 +647,8 @@ describe("helperRuns: a conflict", () => {
     expect(t.c.calls[1]!.extra.helper).toMatchObject({ attempt: 2, base: P, conflict: { files: ["src/ui/Card.tsx"] } });
     expect(t.c.calls[1]!.extra.workspace).toEqual({ path: "/cards/w.helper-2-2", branch: "luna-helper-2" });
     expect(t.coordinator.delegatedLocks()).toEqual(["src/ui/Card.tsx", "src/ui/Card.test.tsx"]);
+    // The lock still begins where the helper first started: the implementer's commit that conflicted (between BASE and P) stays judged.
+    expect(t.coordinator.delegatedLockSets()).toEqual([{ files: ["src/ui/Card.tsx", "src/ui/Card.test.tsx"], base: BASE }]);
     // The second run returns; this time it picks clean.
     t.setPick({ ok: true, picked: [PICKED], tip: PICKED });
     t.c.settle({ outcome: "pass" });
