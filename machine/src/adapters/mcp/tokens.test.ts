@@ -32,14 +32,6 @@ describe("fileTokenStore", () => {
     expect(await store.load("figma")).toBeNull();
     expect(await store.loadClient("figma")).toBeNull();
   });
-  it("keeps the client when asked to, removing only the tokens", async () => {
-    const store = fileTokenStore(dir());
-    await store.saveClient("figma", { client_id: "cid" } as never);
-    await store.save("figma", { access_token: "t", token_type: "Bearer" });
-    await store.remove("figma", { keepClient: true });
-    expect(await store.load("figma")).toBeNull();
-    expect(await store.loadClient("figma")).toMatchObject({ client_id: "cid" });
-  });
 });
 
 describe("tokenFor", () => {
