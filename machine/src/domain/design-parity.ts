@@ -41,13 +41,19 @@ export interface Waiver {
 
 const normalised = (text: unknown): string => (typeof text === "string" ? text.trim().toLowerCase().replace(/\s+/g, " ") : "");
 
+/** The tail the audit's mapping (`a11yFindings`) writes on an accessibility finding's body: the state, then the axe rule or `judged`, then the evidence file names. */
+const A11Y_TAIL = /^[\s\S]*\(state (.*?), (axe [^;)]+|judged)(?:; evidence [^)]*)?\)$/;
+
 /**
  * A short hash (eight hex digits, FNV-1a) of what defines the difference, normalised (trimmed, lower-cased, whitespace collapsed): a parity finding's expected and built values;
- * an accessibility finding's body (its summary, state and rule), less the evidence file names, which differ from round to round.
+ * an accessibility finding's state and its axe rule (or `judged`), read from the tail of its body. The auditor's summary is its own words and the evidence names are new
+ * every round, so neither is hashed: with the id (criterion, selector, page) the state and the rule say which failure it is. A body with no such tail is hashed whole.
  */
 export function waiverHash(f: { design?: unknown; body?: unknown }): string {
   const at = f.design && typeof f.design === "object" ? (f.design as { expected?: unknown; actual?: unknown }) : null;
-  const text = at && (typeof at.expected === "string" || typeof at.actual === "string") ? [normalised(at.expected), normalised(at.actual)] : [normalised(typeof f.body === "string" ? f.body.replace(/; evidence [^)]*\)$/, ")") : "")];
+  const body = typeof f.body === "string" ? f.body : "";
+  const tail = A11Y_TAIL.exec(body);
+  const text = at && (typeof at.expected === "string" || typeof at.actual === "string") ? [normalised(at.expected), normalised(at.actual)] : tail ? [normalised(tail[1]), normalised(tail[2])] : [normalised(body)];
   let h = 0x811c9dc5;
   for (const ch of text.join("\n")) {
     h ^= ch.codePointAt(0) ?? 0;

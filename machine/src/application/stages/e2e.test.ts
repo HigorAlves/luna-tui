@@ -623,11 +623,13 @@ describe("the accessibility audit after the browser run", () => {
     expect(again.outcome).toBe("pass");
   });
 
-  it("a waiver lapses when the accessibility finding's summary changed: the same id, a different problem, fails the stage again", async () => {
+  it("a waiver holds when the auditor words the same problem differently, and lapses when the element fails the criterion in another state", async () => {
     const first = await harness({ audit: audit([blocker, minor]) }).run();
     const waivedFinding = first.findings!.find((f) => f.severity === "blocker")!;
     const waived = [{ id: waivedFinding.id!, hash: waiverHash(waivedFinding) }];
-    const changed = await harness({ audit: audit([{ ...blocker, summary: "now it traps focus for good" }, minor]), waived }).run();
+    const reworded = await harness({ audit: audit([{ ...blocker, summary: "focus cannot leave the dialog", evidence: ["trap-2.png"] }, minor]), waived }).run();
+    expect(reworded.outcome).toBe("pass");
+    const changed = await harness({ audit: audit([{ ...blocker, state: "modal, second step" }, minor]), waived }).run();
     expect(changed.outcome).toBe("fail");
     expect(changed.findings!.map((f) => f.id)).toContain(waivedFinding.id);
   });

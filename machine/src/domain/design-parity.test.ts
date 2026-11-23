@@ -98,6 +98,19 @@ describe("settleParity", () => {
     const s = settleParity(answer({ findings: [finding("blocker")] }) as never, { plan: onlyDefault, spec, captures, bar: 0.75, waived: [{ id: first.id!, hash: "" }] });
     expect(s.blockers).toBe(1);
   });
+  it("hashes an accessibility finding by its state and its rule (or judged), not by the auditor's words or its evidence names", () => {
+    const body = (summary: string, tail: string) => ({ body: `${summary} (${tail})` });
+    const axe = waiverHash(body("Low contrast on the note", "state default, axe color-contrast; evidence a.png, axe.json"));
+    expect(waiverHash(body("The note text is too faint (3.1:1)", "state default, axe color-contrast"))).toBe(axe);
+    expect(waiverHash(body("Low contrast on the note", "state  Default , axe color-contrast; evidence b.png"))).toBe(axe);
+    expect(waiverHash(body("Low contrast on the note", "state hover, axe color-contrast"))).not.toBe(axe);
+    expect(waiverHash(body("Low contrast on the note", "state default, axe color-contrast-enhanced"))).not.toBe(axe);
+    const judged = waiverHash(body("The modal traps focus", "state modal, judged; evidence trap.png"));
+    expect(waiverHash(body("Focus cannot leave the dialog", "state modal, judged"))).toBe(judged);
+    expect(waiverHash(body("The modal traps focus", "state modal, axe focus-trap"))).not.toBe(judged);
+    // A body not written by the audit's mapping is hashed whole.
+    expect(waiverHash({ body: "one thing" })).not.toBe(waiverHash({ body: "another thing" }));
+  });
   it("lists the most severe findings first and keeps at most 40", () => {
     const many = Array.from({ length: 45 }, (_, i) => ({ ...finding("nit"), element: `li.row-${i}`, title: `Row ${i}` }));
     const s = settle(answer({ findings: [...many, { ...finding("blocker"), element: "li.last", title: "Last" }] }));
