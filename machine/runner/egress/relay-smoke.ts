@@ -6,7 +6,7 @@
 // It starts the proxy's relay on 127.0.0.1 with the real credential in a 0444 file (as the machine does), gives the SDK
 // only a placeholder and `ANTHROPIC_BASE_URL`, and checks three things:
 //   1. the reply streams: partial messages arrive before the result does;
-//   2. the init `system` message's `permissionMode` is printed (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is known to force `default`);
+//   2. the init `system` message's `permissionMode` is printed;
 //   3. a tool in `allowedTools` (Read) runs while one outside it (Bash) is denied.
 // It prints no credential value, only kinds, counts, tool names and the relay's own log lines (which carry no header).
 // The credential comes as the machine finds it: CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, then ~/.config/hardness.
@@ -74,7 +74,6 @@ try {
   env.NO_PROXY = "127.0.0.1";
   env.no_proxy = "127.0.0.1";
   env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
-  env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB = "1";
 
   const started = Date.now();
   let firstPartialAt = 0;

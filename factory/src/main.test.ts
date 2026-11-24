@@ -85,8 +85,9 @@ describe("factory main (dry run)", () => {
     expect(options).toMatchObject({ agent: def.agent, agents: [def.agent, ...helpersOn(def, "claude").filter((h) => resolveEngine(h.engine).runtime === "claude").map((h) => h.role)], model: resolveEngine(def.engines.default).modelId, effort: def.effort, maxTurns: 5, permissionMode: "dontAsk", settingSources: [], hooks: ["PreToolUse"], mcpServers: ["luna"] });
     // Commits and PRs are the person's: no attribution from the SDK.
     expect(options.settings).toEqual({ attribution: false, includeCoAuthoredBy: false });
-    // The SDK's subprocesses (Bash, hooks, MCP) do not inherit the credential, and nothing phones home.
-    expect(options.env).toEqual({ CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" });
+    // Nothing phones home. The subprocess scrub is NOT set: from claude 2.1.314 it makes the binary refuse to start without
+    // bubblewrap, which cannot run in the stage container (RFC 0009), and the stage holds only a placeholder credential anyway.
+    expect(options.env).toEqual({ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" });
     // A helper on another runtime is reached through `delegate`, beside the pack's own tools.
     const delegating = helpersOn(def, "claude").some((h) => resolveEngine(h.engine).runtime !== "claude") ? ["mcp__luna__delegate"] : [];
     const { tools, allowedTools } = claudeTools(def.access, options.cwd);
