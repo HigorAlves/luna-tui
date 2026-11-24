@@ -6,6 +6,9 @@ import { looksLikeTestPath } from "./locked-files.ts";
 
 const DOC = /(\.(md|mdx|markdown|rst|adoc|txt)$)|(^|\/)(docs?|documentation)\//i;
 
+/** Whether one path is documentation (prose files, or anything under `doc/`, `docs/`, `documentation/`). */
+export const isDocPath = (path: string): boolean => DOC.test(path.trim());
+
 /** Whether every path the plan touches is documentation or a test, and at least one is documentation. */
 export function isDocsOnly(touchpoints: readonly string[]): boolean {
   const paths = touchpoints.map((p) => p.trim()).filter(Boolean);
