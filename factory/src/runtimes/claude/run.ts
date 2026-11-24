@@ -28,20 +28,17 @@ import { lunaServer } from "./luna.ts";
 
 const env = process.env;
 
-// What the SDK's native binary (0.3.311, claude 2.1.311) does with these two, read from its bundle:
-// - CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 removes credentials from the environment of what the agent
-//   spawns (Bash, hooks, MCP stdio servers). It strips ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN,
-//   ANTHROPIC_CUSTOM_HEADERS, CLAUDE_CODE_OAUTH_TOKEN (and its SESSIONS/REFRESH variants), the Foundry,
-//   AWS and Azure keys, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, GOOGLE_APPLICATION_CREDENTIALS, and
-//   many CI and registry tokens (NODE_AUTH_TOKEN, HF_TOKEN, VAULT_TOKEN, ACTIONS_*, SLACK_WEBHOOK_URL...).
-//   It also unsets credential-file pointers (KUBECONFIG, NETRC, DOCKER_CONFIG, SSH_AUTH_SOCK, XDG_*,
-//   CLAUDE_CONFIG_DIR...) and rewrites registry URLs that carry a password.
-//   It does NOT strip OPENAI_API_KEY, CODEX_HOME, AI_GATEWAY_API_KEY or TYPESAFE_API_KEY: those never
-//   reach a Claude stage (the machine passes only the engine's credential).
-//   Side effect: with it set the SDK forces the permission mode to "default" (and warns), so
-//   `dontAsk` is not honoured; allowedTools stays the explicit allow-list.
+// What the SDK's native binary does with these two:
+// - CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 is NOT set. It removes credentials from the environment of what the agent
+//   spawns (Bash, hooks, MCP stdio servers), and from claude 2.1.314 on it also makes the binary refuse to start on Linux
+//   without bubblewrap ("bubblewrap is required for subprocess env scrubbing and isolation"; checked on 2.1.314 to 2.1.331,
+//   2.1.311 and 2.1.312 start). Bubblewrap cannot run in the stage container under Luna's flags without a looser seccomp
+//   profile, which RFC 0009 turned down. The docs describe only the value 1 and name the scrub "one layer", and what it
+//   protects here is small: the stage holds a placeholder, never the Claude credential (the egress proxy's relay holds it),
+//   and the scrub keeps GitHub tokens and proxy settings anyway. Set it again only where bubblewrap works.
+//   Side effect of leaving it off: the SDK honours `dontAsk` (with the scrub it forced `default`); allowedTools stays the allow-list.
 // - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 turns off telemetry, updates and other background calls.
-const SDK_ENV = { CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" } as const;
+const SDK_ENV = { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" } as const;
 
 /** The SDK's `query()`, or a stand-in with its signature (the conformance table's scripted fake). */
 export type Transport = (params: { prompt: string; options?: Options }) => Query;
