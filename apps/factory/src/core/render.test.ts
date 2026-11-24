@@ -401,6 +401,20 @@ describe("renderPrompt", () => {
     expect(renderPrompt({ pack: PACKS.implementing, input, template })).toContain("checks:\n(none declared; detect the suite from the tree)");
   });
 
+  it("renders the same PR context for each review pass, with the pass's own role and an empty-findings exit", () => {
+    const template = readFileSync(new URL("../../prompts/review_helper.md", import.meta.url), "utf8");
+    const pr = { repo: "o/a", number: 12, url: "https://github.com/o/a/pull/12", title: "Export CSV", body: "Adds it.", author: "them", baseRef: "main", headRef: "feat/export" };
+    const review = { pr, diff: "diff --git a/a.ts b/a.ts\n+x", files: [{ path: "a.ts", additions: 1, deletions: 0 }], existingComments: [{ path: "a.ts", line: 3, author: "x", body: "old note" }] };
+    for (const [id, role] of [["review_security", "security-reviewer"], ["review_migration", "migration-reviewer"], ["review_iac", "iac-reviewer"], ["review_second", "second-opinion"]] as const) {
+      const prompt = renderPrompt({ pack: PACKS[id], input: { ...input, pack: id, stage: id, context: { projectContext: null, review } }, template });
+      expect(prompt).not.toContain("{{");
+      expect(prompt).toContain(`You are \`${role}\``);
+      expect(prompt).toContain("PR #12 Export CSV by @them");
+      expect(prompt).toContain("```diff\ndiff --git a/a.ts b/a.ts\n+x\n```");
+      expect(prompt).toContain("`findings: []`");
+    }
+  });
+
   it("renders the PR's diff and comments for reviewing, and each thread with its id for addressing", () => {
     const pr = { repo: "o/a", number: 12, url: "https://github.com/o/a/pull/12", title: "Export CSV", body: "Adds it.", author: "them", baseRef: "main", headRef: "feat/export" };
     const review = { pr, diff: "diff --git a/a.ts b/a.ts\n+x", files: [{ path: "a.ts", additions: 1, deletions: 0 }], existingComments: [{ path: "a.ts", line: 3, author: "x", body: "old note" }] };

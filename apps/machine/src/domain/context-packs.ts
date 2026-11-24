@@ -31,6 +31,7 @@ export const CONTEXT_OF = {
   scope_check: { key: "check", schema: CheckContext },
   escalation_reason: { key: "check", schema: CheckContext },
   finding_classify: { key: "check", schema: CheckContext },
+  finding_confirm: { key: "check", schema: CheckContext },
   e2e_failure_cause: { key: "check", schema: CheckContext },
   ci_failure_class: { key: "check", schema: CheckContext },
   frame_privacy: { key: "check", schema: CheckContext },
@@ -59,8 +60,8 @@ export const CONTEXT_OF = {
 
 export type ContextPackId = keyof typeof CONTEXT_OF;
 
-/** Context-only packs `POST /runs` never runs: eval_judge grades eval cases for the evals runner only; compliance_review and docs_drift read a change in a worktree; design_parity reads captures a browser run left in a mount; ui_design is the implementer's helper, started by the machine with its own brief. */
-export const NOT_ON_DEMAND: readonly PackId[] = ["eval_judge", "compliance_review", "docs_drift", "design_parity", "ui_design"];
+/** Context-only packs `POST /runs` never runs: eval_judge grades eval cases for the evals runner only; compliance_review, the four review_* passes and docs_drift read a change in a worktree or a PR's diff; design_parity reads captures a browser run left in a mount; ui_design is the implementer's helper, started by the machine with its own brief. */
+export const NOT_ON_DEMAND: readonly PackId[] = ["eval_judge", "compliance_review", "review_security", "review_migration", "review_iac", "review_second", "docs_drift", "design_parity", "ui_design"];
 
 /** What a context-only pack reads: its one key of the stage input's context. */
 export type PackContext =

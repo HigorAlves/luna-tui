@@ -32,6 +32,8 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   escalation_reason: [],
   // Decisions on Verify's work, run on demand by the verify and e2e stages.
   finding_classify: [],
+  // A decision on a helper's review finding, run on demand by the PR review.
+  finding_confirm: [],
   e2e_failure_cause: [],
   ci_failure_class: [],
   frame_privacy: [],
@@ -86,6 +88,11 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   change_exceptions: [],
   // The compliance lead, run by the PR review and by Verify as a sub-run when the repo declares a regime; never a stage of its own.
   compliance_review: [],
+  // The dedicated passes of a PR review, run by the PR review as sub-runs beside `reviewing` on every PR; never a stage of their own.
+  review_security: [],
+  review_migration: [],
+  review_iac: [],
+  review_second: [],
   // The quarterly access review, run on demand by the access review job.
   access_review: [],
   // The incident job asks it when an incident starts and when it resolves.
