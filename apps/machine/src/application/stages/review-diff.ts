@@ -112,28 +112,40 @@ export interface Shard {
 
 const dirOf = (path: string): string => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ".");
 
+/** How big a shard may be: lines, and characters (what the reviewer's prompt can carry whole). */
+interface Size {
+  lines: number;
+  chars: number;
+}
+const overSize = (lines: number, chars: number, limit: Size): boolean => lines > limit.lines || chars > limit.chars;
+
 /** Cuts a file bigger than `limit` into pieces at hunk boundaries, each with the file's header; one hunk bigger than `limit` stays whole. */
-function cutFile(file: DiffFile, limit: number): ShardPart[] {
+function cutFile(file: DiffFile, limit: Size): ShardPart[] {
   const rows = file.text.split("\n");
   rows.pop();
   const first = rows.findIndex((r) => r.startsWith("@@"));
   if (first < 0) return [{ path: file.path, text: file.text, lines: file.lines }];
   const header = rows.slice(0, first);
+  const headerChars = header.reduce((n, r) => n + r.length + 1, 0);
   const hunks: string[][] = [];
   for (const row of rows.slice(first)) {
     if (row.startsWith("@@")) hunks.push([row]);
     else hunks[hunks.length - 1]!.push(row);
   }
   const groups: string[][][] = [];
-  let size = 0;
+  let lines = 0;
+  let chars = 0;
   for (const hunk of hunks) {
+    const hunkChars = hunk.reduce((n, r) => n + r.length + 1, 0);
     const last = groups[groups.length - 1];
-    if (last && header.length + size + hunk.length <= limit) {
+    if (last && !overSize(header.length + lines + hunk.length, headerChars + chars + hunkChars, limit)) {
       last.push(hunk);
-      size += hunk.length;
+      lines += hunk.length;
+      chars += hunkChars;
     } else {
       groups.push([hunk]);
-      size = hunk.length;
+      lines = hunk.length;
+      chars = hunkChars;
     }
   }
   return groups.map((g, i): ShardPart => {
@@ -142,8 +154,9 @@ function cutFile(file: DiffFile, limit: number): ShardPart[] {
   });
 }
 
-/** Cuts the files to review into shards of about `limit` lines: a directory stays in one shard when it fits, a bigger one is split by file, and a file bigger than a shard is cut at hunk boundaries into shards of its own. */
-export function shardDiff(files: readonly DiffFile[], limit: number): Shard[] {
+/** Cuts the files to review into shards of about `lines` lines (and, when given, `chars` characters): a directory stays in one shard when it fits, a bigger one is split by file, and a file bigger than a shard is cut at hunk boundaries into shards of its own. */
+export function shardDiff(files: readonly DiffFile[], lines: number, chars: number = Number.POSITIVE_INFINITY): Shard[] {
+  const limit: Size = { lines, chars };
   const dirs = new Map<string, DiffFile[]>();
   for (const f of files) {
     const dir = dirOf(f.path);
@@ -152,26 +165,30 @@ export function shardDiff(files: readonly DiffFile[], limit: number): Shard[] {
   const done: ShardPart[][] = [];
   let cur: ShardPart[] = [];
   let curLines = 0;
+  let curChars = 0;
   const close = (): void => {
     if (cur.length > 0) done.push(cur);
     cur = [];
     curLines = 0;
+    curChars = 0;
   };
   const whole = (f: DiffFile): ShardPart => ({ path: f.path, text: f.text, lines: f.lines });
   const add = (f: DiffFile): void => {
-    if (curLines + f.lines > limit) close();
+    if (overSize(curLines + f.lines, curChars + f.text.length, limit)) close();
     cur.push(whole(f));
     curLines += f.lines;
+    curChars += f.text.length;
   };
   for (const group of dirs.values()) {
-    const total = group.reduce((n, f) => n + f.lines, 0);
-    if (total <= limit) {
-      if (curLines + total > limit) close();
+    const totalLines = group.reduce((n, f) => n + f.lines, 0);
+    const totalChars = group.reduce((n, f) => n + f.text.length, 0);
+    if (!overSize(totalLines, totalChars, limit)) {
+      if (overSize(curLines + totalLines, curChars + totalChars, limit)) close();
       for (const f of group) add(f);
       continue;
     }
     for (const f of group) {
-      if (f.lines > limit) {
+      if (overSize(f.lines, f.text.length, limit)) {
         close();
         for (const piece of cutFile(f, limit)) done.push([piece]);
       } else add(f);

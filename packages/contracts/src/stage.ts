@@ -356,6 +356,10 @@ export const ReviewContext = z.object({
   ),
   /** Files the review leaves out of `files` and `diff`: lockfiles, generated or minified output, vendored code, snapshots. Absent reads as none. */
   skipped: z.array(z.object({ path: z.string(), lines: z.number().int(), reason: z.string() })).optional(),
+  /** A PR too big for one reviewer is read in shards: this reviewer's `diff` is shard `n` of `of`; `files` is still every file of the PR. */
+  shard: z.object({ n: z.number().int(), of: z.number().int() }).optional(),
+  /** Where the diff is, as files, when it is too big to carry in `diff` (which is then empty): the container path of a read-only folder with `<path>.diff` per file and `all.diff`. */
+  diffDir: z.string().optional(),
   /** The Jira tickets the PR names (title, head branch, body), when Jira is connected; absent reads as none linked. */
   tickets: z.array(ReviewTicket).optional(),
   /** The board cards the review is linked to (by a fact, or by the pr_link decision); absent reads as none. Their criteria and description are a spec too. */

@@ -82,7 +82,11 @@ const reviewText = (review: StageInput["context"]["review"]): string => {
   const left = leftOutText(review.skipped);
   const again = review.rereview;
   const heading = again && !again.note ? `Diff since ${again.since.slice(0, 7)}` : "Diff";
-  return `${prLine(review.pr)}\n\n${body}\n\n${ticketsText(review.tickets)}${cards ? `\n\n${cards}` : ""}\n\nFiles:\n${files}${left ? `\n\n${left}` : ""}\n\nComments already on the PR:\n${comments}${again ? `\n\n${rereviewText(again)}` : ""}\n\n${heading}:\n\`\`\`diff\n${review.diff}\n\`\`\``;
+  const shard = review.shard ? `This is shard ${review.shard.n} of ${review.shard.of} of a pull request too big for one reviewer. The files above are all of the pull request; review only the diff below, which is shard ${review.shard.n}'s files. Other reviewers read the other shards.\n\n` : "";
+  const diff = review.diffDir
+    ? `${heading}:\nThe diff is not inline: this pull request is too big for one prompt. Read it from ${review.diffDir}: \`${review.diffDir}/<path>.diff\` for each file above, and \`${review.diffDir}/all.diff\` for all of it. Read the files your lens needs; it is read-only.`
+    : `${shard}${heading}:\n\`\`\`diff\n${review.diff}\n\`\`\``;
+  return `${prLine(review.pr)}\n\n${body}\n\n${ticketsText(review.tickets)}${cards ? `\n\n${cards}` : ""}\n\nFiles:\n${files}${left ? `\n\n${left}` : ""}\n\nComments already on the PR:\n${comments}${again ? `\n\n${rereviewText(again)}` : ""}\n\n${diff}`;
 };
 
 /** A re-review's own section: what we read last time, the note when the whole diff is below, and each of our threads with the comments in it and what the settle decision made of it. */

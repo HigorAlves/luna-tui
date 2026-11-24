@@ -7,9 +7,10 @@ import { type DecisionOverrides, type Finding, PrReviewAnswer, type RequestedAct
 import { type Decide } from "./check-decide.ts";
 import { diffExcerptOf } from "./diff-section.ts";
 import { type ComplianceDeps, runCompliance } from "./compliance-review.ts";
-import { type Skipped, parseDiff, splitReviewable, type DiffFile } from "./review-diff.ts";
+import { type DiffFile, type Shard, type Skipped, capShards, parseDiff, shardDiff, splitReviewable } from "./review-diff.ts";
+import { PR_DIFF_MOUNT } from "./review-diff-files.ts";
 import { type RereviewDeps, type RereviewPlan, prepareRereview, settledReply } from "./rereview.ts";
-import { type HelperDeps, type HelpersOutcome, confirmHelperFindings, runHelpers } from "./review-helpers.ts";
+import { type HelperDeps, type HelpersOutcome, type PassMount, type PassWorkspace, confirmHelperFindings, runHelpers } from "./review-helpers.ts";
 import { followUp } from "./thread-followup.ts";
 import { addUsage } from "./usage.ts";
 import { excerptOf } from "./verify.ts";
@@ -23,8 +24,12 @@ export interface PrReviewDeps {
   github: GitHub;
   /** The PR's diff from host git in the card's workspace (base fetched, merge base, diff), which has no size limit; GitHub refuses diffs over 20,000 lines. Absent, or when it throws, GitHub's diff is read and the reason is kept in `detail.diffNote`. */
   localDiff?: (opts: { repoPath: string; baseRef: string; worktree: string }) => Promise<string>;
-  /** Runs the reviewing pack with what the host fetched. */
-  runPack: (context: StageContext, review: ReviewContext) => Promise<StageResult>;
+  /** Runs the reviewing pack with what the host fetched; in a workspace of its own when a shard of a big PR is read. */
+  runPack: (context: StageContext, review: ReviewContext, workspace?: PassWorkspace) => Promise<StageResult>;
+  /** What a review may read in one reviewer's prompt (luna.yaml `review.shard_lines`, `review.max_shards`), per repo; absent, 4000 lines and 25 shards. */
+  limits?: (repoPath: string | null) => Promise<{ shardLines: number; maxShards: number }>;
+  /** The big PR's diff as files for the passes and the compliance lead (a folder the machine owns, mounted read-only); absent, a sharded PR's passes are skipped with a note. */
+  diffFiles?: { write: (runId: string, files: readonly DiffFile[], whole: string) => Promise<{ host: string }>; remove: (host: string) => void | Promise<void> };
   /** The security, migration, infrastructure and second-opinion passes, run on every PR after the main review; absent runs none. `decide` (read at call time) asks finding_confirm about what only a pass found; null keeps those findings unchecked. */
   helpers?: HelperDeps & {
     decide: Decide | null;
@@ -157,9 +162,108 @@ async function readDiff(deps: PrReviewDeps, context: StageContext, pr: { repo: s
   }
 }
 
+type Answer = (typeof PrReviewAnswer)["_output"];
+const DEFAULT_LIMITS = { shardLines: 4000, maxShards: 25 };
+/** What a shard's diff may weigh in characters: the prompt carries a PR's text up to 200,000, with the files and comments beside it. */
+const SHARD_CHARS = 150_000;
+/** The most shards run at once. */
+const SHARD_CONCURRENCY = 4;
+const NOT_REVIEWED_SHOWN = 30;
+
+/** Adds up lines per path, in the order paths first appear. */
+const mergeLines = (rows: ReadonlyArray<{ path: string; lines: number }>): Array<{ path: string; lines: number }> => {
+  const by = new Map<string, number>();
+  for (const r of rows) by.set(r.path, (by.get(r.path) ?? 0) + r.lines);
+  return [...by].map(([path, lines]) => ({ path, lines }));
+};
+
+/**
+ * Runs the main reviewer once per shard, at most four at once, each in a clone of its own when the machine can make one (one after another in
+ * the card's folder when it cannot), and merges what they answer into one answer. A shard that fails, escalates, cannot get its clone or answers
+ * badly leaves its files unreviewed; when no shard answered, the first shard's own result is the stage's.
+ */
+async function runShards(
+  deps: PrReviewDeps,
+  context: StageContext,
+  review: ReviewContext,
+  shards: readonly Shard[],
+): Promise<{ result: StageResult; failed: Array<{ path: string; lines: number }>; failedShards: number }> {
+  const maker = deps.helpers?.workspace;
+  const limit = maker ? Math.min(SHARD_CONCURRENCY, shards.length) : 1;
+  const outcomes: Array<{ result: StageResult; answer: Answer | null; note?: string }> = new Array(shards.length);
+  const threads = review.rereview?.threads ?? [];
+  const inShard = (shard: Shard, path: string | null): boolean => path !== null && shard.parts.some((p) => p.path === path);
+  // A thread goes to the shard that holds its file; one whose file is in no shard (or none) goes to the first.
+  const owner = (path: string | null): Shard => shards.find((s) => inShard(s, path)) ?? shards[0]!;
+  const routed = (shard: Shard): NonNullable<ReviewContext["rereview"]>["threads"] => threads.filter((t) => owner(t.path) === shard);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (let i = next++; i < shards.length; i = next++) {
+      const shard = shards[i]!;
+      const sub: StageContext = { ...context, runId: `${context.runId}-shard-${shard.index}`, started: undefined, resume: undefined, engine: undefined };
+      const shardReview: ReviewContext = {
+        ...review,
+        diff: shard.parts.map((p) => p.text).join(""),
+        shard: { n: shard.index, of: shards.length },
+        ...(review.rereview ? { rereview: { ...review.rereview, threads: routed(shard) } } : {}),
+      };
+      let made: PassWorkspace | undefined;
+      try {
+        if (maker) made = await maker.make(sub, `shard-${shard.index}`);
+        const result = await deps.runPack(sub, shardReview, made);
+        const parsed = result.outcome === "pass" ? PrReviewAnswer.safeParse(result.detail?.answer) : null;
+        outcomes[i] = { result, answer: parsed?.success ? parsed.data : null, ...(parsed && !parsed.success ? { note: `its answer does not parse: ${parsed.error.message}` } : {}) };
+      } catch (error) {
+        outcomes[i] = { result: { outcome: "fail", detail: { error: messageOf(error) } }, answer: null, note: messageOf(error) };
+      } finally {
+        if (made) await Promise.resolve(maker!.remove(made)).catch(() => {});
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: limit }, worker));
+
+  const failed: Array<{ path: string; lines: number }> = [];
+  const answers: Answer[] = [];
+  let usage: StageResult["usage"];
+  outcomes.forEach((o, i) => {
+    usage = addUsage(usage, o.result.usage);
+    if (o.answer) answers.push(o.answer);
+    else for (const p of shards[i]!.parts) failed.push({ path: p.path, lines: p.lines });
+  });
+  const failedShards = outcomes.filter((o) => !o.answer).length;
+  if (answers.length === 0) {
+    const first = outcomes[0]!;
+    const result = first.result.outcome === "pass" ? { ...first.result, outcome: "fail" as const, detail: { ...first.result.detail, error: `the review answer does not parse: ${first.note ?? "no shard answered"}` } } : first.result;
+    return { result, failed, failedShards };
+  }
+  const findings = mergeDuplicateFindings(answers.flatMap((a) => a.findings));
+  const seen = new Set<string>();
+  const comments = answers.flatMap((a) => a.comments).filter((c) => {
+    const key = `${c.path}:${c.line}:${c.side ?? "RIGHT"}:${c.body}`;
+    return seen.has(key) ? false : (seen.add(key), true);
+  });
+  const merged: Answer = {
+    verdict: verdictOf(findings),
+    summary: answers.map((a) => a.summary.trim()).filter(Boolean).join(" "),
+    findings,
+    comments,
+    ...(answers.some((a) => a.threads?.length) ? { threads: answers.flatMap((a) => a.threads ?? []) } : {}),
+  };
+  return { result: { outcome: "pass", ...(usage ? { usage } : {}), detail: { answer: merged, summary: merged.summary } }, failed, failedShards };
+}
+
 export function prReviewRunner(deps: PrReviewDeps): StageRunner {
   const { github } = deps;
   return async (context) => {
+    const cleanups: Array<() => void | Promise<void>> = [];
+    try {
+      return await reviewPr(context, cleanups);
+    } finally {
+      for (const c of cleanups) await Promise.resolve(c()).catch(() => {});
+    }
+  };
+
+  async function reviewPr(context: StageContext, cleanups: Array<() => void | Promise<void>>): Promise<StageResult> {
     const pr = prOf(context);
     if (!pr) return { outcome: "fail", detail: { error: "not a PR task" } };
     let review: ReviewContext;
@@ -218,9 +322,45 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     const quiet = plan?.quiet === true;
     const reviewerNeeded = !quiet || plan!.rereview.threads.some((t) => t.settle === "unsettled");
     const silent: StageResult = { outcome: "pass", detail: { answer: { verdict: "comment", summary: "", findings: [], comments: [] } } };
+    // A diff too big for one reviewer is read in shards by module; the passes and the compliance lead read the whole PR once, as files.
+    const limits = (await deps.limits?.(context.task.repoPath ?? null).catch(() => null)) ?? DEFAULT_LIMITS;
+    const readable = parseDiff(shared.diff);
+    const diffLines = readable.reduce((n, f) => n + f.lines, 0);
+    const sharded = diffLines > limits.shardLines;
+    const passNotes: string[] = [];
+    let diffMount: PassMount | null = null;
+    if (sharded) {
+      if (deps.diffFiles) {
+        try {
+          const written = await deps.diffFiles.write(context.runId, readable, shared.diff);
+          cleanups.push(() => deps.diffFiles!.remove(written.host));
+          diffMount = { host: written.host, container: PR_DIFF_MOUNT, readOnly: true };
+        } catch (error) {
+          passNotes.push(`the review passes were skipped: this pull request is too big to carry in a prompt and its diff files could not be written (${messageOf(error)})`);
+        }
+      } else if (deps.helpers) {
+        passNotes.push("the review passes were skipped: this pull request is too big to carry in a prompt and the machine has no folder to hand its diff files in");
+      }
+    }
+    const fileReview: ReviewContext = { ...shared, diff: "", diffDir: PR_DIFF_MOUNT };
+
     // The review passes start with the main review, each in a workspace of its own (they never share the reviewer's folder); runHelpers never throws.
-    const helpersRun = deps.helpers && !quiet ? runHelpers(deps.helpers, context, shared) : null;
-    const [mainRun, helpersDone] = await Promise.allSettled([reviewerNeeded ? deps.runPack(context, review) : Promise.resolve(silent), helpersRun]);
+    const helpersRun = deps.helpers && !quiet && (!sharded || diffMount) ? runHelpers(deps.helpers, context, sharded ? fileReview : shared, diffMount ? [diffMount] : undefined) : null;
+    let unreviewed: Array<{ path: string; lines: number }> = [];
+    let shardStats: { count: number; reviewed: number } | null = null;
+    const mainPromise: Promise<StageResult> = !reviewerNeeded
+      ? Promise.resolve(silent)
+      : sharded
+      ? (async () => {
+          const shards = shardDiff(readable, limits.shardLines, SHARD_CHARS);
+          const capped = capShards(shards, limits.maxShards);
+          const ran = await runShards(deps, context, review, capped.kept);
+          unreviewed = mergeLines([...capped.unreviewed, ...ran.failed]);
+          shardStats = { count: shards.length, reviewed: capped.kept.length - ran.failedShards };
+          return ran.result;
+        })()
+      : deps.runPack(context, review);
+    const [mainRun, helpersDone] = await Promise.allSettled([mainPromise, helpersRun]);
     if (mainRun.status === "rejected") throw mainRun.reason;
     const pack = mainRun.value;
     if (pack.outcome !== "pass") return pack;
@@ -240,7 +380,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     const kept = (confirmed?.kept ?? []).map(({ finding, unsure }) => (unsure ? { ...finding, title: `${UNSURE}${finding.title}` } : finding));
     const helperComments = kept.map((f) => ({ path: f.path, line: f.line, side: f.side === "LEFT" ? ("LEFT" as const) : ("RIGHT" as const), body: `${f.title}: ${f.body}` }));
     // The compliance lead reads the same diff beside the reviewer; its findings join before the verdict, so a high one blocks. It never fails the review.
-    const compliance = deps.compliance && !quiet ? await runCompliance(deps.compliance, context, pr.repo, shared) : null;
+    const compliance = deps.compliance && !quiet ? await runCompliance(deps.compliance, context, pr.repo, sharded ? (diffMount ? fileReview : null) : shared, diffMount ? [diffMount] : undefined) : null;
     const joined = {
       ...parsed.data,
       summary: [parsed.data.summary, compliance?.summary ? `Compliance: ${compliance.summary}` : ""].filter(Boolean).join(" "),
@@ -278,7 +418,10 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       }
     }
     // The verdict is the findings' (and the open threads'), never the model's (orc review-contract): any finding keeps a review from approving.
-    const verdict = verdictOf([...answer.findings, ...stillOpen]);
+    // What no shard read is said in the summary, and a review never approves past it.
+    const notReadLine = unreviewed.length > 0 ? `Not reviewed: ${unreviewed.slice(0, NOT_REVIEWED_SHOWN).map((u) => u.path).join(", ")}${unreviewed.length > NOT_REVIEWED_SHOWN ? ` and ${unreviewed.length - NOT_REVIEWED_SHOWN} more` : ""}.` : "";
+    const summary = [answer.summary, notReadLine].filter(Boolean).join(" ");
+    const verdict = verdictOf([...answer.findings, ...stillOpen, ...(unreviewed.length > 0 ? [{ severity: "question" }] : [])]);
 
     // Nothing is posted here: the review goes out under the person's name, so every verdict, its body and its line
     // comments wait at "post the verdict?" until the person says yes (or edits or drops it).
@@ -295,7 +438,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     const settledCount = plan ? plan.rereview.threads.filter((t) => t.settle === "fixed" || t.settle === "reply_holds").length : 0;
     const body = quiet && !reviewerNeeded
       ? `No new commits since our review at ${plan!.rereview.since.slice(0, 7)}. ${settledCount} of ${plan!.rereview.threads.length} of our threads settled; the rest stay open.`
-      : [answer.summary, !quiet && kept.length > 0 ? `The review passes found ${kept.length} more: ${severityCounts(kept)}.` : ""].filter(Boolean).join(" ");
+      : [summary, !quiet && kept.length > 0 ? `The review passes found ${kept.length} more: ${severityCounts(kept)}.` : ""].filter(Boolean).join(" ");
     const detail = {
       ...pack.detail,
       summary: body,
@@ -314,9 +457,13 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
               const dropped = h.findings.length - (confirmed?.duplicates[h.pack] ?? 0) - (confirmed?.kept.filter((k) => k.pack === h.pack).length ?? 0);
               return { pack: h.pack, ...(h.engine ? { engine: h.engine } : {}), outcome: h.outcome, findings: h.findings.length, ...(verdicts ? { confirm: verdicts } : {}), ...(dropped > 0 ? { dropped } : {}), ...(confirmed?.duplicates[h.pack] ? { alsoFoundByReviewer: confirmed.duplicates[h.pack] } : {}) };
             }),
-            ...(helpers.notes.length > 0 ? { helperNotes: helpers.notes } : {}),
+            ...(helpers.notes.length + passNotes.length > 0 ? { helperNotes: [...helpers.notes, ...passNotes] } : {}),
           }
-        : {}),
+        : passNotes.length > 0
+          ? { helperNotes: passNotes }
+          : {}),
+      ...(shardStats ? { shards: shardStats } : {}),
+      ...(unreviewed.length > 0 ? { unreviewed } : {}),
       ...(plan
         ? { rereview: { since: plan.rereview.since, ...(plan.rereview.note ? { note: plan.rereview.note } : {}), settled: plan.rereview.threads.filter((t) => t.settle === "fixed" || t.settle === "reply_holds").length, open: stillOpen.length, threads: plan.rereview.threads.length } }
         : {}),
@@ -339,7 +486,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       { kind: "pr_review_post", target: pr.url, payload: { event: EVENT_OF[verdict], body, comments, ...(plan ? { threadReplies } : {}) } },
     ];
     return { ...base, detail, requested };
-  };
+  }
 }
 
 /** The review route's `shipping`: posts the review the gate carried (APPROVE, REQUEST_CHANGES or COMMENT) with its line comments. */

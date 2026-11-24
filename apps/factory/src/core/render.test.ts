@@ -424,6 +424,21 @@ describe("renderPrompt", () => {
     expect(render(review)).not.toContain("Left out of this review");
   });
 
+  it("says which shard a reviewer reads, and points a pass at the diff files when the diff is not inline", () => {
+    const pr = { repo: "o/a", number: 12, url: "https://github.com/o/a/pull/12", title: "Export CSV", body: "Adds it.", author: "them", baseRef: "main", headRef: "feat/export" };
+    const review = { pr, diff: "diff --git a/a.ts b/a.ts\n+x", files: [{ path: "a.ts", additions: 1, deletions: 0 }, { path: "z/b.ts", additions: 5, deletions: 2 }], existingComments: [] };
+    const render = (r: object) => renderPrompt({ pack: PACKS.reviewing, input: { ...input, pack: "reviewing", stage: "reviewing", context: { projectContext: null, review: r } }, template: "{{context.review}}" });
+    const shard = render({ ...review, shard: { n: 2, of: 5 } });
+    expect(shard).toContain("This is shard 2 of 5 of a pull request too big for one reviewer");
+    expect(shard).toContain("- z/b.ts (+5 -2)");
+    expect(shard).toContain("```diff\ndiff --git a/a.ts b/a.ts\n+x\n```");
+    expect(render(review)).not.toContain("shard");
+    const files = render({ ...review, diff: "", diffDir: "/pr-diff", shard: undefined });
+    expect(files).toContain("The diff is not inline: this pull request is too big for one prompt. Read it from /pr-diff");
+    expect(files).toContain("/pr-diff/<path>.diff");
+    expect(files).not.toContain("```diff");
+  });
+
   it("renders the PR's diff and comments for reviewing, and each thread with its id for addressing", () => {
     const pr = { repo: "o/a", number: 12, url: "https://github.com/o/a/pull/12", title: "Export CSV", body: "Adds it.", author: "them", baseRef: "main", headRef: "feat/export" };
     const review = { pr, diff: "diff --git a/a.ts b/a.ts\n+x", files: [{ path: "a.ts", additions: 1, deletions: 0 }], existingComments: [{ path: "a.ts", line: 3, author: "x", body: "old note" }] };

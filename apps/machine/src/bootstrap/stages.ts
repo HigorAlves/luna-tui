@@ -55,6 +55,7 @@ import { PACKAGE_MANAGER_CONFIG, configFilesChanged } from "../application/insta
 import { InstallFailedError, type InstallInput, type InstallOutcome, ensureInstalled } from "../application/install.ts";
 import { checkGit } from "../adapters/git/helper.ts";
 import { removeNestedRepositories } from "../adapters/git/machine-repo.ts";
+import { removeDiffFiles, writeDiffFiles } from "../application/stages/review-diff-files.ts";
 import { ensureClone, inUseClones, isClone, localPrDiff, removeClone, reviewClone } from "../adapters/git/clone.ts";
 import { type ProofRig, proofAppDeps } from "../application/config-proof.ts";
 import type { DesignBudget } from "../domain/design-budget.ts";
@@ -416,7 +417,7 @@ export async function buildRealStages(
   const compliance: ComplianceDeps = {
     regimes: async (repoPath) => (repoPath ? ((await policies.for(repoPath)).compliance ?? []) : []),
     wiki: sharedWiki(config.stateDir),
-    run: (subContext, review, context) => runAgent(deps, subContext, "compliance_review", { ...(review ? { review } : {}), compliance: context }),
+    run: (subContext, review, context, mounts) => runAgent(deps, subContext, "compliance_review", { ...(review ? { review } : {}), compliance: context, ...(mounts?.length ? { mounts: [...mounts] } : {}) }),
   };
   // The docs-drift note runs beside Verify's review, on every repo that has docs.
   const docsDrift: DocsDriftDeps = { run: (subContext, drift) => runAgent(deps, subContext, "docs_drift", { docsDrift: drift }) };
@@ -661,12 +662,12 @@ export async function buildRealStages(
       // The security, migration, infrastructure and second-opinion passes: sub-runs of their own packs, all at once beside the main review. Each reads a read-only clone of its own, cloned from the card's repository at the PR's head (what the main reviewer reads), so the card's folder is never touched; finding_confirm is bound late like Verify's decisions.
       helpers: {
         workspace: {
-          make: async (subContext, pack) => {
+          make: async (subContext, label) => {
             const repoPath = subContext.task.repoPath;
             const cardPath = subContext.task.worktreePath;
             if (!repoPath || !cardPath) throw new Error("the task has no PR workspace to review");
             const path = join(config.worktreesDir, basename(repoPath), `${subContext.runId}.review`);
-            const branch = `luna-review/${pack}`;
+            const branch = `luna-review/${label}`;
             removeClone(path);
             inUseClones.add(path);
             try {
@@ -683,7 +684,7 @@ export async function buildRealStages(
             inUseClones.delete(workspace.path);
           },
         },
-        run: (subContext, pack, review, workspace) => runAgent(deps, subContext, pack, { review, ...(workspace ? { workspace } : {}) }),
+        run: (subContext, pack, review, workspace, mounts) => runAgent(deps, subContext, pack, { review, ...(workspace ? { workspace } : {}), ...(mounts?.length ? { mounts: [...mounts] } : {}) }),
         get decide() {
           return verifyDecisions?.decide ?? null;
         },
@@ -698,7 +699,9 @@ export async function buildRealStages(
         },
         decisions: async (repoPath) => (repoPath ? (await policies.for(repoPath)).decisions : {}),
       },
-      runPack: (context, review) => runAgent(deps, context, "reviewing", { review }),
+      runPack: (context, review, workspace) => runAgent(deps, context, "reviewing", { review, ...(workspace ? { workspace } : {}) }),
+      // A big PR's diff as files in a folder of the machine's, mounted read-only for the passes and the compliance lead.
+      diffFiles: { write: (runId, files, whole) => writeDiffFiles(config.stateDir, runId, files, whole), remove: removeDiffFiles },
       ...(reviewLinks ? { links: reviewLinks } : {}),
       ...(jira
         ? {

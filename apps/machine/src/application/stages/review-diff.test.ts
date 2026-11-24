@@ -133,6 +133,12 @@ describe("cutting a diff into shards by module", () => {
     expect(shards[0]!.lines).toBe(404);
   });
 
+  it("also cuts by characters, so a few very long lines do not make a shard the prompt would truncate", () => {
+    const wide = (path: string) => parseDiff(`diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n+${"x".repeat(60_000)}\n`)[0]!;
+    const shards = shardDiff([wide("a/1.js"), wide("a/2.js"), wide("a/3.js")], 4000, 130_000);
+    expect(shards.map(paths)).toEqual([["a/1.js", "a/2.js"], ["a/3.js"]]);
+  });
+
   it("numbers the shards from 1 and counts no file twice", () => {
     const files = Array.from({ length: 30 }, (_, i) => file(`m${i % 6}/f${i}.ts`, 20));
     const shards = shardDiff(files, 100);
