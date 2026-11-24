@@ -46,18 +46,18 @@ Two facts of the harness shape the design:
 
 | Part | Where |
 |---|---|
-| Observation of one tool call (intent, form, error class, failure fingerprint, edited files, tests ran) | `factory/src/core/economy/observe.ts`, `shell-edits.ts` |
-| Loop guard state, rules and the redirect template | `factory/src/core/economy/guard.ts`, `rules.ts` |
+| Observation of one tool call (intent, form, error class, failure fingerprint, edited files, tests ran) | `apps/factory/src/core/economy/observe.ts`, `shell-edits.ts` |
+| Loop guard state, rules and the redirect template | `apps/factory/src/core/economy/guard.ts`, `rules.ts` |
 | Runtime wiring | Claude: a `PostToolUse` hook in `runtimes/claude/guards.ts`. eve: the tool wrappers in `runtimes/eve/agent/tools.ts` |
-| Effective tokens | `factory/src/core/usage.ts`, `contracts/src/economy.ts` |
-| Contract shapes (`EconomyInput`, `Observation`, facts, mask, config) | `contracts/src/economy.ts` |
-| Fold after each run, lifecycle, envelope, evidence, ledger | `machine/src/domain/economy/*.ts` (pure) |
-| The `Economy` port, with `noEconomy()` | `machine/src/application/economy.ts` |
-| Its store, files under `<state>/economy/<repo slug>/` | `machine/src/adapters/economy/` |
-| Routes | `machine/src/adapters/http/app.ts` |
-| The Economy view | `board/src/economy.rs` |
+| Effective tokens | `apps/factory/src/core/usage.ts`, `packages/contracts/src/economy.ts` |
+| Contract shapes (`EconomyInput`, `Observation`, facts, mask, config) | `packages/contracts/src/economy.ts` |
+| Fold after each run, lifecycle, envelope, evidence, ledger | `apps/machine/src/domain/economy/*.ts` (pure) |
+| The `Economy` port, with `noEconomy()` | `apps/machine/src/application/economy.ts` |
+| Its store, files under `<state>/economy/<repo slug>/` | `apps/machine/src/adapters/economy/` |
+| Routes | `apps/machine/src/adapters/http/app.ts` |
+| The Economy view | `apps/board/src/economy.rs` |
 
-Learning data stays in owner-only files under the state dir, as ground truth and graph misses do. `factory/NOTICE` names the upstream project and its licence.
+Learning data stays in owner-only files under the state dir, as ground truth and graph misses do. `apps/factory/NOTICE` names the upstream project and its licence.
 
 ### 1. Observation
 
@@ -185,7 +185,7 @@ The port landed on `feat/token-economizer` as the commits that the Rollout lists
 
 ### As designed
 
-- The three mechanisms and the cost ledger are in the factory and the machine, as the Layout table says. The observer, the loop guard and the mask are in `factory/src/core/economy/`. The folds, the lifecycle and the pruning evidence are in `machine/src/domain/economy/`. The port is `machine/src/application/economy.ts`, with `noEconomy()`, and its store is `machine/src/adapters/economy/store.ts`.
+- The three mechanisms and the cost ledger are in the factory and the machine, as the Layout table says. The observer, the loop guard and the mask are in `apps/factory/src/core/economy/`. The folds, the lifecycle and the pruning evidence are in `apps/machine/src/domain/economy/`. The port is `apps/machine/src/application/economy.ts`, with `noEconomy()`, and its store is `apps/machine/src/adapters/economy/store.ts`.
 - Each tool result becomes an `Observation` inside the container. The output text never leaves it.
 - The loop guard has the envelope, the free gate, the backstop and the judge. The judge is `loop_judge`, a decision pack that runs through the `/out/checks` mailbox. The first stuck verdict gives one redirect. The next one ends the run with `LOOP_STUCK`, and the machine escalates the card.
 - There are six free fact families. A proposer pack and checked detectors add more. The retro promotes lasting facts into `project-context.md`.
@@ -208,14 +208,14 @@ The port landed on `feat/token-economizer` as the commits that the Rollout lists
 - **The detector has four atom kinds.** The design said named predicates and literal substrings. The build adds `errorClass` and `intent` atoms. There are ten predicates. The machine evaluates a detector over the observed calls that it keeps for each of the last 8 runs (`calls.json`, 300 calls a run).
 - **The proposed facts have their own block.** They go under a manual header (`# repo operating manual (<folder name>) — ...`). Each block has at most 4 lines and about 150 tokens, with its header counted. The block for the free facts and the block for the proposed facts each have their own cap.
 - **The proposer runs only with `facts: on` and 2 digests or more.** `facts: free` makes no model call at all.
-- **The config has one more key and bounds.** `promote_cards` (5) is a key. The design fixed the number. The bounds are in `contracts/src/config-v22.ts` and in [configuration](../configuration.md#the-economy-section-the-token-economy): for example `redirects` is 0 to 3 and `backstop_mult` is 1 to 10. `tool_prune: off` also stops the evidence and the mask, not only the proposals.
+- **The config has one more key and bounds.** `promote_cards` (5) is a key. The design fixed the number. The bounds are in `packages/contracts/src/config-v22.ts` and in [configuration](../configuration.md#the-economy-section-the-token-economy): for example `redirects` is 0 to 3 and `backstop_mult` is 1 to 10. `tool_prune: off` also stops the evidence and the mask, not only the proposals.
 - **Promotion is complete on close.** The retro names ids and sections. The machine writes the fact's own stored text into the draft PR. The fact is `pending` once the PR is open, and becomes `promoted` when the default branch's file holds the text, which the machine checks on later closes. The machine offers at most 10 facts.
 - **The status shape has `tools` per pack.** `GET /economy` answers `envelopes`, `guard` (the last 50 rows), `cost`, `facts` and `tools`. The `facts` list holds every state. For each pack, `tools` holds the mask and the proposal, with `unusedRuns` and `cards` for each unit. `cost` has an extra `overheadUnpriced`, the overhead runs that reported no tokens. The routes answer 400 for a repository that the machine does not know. With `MACHINE_ECONOMY=off` they are absent.
 - **Import scope is narrower than "tool evidence and envelopes".** It gives envelopes from passing runs and tool evidence from Claude runs only. It teaches no fact and writes no cost record. A run is never folded twice.
 - **The ledger prices overhead that the runtime did not count.** A `loop_judge`, `loop_redirect` or `fact_propose` run with no token count keeps its cost in dollars. It counts in `overheadUnpriced`, so `overhead` is a floor.
 - **`GET /metrics` has an `economy` section.** It holds effective tokens for work and overhead and the overhead share. It also holds the redirects and stops, the active and promoted facts and the masked units. It is absent for `repo=` with no repository and for a repository the machine does not know.
-- **`loop_judge` has no measured default.** The design promised an entry in `decision-defaults.json` and a scorecard. The pack has nine eval cases and is in the `UNMEASURED` list of `contracts/src/decision-defaults.test.ts`. So it runs on Jev by default, with Claude as the fallback. Nobody has run a baseline for it.
-- **A fact's command is checked on the host, and two cards must confirm a fact.** The container is untrusted, so the character set was not enough: it spells `npx --yes evil-pkg@1 test`. The observer's word lists now live in `contracts/src/economy-vocabulary.ts`. `knownForm` accepts only a spelling the observer could write. The machine applies it when it forms a fact and again when it renders one. A fact is stated only after 2 distinct cards confirmed it (`FIRE_MIN_CARDS`), so one hostile card's retries cannot state a fact.
+- **`loop_judge` has no measured default.** The design promised an entry in `decision-defaults.json` and a scorecard. The pack has nine eval cases and is in the `UNMEASURED` list of `packages/contracts/src/decision-defaults.test.ts`. So it runs on Jev by default, with Claude as the fallback. Nobody has run a baseline for it.
+- **A fact's command is checked on the host, and two cards must confirm a fact.** The container is untrusted, so the character set was not enough: it spells `npx --yes evil-pkg@1 test`. The observer's word lists now live in `packages/contracts/src/economy-vocabulary.ts`. `knownForm` accepts only a spelling the observer could write. The machine applies it when it forms a fact and again when it renders one. A fact is stated only after 2 distinct cards confirmed it (`FIRE_MIN_CARDS`), so one hostile card's retries cannot state a fact.
 
 ### Not verified live
 

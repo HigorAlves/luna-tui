@@ -30,7 +30,7 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      # Go and Rust are the runner image's versions (machine/runner/Dockerfile): bump them together (a test checks).
+      # Go and Rust are the runner image's versions (apps/machine/runner/Dockerfile): bump them together (a test checks).
       - uses: actions/setup-go@v7
         with:
           go-version: "1.25.1"
@@ -49,7 +49,7 @@ jobs:
       # Every golden fixture ticket must be red with its seed and green with its reference
       # patch; a fixture that drifts would grade real agent runs against a broken bar.
       - name: Golden fixtures self-validate
-        run: node machine/scripts/golden-task.mjs --selftest
+        run: node apps/machine/scripts/golden-task.mjs --selftest
 
   contracts:
     runs-on: ubuntu-latest
@@ -119,7 +119,7 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
       - name: Build the runner image
-        run: bash machine/runner/build.sh
+        run: bash apps/machine/runner/build.sh
       - name: Sandbox smoke (no model call)
         run: pnpm --filter @hardness/machine smoke:sandbox
 
@@ -128,7 +128,7 @@ jobs:
     timeout-minutes: 15
     defaults:
       run:
-        working-directory: board
+        working-directory: apps/board
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.99.1
@@ -136,7 +136,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: board
+          workspaces: apps/board
       # rustfmt is not enforced yet: the crate predates it (133 hunks of drift); a format-only
       # PR adds `cargo fmt --check` here. large_enum_variant is allowed until the three
       # enums it names are boxed.

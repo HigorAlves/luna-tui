@@ -32,23 +32,23 @@ Every pack runs on the Claude Agent SDK today, and the pack names a Claude model
 
 | Term | What it is | Lives in | Example |
 |---|---|---|---|
-| Role | Who the agent is: body, description, skills. Runtime-neutral. | `factory/roles/<role>/` | `triage-planner` |
-| Pack | A job: role (or questions) + template + answer schema + access + limits + allowed engines. | `contracts/src/packs.ts` | `triage`, `issue_classify` |
-| Runtime | The harness that executes a run, on one vendor SDK. Exactly three. | `factory/src/runtimes/<runtime>/` | `claude`, `eve`, `jev` |
-| Engine | A named alias: runtime + a pinned model + effort + how it is paid. What packs, `luna.yaml` and the boards refer to. | `contracts/src/engines.ts` | `claude:opus`, `codex:sol`, `openai:sol`, `jev` |
+| Role | Who the agent is: body, description, skills. Runtime-neutral. | `apps/factory/roles/<role>/` | `triage-planner` |
+| Pack | A job: role (or questions) + template + answer schema + access + limits + allowed engines. | `packages/contracts/src/packs.ts` | `triage`, `issue_classify` |
+| Runtime | The harness that executes a run, on one vendor SDK. Exactly three. | `apps/factory/src/runtimes/<runtime>/` | `claude`, `eve`, `jev` |
+| Engine | A named alias: runtime + a pinned model + effort + how it is paid. What packs, `luna.yaml` and the boards refer to. | `packages/contracts/src/engines.ts` | `claude:opus`, `codex:sol`, `openai:sol`, `jev` |
 
 ### Where Claude is welded in today
 
 | File | Coupling | Becomes |
 |---|---|---|
-| `contracts/src/packs.ts` | `model: "opus" \| "sonnet" \| "haiku"`; `tools` are Claude tool names (`Bash(git add:*)`, `mcp__luna__step`) | `engines` + a neutral `access` block |
-| `factory/src/main.ts` | Builds SDK options and loops over `query()` inline | A dispatcher; the loop moves to `runtimes/claude/run.ts` |
-| `factory/src/agents.ts` | `AgentDefinition`, `ROLE_DESCRIPTION`, the `HELPER` table with Claude aliases | Description in role frontmatter; helpers carry an engine |
-| `factory/src/hooks/guards.ts` | Guard policy as a `PreToolUse` hook | A pure `checkCall()` in core, wrapped per runtime |
-| `factory/src/tools/luna.ts` | Ledger and step tools as an SDK MCP server | Plain handlers + zod in core, one wrapper per runtime |
-| `factory/src/render.ts` | `FACTORY_RULES` names Claude tools | Rules with the runtime's tool names filled in |
-| `factory/plugin/` | Skills packaged as a Claude plugin | `factory/skills/`; Claude and eve both read Agent Skills `SKILL.md` |
-| `machine/src/adapters/docker/credentials.ts` | One Claude credential | One loader per runtime |
+| `packages/contracts/src/packs.ts` | `model: "opus" \| "sonnet" \| "haiku"`; `tools` are Claude tool names (`Bash(git add:*)`, `mcp__luna__step`) | `engines` + a neutral `access` block |
+| `apps/factory/src/main.ts` | Builds SDK options and loops over `query()` inline | A dispatcher; the loop moves to `runtimes/claude/run.ts` |
+| `apps/factory/src/agents.ts` | `AgentDefinition`, `ROLE_DESCRIPTION`, the `HELPER` table with Claude aliases | Description in role frontmatter; helpers carry an engine |
+| `apps/factory/src/hooks/guards.ts` | Guard policy as a `PreToolUse` hook | A pure `checkCall()` in core, wrapped per runtime |
+| `apps/factory/src/tools/luna.ts` | Ledger and step tools as an SDK MCP server | Plain handlers + zod in core, one wrapper per runtime |
+| `apps/factory/src/render.ts` | `FACTORY_RULES` names Claude tools | Rules with the runtime's tool names filled in |
+| `apps/factory/plugin/` | Skills packaged as a Claude plugin | `apps/factory/skills/`; Claude and eve both read Agent Skills `SKILL.md` |
+| `apps/machine/src/adapters/docker/credentials.ts` | One Claude credential | One loader per runtime |
 
 ### What the other SDKs offer (as read on 2026-11-02)
 
@@ -60,13 +60,13 @@ Every pack runs on the Claude Agent SDK today, and the pack names a Claude model
 ### Folder structure
 
 ```
-contracts/src/
+packages/contracts/src/
   packs.ts            # `model` replaced by `engines`, `tools` by `access`
   engines.ts          # engine aliases (see RFC 0003 for the model catalog behind them)
   access.ts           # runtime-neutral capabilities: read, write, commands, web, luna tools
   stage.ts            # StageInput gains `engine`
 
-factory/
+apps/factory/
   roles/<role>/
     role.md           # frontmatter: description, skills; body shared by every runtime
     claude.md         # optional addendum, appended on Claude runs only
@@ -74,7 +74,7 @@ factory/
   questions/<pack>.ts # Jev packs: typed questions and criteria, no role
   prompts/<pack>.md   # unchanged
   skills/<skill>/     # was plugin/skills; read by Claude and eve
-  .claude-plugin/     # manifest moves up so the plugin root is factory/
+  .claude-plugin/     # manifest moves up so the plugin root is apps/factory/
   src/
     main.ts           # dispatcher: RUNTIMES[input.engine.runtime].run(ctx)
     core/             # runtime-neutral: runtime.ts, stage-io.ts, render.ts, output.ts,
@@ -86,17 +86,17 @@ factory/
       jev/            # run.ts, questions.ts
   .eve-agents/        # generated by eve/compile.ts at image build, gitignored
 
-machine/src/
+apps/machine/src/
   adapters/credentials/   # claude.ts, codex.ts, typesafe.ts, index.ts
   domain/engine-choice.ts # pure: pack default → luna.yaml → task override
 ```
 
-A role is a folder because its body is about the job and reads the same for any model; what differs is small (tool names, progress reporting, a model habit to correct) and goes in an addendum. An addendum longer than the shared body means the two are different roles. Jev packs get `factory/questions/` instead of a role: a decision model has no persona and reads no prompt. eve agents are generated from the same role, skills and pack at image build time, since roles and packs are static; a run only sends a message.
+A role is a folder because its body is about the job and reads the same for any model; what differs is small (tool names, progress reporting, a model habit to correct) and goes in an addendum. An addendum longer than the shared body means the two are different roles. Jev packs get `apps/factory/questions/` instead of a role: a decision model has no persona and reads no prompt. eve agents are generated from the same role, skills and pack at image build time, since roles and packs are static; a run only sends a message.
 
 ### Key interfaces / data shapes
 
 ```ts
-// contracts/src/engines.ts
+// packages/contracts/src/engines.ts
 export const ENGINES = {
   "claude:opus":   { runtime: "claude", model: "anthropic/opus-5.5",   effort: "high" },
   "claude:sonnet": { runtime: "claude", model: "anthropic/sonnet-5.5", effort: "medium" },
@@ -108,7 +108,7 @@ export const ENGINES = {
   "jev":           { runtime: "jev",    model: "typesafe/jev" },
 } as const satisfies Record<string, Engine>;
 
-// contracts/src/packs.ts
+// packages/contracts/src/packs.ts
 triage: {
   id: "triage",
   kind: "agent",                                // "agent" | "decision" | "script"
@@ -121,7 +121,7 @@ triage: {
   template: "triage.md",
 }
 
-// factory/src/core/runtime.ts
+// apps/factory/src/core/runtime.ts
 export interface Runtime {
   id: "claude" | "eve" | "jev";
   run(ctx: RunContext, emit: (e: RunEvent) => void): Promise<RunOutcome>;
@@ -158,7 +158,7 @@ Precedence: task override (set per stage from either board, the TUI or Luna Notc
 ### Jev at intake
 
 ```ts
-// factory/questions/issue_classify.ts
+// apps/factory/questions/issue_classify.ts
 export default {
   kind:  { type: "choice", criteria: { bug: "...", feature: "...", chore: "...", question: "..." } },
   area:  { type: "choice", criteria: { board: "...", machine: "...", factory: "...", contracts: "...", site: "..." } },
@@ -192,7 +192,7 @@ One runner image carries all three SDKs and the Codex CLI, because a delegated c
 Each phase is a PR (or short stack) under the size budget; phases 1–3 change no behaviour.
 
 0. **Spike** (throwaway branch): in the runner image, an eve agent on `chatgpt()` via `codex app-server` answering with an `outputSchema`; a tool call blocked by a guard; commands in `/work` without nested docker; one `systemOne()` call. Exit: a yes/no for each, versions pinned.
-1. **Move only:** `factory/agents/*.md` → `factory/roles/<role>/role.md`, `plugin/skills` → `skills/`, `src/*` → `src/core/` + `src/runtimes/claude/`. Exit: `LUNA_STAGE_DRY_RUN=1` output byte-identical for every pack.
+1. **Move only:** `apps/factory/agents/*.md` → `apps/factory/roles/<role>/role.md`, `plugin/skills` → `skills/`, `src/*` → `src/core/` + `src/runtimes/claude/`. Exit: `LUNA_STAGE_DRY_RUN=1` output byte-identical for every pack.
 2. **Contracts:** `engines.ts`, `access.ts`, `StageInput.engine`; every pack's default equals today's model. Exit: the golden `access` → Claude tools test.
 3. **Core:** `checkCall()`, `luna-tools.ts`, per-runtime credentials. Exit: guard and luna tool tests pass against core.
 4. **Evals** ([RFC 0003](./0003-upgradable-harness.md)) before any pack moves.
@@ -254,7 +254,7 @@ eve ships `decide()` defaulting to Jev. Rejected: it routes through AI Gateway, 
 - A fresh clone with only a Claude token runs exactly as today.
 - With a Codex login, `luna.yaml` moves `triage` to `codex:sol` and a task passes triage with no change to the machine.
 - `issue_classify` labels a recorded ticket set, and tickets below threshold reach `jira_intake` unchanged.
-- No file outside `factory/src/runtimes/<runtime>/` imports that runtime's SDK.
+- No file outside `apps/factory/src/runtimes/<runtime>/` imports that runtime's SDK.
 
 ## Spike findings (2026-11-02)
 
@@ -286,20 +286,20 @@ What the eve runtime has to do because of them:
 
 Phases 0–5 and 7 are built, phase 6 in part. Where the build differs from the design above:
 
-- **Skills did not move.** They are still `factory/plugin/skills/` with the manifest in `factory/plugin/.claude-plugin/`; the Claude runtime loads the plugin and the eve compiler copies the skills a pack names into its agent.
-- **Roles** are `factory/roles/<role>/role.md` as proposed. Only an `eve.md` addendum exists (on `triage-planner`); no `claude.md` addendum is read.
-- **Questions live in contracts**, not `factory/questions/`: `contracts/src/questions.ts` holds the question types and `answerSchema()`, and `issue_classify`'s set sits in its `contracts/src/packs.ts` entry. `factory/src/runtimes/jev/questions.ts` turns them into the SDK's helpers.
+- **Skills did not move.** They are still `apps/factory/plugin/skills/` with the manifest in `apps/factory/plugin/.claude-plugin/`; the Claude runtime loads the plugin and the eve compiler copies the skills a pack names into its agent.
+- **Roles** are `apps/factory/roles/<role>/role.md` as proposed. Only an `eve.md` addendum exists (on `triage-planner`); no `claude.md` addendum is read.
+- **Questions live in contracts**, not `apps/factory/questions/`: `packages/contracts/src/questions.ts` holds the question types and `answerSchema()`, and `issue_classify`'s set sits in its `packages/contracts/src/packs.ts` entry. `apps/factory/src/runtimes/jev/questions.ts` turns them into the SDK's helpers.
 - **Effort stays on the pack**, not the engine: it is about the job. An engine is a catalog model plus its `auth`; the contract test checks the pack's effort against the model's `caps.effort`.
 - **`codex:sol` runs `gpt-5.6-terra`**: `gpt-6-sol` is API-only on a ChatGPT login, so only `openai:sol` runs it. `codex:luna` and `openai:luna` share `gpt-6-luna`.
 - **`Runtime.run(ctx)` takes no `emit`**: there is no `RunEvent` stream ([RFC 0003](./0003-upgradable-harness.md) §6); each runtime prints its own transcript.
-- **Helpers carry an engine; `delegate` runs the rest** (phase 7). `helpers` is `{ role, engine }[]`, checked like a pack's engines (an agent-capable model at the pack's effort, never Jev). A helper on Claude beside a Claude run is the SDK's subagent, as before (`security-reviewer` on `claude:opus`, `reply-drafter` on `claude:haiku`). eve maps no subagent (its declared subagents run as tasks the parent does not wait on, with their own tools and sandbox to compile), so on eve every helper is delegated. A delegated helper is not "that helper's pack" but a pack built for the call, `helperPack()` in `contracts/src/packs.ts`: the helper's role and `prompts/helper.md` (the parent's message in it), the parent's access narrowed to reading (`readOnly()`: no writes, subagents, skills or luna tools, only commands that read), no helpers, the parent's effort, at most 25 turns and 10 minutes, and `{ answer, findings? }` as the answer. `delegate` is served beside the luna tools (Claude: on the in-process server as `mcp__luna__delegate`, added to the pack's tool lists so the golden access mapping is unchanged; eve: a compiled tool over the luna bridge, on `node:http` since a child outlives fetch's timeouts). Children run one at a time; a child gets what is left of the parent's turns (the parent's tool calls so far, never fewer than its turns, minus one for the answer) and time (less a margin), and `result.json`'s usage adds the children's cost but not their turns, which stay in each child's own result. A child's missing credential (looked for in the container's env, or `$CODEX_HOME/auth.json`), failure or rate limit is the call's error; the parent goes on. The `child` event gained `role`. The machine prepares a stage's helpers' credentials beside its own, each once, and leaves one out with a note when it is missing, held back or busy for two minutes. eve builds an agent per helper on an eve engine at image build, `<pack>--<role>`. First user: `verifying` asks `second-opinion` on `codex:sol` once before its verdict; a missing second opinion never blocks it.
+- **Helpers carry an engine; `delegate` runs the rest** (phase 7). `helpers` is `{ role, engine }[]`, checked like a pack's engines (an agent-capable model at the pack's effort, never Jev). A helper on Claude beside a Claude run is the SDK's subagent, as before (`security-reviewer` on `claude:opus`, `reply-drafter` on `claude:haiku`). eve maps no subagent (its declared subagents run as tasks the parent does not wait on, with their own tools and sandbox to compile), so on eve every helper is delegated. A delegated helper is not "that helper's pack" but a pack built for the call, `helperPack()` in `packages/contracts/src/packs.ts`: the helper's role and `prompts/helper.md` (the parent's message in it), the parent's access narrowed to reading (`readOnly()`: no writes, subagents, skills or luna tools, only commands that read), no helpers, the parent's effort, at most 25 turns and 10 minutes, and `{ answer, findings? }` as the answer. `delegate` is served beside the luna tools (Claude: on the in-process server as `mcp__luna__delegate`, added to the pack's tool lists so the golden access mapping is unchanged; eve: a compiled tool over the luna bridge, on `node:http` since a child outlives fetch's timeouts). Children run one at a time; a child gets what is left of the parent's turns (the parent's tool calls so far, never fewer than its turns, minus one for the answer) and time (less a margin), and `result.json`'s usage adds the children's cost but not their turns, which stay in each child's own result. A child's missing credential (looked for in the container's env, or `$CODEX_HOME/auth.json`), failure or rate limit is the call's error; the parent goes on. The `child` event gained `role`. The machine prepares a stage's helpers' credentials beside its own, each once, and leaves one out with a note when it is missing, held back or busy for two minutes. eve builds an agent per helper on an eve engine at image build, `<pack>--<role>`. First user: `verifying` asks `second-opinion` on `codex:sol` once before its verdict; a missing second opinion never blocks it.
 - **`chat_triage` is a new pack beside `slack_triage`**, not a rename: the same answer shape for a Slack or Teams batch a client sends through `POST /runs` (`claude:haiku`, `codex:luna` allowed). `slack_triage` is unchanged and still serves the machine's Slack inbox.
 - **Jev through the Vercel AI Gateway is built.** The Jev runtime has two transports behind one `JevTransport`: TypeSafe's SDK (`TYPESAFE_API_KEY`) and the AI SDK's decision API (`experimental_decide` from `ai` 7.0.161, already the factory's for eve) on the Gateway (`AI_GATEWAY_API_KEY`, model `typesafe-ai/jev`, the catalog entry's `gatewayId`). The key decides, the Gateway's first. Yes/no is `boolean` on that wire; a choice or score's confidence is TypeSafe's own when the Gateway passes it in its provider metadata (it does), else read from the distribution. Cost is no longer null: the catalog entry carries `pricing: { inputPerMTokUsd: 0.042 }`, the only place a price lives, and a run's `costUsd` is its input tokens at that price (the Gateway's own reported cost matched it to the micro-dollar on the live check). The machine's loader is the "Jev credential": the Gateway key (env, then `~/.config/hardness/ai-gateway-api-key`), else the TypeSafe key; the credential owner stays `typesafe`.
 - **`issue_classify` in intake is built, conservatively.** Before a new Jira or GitHub issue becomes a task, `issue_classify` runs on its title, description and labels through `PackRuns` (client `intake`, a `pack_runs` row for its cost); the answer is kept on the task as `classification`. Labels do not "apply and route" as the design said: only a `question` with every answer at or above `minConfidence` skips `jira_intake` (declined like `not_for_agent`); everything else runs `jira_intake` as before with the classification as a hint in its context. Without a Jev credential intake is unchanged, and a failed run never blocks it. No agreement rate on recorded tickets has been measured beyond the eval cases.
 - **Which engines are live.** `triage` allows `codex:sol` and `slack_triage`/`chat_triage` allow `codex:luna`; every default is still Claude. No writable pack allows an eve engine.
-- **Credentials** are one loader per runtime in `machine/src/adapters/credentials/` (`claude`, `codex`, `openai`, `jev`). The Codex refresh question is settled: each `codex:*` run gets its own copy of `auth.json`, runs take the login one at a time, and a refreshed copy is written back only while the host file is unchanged. A task's or repo's engine pick whose credential is missing falls back to the pack's default with a `stage.engine` note; a missing Jev credential makes `POST /runs` answer 409 `no_credential`.
+- **Credentials** are one loader per runtime in `apps/machine/src/adapters/credentials/` (`claude`, `codex`, `openai`, `jev`). The Codex refresh question is settled: each `codex:*` run gets its own copy of `auth.json`, runs take the login one at a time, and a refreshed copy is written back only while the host file is unchanged. A task's or repo's engine pick whose credential is missing falls back to the pack's default with a `stage.engine` note; a missing Jev credential makes `POST /runs` answer 409 `no_credential`.
 - **eve agents** are compiled and built at image build for the packs that allow an eve engine (`triage`, `slack_triage`, `chat_triage`), not for every pack.
-- **The guards** are one `checkCall()` in `factory/src/core/guards.ts`, as `PreToolUse` hooks on Claude and tool approvals on eve. After review the Codex-home denylist above became roots: every path a tool names must lie in the run's roots, symlinks followed; eve's `bash` runs one argv with no shell; the eve server reads its secrets from a 0600 file, never its environment; web fetches reach only the public web. `docs/architecture.md`, "Factory mode", has the rules as they stand.
-- **The SDK boundary** holds by review: no lint rule enforces it yet; `contracts/src/engines.test.ts` enforces only that model IDs stay in `models.ts`.
+- **The guards** are one `checkCall()` in `apps/factory/src/core/guards.ts`, as `PreToolUse` hooks on Claude and tool approvals on eve. After review the Codex-home denylist above became roots: every path a tool names must lie in the run's roots, symlinks followed; eve's `bash` runs one argv with no shell; the eve server reads its secrets from a 0600 file, never its environment; web fetches reach only the public web. `docs/architecture.md`, "Factory mode", has the rules as they stand.
+- **The SDK boundary** holds by review: no lint rule enforces it yet; `packages/contracts/src/engines.test.ts` enforces only that model IDs stay in `models.ts`.
 - **The `CLAUDE.md` rule** landed with the paths as built and one addition: no source file outside `models.ts` names a model ID.
 - **eve subagents (2026-11-12).** The note above said eve maps no subagent. eve now maps a helper on an eve engine under an eve stage to a declared subagent (`agent/subagents/<role>/`, `tool: false`, the parent's sandbox through `defineParentSandbox()`). `delegate` on eve is a workflow tool: it waits for the child with `ctx.agent(role)` and the `{ answer, findings? }` schema, so the parent does not run the child as a background task. The runner keeps the semantics of `delegate`: `helper_start` on the luna bridge checks the credential and the limits and renders `prompts/helper.md`. The runner follows the stream of the child, caps its turns and time, and writes `/out/children/<n>/`. eve counts the usage of the child in the stream of the parent (`delegatedUsageFact`), so the cost is counted once. Two eve limits shaped the generated tool: a workflow step must be declared in a file inside the app, and the workflow bundle cannot import contracts (`node:fs`), so the answer schema is inlined as JSON. A helper can name another engine for a runtime (`on`). `triage` on codex gets `reply-drafter` on `codex:luna`, the first native subagent. `verifying` on codex gets its second opinion on `claude:opus` (D9).

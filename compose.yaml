@@ -26,7 +26,7 @@ services:
   machine:
     build:
       context: .
-      dockerfile: machine/Dockerfile
+      dockerfile: apps/machine/Dockerfile
     image: hardness-machine:local
     depends_on:
       postgres:
@@ -161,8 +161,8 @@ services:
     volumes:
       - lmnr-clickhouse-data:/var/lib/clickhouse/
       - lmnr-clickhouse-logs:/var/log/clickhouse-server/
-      - ./observe/clickhouse-profiles.xml:/etc/clickhouse-server/users.d/lmnr.xml:ro
-      - ./observe/clickhouse-server.xml:/etc/clickhouse-server/config.d/lmnr.xml:ro
+      - ./infra/laminar/clickhouse-profiles.xml:/etc/clickhouse-server/users.d/lmnr.xml:ro
+      - ./infra/laminar/clickhouse-server.xml:/etc/clickhouse-server/config.d/lmnr.xml:ro
     ulimits:
       nofile:
         soft: 262144

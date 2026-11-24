@@ -18,7 +18,7 @@ Every agent stage today runs `orc-stage run` inside a container with the orc plu
 - Each role runs as a real SDK agent definition with its own prompt body, model, effort, tools, turn limit and skills.
 - Guardrails (no push, no PR create, no tracker writes, no AI attribution, write jail to `/work` and `/out`) run as in-process `PreToolUse` hooks owned and tested here.
 - The step tool and the slice ledger are in-process MCP tools served by the runner, not a bash CLI writing to `.orc/`.
-- The stage contract (`StageInput`, `StageOutput`, pack ids, output schemas) has one source of truth in `contracts/` and one conformance test, in one repo.
+- The stage contract (`StageInput`, `StageOutput`, pack ids, output schemas) has one source of truth in `packages/contracts/` and one conformance test, in one repo.
 - Nothing orc-named at runtime: no `ORC_*` env, no `.orc/` path, no `orc.` event prefix, no `orc-*` binary lookup on the host.
 - Parity first: the golden matrix (`pnpm golden`, `golden:live`) passes with the new runner before any behavior is changed on purpose.
 
@@ -42,9 +42,9 @@ machine (TS)  ──docker run──▶  runner.mjs (node)
                                                   plugins: [/orc]   settingSources: []
 ```
 
-- `machine/runner/build.sh` archives an orc checkout (or clones `main`) into `vendor/orc.tar`; the Dockerfile unpacks it at `/orc` and installs the SDK under `/orc/lib/factory`. `.github/workflows/golden.yml` builds the same image from an `orc_ref` input.
-- `machine/src/domain/stage-input.ts` hand-mirrors `PACK_LIMITS` from orc's `stages.json` ("change both together").
-- `contracts/fixtures/orc/` holds a vendored copy of orc's packs and schemas; `orc-contract.test.ts` checks the machine's zod shapes against it and, when an orc checkout is next to the repo, that the copy is current.
+- `apps/machine/runner/build.sh` archives an orc checkout (or clones `main`) into `vendor/orc.tar`; the Dockerfile unpacks it at `/orc` and installs the SDK under `/orc/lib/factory`. `.github/workflows/golden.yml` builds the same image from an `orc_ref` input.
+- `apps/machine/src/domain/stage-input.ts` hand-mirrors `PACK_LIMITS` from orc's `stages.json` ("change both together").
+- `packages/contracts/fixtures/orc/` holds a vendored copy of orc's packs and schemas; `orc-contract.test.ts` checks the machine's zod shapes against it and, when an orc checkout is next to the repo, that the copy is current.
 - `pack-runner.ts` mounts `<stateDir>/tasks/<id>/orc` at `/state` and sets `ORC_STATE_DIR` so orc's slice ledger survives an attempt; `memory.ts` and the retro prompt read `.orc/<branch>/files/`.
 - `main.ts` looks for `orc-state` on the host PATH; `close-task.ts` calls `orc-state close --merged` when it exists.
 - `e2e.ts` treats a `.orc/targets.json` in the worktree as a sign of a web repo; the e2e prompt cites `orc:qa-targets`.
@@ -76,15 +76,15 @@ Read from orc at `9ef37bd3b1a8` (the checkout next to this repo) and the vendore
 
 | Where | Today | After |
 |---|---|---|
-| Image build (`build.sh`, Dockerfile, `golden.yml`) | Archives or clones orc into `vendor/orc.tar`; `ORC_SOURCE`, `ORC_PATH`, `ORC_REF`, `orc_ref` workflow input | `COPY factory/`; no orc inputs; the golden workflow builds from the checkout under test |
+| Image build (`build.sh`, Dockerfile, `golden.yml`) | Archives or clones orc into `vendor/orc.tar`; `ORC_SOURCE`, `ORC_PATH`, `ORC_REF`, `orc_ref` workflow input | `COPY apps/factory/`; no orc inputs; the golden workflow builds from the checkout under test |
 | Stage entry (`runner.mjs`) | Spawns `orc-stage run` | `node /factory/dist/main.js` |
-| Prompts, agents, skills | orc's, loaded from `/orc` at run time | Copied once into `factory/`, owned and edited here; a NOTICE records the source commit; no sync script |
-| Guards | orc's bash hooks through the plugin | In-process hooks in `factory/src/hooks` with table tests |
+| Prompts, agents, skills | orc's, loaded from `/orc` at run time | Copied once into `apps/factory/`, owned and edited here; a NOTICE records the source commit; no sync script |
+| Guards | orc's bash hooks through the plugin | In-process hooks in `apps/factory/src/hooks` with table tests |
 | Step tool, slice ledger | `mcp__orc__step` (no server), `orc-state` plus `.orc/` in the worktree, `/state` host mount | `mcp__luna__*` served in-process; ledger in `/out/ledger.json`; no `.orc/` written anywhere |
 | Env | `ORC_FACTORY`, `ORC_STATE_DIR` | `LUNA_FACTORY` only |
-| Contract | orc's JSON schemas vendored under `contracts/fixtures/orc/`, `pnpm vendor:orc` | zod in `contracts/src/packs.ts`, one conformance test |
+| Contract | orc's JSON schemas vendored under `packages/contracts/fixtures/orc/`, `pnpm vendor:orc` | zod in `packages/contracts/src/packs.ts`, one conformance test |
 | Machine host | `which orc-state` in `main.ts`; `orc-state close --merged` in `close-task.ts` | Removed |
-| QA target detection (`e2e.ts`) | `.orc/targets.json` marks a web repo; the prompt cites `orc:qa-targets` | `qa_targets` in `PIPELINE.md` front matter; our own `qa-targets` skill in `factory/plugin` |
+| QA target detection (`e2e.ts`) | `.orc/targets.json` marks a web repo; the prompt cites `orc:qa-targets` | `qa_targets` in `PIPELINE.md` front matter; our own `qa-targets` skill in `apps/factory/plugin` |
 | Events | Stored as `orc.<kind>` | `stage.<kind>` |
 | Memory stage | Reads `.orc/<branch>/files/` in the worktree | Reads the ingested ledger and events under the run folder |
 | Project rules file | `docs/agents/project-context.md`, orc's convention | Kept: it is only a file path, now this repo's convention, documented in `configuration.md` |
@@ -95,7 +95,7 @@ Read from orc at `9ef37bd3b1a8` (the checkout next to this repo) and the vendore
 ### Constraints
 
 - The sandbox hardening stays: read-only root, tmpfs `/tmp`, `no-new-privileges`, memory/cpu/pids caps, worktree read-only unless the pack is writable, git `hooks` and `config` read-only, credential by name only.
-- The `StageOutput` the machine ingests (`contracts/src/stage.ts`) is the only thing `pipeline.ts`, `ingest.ts`, the board and `/metrics` depend on. Keeping it means the machine side of this change is small.
+- The `StageOutput` the machine ingests (`packages/contracts/src/stage.ts`) is the only thing `pipeline.ts`, `ingest.ts`, the board and `/metrics` depend on. Keeping it means the machine side of this change is small.
 - PR size budget is 300 LOC. The work below is sliced to respect it.
 
 ### SDK surface this relies on
@@ -115,7 +115,7 @@ Verified against the TypeScript reference and the `0.3.309` type declarations (c
 ### High-level shape
 
 ```
-factory/                            new workspace package @hardness/factory (TypeScript, Node 24)
+apps/factory/                            new workspace package @hardness/factory (TypeScript, Node 24)
   package.json                      @anthropic-ai/claude-agent-sdk pinned; zod from contracts
   NOTICE                            the orc commit the prompts, agent bodies and skills were copied from (MIT)
   src/
@@ -133,19 +133,19 @@ factory/                            new workspace package @hardness/factory (Typ
             browser-qa,playwright-qa,ci-routing,caveman-review,qa-targets}/
   prompts/<pack>.md                 the eight templates (copied from orc, then edited here)
 
-contracts/src/packs.ts              pack metadata + zod output schemas; JSON schema for the SDK derived from zod
-contracts/src/factory-contract.test.ts   replaces orc-contract.test.ts: every pack's zod output schema, filled minimally, ingests
+packages/contracts/src/packs.ts              pack metadata + zod output schemas; JSON schema for the SDK derived from zod
+packages/contracts/src/factory-contract.test.ts   replaces orc-contract.test.ts: every pack's zod output schema, filled minimally, ingests
 
-machine/runner/Dockerfile           COPY factory/ instead of ADD vendor/orc.tar; npm install the SDK in /factory
-machine/runner/build.sh             drops ORC_SOURCE/ORC_PATH/ORC_REF; the image key covers factory/**
-machine/runner/runner.mjs           deleted; ENTRYPOINT node /factory/dist/main.js
+apps/machine/runner/Dockerfile           COPY apps/factory/ instead of ADD vendor/orc.tar; npm install the SDK in /factory
+apps/machine/runner/build.sh             drops ORC_SOURCE/ORC_PATH/ORC_REF; the image key covers apps/factory/**
+apps/machine/runner/runner.mjs           deleted; ENTRYPOINT node /factory/dist/main.js
 .github/workflows/golden.yml        no orc_ref input; builds the image from the checkout
-machine/src/domain/stage-input.ts   PACK_LIMITS imported from contracts, not mirrored
-machine/src/application/stages/pack-runner.ts   stateMount/ORC_STATE_DIR removed; ledger comes back in /out
-machine/src/application/stages/memory.ts        reads the ledger from the run's ingested files, not .orc/
-machine/src/application/stages/e2e.ts           web detection reads PIPELINE.md qa_targets, not .orc/targets.json
-machine/src/application/close-task.ts, main.ts  orc-state step removed
-scripts/vendor-orc.mjs, contracts/fixtures/orc/ deleted
+apps/machine/src/domain/stage-input.ts   PACK_LIMITS imported from contracts, not mirrored
+apps/machine/src/application/stages/pack-runner.ts   stateMount/ORC_STATE_DIR removed; ledger comes back in /out
+apps/machine/src/application/stages/memory.ts        reads the ledger from the run's ingested files, not .orc/
+apps/machine/src/application/stages/e2e.ts           web detection reads PIPELINE.md qa_targets, not .orc/targets.json
+apps/machine/src/application/close-task.ts, main.ts  orc-state step removed
+scripts/vendor-orc.mjs, packages/contracts/fixtures/orc/ deleted
 ```
 
 Removed from the image: `/orc` (plugin, 14 agents, ~90 skills, bash libs, mod), `jq` as a hard requirement. Added: `/factory` (one package, its `dist/`, `node_modules` with the SDK).
@@ -180,7 +180,7 @@ const result = query({
 ### Key interfaces / data shapes
 
 - **StageInput / StageOutput**: unchanged in shape. The output `schema` bumps to 3 and gains `ledger: { slices: [...] }` so the machine no longer needs a host mount to read the slice ledger. `env.LUNA_FACTORY` replaces `env.ORC_FACTORY` in the same PR that switches the image; the old image is never run against the new machine.
-- **Pack registry** (`contracts/src/packs.ts`): `{ id, agent, writable, maxTurns, timeoutMs, model, effort, tools, skills, output: ZodType }`. `PACK_LIMITS` in the machine becomes a projection of it. `z.toJSONSchema(output)` feeds `outputFormat`.
+- **Pack registry** (`packages/contracts/src/packs.ts`): `{ id, agent, writable, maxTurns, timeoutMs, model, effort, tools, skills, output: ZodType }`. `PACK_LIMITS` in the machine becomes a projection of it. `z.toJSONSchema(output)` feeds `outputFormat`.
 - **Agent definitions**: one per role, `description` + `prompt` (the trimmed body of today's orc agent, factory-only: no `/orc:flow` phase talk, no `progress.md`, no parallel mode), `model`, `effort`, `maxTurns`, `tools`, `skills`. Roles: `triage-planner`, `test-designer`, `implementer`, `verifier`, `qa-validator`, `ci-investigator`, `retro-reviewer`.
 - **Tools** (`mcp__luna__*`): `step {label, n, of}` (appended to `events.jsonl` and echoed on stdout for the watch pane); `slice_init {slices[]}`, `slice_set {id, status, commit?, actualLoc?}`, `slice_list` (the ledger, JSON in `/out/ledger.json`); `decision_get {key}` (reads `input.decisions`). This replaces `Bash(orc-state:*)` in the implementer's tool list.
 - **Guards** (`PreToolUse`, matcher `Bash`): deny `git push`, `gh pr create|ready|review|merge`, `gh issue`, `git commit` on a non-`task/` branch, `git reset --hard|clean|branch -D`, any commit message with AI attribution; matcher `Write|Edit`: deny paths outside `/work` and `/out`, and for read-only packs deny `/work`. Each guard is a pure function with a table test.
@@ -223,11 +223,11 @@ This section is the content of Phase 5. Its first two rows (host-mounted session
 
 Phases are ordered so every PR leaves `main` runnable and the golden matrix green. Each phase is one or two PRs inside the 300 LOC budget (tests count; copied prompts and skills are excluded from the count).
 
-**Phase 0 — Spike (go / no-go, half a day).** `factory/src/main.ts` with only the `triage` pack: `agent` + `agents`, one in-process `PreToolUse` deny on `git push`, one skill from a local plugin, `outputFormat`. Run it on `fixtures/golden-task` through the existing sandbox with the SDK's dry-run and one real call. Record: the hook fired, the skill was listed, `structured_output` arrived, `usage.model` matches the agent's `model`. If any of these fails on `0.3.311`, stop and revisit.
+**Phase 0 — Spike (go / no-go, half a day).** `apps/factory/src/main.ts` with only the `triage` pack: `agent` + `agents`, one in-process `PreToolUse` deny on `git push`, one skill from a local plugin, `outputFormat`. Run it on `fixtures/golden-task` through the existing sandbox with the SDK's dry-run and one real call. Record: the hook fired, the skill was listed, `structured_output` arrived, `usage.model` matches the agent's `model`. If any of these fails on `0.3.311`, stop and revisit.
 
-**Phase 1 — Own the contract.** Move the pack output schemas to `contracts/src/packs.ts` as zod; derive JSON schema; `PACK_LIMITS` reads from it; `factory-contract.test.ts` replaces `orc-contract.test.ts`; delete `contracts/fixtures/orc/` and `scripts/vendor-orc.mjs`. No runtime change yet (the image still runs orc). This PR fixes the `schema: 3` vs `const 1` mismatch on our side.
+**Phase 1 — Own the contract.** Move the pack output schemas to `packages/contracts/src/packs.ts` as zod; derive JSON schema; `PACK_LIMITS` reads from it; `factory-contract.test.ts` replaces `orc-contract.test.ts`; delete `packages/contracts/fixtures/orc/` and `scripts/vendor-orc.mjs`. No runtime change yet (the image still runs orc). This PR fixes the `schema: 3` vs `const 1` mismatch on our side.
 
-**Phase 2 — The runner, 1:1.** `factory/` package with `main.ts`, `render.ts`, `output.ts`, `dry-run.ts`, the eight prompts copied from orc (MIT, source commit in `NOTICE`), packs still naming today's tool lists. `agents` defined with the orc bodies trimmed to factory use; `plugin/skills` copied for the nine skills the packs name. Dockerfile, `build.sh` and `golden.yml` switch to `/factory` and lose every `ORC_*` input; `runner.mjs` deleted; `smoke-sandbox.mjs` uses the new dry run; `ORC_FACTORY` becomes `LUNA_FACTORY`. Parity bar: `pnpm golden` and `golden:live` green; `usage.model` per stage now equals the role's model.
+**Phase 2 — The runner, 1:1.** `apps/factory/` package with `main.ts`, `render.ts`, `output.ts`, `dry-run.ts`, the eight prompts copied from orc (MIT, source commit in `NOTICE`), packs still naming today's tool lists. `agents` defined with the orc bodies trimmed to factory use; `plugin/skills` copied for the nine skills the packs name. Dockerfile, `build.sh` and `golden.yml` switch to `/factory` and lose every `ORC_*` input; `runner.mjs` deleted; `smoke-sandbox.mjs` uses the new dry run; `ORC_FACTORY` becomes `LUNA_FACTORY`. Parity bar: `pnpm golden` and `golden:live` green; `usage.model` per stage now equals the role's model.
 
 **Phase 3 — Guards, tools and host clean-up.** `hooks/guards.ts` with table tests; `tools/step.ts` with the ledger; implementer prompt and tool list switch from `orc-state` and `mcp__orc__step` to `mcp__luna__*`; output `schema: 3` with `ledger`; events stored as `stage.<kind>`; the machine drops `stateMount`, `ORC_STATE_DIR`, the `orc-state` host lookup and the close-task step; `memory.ts` reads the ingested ledger; `e2e.ts` reads `qa_targets` from `PIPELINE.md` instead of `.orc/targets.json`. `docker.test.ts` and `pack-runner.test.ts` updated.
 
@@ -281,9 +281,9 @@ Rejected: the sandbox (read-only root, caps, write jail, credential isolation, l
 
 Three months after Phase 3 merges:
 
-- `grep -ri orc` over the repository finds only `factory/NOTICE` and this RFC.
+- `grep -ri orc` over the repository finds only `apps/factory/NOTICE` and this RFC.
 - A fresh clone on a machine with no orc and no Claude Code plugin builds the image, starts the machine and passes the golden matrix; a CI job proves it on every PR.
-- `pnpm images` builds with no checkout or clone outside this repository, and the image key changes only when `factory/**` or the Dockerfiles change.
+- `pnpm images` builds with no checkout or clone outside this repository, and the image key changes only when `apps/factory/**` or the Dockerfiles change.
 - Every stage run row reports `usage.model` equal to the pack's configured model.
 - The golden matrix pass rate is at or above the rate recorded on the last orc-backed image, measured on the same four fixtures.
 - At least one Phase 5 item (per-repo model policy or resume on retry) has shipped on top of the new runner.

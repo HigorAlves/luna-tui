@@ -87,7 +87,7 @@ The `foreman` pack reads a snapshot of the open board (60 cards at most) and ans
 ## What was built
 
 - **Effort.** `luna.yaml` `effort:`, `StageInput.effort`, `--effort` and the `<engine>@<effort>` baselines. A pack that runs on its own refuses `effort`. A re-attached run skips the effort-mismatch note.
-- **Proposals.** `POST /repos/proposals`, the rule in `machine/src/domain/config-proposal.ts`, the `config` card with its change table, and `pnpm eval propose`. The rule refuses stale evidence and evidence from an off-model scorecard. It takes the baseline engine from the repo's own runs. The edit keeps comments, key order and every other key.
+- **Proposals.** `POST /repos/proposals`, the rule in `apps/machine/src/domain/config-proposal.ts`, the `config` card with its change table, and `pnpm eval propose`. The rule refuses stale evidence and evidence from an off-model scorecard. It takes the baseline engine from the repo's own runs. The edit keeps comments, key order and every other key.
 - **Plan council.** Two rounds by default, one revision, `plan.council.counts_as_pass`, and the council section on the plan review page.
 - **Question council.** The `question_council` pack, `triage.council`, the settled answers on the board and `T` to overrule.
 - **Foreman.** `POST /foreman`, the popup on `m`, flags, council state, trust and pending approvals in the snapshot, and a sanitised reply.

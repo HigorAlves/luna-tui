@@ -1,6 +1,6 @@
 
 # Rust
-/board/target
+/apps/board/target
 
 # Node
 node_modules/
@@ -15,16 +15,19 @@ dist/
 board.json
 events.jsonl
 
-# Built by machine/runner/build.sh
-machine/runner/vendor/
+# Built by apps/machine/runner/build.sh
+apps/machine/runner/vendor/
 
 # site
-site/.next/
-site/next-env.d.ts
-site/*.tsbuildinfo
+apps/site/.next/
+apps/site/next-env.d.ts
+apps/site/*.tsbuildinfo
 
 # Replay eval run folders (evals/run.ts)
 evals/.runs/
 
 # orc session state, local only
 .orc/
+
+# turbo
+.turbo/

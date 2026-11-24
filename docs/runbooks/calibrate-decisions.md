@@ -1,6 +1,6 @@
 # Calibrate the decision packs
 
-The decision packs answer typed questions with a confidence. The machine acts on an answer only above the pack's bar. The choice of engine for each slot is not a guess. The machine reads it from `contracts/src/decision-defaults.json`. The command `pnpm eval defaults --write` writes that file from the scorecard over every baseline (RFC 0005 wave 7). This runbook shows how to produce that evidence and change a default.
+The decision packs answer typed questions with a confidence. The machine acts on an answer only above the pack's bar. The choice of engine for each slot is not a guess. The machine reads it from `packages/contracts/src/decision-defaults.json`. The command `pnpm eval defaults --write` writes that file from the scorecard over every baseline (RFC 0005 wave 7). This runbook shows how to produce that evidence and change a default.
 
 For one pack, step by step, with the labelling and the case readings, see [revisit a decision's default engine](revisit-a-default-engine.md). The current rule has these parts. An engine qualifies with coverage 0.6 and four graded cases. The three packs measured answer by answer also need 20 labelled answers. The default is the qualifying engine with the highest acted-on accuracy. A tie goes to Jev, else to the cheaper engine. An engine that acted on every case and was right on every one wins outright. A default moves only on eight graded cases and six labelled cases. Nobody moves the owner's pins.
 
@@ -25,7 +25,7 @@ MACHINE_TRACES=metadata pnpm eval --pack risk_score --engine jev          --tria
 ```sh
 pnpm eval scorecard          # writes evals/scorecard.md: a row per pack and engine, then the proposed default per slot
 pnpm eval defaults           # prints the proposal, changing nothing
-pnpm eval defaults --write   # updates contracts/src/decision-defaults.json
+pnpm eval defaults --write   # updates packages/contracts/src/decision-defaults.json
 ```
 
 `evals/scorecard.md` states the rule. An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifying engine with the highest **acted-on accuracy** (right when the machine would have acted). Engines within 2 points tie. A tie goes to Jev when it is among them (by far the cheapest engine), else to the cheaper one. A pack with fewer than two engines measured keeps its default.
@@ -36,10 +36,10 @@ Read overconfidence (wrong at or above the bar) and ECE when two numbers look al
 
 - **Accept**:
   - Run `pnpm eval defaults --write`.
-  - Commit `evals/baselines/**`, `evals/scorecard.md`, `contracts/src/decision-defaults.json` and the site fact (`pnpm --filter site facts`).
+  - Commit `evals/baselines/**`, `evals/scorecard.md`, `packages/contracts/src/decision-defaults.json` and the site fact (`pnpm --filter site facts`).
   - The file holds the reason and the date.
 - **Override**:
-  - Edit the entry by hand in `contracts/src/decision-defaults.json`.
+  - Edit the entry by hand in `packages/contracts/src/decision-defaults.json`.
   - Say why in its `reason` (`override: ...`).
   - The command `pnpm --filter @hardness/contracts exec vitest run` checks the file. Every decision pack must have an entry. Every engine must be within the pack's `allowed` list (`jev`, `claude:haiku`, `codex:luna`). Every entry must have a reason and a date.
   - A bad file fails that test. The machine then falls back to the built-in default (Jev, then `claude:haiku`). It does not fail at boot.
@@ -47,7 +47,7 @@ Read overconfidence (wrong at or above the bar) and ECE when two numbers look al
 
 ## What to re-run
 
-- After you change a decision pack's questions, criteria or instructions (`contracts/src/packs.ts`):
+- After you change a decision pack's questions, criteria or instructions (`packages/contracts/src/packs.ts`):
   - Re-run that pack's baselines on every engine.
   - Run `scorecard`.
   - Run `defaults`.

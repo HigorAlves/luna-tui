@@ -35,7 +35,7 @@ Luna Notch (the macOS app) already has the product side: one board on the same e
 | Gates | Approve (into Approved), Looks right (into Ship), the Inbox | `awaiting_*` states answered through `/decision` and `/answers` |
 | Integrations | Slack, Teams, Jira, GitHub, Vercel | Slack inbox, Jira sync and intake, PR inbox, GitHub issue intake |
 
-The notch's Jira and Slack code is a Swift port of the machine's (`machine/src/adapters/jira/`, `adapters/slack/`, `application/slack-inbox.ts`). Running both on the same ticket would move and comment its Jira issue twice.
+The notch's Jira and Slack code is a Swift port of the machine's (`apps/machine/src/adapters/jira/`, `adapters/slack/`, `application/slack-inbox.ts`). Running both on the same ticket would move and comment its Jira issue twice.
 
 ## Proposed design
 

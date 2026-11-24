@@ -56,7 +56,7 @@ check "each problem on its own line" $'no GitHub token: a, b\ngit has no identit
 check "an answer that is not JSON lists none" "" "$(health_problems 'oops')"
 
 echo "board_link_state"
-plugins=$'1 plugin installed:\n- hardness.board (Luna TUI) enabled [local:/Users/x/luna/board]\n  config: /Users/x/.config/herdr/plugins/config/hardness.board'
+plugins=$'1 plugin installed:\n- hardness.board (Luna TUI) enabled [local:/Users/x/luna/apps/board]\n  config: /Users/x/.config/herdr/plugins/config/hardness.board'
 check "linked to this checkout (herdr's output must not break the pipe under pipefail)" linked "$(board_link_state "$plugins" /Users/x/luna)"
 check "linked to another checkout" elsewhere "$(board_link_state "$plugins" /Users/x/other)"
 check "disabled" disabled "$(board_link_state "${plugins/ enabled / disabled }" /Users/x/luna)"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # integrations.sh - Jira, the Slack inbox, Laminar and the machine's own settings, written to the root .env
-# (0600), which compose reads for `pnpm start`; machine/.env links to it for `pnpm dev`. Each
+# (0600), which compose reads for `pnpm start`; apps/machine/.env links to it for `pnpm dev`. Each
 # answer left empty keeps what is there, and each set of keys is tried against its service.
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -46,7 +46,7 @@ jira() {
 slack() {
   ui_section "Slack inbox"
   info "One-time Slack app, only in your workspace:"
-  echo "  1. https://api.slack.com/apps → Create New App → From a manifest → paste slack/manifest.json"
+  echo "  1. https://api.slack.com/apps → Create New App → From a manifest → paste infra/slack/manifest.json"
   echo "  2. Install to Workspace; copy the User OAuth Token (xoxp-…) from OAuth & Permissions"
   echo "  3. Basic Information → App-Level Tokens → one with connections:write (xapp-…)"
   if ui_confirm "Open api.slack.com/apps now?"; then open "https://api.slack.com/apps" 2>/dev/null || true; fi
@@ -98,8 +98,8 @@ grep -qx "Laminar" <<<"$picked" && laminar
 grep -qx "Machine settings" <<<"$picked" && machine_settings
 [ -z "$picked" ] && info "Nothing picked; run make integrations any time."
 
-# `pnpm dev` runs the machine on the host, which reads machine/.env: point it at the same file.
-if [ -f "$ENV_FILE" ] && [ "$ENV_FILE" = "$ROOT/.env" ] && [ ! -e "$ROOT/machine/.env" ]; then
-  ln -s ../.env "$ROOT/machine/.env" && info "Linked machine/.env to .env for pnpm dev"
+# `pnpm dev` runs the machine on the host, which reads apps/machine/.env: point it at the same file.
+if [ -f "$ENV_FILE" ] && [ "$ENV_FILE" = "$ROOT/.env" ] && [ ! -e "$ROOT/apps/machine/.env" ]; then
+  ln -s ../../.env "$ROOT/apps/machine/.env" && info "Linked apps/machine/.env to .env for pnpm dev"
 fi
 if [ -n "$picked" ]; then info "The machine reads these when it starts: make up (or restart it) to apply."; fi

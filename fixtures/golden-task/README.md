@@ -1,6 +1,6 @@
 # Golden task fixture
 
-A tiny repo with one seeded bug, used by `machine/scripts/golden-task.mjs` as the
+A tiny repo with one seeded bug, used by `apps/machine/scripts/golden-task.mjs` as the
 regression check for the whole pipeline (see [docs/install.md](../../docs/install.md)).
 The script copies this directory into a fresh git repo per run, so edit the bug
 here, not in a copy.

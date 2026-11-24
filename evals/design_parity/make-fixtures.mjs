@@ -9,7 +9,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const { PNG } = createRequire(resolve(HERE, "../../machine/package.json"))("pngjs");
+const { PNG } = createRequire(resolve(HERE, "../../apps/machine/package.json"))("pngjs");
 const OUT = join(HERE, "cases");
 const FILE = "Qx7LmP2vR9sTa";
 

@@ -1,5 +1,5 @@
 <div align="center">
-<img src="../board/icon.png" width="112" alt="Luna TUI's icon">
+<img src="../apps/board/icon.png" width="112" alt="Luna TUI's icon">
 
 # Luna TUI
 
@@ -13,7 +13,7 @@ Luna TUI is a local dev harness for working with AI coding agents. You plan
 tickets on a board inside [herdr](https://herdr.dev/). A machine then moves each
 ticket through a fixed pipeline. It runs agents in throwaway Docker containers:
 Claude by default, Codex where you pick it. It stops at approval gates, so you
-stay in control. For stage-by-stage detail, read [docs/architecture.md](../docs/architecture.md). The roles, prompts and guardrails live in [`factory/`](../factory/).
+stay in control. For stage-by-stage detail, read [docs/architecture.md](../docs/architecture.md). The roles, prompts and guardrails live in [`apps/factory/`](../apps/factory/).
 
 ## Install
 
@@ -29,10 +29,10 @@ Or install it yourself from [herdr.dev](https://herdr.dev/). Check with `herdr -
 
 ```bash
 pnpm install
-pnpm board:link    # builds the board, then runs `herdr plugin link ./board`
+pnpm board:link    # builds the board, then runs `herdr plugin link ./apps/board`
 ```
 
-Linking is a one-time step. For Rust prerequisites and the details, read [board/README.md](../board/README.md).
+Linking is a one-time step. For Rust prerequisites and the details, read [apps/board/README.md](../apps/board/README.md).
 
 ### 3. Add the keybinding
 
