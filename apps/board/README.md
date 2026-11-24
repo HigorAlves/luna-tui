@@ -30,7 +30,7 @@ The machine refuses to approve a plan while a criterion has no scenario that nam
 ## Install as a herdr plugin (local link)
 
 ```sh
-pnpm board:link      # from the repo root: builds, then `herdr plugin link ./board`
+pnpm board:link      # from the repo root: builds, then `herdr plugin link ./apps/board`
 herdr plugin action invoke hardness.board.open
 ```
 

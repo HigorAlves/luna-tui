@@ -300,8 +300,8 @@ if (command === "harvest") {
       for (const line of changedLines(readLedger(EVALS), hashes)) console.log(line);
       writeFileSync(DEFAULTS_FILE, `${JSON.stringify(next, null, 2)}\n`);
       writeLedger(EVALS, hashes);
-      console.log(`contracts/src/decision-defaults.json written`);
-    } else console.log("dry run: --write writes contracts/src/decision-defaults.json");
+      console.log(`packages/contracts/src/decision-defaults.json written`);
+    } else console.log("dry run: --write writes packages/contracts/src/decision-defaults.json");
   }
 } else {
   await import("./run.ts");

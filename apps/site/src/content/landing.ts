@@ -336,7 +336,7 @@ export const factory = {
       {
         id: "stubs",
         label: "Board only",
-        commands: ["pnpm install", "pnpm board:build && herdr plugin link ./board", "MACHINE_AGENTS=off pnpm start"],
+        commands: ["pnpm install", "pnpm board:build && herdr plugin link ./apps/board", "MACHINE_AGENTS=off pnpm start"],
       },
     ],
     copy: "Copy",

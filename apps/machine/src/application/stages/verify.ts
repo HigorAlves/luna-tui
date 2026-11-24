@@ -386,7 +386,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
             detail: {
               step: "checks",
               reason: `\`${cmd}\` cannot run: the runner image lacks the tool (exit 127: ${tailOf(result.stderr || result.stdout).trim() || "command not found"})`,
-              options: ["add the tool to machine/runner/Dockerfile and rebuild (pnpm images)", "change the repo's test command"],
+              options: ["add the tool to apps/machine/runner/Dockerfile and rebuild (pnpm images)", "change the repo's test command"],
             },
           };
         }

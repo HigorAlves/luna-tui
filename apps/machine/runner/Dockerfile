@@ -81,14 +81,14 @@ ENV CODEX_HOME=/tmp/.codex EVE_TELEMETRY_DISABLED=1
 # workspace's own lockfile so the image runs exactly what the checkout tests. The Agent SDK
 # and eve are installed now, so a stage needs no network to start. .pnpmfile.cjs keeps eve's
 # optional framework peers (next, react, vite) out, which the lockfile records.
+# --filter-prod, not --filter: the factory's dev-only workspace deps (the shared tsconfig and vitest presets)
+# would otherwise come along, with vitest, vite and jsdom behind them.
 WORKDIR /opt/luna/factory-src
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .pnpmfile.cjs ./
-# The shared tsconfig/vitest presets (dev-only: --prod leaves them unlinked; nothing in the image reads a tsconfig).
-COPY config config
 COPY packages/contracts/package.json packages/contracts/
 COPY apps/factory/package.json apps/factory/
 RUN corepack enable \
- && corepack pnpm install --frozen-lockfile --prod --filter @hardness/factory... \
+ && corepack pnpm install --frozen-lockfile --prod --filter-prod @hardness/factory... \
  && rm -rf /root/.cache /root/.local/share/pnpm
 # pnpm itself, at the version package.json pins, on the layer's PATH ahead of corepack's shim. A container keeps corepack's
 # cache on its own tmpfs (the machine sets COREPACK_HOME), so with corepack alone every check-time install downloaded pnpm

@@ -23,7 +23,7 @@
 </head>
 <body>
 <h1>Luna TUI</h1>
-<p class="note">Eclipse with Prompt eyes. Every drawing below comes from <code>scripts/mark.mjs</code>, the same builder the exporter and the site use. ES modules do not load from file://, so serve the repo root: <code>python3 -m http.server</code> and open /design/icons/luna-tui.html.</p>
+<p class="note">Eclipse with Prompt eyes. Every drawing below comes from <code>scripts/mark.mjs</code>, the same builder the exporter and the site use. ES modules do not load from file://, so serve the repo root: <code>python3 -m http.server</code> and open /docs/design/icons/luna-tui.html.</p>
 
 <h2>Mark, 1024 grid</h2>
 <div class="row" id="hero"></div>
@@ -41,7 +41,7 @@
 <div class="row" id="glyphs"></div>
 
 <script type="module">
-  import { markSvg, glyphSvg } from "../../scripts/mark.mjs"
+  import { markSvg, glyphSvg } from "../../../scripts/mark.mjs"
 
   const fig = (svg, label) => {
     const f = document.createElement("figure")
@@ -55,7 +55,7 @@
   put("ladder", [512, 256, 128, 64, 32, 16].map((px) => fig(sized(markSvg(), px), `${px}`)))
   put("appearances", ["default", "dark", "tinted"].map((a) => fig(sized(markSvg({ appearance: a }), 200), a)))
   put("crops", [
-    fig(`<div class="checker">${sized(markSvg({ fit: "grid" }), 240)}</div>`, "grid: transparent margin (macOS icon, board/icon.png)"),
+    fig(`<div class="checker">${sized(markSvg({ fit: "grid" }), 240)}</div>`, "grid: transparent margin (macOS icon, apps/board/icon.png)"),
     fig(`<div class="checker">${sized(markSvg({ fit: "tile" }), 240)}</div>`, "tile: edge to edge, crop 100..924 (favicon, site)"),
   ])
   put("glyphs", [

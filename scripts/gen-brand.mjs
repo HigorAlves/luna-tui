@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { APPEARANCES, GLYPH_VIEWBOX, glyphInner, markInner, viewBox } from "./mark.mjs"
 
-const out = resolve(dirname(fileURLToPath(import.meta.url)), "../site/src/components/brand.generated.ts")
+const out = resolve(dirname(fileURLToPath(import.meta.url)), "../apps/site/src/components/brand.generated.ts")
 const marks = Object.fromEntries(Object.keys(APPEARANCES).map((k) => [k, markInner(k)]))
 
 writeFileSync(

@@ -29,7 +29,7 @@ Or install it yourself from [herdr.dev](https://herdr.dev/). Check with `herdr -
 
 ```bash
 pnpm install
-pnpm board:link    # builds the board, then runs `herdr plugin link ./board`
+pnpm board:link    # builds the board, then runs `herdr plugin link ./apps/board`
 ```
 
 Linking is a one-time step. For Rust prerequisites and the details, read [apps/board/README.md](../apps/board/README.md).

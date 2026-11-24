@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { parse as parseYaml } from "yaml";
@@ -255,8 +255,8 @@ export function findRepoRoot(from: string): string {
   }
 }
 
-/** The repository root: a relative `MACHINE_SLACK_RULES` is taken from here. */
-const REPO_ROOT = findRepoRoot(dirname(fileURLToPath(import.meta.url)));
+/** The repository root, looked up only when a relative `MACHINE_SLACK_RULES` needs it, so loading this module never throws. */
+const repoRoot = (): string => findRepoRoot(dirname(fileURLToPath(import.meta.url)));
 
 export const DEFAULT_DATABASE_URL = "postgres://hardness:hardness@127.0.0.1:5433/hardness";
 export const DEFAULT_PORT = 4317;
@@ -622,7 +622,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       appToken: env.MACHINE_SLACK_APP_TOKEN?.trim() || null,
       intervalMs: inboxSeconds * 1000,
       markRead: env.MACHINE_SLACK_MARK_READ === "on",
-      rulesPath: rules ? resolve(REPO_ROOT, rules) : join(stateDir, "slack-triage.md"),
+      rulesPath: rules ? (isAbsolute(rules) ? rules : resolve(repoRoot(), rules)) : join(stateDir, "slack-triage.md"),
       digestAt,
       scope: slackScope,
     },
