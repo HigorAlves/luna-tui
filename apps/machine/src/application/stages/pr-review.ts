@@ -5,7 +5,9 @@
 import { type DecisionOverrides, type Finding, PrReviewAnswer, type RequestedAction, type ReviewContext, type ReviewLinks, mergeDuplicateFindings } from "@hardness/contracts";
 
 import { type Decide } from "./check-decide.ts";
+import { diffExcerptOf } from "./diff-section.ts";
 import { type ComplianceDeps, runCompliance } from "./compliance-review.ts";
+import { type RereviewDeps, type RereviewPlan, prepareRereview, settledReply } from "./rereview.ts";
 import { type HelperDeps, type HelpersOutcome, confirmHelperFindings, runHelpers } from "./review-helpers.ts";
 import { addUsage } from "./usage.ts";
 import { excerptOf } from "./verify.ts";
@@ -25,6 +27,8 @@ export interface PrReviewDeps {
     /** The repo's decision overrides (luna.yaml `policy.decisions`); absent, none. */
     decisions?: (repoPath: string | null) => Promise<Record<string, DecisionOverrides>>;
   };
+  /** Re-reviewing a PR we reviewed before (by this login): the delta since that review, and our open threads settled by `thread_settle` or answered by the reviewer. Absent, every review reads the whole diff. */
+  rereview?: RereviewDeps;
   /** The compliance review beside this one, only when the machine has a wiki to read controls from; it runs when the repo declares regimes. */
   compliance?: ComplianceDeps;
   /** The Jira port, only when Jira is configured: the tickets the PR names are read and the reviewer checks the diff against them. */
@@ -41,6 +45,18 @@ export interface PrReviewDeps {
 /** A card's description as the reviewer reads it: capped, the data block quotes the rest. */
 const CARD_DESCRIPTION_CAP = 4000;
 const cardOf = (c: LinkableCard) => ({ id: c.id, title: c.title, criteria: c.criteria, description: c.description.trim().slice(0, CARD_DESCRIPTION_CAP) });
+
+/** What a re-review posts on one of our threads: a reply, and whether the thread is resolved after it. `by` says who settled it (the decision's templated reply, or the reviewer's own); `settled` is the decision's reason. */
+export interface ThreadReply {
+  threadId: string;
+  body: string;
+  resolve: boolean;
+  by: "decision" | "reviewer";
+  settled?: "fixed" | "reply_holds";
+  severity?: string;
+  path: string | null;
+  line: number | null;
+}
 
 const EVENT_OF = { approve: "APPROVE", request_changes: "REQUEST_CHANGES", comment: "COMMENT" } as const;
 
@@ -70,13 +86,7 @@ export function capComments<T extends { path: string; line: number }>(comments: 
     .map(({ c }) => c);
 }
 
-/** What a finding's file looked like in the PR's diff, when the worktree cannot show it: the file's own section, capped. */
-const DIFF_EXCERPT_CAP = 2000;
-export function diffExcerptOf(diff: string, finding: Pick<Finding, "path">): string {
-  const sections = diff.split(/^(?=diff --git )/m);
-  const section = sections.find((part) => part.startsWith(`diff --git a/${finding.path} `) || part.split("\n", 1)[0]!.endsWith(` b/${finding.path}`));
-  return (section ?? "").slice(0, DIFF_EXCERPT_CAP);
-}
+export { diffExcerptOf };
 
 /** Marks a finding the confirmation was not sure of; the person reads the mark before posting. */
 const UNSURE = "Unsure: ";
@@ -142,8 +152,22 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       return { outcome: "fail", detail: { error: messageOf(error) } };
     }
 
+    // A PR we reviewed before is reviewed again on what changed since, and our open threads are settled first. Anything unreadable falls back to the whole diff.
+    let plan: RereviewPlan | null = null;
+    const cardPath = context.task.worktreePath ?? null;
+    if (deps.rereview && cardPath) {
+      try {
+        plan = await prepareRereview(deps.rereview, github, { repo: pr.repo, number: pr.number, worktree: cardPath, repoPath: context.task.repoPath ?? null, fullDiff: review.diff, log: (line) => console.warn(`review: ${line}`) });
+      } catch (error) {
+        console.warn(`review: could not prepare a re-review of ${pr.url} (${messageOf(error)}); reviewing the whole diff`);
+      }
+    }
+    // The passes and the compliance lead read the diff only; the threads are the main reviewer's.
+    const shared: ReviewContext = plan ? { ...review, diff: plan.diff } : review;
+    if (plan) review = { ...shared, rereview: plan.rereview };
+
     // The review passes start with the main review, each in a workspace of its own (they never share the reviewer's folder); runHelpers never throws.
-    const helpersRun = deps.helpers ? runHelpers(deps.helpers, context, review) : null;
+    const helpersRun = deps.helpers ? runHelpers(deps.helpers, context, shared) : null;
     const [mainRun, helpersDone] = await Promise.allSettled([deps.runPack(context, review), helpersRun]);
     if (mainRun.status === "rejected") throw mainRun.reason;
     const pack = mainRun.value;
@@ -164,7 +188,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     const kept = (confirmed?.kept ?? []).map(({ finding, unsure }) => (unsure ? { ...finding, title: `${UNSURE}${finding.title}` } : finding));
     const helperComments = kept.map((f) => ({ path: f.path, line: f.line, side: f.side === "LEFT" ? ("LEFT" as const) : ("RIGHT" as const), body: `${f.title}: ${f.body}` }));
     // The compliance lead reads the same diff beside the reviewer; its findings join before the verdict, so a high one blocks. It never fails the review.
-    const compliance = deps.compliance ? await runCompliance(deps.compliance, context, pr.repo, review) : null;
+    const compliance = deps.compliance ? await runCompliance(deps.compliance, context, pr.repo, shared) : null;
     const joined = {
       ...parsed.data,
       summary: [parsed.data.summary, compliance?.summary ? `Compliance: ${compliance.summary}` : ""].filter(Boolean).join(" "),
@@ -172,8 +196,30 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       comments: [...parsed.data.comments, ...(compliance?.comments ?? [])],
     };
     const answer = helpers || compliance ? { ...joined, findings: mergeDuplicateFindings([...joined.findings, ...(confirmed?.agreed ?? []), ...kept]), comments: [...joined.comments, ...helperComments] } : parsed.data;
-    // The verdict is the findings', never the model's (orc review-contract): any finding keeps a review from approving.
-    const verdict = verdictOf(answer.findings);
+    // Our threads: what the decision settled, what the reviewer resolved, and what stays open. An open thread counts at its severity, and one the reviewer
+    // did not answer stays open as a question, so a review never approves past a thread nobody looked at.
+    const threadReplies: ThreadReply[] = [];
+    const stillOpen: Array<{ severity: string }> = [];
+    if (plan) {
+      const answered = new Map((parsed.data.threads ?? []).map((t) => [t.threadId, t]));
+      for (const t of plan.rereview.threads) {
+        const where = { path: t.path, line: t.line };
+        if (t.settle !== "unsettled") {
+          threadReplies.push({ threadId: t.id, body: settledReply(t.settle, plan.head), resolve: true, by: "decision", settled: t.settle, ...where });
+          continue;
+        }
+        const a = answered.get(t.id);
+        if (!a) {
+          stillOpen.push({ severity: "question" });
+          continue;
+        }
+        const resolve = a.decision === "resolve";
+        threadReplies.push({ threadId: t.id, body: a.body.trim() || (resolve ? "Resolving." : "Still open."), resolve, by: "reviewer", ...(resolve ? {} : { severity: a.severity }), ...where });
+        if (!resolve) stillOpen.push({ severity: a.severity });
+      }
+    }
+    // The verdict is the findings' (and the open threads'), never the model's (orc review-contract): any finding keeps a review from approving.
+    const verdict = verdictOf([...answer.findings, ...stillOpen]);
 
     // Nothing is posted here: the review goes out under the person's name, so every verdict, its body and its line
     // comments wait at "post the verdict?" until the person says yes (or edits or drops it).
@@ -203,6 +249,9 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
             ...(helpers.notes.length > 0 ? { helperNotes: helpers.notes } : {}),
           }
         : {}),
+      ...(plan
+        ? { rereview: { since: plan.rereview.since, ...(plan.rereview.note ? { note: plan.rereview.note } : {}), settled: plan.rereview.threads.filter((t) => t.settle !== "unsettled").length, open: stillOpen.length, threads: plan.rereview.threads.length } }
+        : {}),
       ...(compliance ? { compliance: { regimesRun: compliance.regimesRun, findings: compliance.findings.length, notes: compliance.notes } } : {}),
       ...(parsed.data.verdict !== verdict ? { modelVerdict: parsed.data.verdict } : {}),
       posted: false,
@@ -217,7 +266,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       }
     }
     const requested: RequestedAction[] = [
-      { kind: "pr_review_post", target: pr.url, payload: { event: EVENT_OF[verdict], body: answer.summary, comments } },
+      { kind: "pr_review_post", target: pr.url, payload: { event: EVENT_OF[verdict], body: answer.summary, comments, ...(plan ? { threadReplies } : {}) } },
     ];
     return { ...base, detail, requested };
   };

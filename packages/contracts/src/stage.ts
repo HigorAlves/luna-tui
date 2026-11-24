@@ -358,6 +358,23 @@ export const ReviewContext = z.object({
   tickets: z.array(ReviewTicket).optional(),
   /** The board cards the review is linked to (by a fact, or by the pr_link decision); absent reads as none. Their criteria and description are a spec too. */
   cards: z.array(ReviewCard).optional(),
+  /** A re-review: the PR was reviewed before, so `diff` is only what changed since `since` (the commit our latest review read), unless `note` says the whole diff is here. `threads` are our own open threads, each with what the settle decision made of it; the reviewer answers the ones left `unsettled`. */
+  rereview: z
+    .object({
+      since: z.string(),
+      note: z.string().optional(),
+      threads: z.array(
+        z.object({
+          id: z.string(),
+          path: z.string().nullable(),
+          line: z.number().int().nullable(),
+          comments: z.array(z.object({ author: z.string(), ours: z.boolean(), body: z.string() })),
+          /** fixed and reply_holds are settled by the decision; unsettled is the reviewer's to answer. */
+          settle: z.enum(["fixed", "reply_holds", "unsettled"]),
+        }),
+      ),
+    })
+    .optional(),
 });
 export type ReviewContext = z.infer<typeof ReviewContext>;
 

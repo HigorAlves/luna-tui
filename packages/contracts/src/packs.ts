@@ -374,6 +374,8 @@ export const PrReviewAnswer = z.object({
   escalation: EscalationReason.optional(),
   reason: z.string().optional(),
   options: z.array(z.string()).optional(),
+  /** A re-review: one entry per thread of ours the settle decision left to the reviewer. `resolve` posts `body` and resolves the thread; `open` posts `body` (why it stays open) and leaves it, and its `severity` counts toward the verdict like a finding's. */
+  threads: z.array(z.object({ threadId: z.string(), decision: z.enum(["resolve", "open"]), severity: z.enum(["bug", "security", "api-surface", "test", "nit", "suggestion", "question"]), body: z.string() })).optional(),
 });
 
 /** The dedicated review passes the machine runs beside `reviewing` on every PR: one pack per lens, each on its own engine. */

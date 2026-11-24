@@ -666,6 +666,13 @@ export async function diffSince(path: string, since: string, to = "HEAD"): Promi
   return diffText(path, since, to);
 }
 
+/** A file as it was at `rev` in `path`'s workspace, read by the host; null when the commit or the file is unknown, or the file is over 1 MB. */
+export async function fileAtRev(path: string, rev: string, file: string): Promise<string | null> {
+  if (!/^[0-9a-f]{7,40}$/i.test(rev) || file.startsWith("-") || file.includes("\0")) return null;
+  const shown = await exec("git", [...HOST_GIT, ...at(path), "show", `${rev}:${file}`]);
+  return shown.code === 0 && shown.stdout.length <= 1_000_000 ? shown.stdout : null;
+}
+
 /** Undoes one commit with a new commit on top (never rewrites history a person may have fetched). */
 export async function revertCommit(path: string, sha: string): Promise<void> {
   assertNoNestedRepository(path);
