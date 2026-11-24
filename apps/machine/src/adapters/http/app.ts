@@ -30,8 +30,8 @@ import { ApproverRequiredError, ConfigRebuildError, CoverageGapsError, Idempoten
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
 import { CloneError, NoPullError, NotReadyError, type PullsPort } from "../../application/pulls.ts";
-import { type McpApi, mountMcpCallback, mountMcpRoutes } from "./mcp.ts";
-import { mountDesignRoutes } from "./design.ts";
+import { type McpApi, mcpCallbackRouter, mcpRoutes } from "./mcp.ts";
+import { designRoutes } from "./design.ts";
 import type { PolicyStore } from "../../application/policy.ts";
 import { AlreadyTaskError, BadRelationError, BuiltinWatchError, NoItemError, NoWatchError, SlackRefusedError, type SlackInboxPort } from "../../application/slack-inbox.ts";
 import { NoSlackTokenError } from "../../application/slack.ts";
@@ -137,9 +137,9 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
   const app = createOpenApiRouter();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   // The OAuth callback is the one route a browser reaches with no token; it takes only a login this machine started.
-  if (mcp) mountMcpCallback(app, mcp);
+  if (mcp) app.route("/", mcpCallbackRouter(mcp));
   app.use(guard(access));
-  if (mcp) mountMcpRoutes(app, mcp);
+  if (mcp) app.route("/", mcpRoutes(mcp));
   /** A task row as the board reads it, clocks included. */
   const serialize = async (row: TaskRow, usage: { spentUsd: number; workedMs: number } | null = null) =>
     toTask(row, usage, sla ? await sla(row) : null, await pipeline.glance(row.id));
@@ -229,7 +229,7 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
   });
 
   const deps: RouteDeps = { repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, compliance, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials, engineBudgets, runs, configProofs, repoSignals, knownRepos, chatRepos, clock, problemsOf, sandboxPolicy, mcp, policies, qaImage, serialize };
-  mountDesignRoutes(app, { runs, chatRepos, policies, qaImage }, { body, fail: (c, status, error, message) => fail(c, status, error, message) });
+  app.route("/", designRoutes({ runs, chatRepos, policies, qaImage }));
   app.route("/", machineRoutes(deps));
   app.route("/", eventsRoutes(deps));
   app.route("/", reposRoutes(deps));

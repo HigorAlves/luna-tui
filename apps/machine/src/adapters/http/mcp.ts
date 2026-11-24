@@ -6,7 +6,8 @@
 import { randomBytes } from "node:crypto";
 import type { McpServerConfig } from "@hardness/contracts";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
-import type { Hono } from "hono";
+import { createOpenApiRouter } from "./openapi/router.ts";
+import { mcpCallbackRoute, mcpLoginRoute, mcpStatusRoute } from "./routes/mcp.openapi.ts";
 
 import type { Mcp } from "../../application/mcp.ts";
 import { type OAuthProvider, type TokenStore, lunaOAuthProvider } from "../mcp/tokens.ts";
@@ -48,11 +49,12 @@ interface Logins {
 const issued = new WeakMap<McpApi, Logins>();
 
 /** Before the API guard: the callback, the only unauthenticated MCP route. */
-export function mountMcpCallback(app: Hono, api: McpApi): void {
+export function mcpCallbackRouter(api: McpApi) {
+  const app = createOpenApiRouter();
   const logins: Logins = { states: new Map(), failed: new Set() };
   const { states, failed } = logins;
   issued.set(api, logins);
-  app.get("/mcp/:server/callback", async (c) => {
+  app.openapi(mcpCallbackRoute, async (c) => {
     const name = c.req.param("server");
     const state = c.req.query("state") ?? "";
     const code = c.req.query("code") ?? "";
@@ -70,14 +72,16 @@ export function mountMcpCallback(app: Hono, api: McpApi): void {
       clearTimeout(entry.timer);
       states.delete(state);
     }
-    return c.html(page(`Logged in to ${escape(name)}. You can close this tab.`));
+    return c.html(page(`Logged in to ${escape(name)}. You can close this tab.`), 200);
   });
+  return app;
 }
 
 /** After the API guard: status and login. */
-export function mountMcpRoutes(app: Hono, api: McpApi): void {
+export function mcpRoutes(api: McpApi) {
+  const app = createOpenApiRouter();
   const { states, failed } = issued.get(api) ?? { states: new Map<string, Issued>(), failed: new Set<string>() };
-  app.get("/mcp", async (c) =>
+  app.openapi(mcpStatusRoute, async (c) =>
     c.json(
       await Promise.all(
         api.mcp.servers().map(async (server) => {
@@ -87,9 +91,10 @@ export function mountMcpRoutes(app: Hono, api: McpApi): void {
           return { name: server.name, transport: server.transport, loggedIn, loginPending, loginFailed: failed.has(server.name), tools: tools ?? [], reachable: tools !== null };
         }),
       ),
+      200,
     ),
   );
-  app.post("/mcp/:server/login", async (c) => {
+  app.openapi(mcpLoginRoute, async (c) => {
     const server = api.mcp.servers().find((s) => s.name === c.req.param("server"));
     if (!server) return c.json({ error: "no_server", message: `no MCP server ${c.req.param("server")} on this machine` }, 404);
     if (server.credential.kind !== "oauth") return c.json({ error: "not_oauth", message: `${server.name} does not log in through OAuth` }, 409);
@@ -108,8 +113,9 @@ export function mountMcpRoutes(app: Hono, api: McpApi): void {
       timer.unref();
       states.set(state, { server: server.name, used: false, timer });
     }
-    return c.json({ authorizeUrl });
+    return c.json({ authorizeUrl }, 200);
   });
+  return app;
 }
 
 /** The real thing: the SDK's `auth()` over the token store. A login keeps its provider (and PKCE verifier) from start to finish. */

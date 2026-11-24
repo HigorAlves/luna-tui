@@ -1,8 +1,9 @@
 // The token economy (RFC 0007).
-import { EconomyApproveInput, EconomyRepoInput, EconomyRestoreInput } from "@hardness/contracts";
+import { EconomyRepoInput } from "@hardness/contracts";
 import { isAbsolute } from "node:path";
 import { createOpenApiRouter } from "../openapi/router.ts";
-import { BadRequest, body, type RouteDeps } from "./kit.ts";
+import { approveMaskRoute, dropFactRoute, economyStatusRoute, importRunsRoute, restoreMaskRoute } from "./economy.openapi.ts";
+import { BadRequest, type RouteDeps } from "./kit.ts";
 
 export function economyRoutes(deps: RouteDeps) {
   const { economy, runs } = deps;
@@ -14,27 +15,27 @@ export function economyRoutes(deps: RouteDeps) {
       if (!(await economy.knownRepos()).includes(repo)) throw new BadRequest("the machine does not know that repository");
       return repo;
     };
-    app.get("/economy", async (c) => {
+    app.openapi(economyStatusRoute, async (c) => {
       const repo = await known(EconomyRepoInput.parse({ repo: c.req.query("repo") }).repo);
-      return c.json(await economy.port.status(repo, (await economy.configOf(repo)).guard.envelope_min_samples));
+      return c.json(await economy.port.status(repo, (await economy.configOf(repo)).guard.envelope_min_samples), 200);
     });
-    app.post("/economy/facts/:id/drop", async (c) => {
-      const { repo } = await body(c, EconomyRepoInput);
-      return c.json({ dropped: await economy.port.dropFact(await known(repo), c.req.param("id")) });
+    app.openapi(dropFactRoute, async (c) => {
+      const { repo } = c.req.valid("json");
+      return c.json({ dropped: await economy.port.dropFact(await known(repo), c.req.param("id")) }, 200);
     });
-    app.post("/economy/mask/approve", async (c) => {
-      const { repo, pack } = await body(c, EconomyApproveInput);
-      return c.json({ approved: await economy.port.approveMask(await known(repo), pack) });
+    app.openapi(approveMaskRoute, async (c) => {
+      const { repo, pack } = c.req.valid("json");
+      return c.json({ approved: await economy.port.approveMask(await known(repo), pack) }, 200);
     });
-    app.post("/economy/mask/restore", async (c) => {
-      const { repo, pack, unit } = await body(c, EconomyRestoreInput);
-      return c.json({ restored: await economy.port.restore(await known(repo), pack, unit) });
+    app.openapi(restoreMaskRoute, async (c) => {
+      const { repo, pack, unit } = c.req.valid("json");
+      return c.json({ restored: await economy.port.restore(await known(repo), pack, unit) }, 200);
     });
     // The runs already on disk are folded once; a second call finds none.
-    app.post("/economy/import", async (c) => {
-      const { repo } = await body(c, EconomyRepoInput);
+    app.openapi(importRunsRoute, async (c) => {
+      const { repo } = c.req.valid("json");
       await known(repo);
-      return c.json({ runs: await economy.port.importRuns(repo, await economy.configOf(repo)) });
+      return c.json({ runs: await economy.port.importRuns(repo, await economy.configOf(repo)) }, 200);
     });
   }
   return app;

@@ -1,9 +1,8 @@
 // Jira by hand.
-import { JiraCreateInput, JiraLinkInput } from "@hardness/contracts";
-import type { Context } from "hono";
 import type { TaskRow } from "../../../domain/task.ts";
 import { createOpenApiRouter } from "../openapi/router.ts";
-import { body, taskId, type RouteDeps } from "./kit.ts";
+import { createJiraRoute, jiraSearchRoute, jiraStatusRoute, linkJiraRoute, unlinkJiraRoute } from "./jira.openapi.ts";
+import { taskId, type RouteDeps } from "./kit.ts";
 
 export function jiraRoutes(deps: RouteDeps) {
   const { pipeline, bus, jira, serialize } = deps;
@@ -12,22 +11,21 @@ export function jiraRoutes(deps: RouteDeps) {
     // Jira by hand (`J` on a ticket): link an issue, unlink it, create one from the ticket, search
     // issues to pick from, and whether the token works. The automatic part (JiraSync, JiraIntake,
     // JiraWatch) needs no route.
-    app.get("/jira/status", async (c) => c.json(await jira.status()));
-    app.get("/jira/search", async (c) => c.json(await jira.search(c.req.query("q") ?? "")));
-    const linked = async (c: Context, task: TaskRow, status: 200 | 201 = 200) => {
+    const linked = async (task: TaskRow) => {
       const out = await serialize(task, await pipeline.taskUsage(task.id));
       bus.publish({ type: "task.updated", task: out, seq: out.seq });
-      return c.json(out, status);
+      return out;
     };
-    app.post("/tasks/:id/jira", async (c) => {
+    app.openapi(jiraStatusRoute, async (c) => c.json(await jira.status(), 200));
+    app.openapi(jiraSearchRoute, async (c) => c.json(await jira.search(c.req.valid("query").q ?? ""), 200));
+    app.openapi(linkJiraRoute, async (c) => {
       const id = taskId(c);
-      const { key } = await body(c, JiraLinkInput);
-      return linked(c, await jira.link(id, key));
+      return c.json(await linked(await jira.link(id, c.req.valid("json").key)), 200);
     });
-    app.delete("/tasks/:id/jira", async (c) => linked(c, await jira.unlink(taskId(c))));
-    app.post("/tasks/:id/jira/create", async (c) => {
+    app.openapi(unlinkJiraRoute, async (c) => c.json(await linked(await jira.unlink(taskId(c))), 200));
+    app.openapi(createJiraRoute, async (c) => {
       const id = taskId(c);
-      return linked(c, await jira.create(id, await body(c, JiraCreateInput)), 201);
+      return c.json(await linked(await jira.create(id, c.req.valid("json"))), 201);
     });
   }
   return app;

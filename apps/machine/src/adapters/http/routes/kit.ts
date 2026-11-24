@@ -45,15 +45,6 @@ export const TicketChatInput = z.object({
 
 export class BadRequest extends Error {}
 
-export const ReleaseNotesRunInput = z.object({
-  repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/name"),
-  tag: z.string().regex(/^[A-Za-z0-9._\/-]+$/, "a tag"),
-  since: z.string().datetime().optional(),
-});
-export const EvidenceRunInput = z.object({ repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/name"), period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "YYYY-MM") });
-export const StatusRunInput = z.object({ week: z.string().regex(/^\d{4}-W(0[1-9]|[1-4]\d|5[0-3])$/, "an ISO week like 2026-W46").optional() });
-export const AccessRunInput = z.object({ org: z.string().regex(/^[A-Za-z0-9-]+$/, "a GitHub org") });
-
 /** The window of a repo's own runs that a config proposal reads. */
 export const SIGNAL_DAYS = 30;
 export const DAY_MS = 24 * 60 * 60 * 1000;

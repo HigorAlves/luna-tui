@@ -3,6 +3,7 @@ import { CARD_EVENT_NAMES, CardEventName, type StreamMessage } from "@hardness/c
 import { streamSSE } from "hono/streaming";
 import type { TaskRow } from "../../../domain/task.ts";
 import { ReplayFeed } from "../replay.ts";
+import { eventsRoute } from "./events.openapi.ts";
 import { createOpenApiRouter } from "../openapi/router.ts";
 import { PING_EVERY_MS, SOURCE_KINDS, BadRequest, taskId, type RouteDeps } from "./kit.ts";
 
@@ -10,7 +11,7 @@ export function eventsRoutes(deps: RouteDeps) {
   const { pipeline, bus, serialize } = deps;
   const app = createOpenApiRouter();
   /** Live updates; `since` replays the task changes past that sequence number first, `source` keeps one source's tasks (see replay.ts). `ready` follows the replay. */
-  app.get("/events", (c) => {
+  app.openapi(eventsRoute, (c) => {
     const since = c.req.query("since");
     const source = c.req.query("source") ?? null;
     const wanted = c.req.query("names");
