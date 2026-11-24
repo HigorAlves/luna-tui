@@ -55,7 +55,7 @@ import { PACKAGE_MANAGER_CONFIG, configFilesChanged } from "../application/insta
 import { InstallFailedError, type InstallInput, type InstallOutcome, ensureInstalled } from "../application/install.ts";
 import { checkGit } from "../adapters/git/helper.ts";
 import { removeNestedRepositories } from "../adapters/git/machine-repo.ts";
-import { ensureClone, inUseClones, isClone, removeClone, reviewClone } from "../adapters/git/clone.ts";
+import { ensureClone, inUseClones, isClone, localPrDiff, removeClone, reviewClone } from "../adapters/git/clone.ts";
 import { type ProofRig, proofAppDeps } from "../application/config-proof.ts";
 import type { DesignBudget } from "../domain/design-budget.ts";
 import type { Waiver } from "../domain/design-parity.ts";
@@ -656,6 +656,7 @@ export async function buildRealStages(
     // The PR tasks' own stages: the host fetches the diff or the threads, the pack answers.
     reviewing: prReviewRunner({
       github,
+      localDiff: ({ repoPath, baseRef, worktree }) => localPrDiff(repoPath, baseRef, worktree),
       compliance,
       // The security, migration, infrastructure and second-opinion passes: sub-runs of their own packs, all at once beside the main review. Each reads a read-only clone of its own, cloned from the card's repository at the PR's head (what the main reviewer reads), so the card's folder is never touched; finding_confirm is bound late like Verify's decisions.
       helpers: {

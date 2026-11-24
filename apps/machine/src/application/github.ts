@@ -193,7 +193,7 @@ export interface GitHub {
   listOpenPrs(): Promise<OpenPrs>;
   /** The PR's node for the inbox query, or null when GitHub no longer shows it. */
   prFacts(slug: string, number: number): Promise<PrNode | null>;
-  /** The unified diff, tail-capped by the adapter. */
+  /** The unified diff, whole; GitHub refuses one over 20,000 lines (the review reads those with host git). */
   prDiff(slug: string, number: number): Promise<string>;
   prFiles(slug: string, number: number): Promise<ReviewContext["files"]>;
   prComments(slug: string, number: number): Promise<ReviewContext["existingComments"]>;

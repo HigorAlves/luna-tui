@@ -20,6 +20,8 @@ import { readTickets } from "../review-tickets.ts";
 
 export interface PrReviewDeps {
   github: GitHub;
+  /** The PR's diff from host git in the card's workspace (base fetched, merge base, diff), which has no size limit; GitHub refuses diffs over 20,000 lines. Absent, or when it throws, GitHub's diff is read and the reason is kept in `detail.diffNote`. */
+  localDiff?: (opts: { repoPath: string; baseRef: string; worktree: string }) => Promise<string>;
   /** Runs the reviewing pack with what the host fetched. */
   runPack: (context: StageContext, review: ReviewContext) => Promise<StageResult>;
   /** The security, migration, infrastructure and second-opinion passes, run on every PR after the main review; absent runs none. `decide` (read at call time) asks finding_confirm about what only a pass found; null keeps those findings unchecked. */
@@ -132,6 +134,26 @@ export function reviewLinksOf(links: PrLinks, tickets: ReadonlyArray<{ key: stri
   return { at: new Date().toISOString(), jira, cards, ...(links.suggestion ? { suggestion: links.suggestion } : {}) };
 }
 
+/** The PR's diff: host git first (whole, whatever its size), GitHub's as the fallback with the reason kept. Throws with both reasons when neither reads it. */
+async function readDiff(deps: PrReviewDeps, context: StageContext, pr: { repo: string; number: number }, baseRef: string): Promise<{ diff: string; source: "local" | "github"; note?: string }> {
+  const repoPath = context.task.repoPath ?? null;
+  const worktree = context.task.worktreePath ?? null;
+  let note: string | undefined;
+  if (deps.localDiff && repoPath && worktree) {
+    try {
+      return { diff: await deps.localDiff({ repoPath, baseRef, worktree }), source: "local" };
+    } catch (error) {
+      note = `host git could not make the diff (${messageOf(error)}); GitHub's was read`;
+      console.warn(`review: ${note}`);
+    }
+  }
+  try {
+    return { diff: await deps.github.prDiff(pr.repo, pr.number), source: "github", ...(note ? { note } : {}) };
+  } catch (error) {
+    throw new Error(note ? `${messageOf(error)}; ${note}` : messageOf(error));
+  }
+}
+
 export function prReviewRunner(deps: PrReviewDeps): StageRunner {
   const { github } = deps;
   return async (context) => {
@@ -139,13 +161,15 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     if (!pr) return { outcome: "fail", detail: { error: "not a PR task" } };
     let review: ReviewContext;
     let links: PrLinks;
+    let diffSource: "local" | "github" = "github";
+    let diffNote: string | undefined;
     try {
-      const [facts, diff, files, existingComments] = await Promise.all([
-        gatherPr(github, pr.repo, pr.number),
-        github.prDiff(pr.repo, pr.number),
-        github.prFiles(pr.repo, pr.number),
-        github.prComments(pr.repo, pr.number),
-      ]);
+      const [facts, existingComments] = await Promise.all([gatherPr(github, pr.repo, pr.number), github.prComments(pr.repo, pr.number)]);
+      const read = await readDiff(deps, context, pr, facts.baseRef);
+      diffSource = read.source;
+      diffNote = read.note;
+      const diff = read.diff;
+      const files = await github.prFiles(pr.repo, pr.number);
       review = { pr: facts, diff, files, existingComments };
       const repoPath = context.task.repoPath ?? null;
       // What the PR is the work of: the keys it names, the cards that match by a recorded fact and, when nothing does, the decision's pick.
@@ -265,6 +289,8 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       // What the review was linked to and how (key | fact | decision), and a suggestion that stayed under the bar.
       ...(reviewLinks ? { links: reviewLinks } : {}),
       verdict,
+      diffSource,
+      ...(diffNote ? { diffNote } : {}),
       ...(helpers
         ? {
             helpers: helpers.helpers.map((h) => {

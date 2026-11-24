@@ -76,9 +76,6 @@ export interface OctokitLike {
   paginate<T = unknown>(method: unknown, params?: Record<string, unknown>): Promise<T[]>;
 }
 
-/** The review pack reads a diff tail, not a whole diff: generated files pad the front, changes are everywhere. */
-export const DIFF_TAIL_CHARS = 200_000;
-
 const THREADS_QUERY = `query($owner:String!,$name:String!,$number:Int!){
   repository(owner:$owner,name:$name){ pullRequest(number:$number){
     reviewThreads(first:100){nodes{ id isResolved isOutdated path line originalLine
@@ -386,8 +383,8 @@ export class OctokitGitHub implements GitHub {
     const { data } = await call(`reading the diff of ${slug}#${number}`, () =>
       this.octokit.rest.pulls.get({ owner, repo, pull_number: number, mediaType: { format: "diff" } }),
     );
-    const text = String(data);
-    return text.length > DIFF_TAIL_CHARS ? text.slice(-DIFF_TAIL_CHARS) : text;
+    // Whole: GitHub refuses a diff of over 20,000 lines itself, and the review shards what is big, so nothing is cut here.
+    return String(data);
   }
 
   async prFiles(slug: string, number: number) {

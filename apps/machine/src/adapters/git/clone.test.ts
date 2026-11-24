@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { bringBack, copiedSettings, hostBaselineWorkspace, inUseClones, removeLeftovers, ensureClone, ensurePrClone, syncPrHead, freshClone, isClone, isFreshWorkspace, moveToClone, publishBranch, readCopy, removeClone, reviewClone, unpushedCommits } from "./clone.ts";
+import { bringBack, copiedSettings, hostBaselineWorkspace, inUseClones, removeLeftovers, ensureClone, ensurePrClone, syncPrHead, freshClone, isClone, isFreshWorkspace, moveToClone, publishBranch, readCopy, removeClone, reviewClone, localPrDiff, unpushedCommits } from "./clone.ts";
 import { configureMachineRepos, machineGitDir, machineRepoRoot } from "./machine-repo.ts";
 import { branchBase, changedPaths, commitAll, ensureWorktree, nestedLockfilesAt, removeWorktree, scopeStartOf, workspaceFor } from "./worktree.ts";
 
@@ -693,5 +693,50 @@ describe("a throwaway copy of a repository's tracked files, for a model to read"
   it("fails with git's message when the path is no repository", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "readcopy-none-")));
     await expect(readCopy(join(root, "nothing"), join(root, "copy"))).rejects.toThrow(/git clone failed/);
+  });
+});
+
+describe("a PR's diff from host git", () => {
+  /** A remote with main, a PR branch off it that adds a huge generated file, and a main that moved on after the PR branched. */
+  function bigPr(prefix: string) {
+    const r = withRemote(prefix);
+    git(r.repo, "checkout", "-q", "-b", "feat/pr");
+    writeFileSync(join(r.repo, "src.ts"), "export const x = 1;\n");
+    writeFileSync(join(r.repo, "big.json"), Array.from({ length: 30000 }, (_, i) => `  "line${i}": ${i},`).join("\n") + "\n");
+    git(r.repo, "add", "-A");
+    git(r.repo, "commit", "-q", "-m", "pr");
+    git(r.repo, "push", "-q", "origin", "feat/pr");
+    git(r.repo, "checkout", "-q", "main");
+    git(r.repo, "branch", "-q", "-D", "feat/pr");
+    writeFileSync(join(r.repo, "later.txt"), "later\n");
+    git(r.repo, "add", "-A");
+    git(r.repo, "commit", "-q", "-m", "main moves on");
+    git(r.repo, "push", "-q", "origin", "main");
+    // The user's repository never fetched main since: its remote ref is gone, as on a repository nobody pulled.
+    git(r.repo, "update-ref", "-d", "refs/remotes/origin/main");
+    return r;
+  }
+
+  it("fetches the base, diffs from the merge base and keeps every line of a 30,000-line generated file", async () => {
+    const { repo, dir } = bigPr("pr-diff-");
+    const card = join(dir, "pr-clone");
+    await ensurePrClone(repo, "feat/pr", card);
+    const diff = await localPrDiff(repo, "main", card);
+    expect(diff).toContain("diff --git a/src.ts b/src.ts");
+    expect(diff).toContain('+  "line0": 0,');
+    expect(diff).toContain('+  "line29999": 29999,');
+    expect(diff.length).toBeGreaterThan(200_000);
+    // What main gained after the PR branched is not the PR's change.
+    expect(diff).not.toContain("later.txt");
+    // Nothing of the card moved: its head is still the PR's.
+    expect(wgit(card, "rev-parse", "--abbrev-ref", "HEAD")).toBe("feat/pr");
+    expect(wgit(card, "for-each-ref", "refs/luna/")).not.toContain("pr-base");
+  });
+
+  it("refuses a base ref shaped like an option", async () => {
+    const { repo, dir } = bigPr("pr-diff-");
+    const card = join(dir, "pr-clone");
+    await ensurePrClone(repo, "feat/pr", card);
+    await expect(localPrDiff(repo, "--upload-pack=x", card)).rejects.toThrow(/branch/);
   });
 });

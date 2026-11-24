@@ -348,7 +348,7 @@ export type ReviewCard = z.infer<typeof ReviewCard>;
 /** For reviewing (a PR task): what the host fetched about someone's PR. */
 export const ReviewContext = z.object({
   pr: PrFacts,
-  /** `gh pr diff` output, tail-capped by the host. */
+  /** The PR's unified diff as host git read it (or GitHub's, as a fallback): whole, or one shard's part of it, minus the files the review leaves out. */
   diff: z.string(),
   files: z.array(z.object({ path: z.string(), additions: z.number().int(), deletions: z.number().int(), /** The name a renamed file had before. */ previousPath: z.string().optional() })),
   existingComments: z.array(

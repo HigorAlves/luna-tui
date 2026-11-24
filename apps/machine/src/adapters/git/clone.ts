@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 
 import { exec, execOrThrow } from "../process/exec.ts";
 import { at, machineGitDir, machineRepoRoot } from "./machine-repo.ts";
-import { BASE_REF, HOST_GIT, type Workspace, repoAddsGitlink, branchExists, clearStaleLock, headCommit, isBranchName, resetWorktree, stackOf, startPoint } from "./worktree.ts";
+import { BASE_REF, HOST_GIT, type Workspace, repoAddsGitlink, branchExists, clearStaleLock, diffText, headCommit, isBranchName, resetWorktree, stackOf, startPoint } from "./worktree.ts";
 
 const CLONE_TIMEOUT_MS = 300_000;
 /** Set in the repository of a fresh workspace, which nothing else sets. */
@@ -205,6 +205,29 @@ export async function syncPrHead(repoPath: string, headRef: string, path: string
   await git("update-ref", `refs/luna/pushed/${headRef}`, sha);
   await git("symbolic-ref", "HEAD", `refs/heads/${headRef}`);
   await resetWorktree(path, sha);
+}
+
+/**
+ * The PR's own change, read by host git instead of GitHub's diff API (which refuses a diff of over 20,000 lines): the base branch is
+ * fetched into the user's repository exactly as `ensurePrClone` fetches the head, the card's repository (the machine's) gets any objects
+ * it lacks, and the diff runs from the merge base to the card's head. Nothing caps its length. The card's refs and folder are left as
+ * they were; the one ref made to bring objects over is deleted. Throws when the base cannot be fetched or has no merge base with the head.
+ */
+export async function localPrDiff(repoPath: string, baseRef: string, path: string): Promise<string> {
+  if (!isBranchName(baseRef)) throw new Error(`not a usable branch name: ${JSON.stringify(baseRef)}`);
+  if (!isClone(path)) throw new Error(`the card has no workspace at ${path} yet`);
+  const fetched = await exec("git", [...HOST_GIT, "-C", repoPath, "fetch", "--quiet", "--end-of-options", "origin", `+refs/heads/${baseRef}:refs/remotes/origin/${baseRef}`], { timeoutMs: CLONE_TIMEOUT_MS });
+  if (fetched.code !== 0) throw new Error(`git fetch origin ${baseRef} failed: ${(fetched.stderr || fetched.stdout).trim()}`);
+  const sha = await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "--verify", `refs/remotes/origin/${baseRef}^{commit}`]);
+  const git = (...args: string[]) => exec("git", [...HOST_GIT, ...inMachine(path), ...args], { timeoutMs: CLONE_TIMEOUT_MS });
+  if ((await git("cat-file", "-e", `${sha}^{commit}`)).code !== 0) {
+    const brought = await git("fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--end-of-options", repoPath, `+refs/remotes/origin/${baseRef}:refs/luna/pr-base`);
+    await git("update-ref", "-d", "refs/luna/pr-base");
+    if (brought.code !== 0) throw new Error(`could not bring the PR's base ${sha.slice(0, 7)} into the workspace: ${(brought.stderr || brought.stdout).trim()}`);
+  }
+  const mb = await git("merge-base", sha, "HEAD");
+  if (mb.code !== 0 || !/^[0-9a-f]{40,64}$/.test(mb.stdout.trim())) throw new Error(`the PR's head and ${baseRef} have no merge base`);
+  return diffText(path, mb.stdout.trim(), "HEAD");
 }
 
 /**
