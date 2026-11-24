@@ -33,6 +33,22 @@ describe("selectSweep", () => {
     expect(names(selectSweep(checks, ["web/a.ts"], [], 60))).toContain("slow-suite");
   });
 
+  it("ignores the graph's impact when every changed file is documentation", () => {
+    // The graph ties a README to every source file that mentions it: that is not a reason to run the suite of those files.
+    expect(names(selectSweep(checks, [".github/README.md"], ["web/a.ts", "api/b.ts"], 10))).toEqual(["full-suite", "lint", "typecheck", "format"]);
+    expect(names(selectSweep(checks, ["docs/a.md", "docs/guide/b.mdx"], ["web/a.ts"], 10))).not.toContain("unit-web");
+  });
+
+  it("still takes a check whose paths cover the documentation itself", () => {
+    const docsCheck = [check("docs-lint", { paths: ["docs/**"] }), check("unit-web", { paths: ["web/**"] })];
+    expect(names(selectSweep(docsCheck, ["docs/a.md"], ["web/a.ts"], 10))).toEqual(["docs-lint"]);
+  });
+
+  it("keeps the impact when a code or test file changes beside the documentation", () => {
+    expect(names(selectSweep(checks, ["README.md", "web/a.test.ts"], ["api/b.ts"], 10))).toEqual(expect.arrayContaining(["unit-web", "unit-api"]));
+    expect(names(selectSweep(checks, ["README.md", "web/a.ts"], ["api/b.ts"], 10))).toEqual(expect.arrayContaining(["unit-web", "unit-api"]));
+  });
+
   it("keeps every check with paths when the change is unknown", () => {
     expect(names(selectSweep(checks, null, [], 10))).toEqual(expect.arrayContaining(["unit-web", "unit-api"]));
   });

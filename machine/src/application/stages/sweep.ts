@@ -7,6 +7,7 @@ import picomatch from "picomatch";
 import type { BlockedRow } from "../../adapters/docker/egress.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import { type CheckCommand, checkCommand } from "../../domain/checks.ts";
+import { isDocPath } from "../../domain/docs-only.ts";
 import { envBrokenDetail, noIdentityDetail } from "../env-broken.ts";
 import type { Trust } from "../../domain/trust.ts";
 import { type SessionExec, openChecksSession } from "./checks-session.ts";
@@ -17,9 +18,13 @@ const GATE_NAME = /lint|type-?check|tsc|format|fmt|prettier|eslint|biome/i;
 export const tailOf = (text: string): string => text.trimEnd().split("\n").slice(-TAIL_LINES).join("\n");
 
 /** The checks the sweep runs, in the repo's order: those whose `paths` cover a changed or impacted file (every one with paths when the change is unknown),
- *  the whole-suite checks (no `paths`) whose `minutes` hint is within `wholeSuiteMinutes`, and the lint, typecheck and format checks. */
+ *  the whole-suite checks (no `paths`) whose `minutes` hint is within `wholeSuiteMinutes`, and the lint, typecheck and format checks.
+ *  A change that is only documentation brings no impact: its checks are those whose `paths` cover the documentation itself. */
 export function selectSweep(checks: readonly CheckSpec[], changed: readonly string[] | null, impact: readonly string[], wholeSuiteMinutes: number): CheckSpec[] {
-  const reach = changed === null ? null : [...changed, ...impact];
+  // A change to documentation alone reaches only what covers the documentation: the graph ties a README to every source file that mentions it,
+  // which is no reason to run those files' suites (a README card ran the whole machine suite, 20 minutes, and failed on tests it never touched).
+  const proseOnly = changed !== null && changed.length > 0 && changed.every(isDocPath);
+  const reach = changed === null ? null : proseOnly ? [...changed] : [...changed, ...impact];
   return checks.filter((check) => {
     if (check.paths && check.paths.length > 0) {
       if (reach === null) return true;
