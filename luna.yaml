@@ -8,42 +8,42 @@
 checks:
   - name: contracts typecheck
     run: pnpm --filter @hardness/contracts typecheck
-    paths: ["contracts/**"]
+    paths: ["packages/contracts/**"]
     minutes: 1
   - name: contracts tests
     run: pnpm --filter @hardness/contracts test
-    paths: ["contracts/**"]
+    paths: ["packages/contracts/**"]
     minutes: 1
 
   - name: factory typecheck
     run: pnpm --filter @hardness/factory typecheck
-    paths: ["factory/**", "contracts/**"]
+    paths: ["apps/factory/**", "packages/contracts/**"]
     minutes: 1
   - name: factory tests
     run: pnpm --filter @hardness/factory test
-    paths: ["factory/**", "contracts/**"]
+    paths: ["apps/factory/**", "packages/contracts/**"]
     minutes: 2
 
   - name: evals typecheck
     run: pnpm --filter @hardness/evals typecheck
-    paths: ["evals/**", "contracts/**"]
+    paths: ["evals/**", "packages/contracts/**"]
     minutes: 1
   - name: evals tests
     run: pnpm --filter @hardness/evals test
-    paths: ["evals/**", "contracts/**"]
+    paths: ["evals/**", "packages/contracts/**"]
     minutes: 1
 
   - name: machine typecheck
     run: pnpm --filter @hardness/machine typecheck
-    paths: ["machine/**", "contracts/**"]
+    paths: ["apps/machine/**", "packages/contracts/**"]
     minutes: 2
   - name: machine tests
     run: pnpm --filter @hardness/machine test
-    paths: ["machine/**", "contracts/**"]
+    paths: ["apps/machine/**", "packages/contracts/**"]
     minutes: 8
   - name: golden fixtures
-    run: node machine/scripts/golden-task.mjs --selftest
-    paths: ["fixtures/**", "machine/scripts/golden-*.mjs"]
+    run: node apps/machine/scripts/golden-task.mjs --selftest
+    paths: ["fixtures/**", "apps/machine/scripts/golden-*.mjs"]
     minutes: 2
   # make setup's scripts: shellcheck (in the runner image), and the .env and credential writes on temp files.
   - name: setup scripts
@@ -53,34 +53,34 @@ checks:
 
   - name: site facts
     run: pnpm --filter site facts:check
-    paths: ["site/**", "contracts/**", "machine/*/Dockerfile"]
+    paths: ["apps/site/**", "packages/contracts/**", "apps/machine/*/Dockerfile"]
     minutes: 1
   - name: site lint
     run: pnpm --filter site lint
-    paths: ["site/**"]
+    paths: ["apps/site/**"]
     minutes: 1
   - name: site typecheck
     run: pnpm --filter site typecheck
-    paths: ["site/**"]
+    paths: ["apps/site/**"]
     minutes: 2
   - name: site tests
     run: pnpm --filter site test
-    paths: ["site/**"]
+    paths: ["apps/site/**"]
     minutes: 1
   - name: site build
     run: pnpm --filter site build
-    paths: ["site/**"]
+    paths: ["apps/site/**"]
     minutes: 4
 
   - name: board clippy
     run: cargo clippy --all-targets -- -D warnings -A clippy::large_enum_variant
-    cwd: board
-    paths: ["board/**"]
+    cwd: apps/board
+    paths: ["apps/board/**"]
     minutes: 4
   - name: board tests
     run: cargo test
-    cwd: board
-    paths: ["board/**"]
+    cwd: apps/board
+    paths: ["apps/board/**"]
     minutes: 4
 
 # The machine's suite runs against a real Postgres (freshTestDatabase drops and recreates a schema per file).

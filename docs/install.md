@@ -20,7 +20,7 @@ It walks a fresh Mac through everything below, one step at a time. Every step is
 |---|---|
 | `make tools` | installs what is missing with Homebrew after one confirmation (Docker Desktop, Node, pnpm, Rust, gh, herdr; gum, Codex and Claude Code if you want them) |
 | `make credentials` | each engine's credential into `~/.config/hardness/` (0600): Claude through `claude setup-token`, the Codex login, an OpenAI key and a Jev key (Vercel AI Gateway or TypeSafe) if you use them; the machine's API token; `gh auth login` |
-| `make integrations` | Jira, the Slack inbox and machine settings (where your repos live, engine budgets) into the root `.env` (0600), each tried against its service; `machine/.env` is linked to it for `pnpm dev` |
+| `make integrations` | Jira, the Slack inbox and machine settings (where your repos live, engine budgets) into the root `.env` (0600), each tried against its service; `apps/machine/.env` is linked to it for `pnpm dev` |
 | `make up`, `make down` | `pnpm start`, `pnpm stop` |
 | `make board` | `pnpm board:link` |
 | `make luna-yaml REPO=<path>` | a repo's `luna.yaml`: Jira (the statuses listed from your project when the Jira keys are set), engines, policy, budgets and SLAs; an existing file keeps its comments, the change is shown as a diff, and nothing is written that the machine would refuse. Checks and services come from the board's `:setup <repo>`, which proves them |
@@ -48,9 +48,9 @@ pnpm board:link       # builds the board and links it into herdr once; `pnpm boa
 ## Two ways to run
 
 - **`pnpm start`**: Postgres and the machine both run in Docker. You keep no server open in a terminal. It passes your `gh auth token` to the machine as `GH_TOKEN`. This is the one credential that the machine's GitHub calls use. It also passes your git identity. A bare `docker compose up` passes neither, so the machine answers `/health` with 503 and the reason (`docker compose up --wait` fails, and `make doctor` prints it) instead of failing each card at its first push. `pnpm stop` stops both and keeps the data. Stage containers still run on your Docker. So the machine mounts repos, worktrees and run folders at the same paths as on your host. See [configuration.md](./configuration.md#compose).
-- **`pnpm dev`**: use it to work on the harness itself. It stops the machine container. It starts only Postgres (`docker compose up postgres`). It runs the machine on your host at http://127.0.0.1:4317 with hot reload. It loads `machine/.env` if one exists. `pnpm db:down` stops Postgres and keeps its data.
+- **`pnpm dev`**: use it to work on the harness itself. It stops the machine container. It starts only Postgres (`docker compose up postgres`). It runs the machine on your host at http://127.0.0.1:4317 with hot reload. It loads `apps/machine/.env` if one exists. `pnpm db:down` stops Postgres and keeps its data.
 
-Both use the same database. Tasks carry over when you switch. For board usage and keys, see [`board/README.md`](../board/README.md).
+Both use the same database. Tasks carry over when you switch. For board usage and keys, see [`apps/board/README.md`](../apps/board/README.md).
 
 ## Slack inbox
 
@@ -62,7 +62,7 @@ To create the app:
 2. Click **Create New App**.
 3. Click **From a manifest**.
 4. Pick your workspace.
-5. Paste [`slack/manifest.json`](../slack/manifest.json).
+5. Paste [`infra/slack/manifest.json`](../infra/slack/manifest.json).
 6. Click **Create**.
 
 To get the user token:
@@ -82,7 +82,7 @@ The app token feeds the live socket. The socket brings in reactions and replies 
 
 To connect the machine:
 
-1. Put both tokens where the machine reads them: `machine/.env` for `pnpm dev`, or a root `.env` (or the shell) for `pnpm start`:
+1. Put both tokens where the machine reads them: `apps/machine/.env` for `pnpm dev`, or a root `.env` (or the shell) for `pnpm start`:
 
    ```sh
    MACHINE_SLACK_USER_TOKEN=xoxp-...
@@ -108,7 +108,7 @@ To make the token:
 
 To connect the machine:
 
-1. Put the site, your Atlassian email and the token where the machine reads them: `machine/.env` for `pnpm dev`, or a root `.env` or the shell for `pnpm start`:
+1. Put the site, your Atlassian email and the token where the machine reads them: `apps/machine/.env` for `pnpm dev`, or a root `.env` or the shell for `pnpm start`:
 
    ```sh
    MACHINE_JIRA_SITE=https://acme.atlassian.net
@@ -153,6 +153,6 @@ pnpm golden           # end-to-end, needs a running machine
 - `pnpm --filter @hardness/factory test`: the runner's own tests. They cover the guards and roots, the prompt renderer, the ledger tools and the result writer. They also run a dry run of every pack and the conformance table on each runtime's fake (Claude, eve, Jev). They need no credential.
 - `pnpm eval`: replay evals of a pack on an engine, in the stage image. It needs a credential and docker. It runs locally only. See [evals/README.md](../evals/README.md).
 
-`pnpm golden --matrix` runs every ticket of `fixtures/golden-task`, `golden-web` and `golden-cli`. Each fixture holds a bug and a feature. The command grades the suite, stages, stubs, evidence verdict, cost and diff size. It exits 1 under an 80% pass rate. It writes `golden-result.json`. `--only <fixture>`, `--ceiling-usd` and `--threshold` tune it. The nightly `golden` workflow runs it. `node machine/scripts/golden-task.mjs --selftest` checks the fixtures without a machine.
+`pnpm golden --matrix` runs every ticket of `fixtures/golden-task`, `golden-web` and `golden-cli`. Each fixture holds a bug and a feature. The command grades the suite, stages, stubs, evidence verdict, cost and diff size. It exits 1 under an 80% pass rate. It writes `golden-result.json`. `--only <fixture>`, `--ceiling-usd` and `--threshold` tune it. The nightly `golden` workflow runs it. `node apps/machine/scripts/golden-task.mjs --selftest` checks the fixtures without a machine.
 
 `pnpm golden` drives `fixtures/golden-task/` through every gate of the pipeline against a running machine. It works the same way the board does. It checks that the implementer's fix makes its tests pass. Run it after any change to the engine, the API, or the agents.

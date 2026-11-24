@@ -1,10 +1,8 @@
 packages:
+  - apps/*
+  - packages/*
   - config/*
-  - machine
-  - contracts
-  - factory
   - evals
-  - site
 allowBuilds:
   esbuild: true
   sharp: true

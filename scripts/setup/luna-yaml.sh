@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # luna-yaml.sh - writes or updates a repo's luna.yaml by asking: Jira, engines, policy, budgets and
-# SLAs. Answers go through machine/scripts/luna-yaml.ts, which validates them as the machine reads
+# SLAs. Answers go through apps/machine/scripts/luna-yaml.ts, which validates them as the machine reads
 # the file and keeps an existing file's comments. Checks and services are proposed and proven by
 # the board's `:setup <repo>` instead. No secret goes in this file: it is committed with the repo.
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-LUNA_YAML_TS="$ROOT/machine/scripts/luna-yaml.ts"
+LUNA_YAML_TS="$ROOT/apps/machine/scripts/luna-yaml.ts"
 ANSWERS=$(mktemp)
 NEW=$(mktemp)
 trap 'rm -f "$ANSWERS" "$NEW" "${CURRENT:-}"' EXIT

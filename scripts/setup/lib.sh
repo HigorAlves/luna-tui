@@ -8,7 +8,7 @@ source "$SETUP_DIR/helpers/logging.sh"
 source "$SETUP_DIR/helpers/ui.sh"
 
 # Where the machine reads its credentials (docs/configuration.md#credentials) and its env
-# (compose reads the root .env; `pnpm dev` reads machine/.env, a link to it).
+# (compose reads the root .env; `pnpm dev` reads apps/machine/.env, a link to it).
 CONFIG_DIR="${LUNA_CONFIG_DIR:-$HOME/.config/hardness}"
 ENV_FILE="${LUNA_ENV_FILE:-$ROOT/.env}"
 CODEX_AUTH="${CODEX_HOME:-$HOME/.codex}/auth.json"
@@ -43,7 +43,7 @@ health_problems() {
   node -e 'try { for (const p of JSON.parse(process.argv[1]).problems ?? []) console.log(p); } catch {}' "$1" 2>/dev/null || true
 }
 
-# board_link_state PLUGIN_LIST ROOT: how `herdr plugin list` shows the board: linked (to ROOT/board), elsewhere (another checkout),
+# board_link_state PLUGIN_LIST ROOT: how `herdr plugin list` shows the board: linked (to ROOT/apps/board), elsewhere (another checkout),
 # disabled or missing. The list is taken as text, not piped: `grep -q` quits at the match, and under pipefail herdr's SIGPIPE
 # on its next line would read as "not linked".
 board_link_state() {
@@ -51,7 +51,7 @@ board_link_state() {
   line=$(grep '^- hardness.board ' <<<"$1" | head -n 1) || true
   [ -n "$line" ] || { echo missing; return; }
   case "$line" in *" disabled "*) echo disabled; return ;; esac
-  case "$line" in *"[local:$2/board]"*) echo linked ;; *) echo elsewhere ;; esac
+  case "$line" in *"[local:$2/apps/board]"*) echo linked ;; *) echo elsewhere ;; esac
 }
 
 # cred_present NAME: the credential file ~/.config/hardness/NAME exists and is not empty.

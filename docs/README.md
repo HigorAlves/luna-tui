@@ -8,7 +8,7 @@
 | [api.md](./api.md) | HTTP routes and an example session |
 | [contributing.md](./contributing.md) | Running the checks, opening a PR |
 
-For the board (the Rust TUI): [`board/README.md`](../board/README.md).
+For the board (the Rust TUI): [`apps/board/README.md`](../apps/board/README.md).
 
 ## Runbooks
 

@@ -1,6 +1,6 @@
 # Admit an engine to a vision pack
 
-A vision pack reads images. Today these are `design_spec`, `ui_design` and `design_parity` (`vision: true` in `contracts/src/packs.ts`). An engine joins one only when its model reads images and its eval matches Claude's ([RFC 0013](../rfcs/0013-designer-agents.md), phase 4). This runbook is that path, in order.
+A vision pack reads images. Today these are `design_spec`, `ui_design` and `design_parity` (`vision: true` in `packages/contracts/src/packs.ts`). An engine joins one only when its model reads images and its eval matches Claude's ([RFC 0013](../rfcs/0013-designer-agents.md), phase 4). This runbook is that path, in order.
 
 Everything here runs on your machine. The probe and the evals need a model credential, so none of it runs in CI. You need the rebuilt stage image, the login or key of the candidate, and the Claude token for the baseline.
 
@@ -20,7 +20,7 @@ If the backend rejects the image (an HTTP 400 naming `input_image`) or the engin
 
 ## 2. Flip the catalog flag
 
-- Set `vision: true` on the model's entry in `contracts/src/models.ts` (`SEES` instead of `BLIND`).
+- Set `vision: true` on the model's entry in `packages/contracts/src/models.ts` (`SEES` instead of `BLIND`).
 - Run the contract test:
 
 ```sh
@@ -71,7 +71,7 @@ On a fail, the pack stays Claude-only. Keep the record. It says why.
 
 Only after a pass:
 
-- Add the engine to the pack's `engines.allowed` in `contracts/src/packs.ts`.
+- Add the engine to the pack's `engines.allowed` in `packages/contracts/src/packs.ts`.
 - Add it to `engines.fallback` only if you want the pack to move to it on a usage limit. Leave `default` as it is.
 - Update the pack's comment, which says "Claude only".
 

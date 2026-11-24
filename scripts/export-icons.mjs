@@ -7,14 +7,14 @@ import { fileURLToPath } from "node:url"
 import { markSvg } from "./mark.mjs"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
-const sharp = createRequire(resolve(root, "site/package.json"))("sharp")
+const sharp = createRequire(resolve(root, "apps/site/package.json"))("sharp")
 
 const OUT = [
-  ["site/public/icon.png", 256, "tile"],
-  ["site/public/mark.png", 64, "tile"],
-  ["site/src/app/icon.png", 512, "tile"],
-  ["site/src/app/apple-icon.png", 180, "tile"],
-  ["board/icon.png", 512, "grid"],
+  ["apps/site/public/icon.png", 256, "tile"],
+  ["apps/site/public/mark.png", 64, "tile"],
+  ["apps/site/src/app/icon.png", 512, "tile"],
+  ["apps/site/src/app/apple-icon.png", 180, "tile"],
+  ["apps/board/icon.png", 512, "grid"],
 ]
 
 const rows = []

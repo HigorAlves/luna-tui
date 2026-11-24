@@ -159,7 +159,7 @@ The two spikes are above. S4 gave a go with conditions. S6 gave a no-go, so S7 i
 
 ### S13: the network of each pack
 
-Every agent pack declares its network in `contracts/src/packs.ts`: `engine`, `github` or `full`. Most packs reach only their engine. The writable build, verify, e2e, recording and setup stages are `full`.
+Every agent pack declares its network in `packages/contracts/src/packs.ts`: `engine`, `github` or `full`. Most packs reach only their engine. The writable build, verify, e2e, recording and setup stages are `full`.
 
 ### Review rounds
 

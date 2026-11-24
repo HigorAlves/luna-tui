@@ -28,7 +28,7 @@ Most of it is useful with Claude alone and can land before [RFC 0002](./0002-nat
 
 ## Background / Context
 
-- `contracts/src/packs.ts` stores `model: "opus" | "sonnet" | "haiku"`, aliases the Claude Agent SDK resolves itself. The pinned SDK version (`factory/package.json`) is today the only thing deciding which Claude model runs.
+- `packages/contracts/src/packs.ts` stores `model: "opus" | "sonnet" | "haiku"`, aliases the Claude Agent SDK resolves itself. The pinned SDK version (`apps/factory/package.json`) is today the only thing deciding which Claude model runs.
 - Every run already leaves its input (`/in/stage.json`) and its answer (`/out/result.json`, `events.jsonl`) under the machine's state dir. That is an eval corpus nobody reads back.
 - `StageOutput` carries `schema: 3`; `StageInput` has no version.
 - A rate-limited stage parks the task in `paused_rate_limit` until the reset time, even when another engine could answer.
@@ -39,7 +39,7 @@ Most of it is useful with Claude alone and can land before [RFC 0002](./0002-nat
 ### 1. Model catalog behind engine aliases
 
 ```ts
-// contracts/src/models.ts: the only file that names a model ID
+// packages/contracts/src/models.ts: the only file that names a model ID
 export const MODELS = {
   "anthropic/opus-5.5": {
     runtime: "claude", id: "claude-opus-5-5", status: "ga",
@@ -55,7 +55,7 @@ Packs name engines (`claude:opus`), engines name catalog keys, catalog keys name
 
 ### 2. One runtime interface, conformance-tested
 
-`factory/src/runtimes/conformance/` holds one scenario table. Each runtime ships a fake transport (a scripted `query()` for Claude, eve's `mockModel` for eve, canned answers for Jev) and must pass every row:
+`apps/factory/src/runtimes/conformance/` holds one scenario table. Each runtime ships a fake transport (a scripted `query()` for Claude, eve's `mockModel` for eve, canned answers for Jev) and must pass every row:
 
 | Scenario | Expected |
 |---|---|
@@ -111,11 +111,11 @@ On a rate limit the machine retries the stage on the next fallback engine and re
 
 ### 6. One event stream
 
-Each runtime translates its SDK's stream into one `RunEvent` union in `contracts/src/events.ts` (`text`, `tool_call`, `tool_result`, `step`, `usage`, `rate_limit`). The transcript the board's watch pane follows, `events.jsonl` and usage accounting read only that. An SDK changing its message shape breaks one translator.
+Each runtime translates its SDK's stream into one `RunEvent` union in `packages/contracts/src/events.ts` (`text`, `tool_call`, `tool_result`, `step`, `usage`, `rate_limit`). The transcript the board's watch pane follows, `events.jsonl` and usage accounting read only that. An SDK changing its message shape breaks one translator.
 
 ### 7. A fingerprint on every run
 
-The run record stores engine, exact model ID, runtime and SDK version, and a hash over template + role + addendum + skills + access (`factory/src/core/fingerprint.ts`). A change in quality becomes a diff between two fingerprints; `/metrics?groupBy=engine` and `groupBy=fingerprint` compare them.
+The run record stores engine, exact model ID, runtime and SDK version, and a hash over template + role + addendum + skills + access (`apps/factory/src/core/fingerprint.ts`). A change in quality becomes a diff between two fingerprints; `/metrics?groupBy=engine` and `groupBy=fingerprint` compare them.
 
 ### 8. Policy as data, enforced twice
 
@@ -123,7 +123,7 @@ The run record stores engine, exact model ID, runtime and SDK version, and a has
 
 ### 9. Versioned contracts and import boundaries
 
-`StageInput` gets a `schema` number like `StageOutput`. Runtimes import only `@hardness/contracts` and `factory/src/core/`. A lint rule keeps each SDK inside its runtime folder and model IDs inside `models.ts`.
+`StageInput` gets a `schema` number like `StageOutput`. Runtimes import only `@hardness/contracts` and `apps/factory/src/core/`. A lint rule keeps each SDK inside its runtime folder and model IDs inside `models.ts`.
 
 ### 10. Kill switches and budgets
 
@@ -131,7 +131,7 @@ The run record stores engine, exact model ID, runtime and SDK version, and a has
 
 ### Dependency hygiene
 
-- Exact versions for `@anthropic-ai/claude-agent-sdk` (already exact), `eve`, `@typesafe-ai/sdk`, and the Codex CLI in `machine/runner/Dockerfile`. No carets on a runtime SDK.
+- Exact versions for `@anthropic-ai/claude-agent-sdk` (already exact), `eve`, `@typesafe-ai/sdk`, and the Codex CLI in `apps/machine/runner/Dockerfile`. No carets on a runtime SDK.
 - Dependency updates grouped per runtime, so an eve bump never rides along with a Claude SDK bump.
 - An SDK or model upgrade PR carries its conformance result and an eval scorecard in the body. The runner image key already covers the lockfile, so the image rebuilds with it.
 
@@ -198,14 +198,14 @@ A flag per pack and engine. Rejected: flags say on or off; shadow and canary are
 
 Built: §1 (catalog), §2 (conformance), §3 (evals), §5 (fallback across engines), §6 (`RunEvent`), §7 (fingerprint), §8, §10 (kill switch and per-engine budgets), metrics by engine and by fingerprint, and parts of §9. Not started: §4 rollout states, and two of the three runbooks. Where the build differs:
 
-- **§1 Catalog.** `contracts/src/models.ts` and `contracts/src/engines.test.ts` as proposed, plus a check that no source file under `contracts/src`, `factory/src` or `machine/src` other than `models.ts` names a model ID. Effort is not on the engine: it stays on the pack, checked against the model's `caps.effort`. `codex:sol` points at `openai/gpt-5.6-terra` (`gpt-6-sol` is API-only on a ChatGPT login); Jev's catalog ID is `jev-latest`, TypeSafe's own alias, so it is the one model that is not pinned.
-- **§2 Conformance.** `factory/src/runtimes/conformance/` runs one table against each runtime's fake (Jev the rows a runtime without tools or text answers can play); it runs in `pnpm --filter @hardness/factory test`. Beyond the rows above it checks a model error, shell syntax refused and a path outside the run's roots refused. The delegate rows ([RFC 0002](./0002-native-agent-runtimes.md) phase 7) run on Claude and eve against a fake child runtime: the child's answer is the call's result, its `child` events come in order with its cost, which the parent's usage adds; the child is at depth 1, read-only and within the parent's turns; a failing child and a missing credential are the call's error and the parent answers. On eve the call's own `tool_call` races the bridge that starts the child, so the order is checked from the child's start.
+- **§1 Catalog.** `packages/contracts/src/models.ts` and `packages/contracts/src/engines.test.ts` as proposed, plus a check that no source file under `packages/contracts/src`, `apps/factory/src` or `apps/machine/src` other than `models.ts` names a model ID. Effort is not on the engine: it stays on the pack, checked against the model's `caps.effort`. `codex:sol` points at `openai/gpt-5.6-terra` (`gpt-6-sol` is API-only on a ChatGPT login); Jev's catalog ID is `jev-latest`, TypeSafe's own alias, so it is the one model that is not pinned.
+- **§2 Conformance.** `apps/factory/src/runtimes/conformance/` runs one table against each runtime's fake (Jev the rows a runtime without tools or text answers can play); it runs in `pnpm --filter @hardness/factory test`. Beyond the rows above it checks a model error, shell syntax refused and a path outside the run's roots refused. The delegate rows ([RFC 0002](./0002-native-agent-runtimes.md) phase 7) run on Claude and eve against a fake child runtime: the child's answer is the call's result, its `child` events come in order with its cost, which the parent's usage adds; the child is at depth 1, read-only and within the parent's turns; a failing child and a missing credential are the call's error and the parent answers. On eve the call's own `tool_call` races the bridge that starts the child, so the order is checked from the child's start.
 - **§3 Evals.** `evals/` and `pnpm eval` as proposed (`--pack`, `--engine`, `--against`, `--case`, `--no-judge`, `--save-baseline`), each case run in the stage image through the machine's `runPackOnce`. The graders are shared (`evals/src/`), not one `graders.ts` per pack; a case is `stage.json` plus `expect.json` (outcome, deterministic checks, a rubric). The judge is the `eval_judge` pack, fixed on `claude:opus`; it runs only from the evals runner, never through `POST /runs`. The cases are not recorded runs: three synthetic Slack batches, three triage tickets over the golden fixtures, and three synthetic issues for `issue_classify` instead of `reviewing`. Baselines exist for `slack_triage` only (`claude-haiku`, `codex-luna`).
 - **§4 Rollout states.** Not started. Instead: an engine is tried by adding it to a pack's `allowed` and picking it per repo (`luna.yaml` `engines:`) or per task (`stages`); a pick whose credential is missing, whose runtime is turned off or which is at its monthly cap runs the pack's default with a note on the task.
 - **§5 Fallback.** As proposed: `engines.fallback` is an ordered list, each one of `allowed` (contract test). A usage limit latches the credential whose window it hit (`claude`, `codex`, `openai`, `typesafe`; `GET /health`'s `slots.latched`), as before, and the stage runs again at once, as a new attempt, on the first fallback that has not run it this time, whose credential is present (and neither disabled nor at its cap) and whose window is not latched; a `stage.engine` event on that run says `fallback after <engine> rate limit`, and the task pauses only when the list is exhausted. One list serves both directions, the engine that just hit its limit being skipped: `triage` falls back between `claude:opus` and `codex:sol`, `slack_triage` and `chat_triage` between `claude:haiku` and `codex:luna`; the Claude-only packs have none. `POST /runs` does the same within a call before its 429. The Slack inbox's own loop still runs `slack_triage` on its default only, so its behaviour on a limit is unchanged. A restart relatches every window a paused chain hit.
 - **§6 `RunEvent`.** As proposed, plus `session` (the run's start line), `note`, the luna ledger's events and `child`, which `delegate` emits as each child starts and ends. Every line is `{ kind, payload }`, the shape `events.jsonl` already had. Runtimes emit through `RunContext.emit`; `core/transcript.ts` prints today's transcript lines from the events (a golden run per runtime in the conformance tests pins them), and `rate_limit` is emitted once by `main.ts` from the settled run. A Claude `tool_result` carries no error text, so the Claude transcript still shows no `✗` line. The machine keeps the stream kinds in the file and off the task's log. Usage accounting still reads `result.json`.
 - **§7 Fingerprint.** `result.json`'s `run` names the runtime, engine, pinned model ID, the SDK and its installed version, and a sha256 over the template, the role as the runtime sends it (helpers and addendum), the skills' files, the access, the answer schema and the factory rules; a decision pack's questions stand in for its template. `stage_runs`, `pack_runs` and `slack_triage_runs` store `runtime`, `model_id`, `sdk_version` and `fingerprint`; `GET /tasks/:id` shows them per stage run and `GET /metrics?groupBy=fingerprint` compares them. `GET /metrics?groupBy=engine` groups `stage_runs.engine` beside it: per engine, stage runs, first-pass rate, escalations, runs ended on a usage limit, mean turns, mean duration and cost.
-- **§8 Policy as data.** `access` is declared per pack in runtime-neutral words (`contracts/src/access.ts`) and enforced by `factory/src/core/guards.ts` in both agent runtimes on top of the container's mounts. Every guard decision, allowed or denied with its reason, is a `tool_call` event in `/out/events.jsonl`.
+- **§8 Policy as data.** `access` is declared per pack in runtime-neutral words (`packages/contracts/src/access.ts`) and enforced by `apps/factory/src/core/guards.ts` in both agent runtimes on top of the container's mounts. Every guard decision, allowed or denied with its reason, is a `tool_call` event in `/out/events.jsonl`.
 - **§9 Contracts and boundaries.** `StageInput` and `StageOutput` both carry `schema` (3). No lint rule keeps an SDK inside its runtime folder; that holds by review.
 - **§10 Kill switch and budgets.** The switch is `MACHINE_DISABLE_RUNTIMES` (a comma list, `eve` and/or `jev`, read at boot), named like the machine's other variables; `claude` is refused at boot rather than sending packs anywhere, since every default runs on it. An engine on a disabled runtime is unavailable like one without a credential: a pick of it runs the default with a note, no fallback goes to it, `GET /engines` says `disabled by MACHINE_DISABLE_RUNTIMES`, `POST /runs` answers 409 `runtime_disabled`. The caps are not in `PIPELINE.md` but `MACHINE_ENGINE_BUDGETS` (`codex=0,openai=20,jev=5`: per engine or per credential) and a repo's luna.yaml `budget.engines`, over the calendar month's recorded cost (stage runs, `POST /runs` calls, Slack triage runs; a repo's cap its own stage runs; Jira intake keeps no run record). Every metered engine is tracked in dollars, not only Jev; Codex records no cost, so a `codex` cap never trips, and Claude cannot be capped. At 80, 90 and 100% a `budget.alert` names the cap (`scope: "engine"`); at 100% the engine is unavailable like a missing credential (`POST /runs`: 409 `budget`), and `GET /engines` shows `spentThisMonthUsd` and `budgetUsd`. The daily ceiling (`MACHINE_DAILY_BUDGET_USD`) still counts stage runs and `POST /runs` calls alike.
 - **Dependency hygiene.** Runtime SDKs are pinned exactly (`@anthropic-ai/claude-agent-sdk`, `eve`, `@typesafe-ai/sdk`, the Codex CLI's `CODEX_VERSION`); there is no automated dependency grouping. `docs/contributing.md` asks an engine, model or SDK change for a scorecard and the conformance table.

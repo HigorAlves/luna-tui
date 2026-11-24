@@ -1,4 +1,4 @@
-// Writes site/src/components/brand.generated.ts from the shared builder.
+// Writes apps/site/src/components/brand.generated.ts from the shared builder.
 import { writeFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"

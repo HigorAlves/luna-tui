@@ -18,7 +18,7 @@
 //   pnpm eval admit --pack <p> --engine <e> --against <claude:*> [--write]   whether the engine may join a pack that reads images: its saved baseline against Claude's; exits 0 on a pass, 1 on a fail, 2 on a missing baseline
 //   pnpm eval build-helper --engine <e> [--case <id>]... [--no-baseline] [--dry] [--image <tag>]   `implementing` on 3 cards (a logic slice and a UI slice) with the ui-designer helper, and with delegation off; reports both slices committed, scope, picks, conflicts and wall clock. Local only
 //   pnpm eval scorecard                    evals/scorecard.md over every decision baseline
-//   pnpm eval defaults [--write] [--except <pack>...]              the default per slot by the scorecard's rule; --write updates contracts/src/decision-defaults.json
+//   pnpm eval defaults [--write] [--except <pack>...]              the default per slot by the scorecard's rule; --write updates packages/contracts/src/decision-defaults.json
 import { DECISION_DEFAULTS, EngineId, PACKS, PackId, decisionEngines } from "@hardness/contracts";
 import { machineCredentials } from "@hardness/machine/credentials";
 import { imageExists } from "@hardness/machine/docker";
@@ -48,7 +48,7 @@ import { folderMegabytes, priorityHints, printable, recordsReport, stripUnsafe }
 import { type Proposal, PINNED, buildDefaultsFile, loadAgentBaselines, loadBaselines, proposeDefaults, renderScorecard } from "./src/scorecard.ts";
 
 const EVALS = dirname(fileURLToPath(import.meta.url));
-const DEFAULTS_FILE = resolve(EVALS, "..", "contracts", "src", "decision-defaults.json");
+const DEFAULTS_FILE = resolve(EVALS, "..", "packages", "contracts", "src", "decision-defaults.json");
 const [command, sub] = process.argv.slice(2);
 
 function fail(message: string): never {

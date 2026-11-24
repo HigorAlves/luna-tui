@@ -1,9 +1,9 @@
 # Revisit a decision's default engine
 
-The machine reads the engine for each decision slot from `contracts/src/decision-defaults.json`. The command `pnpm eval defaults --write` writes that file from baselines. Revisit one slot when:
+The machine reads the engine for each decision slot from `packages/contracts/src/decision-defaults.json`. The command `pnpm eval defaults --write` writes that file from baselines. Revisit one slot when:
 
 - a person upgraded a model ([upgrade-a-model](upgrade-a-model.md)) and the slot's engine uses it;
-- the pack's questions, criteria or bars changed (`contracts/src/packs.ts`);
+- the pack's questions, criteria or bars changed (`packages/contracts/src/packs.ts`);
 - a scorecard row looks wrong (a win on six cases, an unexpected tie);
 - a month of new truth has gathered: more labelled records than there were cases.
 
@@ -48,7 +48,7 @@ The owner pins a decision on Jev (`PINNED` in `evals/src/scorecard.ts`). These s
 9. **Check and commit.**
    1. Run `pnpm --filter @hardness/contracts test`.
    2. Run `pnpm --filter site facts` (the site's fact for the slot).
-   3. Commit `evals/baselines/**`, `evals/scorecard.md`, `contracts/src/decision-defaults.json` and the facts.
+   3. Commit `evals/baselines/**`, `evals/scorecard.md`, `packages/contracts/src/decision-defaults.json` and the facts.
 
 ## Proposing a change for one repo
 
@@ -67,13 +67,13 @@ The rule is in [architecture](../architecture.md#config-proposals).
 
 To keep an engine the rule did not pick:
 
-- Edit its entry in `contracts/src/decision-defaults.json` by hand.
+- Edit its entry in `packages/contracts/src/decision-defaults.json` by hand.
 - Start its `reason` with `override:`.
 - Say why in the rest of the `reason`.
 
 The contracts test checks the file. To go back:
 
-- Restore the entry from git (`git checkout <sha> -- contracts/src/decision-defaults.json`).
+- Restore the entry from git (`git checkout <sha> -- packages/contracts/src/decision-defaults.json`).
 - Run the contracts test.
 - Run `pnpm --filter site facts`.
 - Commit the change.

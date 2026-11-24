@@ -1,6 +1,6 @@
 name: golden
 
-# The golden matrix (`machine/scripts/golden-task.mjs --matrix`): real agents, real model
+# The golden matrix (`apps/machine/scripts/golden-task.mjs --matrix`): real agents, real model
 # calls, so never on PRs. Nightly + on demand. Fails under an 80% pass rate.
 on:
   schedule:
@@ -58,10 +58,10 @@ jobs:
           printf '%s' "$ANTHROPIC_API_KEY" > ~/.config/hardness/anthropic-api-key
           chmod 600 ~/.config/hardness/anthropic-api-key
       - name: Build the runner image
-        run: bash machine/runner/build.sh
+        run: bash apps/machine/runner/build.sh
       - name: Build the QA image
-        if: hashFiles('machine/runner-qa/Dockerfile') != ''
-        run: bash machine/runner/build.sh --qa
+        if: hashFiles('apps/machine/runner-qa/Dockerfile') != ''
+        run: bash apps/machine/runner/build.sh --qa
       - name: Migrate and start the machine
         run: |
           pnpm --filter @hardness/machine db:migrate
@@ -74,7 +74,7 @@ jobs:
           cat machine.log
           exit 1
       - name: Run the golden matrix
-        run: node machine/scripts/golden-task.mjs --matrix --threshold 0.8 --ceiling-usd 5
+        run: node apps/machine/scripts/golden-task.mjs --matrix --threshold 0.8 --ceiling-usd 5
       # golden-concurrency needs the machine started with MACHINE_MAX_CONCURRENT=1 (it reads no
       # env itself, it only talks to HARDNESS_MACHINE_URL), so the live paths get their own
       # machine on 4318 with the cap at 1. The matrix machine is stopped first: two machines on
