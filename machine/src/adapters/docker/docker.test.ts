@@ -780,6 +780,62 @@ describe("secrets reach a container as files, never in its configuration", () =>
   });
 });
 
+describe("a cache volume a different user wrote", () => {
+  // A volume that an earlier run left owned by root (or another uid) cannot be written by the stage user: pnpm failed with
+  // "Failed to write cafs ... Permission denied" and the card escalated as env_broken. The machine hands the volume over first.
+  function fakes(prepCode = 0) {
+    const calls: string[][] = [];
+    const deps: Partial<RunDeps> = {
+      ...NO_DAEMON,
+      exec: async (_c, args) => (calls.push(args), { code: args.includes("CHOWN") ? prepCode : 0, stdout: "", stderr: "" }),
+      execOrThrow: async (_c, args) => (calls.push(args), ""),
+      startServices: async () => ({ network: null, env: {}, hosts: [], teardown: async () => {} }),
+    } as Partial<RunDeps>;
+    return { deps, calls, prep: () => calls.filter((a) => a.includes("CHOWN")) };
+  }
+  const check = (volume: string | undefined, user: string | undefined) => ({ name: "c1", image: "img:1", worktree: "/wt", argv: ["true"], cacheVolume: volume, user });
+
+  it("is handed to the stage user, by a short container with no network, before the command mounts it", async () => {
+    const { deps, calls, prep } = fakes();
+    await execInSandbox(check("vol-handover", "501:20"), {}, deps);
+    const [fix] = prep();
+    expect(fix).toEqual(expect.arrayContaining(["--user", "0:0", "--network", "none", "-v", "vol-handover:/cache", "--cap-drop", "ALL", "--cap-add", "CHOWN"]));
+    expect(fix?.join(" ")).toContain("chown -R 501:20 /cache");
+    expect(fix?.indexOf("img:1")).toBeGreaterThan(-1);
+    const main = calls.findIndex((a) => a.includes("--user") && a[a.indexOf("--user") + 1] === "501:20");
+    expect(calls.indexOf(fix as string[])).toBeLessThan(main);
+  });
+
+  it("is checked once per volume and user, not on every command", async () => {
+    const { deps, prep } = fakes();
+    await execInSandbox(check("vol-once", "501:20"), {}, deps);
+    await execInSandbox(check("vol-once", "501:20"), {}, deps);
+    expect(prep()).toHaveLength(1);
+    await execInSandbox(check("vol-once", "1000:1000"), {}, deps);
+    expect(prep()).toHaveLength(2);
+  });
+
+  it("is left alone when there is no cache, or the user is a name rather than numbers", async () => {
+    const { deps, prep } = fakes();
+    await execInSandbox(check(undefined, "501:20"), {}, deps);
+    await execInSandbox(check("vol-name", "node"), {}, deps);
+    expect(prep()).toHaveLength(0);
+  });
+
+  it("does not stop the run when the hand-over fails", async () => {
+    const { deps, calls } = fakes(1);
+    const result = await execInSandbox(check("vol-fails", "501:20"), {}, deps);
+    expect(result.code).toBe(0);
+    expect(calls.some((a) => a[0] === "run" && a.includes("true"))).toBe(true);
+  });
+
+  it("is done for a stage too", async () => {
+    const { deps, prep } = fakes();
+    await runSandbox(run({ runDir: "/nonexistent", cacheVolume: "vol-stage", user: "501:20" }), deps).catch(() => {});
+    expect(prep()).toHaveLength(1);
+  });
+});
+
 describe("sandboxExecutor's secrets", () => {
   it("loads the names a check declares from the store for its repository, passes the values, and refuses to run a check whose secret is missing", async () => {
     const runs: Array<{ secrets?: Record<string, string> }> = [];
