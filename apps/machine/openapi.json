@@ -818,6 +818,7 @@
               "scope_check",
               "escalation_reason",
               "finding_classify",
+              "finding_confirm",
               "e2e_failure_cause",
               "ci_failure_class",
               "frame_privacy",
@@ -861,6 +862,10 @@
               "question_council",
               "change_exceptions",
               "compliance_review",
+              "review_security",
+              "review_migration",
+              "review_iac",
+              "review_second",
               "access_review",
               "breach_assess",
               "capacity_check",
@@ -1465,6 +1470,7 @@
                             "scope_check",
                             "escalation_reason",
                             "finding_classify",
+                            "finding_confirm",
                             "e2e_failure_cause",
                             "ci_failure_class",
                             "frame_privacy",
@@ -1508,6 +1514,10 @@
                             "question_council",
                             "change_exceptions",
                             "compliance_review",
+                            "review_security",
+                            "review_migration",
+                            "review_iac",
+                            "review_second",
                             "access_review",
                             "breach_assess",
                             "capacity_check",
@@ -1844,6 +1854,7 @@
                       "scope_check",
                       "escalation_reason",
                       "finding_classify",
+                      "finding_confirm",
                       "e2e_failure_cause",
                       "ci_failure_class",
                       "frame_privacy",
@@ -1887,6 +1898,10 @@
                       "question_council",
                       "change_exceptions",
                       "compliance_review",
+                      "review_security",
+                      "review_migration",
+                      "review_iac",
+                      "review_second",
                       "access_review",
                       "breach_assess",
                       "capacity_check",
@@ -5058,6 +5073,19 @@
                   "jev"
                 ]
               },
+              "finding_confirm": {
+                "type": "string",
+                "enum": [
+                  "claude:opus",
+                  "claude:sonnet",
+                  "claude:haiku",
+                  "codex:sol",
+                  "codex:luna",
+                  "openai:sol",
+                  "openai:luna",
+                  "jev"
+                ]
+              },
               "e2e_failure_cause": {
                 "type": "string",
                 "enum": [
@@ -5605,6 +5633,58 @@
                 ]
               },
               "compliance_review": {
+                "type": "string",
+                "enum": [
+                  "claude:opus",
+                  "claude:sonnet",
+                  "claude:haiku",
+                  "codex:sol",
+                  "codex:luna",
+                  "openai:sol",
+                  "openai:luna",
+                  "jev"
+                ]
+              },
+              "review_security": {
+                "type": "string",
+                "enum": [
+                  "claude:opus",
+                  "claude:sonnet",
+                  "claude:haiku",
+                  "codex:sol",
+                  "codex:luna",
+                  "openai:sol",
+                  "openai:luna",
+                  "jev"
+                ]
+              },
+              "review_migration": {
+                "type": "string",
+                "enum": [
+                  "claude:opus",
+                  "claude:sonnet",
+                  "claude:haiku",
+                  "codex:sol",
+                  "codex:luna",
+                  "openai:sol",
+                  "openai:luna",
+                  "jev"
+                ]
+              },
+              "review_iac": {
+                "type": "string",
+                "enum": [
+                  "claude:opus",
+                  "claude:sonnet",
+                  "claude:haiku",
+                  "codex:sol",
+                  "codex:luna",
+                  "openai:sol",
+                  "openai:luna",
+                  "jev"
+                ]
+              },
+              "review_second": {
                 "type": "string",
                 "enum": [
                   "claude:opus",
@@ -8656,6 +8736,7 @@
                     "scope_check",
                     "escalation_reason",
                     "finding_classify",
+                    "finding_confirm",
                     "e2e_failure_cause",
                     "ci_failure_class",
                     "frame_privacy",
@@ -8699,6 +8780,10 @@
                     "question_council",
                     "change_exceptions",
                     "compliance_review",
+                    "review_security",
+                    "review_migration",
+                    "review_iac",
+                    "review_second",
                     "access_review",
                     "breach_assess",
                     "capacity_check",
@@ -8758,6 +8843,7 @@
               "scope_check",
               "escalation_reason",
               "finding_classify",
+              "finding_confirm",
               "e2e_failure_cause",
               "ci_failure_class",
               "frame_privacy",
@@ -8801,6 +8887,10 @@
               "question_council",
               "change_exceptions",
               "compliance_review",
+              "review_security",
+              "review_migration",
+              "review_iac",
+              "review_second",
               "access_review",
               "breach_assess",
               "capacity_check",
@@ -14817,6 +14907,7 @@
                       "scope_check",
                       "escalation_reason",
                       "finding_classify",
+                      "finding_confirm",
                       "e2e_failure_cause",
                       "ci_failure_class",
                       "frame_privacy",
@@ -14860,6 +14951,10 @@
                       "question_council",
                       "change_exceptions",
                       "compliance_review",
+                      "review_security",
+                      "review_migration",
+                      "review_iac",
+                      "review_second",
                       "access_review",
                       "breach_assess",
                       "capacity_check",
@@ -17972,6 +18067,71 @@
                           ]
                         }
                       },
+                      "finding_confirm": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "engine": {
+                              "type": "string",
+                              "enum": [
+                                "claude:opus",
+                                "claude:sonnet",
+                                "claude:haiku",
+                                "codex:sol",
+                                "codex:luna",
+                                "openai:sol",
+                                "openai:luna",
+                                "jev"
+                              ]
+                            },
+                            "effort": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "enum": [
+                                "low",
+                                "medium",
+                                "high",
+                                null
+                              ]
+                            },
+                            "n": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "quality": {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 1
+                            },
+                            "costPerCase": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "at": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "model": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "engine",
+                            "effort",
+                            "n",
+                            "quality",
+                            "costPerCase",
+                            "at"
+                          ]
+                        }
+                      },
                       "e2e_failure_cause": {
                         "type": "array",
                         "items": {
@@ -20703,6 +20863,266 @@
                         }
                       },
                       "compliance_review": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "engine": {
+                              "type": "string",
+                              "enum": [
+                                "claude:opus",
+                                "claude:sonnet",
+                                "claude:haiku",
+                                "codex:sol",
+                                "codex:luna",
+                                "openai:sol",
+                                "openai:luna",
+                                "jev"
+                              ]
+                            },
+                            "effort": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "enum": [
+                                "low",
+                                "medium",
+                                "high",
+                                null
+                              ]
+                            },
+                            "n": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "quality": {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 1
+                            },
+                            "costPerCase": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "at": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "model": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "engine",
+                            "effort",
+                            "n",
+                            "quality",
+                            "costPerCase",
+                            "at"
+                          ]
+                        }
+                      },
+                      "review_security": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "engine": {
+                              "type": "string",
+                              "enum": [
+                                "claude:opus",
+                                "claude:sonnet",
+                                "claude:haiku",
+                                "codex:sol",
+                                "codex:luna",
+                                "openai:sol",
+                                "openai:luna",
+                                "jev"
+                              ]
+                            },
+                            "effort": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "enum": [
+                                "low",
+                                "medium",
+                                "high",
+                                null
+                              ]
+                            },
+                            "n": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "quality": {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 1
+                            },
+                            "costPerCase": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "at": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "model": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "engine",
+                            "effort",
+                            "n",
+                            "quality",
+                            "costPerCase",
+                            "at"
+                          ]
+                        }
+                      },
+                      "review_migration": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "engine": {
+                              "type": "string",
+                              "enum": [
+                                "claude:opus",
+                                "claude:sonnet",
+                                "claude:haiku",
+                                "codex:sol",
+                                "codex:luna",
+                                "openai:sol",
+                                "openai:luna",
+                                "jev"
+                              ]
+                            },
+                            "effort": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "enum": [
+                                "low",
+                                "medium",
+                                "high",
+                                null
+                              ]
+                            },
+                            "n": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "quality": {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 1
+                            },
+                            "costPerCase": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "at": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "model": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "engine",
+                            "effort",
+                            "n",
+                            "quality",
+                            "costPerCase",
+                            "at"
+                          ]
+                        }
+                      },
+                      "review_iac": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "engine": {
+                              "type": "string",
+                              "enum": [
+                                "claude:opus",
+                                "claude:sonnet",
+                                "claude:haiku",
+                                "codex:sol",
+                                "codex:luna",
+                                "openai:sol",
+                                "openai:luna",
+                                "jev"
+                              ]
+                            },
+                            "effort": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "enum": [
+                                "low",
+                                "medium",
+                                "high",
+                                null
+                              ]
+                            },
+                            "n": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "quality": {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 1
+                            },
+                            "costPerCase": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "at": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "model": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "engine",
+                            "effort",
+                            "n",
+                            "quality",
+                            "costPerCase",
+                            "at"
+                          ]
+                        }
+                      },
+                      "review_second": {
                         "type": "array",
                         "items": {
                           "type": "object",
@@ -21976,6 +22396,7 @@
                       "scope_check",
                       "escalation_reason",
                       "finding_classify",
+                      "finding_confirm",
                       "e2e_failure_cause",
                       "ci_failure_class",
                       "frame_privacy",
@@ -22019,6 +22440,10 @@
                       "question_council",
                       "change_exceptions",
                       "compliance_review",
+                      "review_security",
+                      "review_migration",
+                      "review_iac",
+                      "review_second",
                       "access_review",
                       "breach_assess",
                       "capacity_check",
@@ -22158,6 +22583,7 @@
                       "scope_check",
                       "escalation_reason",
                       "finding_classify",
+                      "finding_confirm",
                       "e2e_failure_cause",
                       "ci_failure_class",
                       "frame_privacy",
@@ -22201,6 +22627,10 @@
                       "question_council",
                       "change_exceptions",
                       "compliance_review",
+                      "review_security",
+                      "review_migration",
+                      "review_iac",
+                      "review_second",
                       "access_review",
                       "breach_assess",
                       "capacity_check",
@@ -23057,6 +23487,19 @@
                           "jev"
                         ]
                       },
+                      "finding_confirm": {
+                        "type": "string",
+                        "enum": [
+                          "claude:opus",
+                          "claude:sonnet",
+                          "claude:haiku",
+                          "codex:sol",
+                          "codex:luna",
+                          "openai:sol",
+                          "openai:luna",
+                          "jev"
+                        ]
+                      },
                       "e2e_failure_cause": {
                         "type": "string",
                         "enum": [
@@ -23604,6 +24047,58 @@
                         ]
                       },
                       "compliance_review": {
+                        "type": "string",
+                        "enum": [
+                          "claude:opus",
+                          "claude:sonnet",
+                          "claude:haiku",
+                          "codex:sol",
+                          "codex:luna",
+                          "openai:sol",
+                          "openai:luna",
+                          "jev"
+                        ]
+                      },
+                      "review_security": {
+                        "type": "string",
+                        "enum": [
+                          "claude:opus",
+                          "claude:sonnet",
+                          "claude:haiku",
+                          "codex:sol",
+                          "codex:luna",
+                          "openai:sol",
+                          "openai:luna",
+                          "jev"
+                        ]
+                      },
+                      "review_migration": {
+                        "type": "string",
+                        "enum": [
+                          "claude:opus",
+                          "claude:sonnet",
+                          "claude:haiku",
+                          "codex:sol",
+                          "codex:luna",
+                          "openai:sol",
+                          "openai:luna",
+                          "jev"
+                        ]
+                      },
+                      "review_iac": {
+                        "type": "string",
+                        "enum": [
+                          "claude:opus",
+                          "claude:sonnet",
+                          "claude:haiku",
+                          "codex:sol",
+                          "codex:luna",
+                          "openai:sol",
+                          "openai:luna",
+                          "jev"
+                        ]
+                      },
+                      "review_second": {
                         "type": "string",
                         "enum": [
                           "claude:opus",
@@ -25938,6 +26433,23 @@
                           null
                         ]
                       },
+                      "finding_confirm": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "enum": [
+                          "claude:opus",
+                          "claude:sonnet",
+                          "claude:haiku",
+                          "codex:sol",
+                          "codex:luna",
+                          "openai:sol",
+                          "openai:luna",
+                          "jev",
+                          null
+                        ]
+                      },
                       "e2e_failure_cause": {
                         "type": [
                           "string",
@@ -26653,6 +27165,74 @@
                         ]
                       },
                       "compliance_review": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "enum": [
+                          "claude:opus",
+                          "claude:sonnet",
+                          "claude:haiku",
+                          "codex:sol",
+                          "codex:luna",
+                          "openai:sol",
+                          "openai:luna",
+                          "jev",
+                          null
+                        ]
+                      },
+                      "review_security": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "enum": [
+                          "claude:opus",
+                          "claude:sonnet",
+                          "claude:haiku",
+                          "codex:sol",
+                          "codex:luna",
+                          "openai:sol",
+                          "openai:luna",
+                          "jev",
+                          null
+                        ]
+                      },
+                      "review_migration": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "enum": [
+                          "claude:opus",
+                          "claude:sonnet",
+                          "claude:haiku",
+                          "codex:sol",
+                          "codex:luna",
+                          "openai:sol",
+                          "openai:luna",
+                          "jev",
+                          null
+                        ]
+                      },
+                      "review_iac": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "enum": [
+                          "claude:opus",
+                          "claude:sonnet",
+                          "claude:haiku",
+                          "codex:sol",
+                          "codex:luna",
+                          "openai:sol",
+                          "openai:luna",
+                          "jev",
+                          null
+                        ]
+                      },
+                      "review_second": {
                         "type": [
                           "string",
                           "null"
