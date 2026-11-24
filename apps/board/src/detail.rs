@@ -180,7 +180,7 @@ fn is_stopped(task: &Task) -> bool {
 fn is_result(task: &Task) -> bool {
     matches!(
         task.state.as_str(),
-        "awaiting_ship" | "shipping" | "reviewing_memory" | "closed" | "archived" | "done"
+        "awaiting_ship" | "shipping" | "pr_watch" | "reviewing_memory" | "closed" | "archived" | "done"
     )
 }
 

@@ -2522,6 +2522,8 @@ pub enum Look {
     Working,
     Queued,
     Paused,
+    /// A PR card waiting in Ship until its PR is merged or closed: idle, never stale.
+    Watching,
     Draft,
     Done,
     /// Ended without shipping or closing: dimmed in Done.
@@ -2715,6 +2717,7 @@ impl Task {
             "draft" => Look::Draft,
             "closed" => Look::Done,
             "archived" => Look::Archived,
+            "pr_watch" => Look::Watching,
             _ if self.waiting_on_you => Look::NeedsYou,
             _ if self.queued => Look::Queued,
             _ if self.running
@@ -2761,6 +2764,7 @@ impl Task {
             "awaiting_ship" if !self.waiting_on_you => "watching the PR".to_string(),
             "awaiting_ship" => "choose ship".to_string(),
             "shipping" => "opening PR".to_string(),
+            "pr_watch" => "watching PR".to_string(),
             "reviewing_memory" if !self.waiting_on_you => "retro".to_string(),
             "reviewing_memory" => "review memory".to_string(),
             "escalated" => "escalated".to_string(),
@@ -3450,6 +3454,19 @@ pub(crate) mod tests {
             Look::Stale < Look::Working,
             "stale sorts before working: it needs a look"
         );
+    }
+
+    #[test]
+    fn a_card_watching_its_pr_reads_as_idle_in_ship_never_working_or_stale() {
+        let mut task: Task = serde_json::from_str(&task_json("")).unwrap();
+        task.state = "pr_watch".into();
+        let updated = unix_secs(&task.updated_at).unwrap();
+        assert!(matches!(task.look_at(updated + 60), Look::Watching));
+        assert!(
+            matches!(task.look_at(updated + STALE_SECS * 100), Look::Watching),
+            "days of waiting for a merge are not stale"
+        );
+        assert_eq!(task.status_label(), "watching PR");
     }
 
     #[test]
