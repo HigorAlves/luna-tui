@@ -25,7 +25,7 @@ interface World {
 
 const review = (over: Partial<PrReview> = {}): PrReview => ({ author: ME, state: "COMMENTED", commitId: "sha1", at: at(0), association: null, ...over });
 
-function setup(world: World = {}, options: { cards?: WatchedCard[]; policy?: { auto_rereview: "on" | "off"; quiet_minutes: number }; minutes?: number } = {}) {
+function setup(world: World = {}, options: { cards?: WatchedCard[]; policy?: { auto_rereview: "on" | "off"; quiet_minutes: number }; minutes?: number; sync?: (card: WatchedCard) => Promise<void> } = {}) {
   const sent: Array<{ id: string; what: string; key?: string }> = [];
   const github = fakeGitHub({
     viewer: async () => ({ login: ME, teams: [] }),
@@ -44,6 +44,8 @@ function setup(world: World = {}, options: { cards?: WatchedCard[]; policy?: { a
     send: async (id, what, key) => void sent.push({ id, what, ...(key ? { key } : {}) }),
     policy: async () => options.policy ?? { auto_rereview: "on", quiet_minutes: 15 },
     now: nowAt(options.minutes ?? 60),
+    warn: () => {},
+    ...(options.sync ? { sync: options.sync } : {}),
   });
   return { watch, sent, github };
 }
@@ -181,6 +183,29 @@ describe("the PR watch", () => {
       await watch.tick();
       expect(sent).toEqual([]);
     });
+  });
+
+  it("brings the card's workspace to the PR's current head before it loops the card back, and not for a merge", async () => {
+    const order: string[] = [];
+    const looped = setup({ reviews: [review()], head: "sha2", headAt: at(5) }, { minutes: 30, sync: async (c) => void order.push(`sync ${c.id}`) });
+    const send = looped.watch as unknown as { options: { send: (...a: unknown[]) => Promise<unknown> } };
+    const inner = send.options.send;
+    send.options.send = async (...a) => (order.push("send"), inner(...a));
+    await looped.watch.tick();
+    expect(order).toEqual(["sync t1", "send"]);
+    const merged = setup({ state: "closed", merged: true }, { sync: async () => void order.push("never") });
+    await merged.watch.tick();
+    expect(order).not.toContain("never");
+  });
+
+  it("a workspace that cannot be synced keeps the card watching and the key unspent, so the next tick tries again", async () => {
+    let attempts = 0;
+    const { watch, sent } = setup({ reviews: [review()], head: "sha2", headAt: at(5) }, { minutes: 30, sync: async () => { if (++attempts === 1) throw new Error("2 commits not pushed"); } });
+    await watch.tick();
+    expect(sent).toEqual([]);
+    await watch.tick();
+    expect(attempts).toBe(2);
+    expect(sent).toHaveLength(1);
   });
 
   it("one card whose GitHub read fails does not stop the others", async () => {

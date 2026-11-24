@@ -2,7 +2,7 @@
 // mid-stage, then serves the API on localhost.
 import { expireKept, keepFolder } from "./application/kept-sandboxes.ts";
 import { checkGit } from "./adapters/git/helper.ts";
-import { hostBaselineWorkspace, hostFreshWorkspace, readCopy, removeLeftovers } from "./adapters/git/clone.ts";
+import { hostBaselineWorkspace, hostFreshWorkspace, readCopy, removeLeftovers, syncPrHead } from "./adapters/git/clone.ts";
 import { type BudgetAlert, type EvidenceContext, FACTORY_DEFAULTS, Ledger, PrAction, type PullRequest, RUN_OR_GATE, type TicketContext, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
@@ -638,6 +638,11 @@ const prWatch = new PrWatch({
     (await pipeline.watching()).flatMap((task) =>
       task.source?.kind === "github_pr" ? [{ id: task.id, route: task.route, repoPath: task.repoPath, source: { repo: task.source.repo, number: task.source.number }, since: task.stateSince ?? task.updatedAt, ...(task.retries.watchKey ? { watchKey: task.retries.watchKey } : {}) }] : [],
     ),
+  // A card that loops back works on the PR's head as it is now; a workspace that cannot be moved there (unpushed commits) leaves the card watching, key unspent.
+  sync: async (card) => {
+    const task = await pipeline.get(card.id);
+    if (task.repoPath && task.worktreePath && task.source?.kind === "github_pr") await syncPrHead(task.repoPath, task.source.headRef, task.worktreePath);
+  },
   send: (id, what, key) => pipeline.prWatch(id, what, key),
   policy: async (repoPath) => (repoPath ? (await policies.for(repoPath)).factory.review : FACTORY_DEFAULTS.review),
 });

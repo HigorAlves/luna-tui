@@ -3,7 +3,7 @@
 // every stage finds `task.branch` and `task.worktreePath` set and never invents a task branch.
 import { PrAction, PullRequest, TaskSource, isTerminal } from "@hardness/contracts";
 
-import { ensurePrClone as realEnsurePrClone } from "../adapters/git/clone.ts";
+import { ensurePrClone as realEnsurePrClone, syncPrHead as realSyncPrHead } from "../adapters/git/clone.ts";
 import { prWorktreePath } from "../adapters/git/worktree.ts";
 import { canPush } from "../domain/pull-request.ts";
 import type { TaskRow } from "../domain/task.ts";
@@ -49,6 +49,8 @@ export interface PrTaskDeps {
   };
   /** The PR's own clone, at its head; tests inject a fake, the default runs git. */
   ensurePrClone?: (repoPath: string, headRef: string, path: string) => Promise<void>;
+  /** Moves a watching card's workspace to the PR's current head before it loops back; tests inject a fake, the default runs git. */
+  syncPrHead?: (repoPath: string, headRef: string, path: string) => Promise<void>;
 }
 
 /** What each route is for, as the task's one criterion. */
@@ -81,7 +83,11 @@ export async function createPrTask(deps: PrTaskDeps, pr: PullRequest, action: Pr
   const open = (await deps.pipeline.findOpenBySource(pr.repo, pr.number, "github_pr")).filter((t) => !isTerminal(t.state));
   // A card of this route that is only watching the PR takes the key as "look again now": it loops back, no new task.
   const watching = open.find((t) => t.state === "pr_watch" && t.route === action);
-  if (watching) return deps.pipeline.rewatch(watching.id);
+  if (watching) {
+    // It works on the PR's head as it is now, not the one it had when it began watching; a workspace that cannot be moved (unpushed commits) fails the key and the card keeps watching.
+    if (watching.worktreePath) await (deps.syncPrHead ?? realSyncPrHead)(pr.localPath, pr.headRef, watching.worktreePath);
+    return deps.pipeline.rewatch(watching.id);
+  }
   // A card watching under another route runs nothing, so it does not block this one; anything running on the PR does.
   const running = open.find((t) => t.state !== "pr_watch");
   if (running) throw new PrBusyError(pr.repo, pr.number, running.id);

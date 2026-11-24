@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { bringBack, copiedSettings, hostBaselineWorkspace, inUseClones, removeLeftovers, ensureClone, ensurePrClone, freshClone, isClone, isFreshWorkspace, moveToClone, publishBranch, readCopy, removeClone, reviewClone, unpushedCommits } from "./clone.ts";
+import { bringBack, copiedSettings, hostBaselineWorkspace, inUseClones, removeLeftovers, ensureClone, ensurePrClone, syncPrHead, freshClone, isClone, isFreshWorkspace, moveToClone, publishBranch, readCopy, removeClone, reviewClone, unpushedCommits } from "./clone.ts";
 import { configureMachineRepos, machineGitDir, machineRepoRoot } from "./machine-repo.ts";
 import { branchBase, changedPaths, commitAll, ensureWorktree, nestedLockfilesAt, removeWorktree, scopeStartOf, workspaceFor } from "./worktree.ts";
 
@@ -223,6 +223,74 @@ describe("a PR task's workspace", () => {
   it("refuses a review clone of a card that has no workspace yet", async () => {
     const { dir } = repository("pr-review-none-");
     await expect(reviewClone(join(dir, "missing"), join(dir, "p.review"), "luna-review/x")).rejects.toThrow(/workspace/);
+  });
+});
+
+describe("syncing a PR workspace to the PR's current head", () => {
+  /** A PR branch on the remote with one commit, and a PR workspace on it; `push(file)` makes another clone-side commit on the remote branch. */
+  async function pr() {
+    const r = withRemote("sync-");
+    git(r.repo, "checkout", "-q", "-b", "feat/pr");
+    writeFileSync(join(r.repo, "pr.txt"), "pr\n");
+    git(r.repo, "add", "-A");
+    git(r.repo, "commit", "-q", "-m", "pr");
+    git(r.repo, "push", "-q", "origin", "feat/pr");
+    git(r.repo, "checkout", "-q", "main");
+    const path = join(r.dir, "pr-clone");
+    await ensurePrClone(r.repo, "feat/pr", path);
+    const author = join(r.root, "author");
+    execFileSync("git", ["clone", "-q", "-b", "feat/pr", r.remote, author]);
+    return { ...r, path, author };
+  }
+
+  it("moves the branch, the remote ref and the files to a head the author pushed on top", async () => {
+    const { repo, path, author, remote } = await pr();
+    writeFileSync(join(author, "more.txt"), "more\n");
+    git(author, "add", "-A");
+    git(author, "commit", "-q", "-m", "more");
+    git(author, "push", "-q", "origin", "feat/pr");
+    await syncPrHead(repo, "feat/pr", path);
+    const head = git(remote, "rev-parse", "feat/pr");
+    expect(wgit(path, "rev-parse", "HEAD")).toBe(head);
+    expect(wgit(path, "rev-parse", "refs/remotes/origin/feat/pr")).toBe(head);
+    expect(existsSync(join(path, "more.txt"))).toBe(true);
+    expect(await unpushedCommits(path)).toEqual([]);
+  });
+
+  it("follows a force-push to a head that does not descend from the old one, and drops stray files", async () => {
+    const { repo, path, author, remote } = await pr();
+    writeFileSync(join(path, "stray.txt"), "stray\n");
+    git(author, "reset", "-q", "--hard", "HEAD~1");
+    writeFileSync(join(author, "other.txt"), "other\n");
+    git(author, "add", "-A");
+    git(author, "commit", "-q", "-m", "rewritten");
+    git(author, "push", "-q", "--force", "origin", "feat/pr");
+    await syncPrHead(repo, "feat/pr", path);
+    expect(wgit(path, "rev-parse", "HEAD")).toBe(git(remote, "rev-parse", "feat/pr"));
+    expect(existsSync(join(path, "other.txt"))).toBe(true);
+    expect(existsSync(join(path, "pr.txt"))).toBe(false);
+    expect(existsSync(join(path, "stray.txt"))).toBe(false);
+    expect(await unpushedCommits(path)).toEqual([]);
+  });
+
+  it("leaves a workspace with commits the machine has not pushed exactly as it is, and says so", async () => {
+    const { repo, path, author } = await pr();
+    writeFileSync(join(path, "mine.txt"), "mine\n");
+    const mine = await commitAll(path, "mine");
+    writeFileSync(join(author, "more.txt"), "more\n");
+    git(author, "add", "-A");
+    git(author, "commit", "-q", "-m", "more");
+    git(author, "push", "-q", "origin", "feat/pr");
+    await expect(syncPrHead(repo, "feat/pr", path)).rejects.toThrow(/not pushed/);
+    expect(wgit(path, "rev-parse", "HEAD")).toBe(mine);
+    expect(existsSync(join(path, "mine.txt"))).toBe(true);
+  });
+
+  it("does nothing when the head has not moved", async () => {
+    const { repo, path } = await pr();
+    const before = wgit(path, "rev-parse", "HEAD");
+    await syncPrHead(repo, "feat/pr", path);
+    expect(wgit(path, "rev-parse", "HEAD")).toBe(before);
   });
 });
 

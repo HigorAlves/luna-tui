@@ -29,6 +29,8 @@ export interface PrWatchOptions {
   github: Pick<GitHub, "viewer" | "prMerged" | "prFacts" | "prReviews" | "prThreads">;
   /** The cards waiting at `pr_watch`. */
   watching: () => Promise<WatchedCard[]>;
+  /** Brings the card's workspace to the PR's current head; it runs before a `responded` is sent. When it throws the card stays at `pr_watch` and the key is not spent. */
+  sync?: (card: WatchedCard) => Promise<void>;
   /** Sends the card its event (the pipeline applies it). `key` goes with `responded`. */
   send: (id: string, what: "merged" | "closed" | "responded", key?: string) => Promise<unknown>;
   /** The repository's `review.*` keys. */
@@ -124,6 +126,7 @@ export class PrWatch {
     if (this.now().getTime() - seen < policy.quiet_minutes * 60_000) return;
     const key = `${head ?? "?"}:${new Date(seen).toISOString()}`;
     if (key === card.watchKey) return;
+    await this.options.sync?.(card);
     await this.options.send(card.id, "responded", key);
   }
 

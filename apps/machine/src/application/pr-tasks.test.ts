@@ -35,12 +35,18 @@ const pr = (over: Partial<PullRequest> = {}): PullRequest => ({
 
 function setup(existing: Partial<TaskRow> | Array<Partial<TaskRow>> | null = null) {
   const rewatched: string[] = [];
+  const synced: string[][] = [];
+  let syncError: Error | null = null;
   const open = (Array.isArray(existing) ? existing : existing ? [existing] : []).map((e) => ({ id: "old", state: "closed", route: "ci_fix", ...e }) as TaskRow).filter((t) => t.state !== "closed" && t.state !== "archived");
   const created: Record<string, unknown>[] = [];
   const started: string[] = [];
   const worktrees: string[][] = [];
   const deps = {
     worktreesDir: "/wt",
+    syncPrHead: async (repoPath: string, headRef: string, path: string) => {
+      if (syncError) throw syncError;
+      synced.push([repoPath, headRef, path]);
+    },
     ensurePrClone: async (repoPath: string, headRef: string, path: string) => void worktrees.push([repoPath, headRef, path]),
     pipeline: {
       findOpenBySource: async () => open,
@@ -58,7 +64,7 @@ function setup(existing: Partial<TaskRow> | Array<Partial<TaskRow>> | null = nul
       },
     },
   };
-  return { deps, created, started, worktrees, rewatched };
+  return { deps, created, started, worktrees, rewatched, synced, failSync: (e: Error) => void (syncError = e) };
 }
 
 describe("createPrTask", () => {
@@ -107,13 +113,21 @@ describe("createPrTask", () => {
   });
 
   it("a card of the same route watching the PR is looped back at once, no new task, no new worktree", async () => {
-    const { deps, created, started, worktrees, rewatched } = setup({ id: "watching", state: "pr_watch", route: "ci_fix" });
+    const { deps, created, started, worktrees, rewatched, synced } = setup({ id: "watching", state: "pr_watch", route: "ci_fix", worktreePath: "/wt/a/pr-12" });
     const task = await createPrTask(deps, pr(), "ci_fix");
     expect(task.id).toBe("watching");
+    expect(synced).toEqual([["/r/a", "feat/export", "/wt/a/pr-12"]]);
     expect(rewatched).toEqual(["watching"]);
     expect(created).toEqual([]);
     expect(started).toEqual([]);
     expect(worktrees).toEqual([]);
+  });
+
+  it("a loop-back whose workspace cannot be moved to the PR's head fails and leaves the card watching", async () => {
+    const { deps, rewatched, failSync } = setup({ id: "watching", state: "pr_watch", route: "address", worktreePath: "/wt/a/pr-12" });
+    failSync(new Error("1 commit(s) not pushed"));
+    await expect(createPrTask(deps, pr({ mine: true, author: "me" }), "address")).rejects.toThrow(/not pushed/);
+    expect(rewatched).toEqual([]);
   });
 
   it("a card of another route watching the PR does not block a new task, and a running one still does", async () => {
