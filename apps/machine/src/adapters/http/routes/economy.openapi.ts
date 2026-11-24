@@ -18,6 +18,7 @@ export const EconomyImported = z.object({ runs: z.number().int() }).openapi("Eco
 expectSame<Same<z.infer<typeof EconomyImported>, { runs: Awaited<ReturnType<Economy["importRuns"]>> }>>();
 
 export const economyStatusRoute = createRoute({
+  operationId: "getEconomy",
   method: "get",
   path: "/economy",
   tags: TAGS,
@@ -28,6 +29,7 @@ export const economyStatusRoute = createRoute({
 });
 
 export const dropFactRoute = createRoute({
+  operationId: "dropEconomyFact",
   method: "post",
   path: "/economy/facts/{id}/drop",
   tags: TAGS,
@@ -38,6 +40,7 @@ export const dropFactRoute = createRoute({
 });
 
 export const approveMaskRoute = createRoute({
+  operationId: "approveEconomyMask",
   method: "post",
   path: "/economy/mask/approve",
   tags: TAGS,
@@ -48,6 +51,7 @@ export const approveMaskRoute = createRoute({
 });
 
 export const restoreMaskRoute = createRoute({
+  operationId: "restoreEconomyMask",
   method: "post",
   path: "/economy/mask/restore",
   tags: TAGS,
@@ -58,6 +62,7 @@ export const restoreMaskRoute = createRoute({
 });
 
 export const importRunsRoute = createRoute({
+  operationId: "importEconomyRuns",
   method: "post",
   path: "/economy/import",
   tags: TAGS,

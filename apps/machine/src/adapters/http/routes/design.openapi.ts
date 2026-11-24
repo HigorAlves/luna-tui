@@ -23,6 +23,7 @@ export const A11yReportSchema = z
 expectSame<Same<z.infer<typeof A11yReportSchema>, A11yReport>>();
 
 export const designSpecRoute = createRoute({
+  operationId: "runDesignSpec",
   method: "post",
   path: "/design/spec",
   tags: TAGS,
@@ -37,6 +38,7 @@ export const designSpecRoute = createRoute({
 });
 
 export const designAuditRoute = createRoute({
+  operationId: "runDesignAudit",
   method: "post",
   path: "/design/audit",
   tags: TAGS,

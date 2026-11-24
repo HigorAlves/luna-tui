@@ -108,7 +108,9 @@ describe("GET /tasks/:id carries the ship view", () => {
   it("is what the reader gives for the card's id", async () => {
     const task = await pipeline.createTask({ title: "Login" });
     const seen: string[] = [];
-    const out = await detail(task.id, async (id) => (seen.push(id), { pr: { slug: "o/a", number: 3, url: "https://github.com/o/a/pull/3" }, ready: true }));
+    // A whole ShipView, as the watch answers it, so the answer fits the route's documented schema.
+    const ship = { pr: { slug: "o/a", number: 3, url: "https://github.com/o/a/pull/3" }, head: "abc1234", ready: true, checklist: [{ id: "ci", ok: true, detail: "green" }], autoMerge: { allowed: false, reason: "a person merges this repository's PRs" }, review: { required: null, by: null }, fixRounds: 0, queued: false, quietSince: null, lastEvent: null, at: null };
+    const out = await detail(task.id, async (id) => (seen.push(id), ship));
     expect(seen).toEqual([task.id]);
     expect(out.ship).toMatchObject({ ready: true, pr: { number: 3 } });
   });

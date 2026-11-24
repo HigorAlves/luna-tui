@@ -44,6 +44,7 @@ import type { Bus } from "./bus.ts";
 import { toTask } from "./serialize.ts";
 import { swaggerUI } from "@hono/swagger-ui";
 import { HTTPException } from "hono/http-exception";
+import { conformanceOn, responseConformance, violations } from "./openapi/conformance.ts";
 import { createOpenApiRouter } from "./openapi/router.ts";
 import { BadRequest, CLIENT_CLOSED, body, fail, type RouteDeps } from "./routes/kit.ts";
 import { machineRoutes } from "./routes/machine.routes.ts";
@@ -135,6 +136,8 @@ export interface AppDeps {
 
 export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, compliance, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], chatRepos = async () => [], clock = () => new Date(), problems: problemsOf, sandboxPolicy, mcp, policies, qaImage = false }: AppDeps): Hono {
   const app = createOpenApiRouter();
+  // In the machine's tests every answer is held to the document (openapi/conformance.ts); first, so it sees the door's answers too.
+  if (conformanceOn()) app.use(responseConformance(app, (violation) => violations.push(violation)));
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   // The OAuth callback is the one route a browser reaches with no token; it takes only a login this machine started.
   if (mcp) app.route("/", mcpCallbackRouter(mcp));

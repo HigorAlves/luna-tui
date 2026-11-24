@@ -235,6 +235,7 @@ const SinceQuery = z.object({ since: z.string().optional().openapi({ param: { na
 // ── Routes ──
 
 export const itemsRoute = createRoute({
+  operationId: "listSlackItems",
   method: "get",
   path: "/slack/items",
   tags: TAGS,
@@ -244,6 +245,7 @@ export const itemsRoute = createRoute({
 });
 
 export const refreshRoute = createRoute({
+  operationId: "refreshSlack",
   method: "post",
   path: "/slack/refresh",
   tags: TAGS,
@@ -252,6 +254,7 @@ export const refreshRoute = createRoute({
 });
 
 export const patchItemRoute = createRoute({
+  operationId: "updateSlackItem",
   method: "patch",
   path: "/slack/items/{id}",
   tags: TAGS,
@@ -262,6 +265,7 @@ export const patchItemRoute = createRoute({
 });
 
 export const relateItemRoute = createRoute({
+  operationId: "relateSlackItem",
   method: "post",
   path: "/slack/items/{id}/relation",
   tags: TAGS,
@@ -272,6 +276,7 @@ export const relateItemRoute = createRoute({
 });
 
 export const replyItemRoute = createRoute({
+  operationId: "replySlackItem",
   method: "post",
   path: "/slack/items/{id}/reply",
   tags: TAGS,
@@ -282,6 +287,7 @@ export const replyItemRoute = createRoute({
 });
 
 export const itemTaskRoute = createRoute({
+  operationId: "createTaskFromSlackItem",
   method: "post",
   path: "/slack/items/{id}/task",
   tags: TAGS,
@@ -292,6 +298,7 @@ export const itemTaskRoute = createRoute({
 });
 
 export const watchesRoute = createRoute({
+  operationId: "listSlackWatches",
   method: "get",
   path: "/slack/watches",
   tags: TAGS,
@@ -301,6 +308,7 @@ export const watchesRoute = createRoute({
 });
 
 export const addWatchRoute = createRoute({
+  operationId: "addSlackWatch",
   method: "post",
   path: "/slack/watches",
   tags: TAGS,
@@ -311,6 +319,7 @@ export const addWatchRoute = createRoute({
 });
 
 export const patchWatchRoute = createRoute({
+  operationId: "updateSlackWatch",
   method: "patch",
   path: "/slack/watches/{id}",
   tags: TAGS,
@@ -320,6 +329,7 @@ export const patchWatchRoute = createRoute({
 });
 
 export const deleteWatchRoute = createRoute({
+  operationId: "deleteSlackWatch",
   method: "delete",
   path: "/slack/watches/{id}",
   tags: TAGS,
@@ -330,6 +340,7 @@ export const deleteWatchRoute = createRoute({
 });
 
 export const metricsRoute = createRoute({
+  operationId: "getSlackMetrics",
   method: "get",
   path: "/slack/metrics",
   tags: TAGS,
@@ -340,6 +351,7 @@ export const metricsRoute = createRoute({
 });
 
 export const triageRunsRoute = createRoute({
+  operationId: "listSlackTriageRuns",
   method: "get",
   path: "/slack/triage-runs",
   tags: TAGS,
@@ -350,6 +362,7 @@ export const triageRunsRoute = createRoute({
 });
 
 export const usergroupsRoute = createRoute({
+  operationId: "listSlackUsergroups",
   method: "get",
   path: "/slack/usergroups",
   tags: TAGS,
@@ -359,6 +372,7 @@ export const usergroupsRoute = createRoute({
 });
 
 export const channelsRoute = createRoute({
+  operationId: "listSlackChannels",
   method: "get",
   path: "/slack/channels",
   tags: TAGS,

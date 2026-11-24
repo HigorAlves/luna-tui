@@ -29,6 +29,7 @@ export const JiraIssueHitSchema = z
 expectSame<Same<z.infer<typeof JiraIssueHitSchema>, JiraIssueHit>>();
 
 export const jiraStatusRoute = createRoute({
+  operationId: "getJiraStatus",
   method: "get",
   path: "/jira/status",
   tags: TAGS,
@@ -38,6 +39,7 @@ export const jiraStatusRoute = createRoute({
 });
 
 export const jiraSearchRoute = createRoute({
+  operationId: "searchJiraIssues",
   method: "get",
   path: "/jira/search",
   tags: TAGS,
@@ -48,6 +50,7 @@ export const jiraSearchRoute = createRoute({
 });
 
 export const linkJiraRoute = createRoute({
+  operationId: "linkJiraIssue",
   method: "post",
   path: "/tasks/{id}/jira",
   tags: TAGS,
@@ -58,6 +61,7 @@ export const linkJiraRoute = createRoute({
 });
 
 export const unlinkJiraRoute = createRoute({
+  operationId: "unlinkJiraIssue",
   method: "delete",
   path: "/tasks/{id}/jira",
   tags: TAGS,
@@ -68,6 +72,7 @@ export const unlinkJiraRoute = createRoute({
 });
 
 export const createJiraRoute = createRoute({
+  operationId: "createJiraIssue",
   method: "post",
   path: "/tasks/{id}/jira/create",
   tags: TAGS,

@@ -51,6 +51,7 @@ expectSame<Same<z.infer<typeof TicketCardSchema>, Awaited<ReturnType<TicketMachi
 const KeyParams = z.object({ key: z.string().openapi({ param: { name: "key", in: "path" }, example: "PLAT-123", description: "A Jira key or url-encoded `owner/repo#n`" }) });
 
 export const listTicketsRoute = createRoute({
+  operationId: "listTickets",
   method: "get",
   path: "/tickets",
   tags: TAGS,
@@ -60,6 +61,7 @@ export const listTicketsRoute = createRoute({
 });
 
 export const approveTicketRoute = createRoute({
+  operationId: "approveTicket",
   method: "post",
   path: "/tickets/{key}/approve",
   tags: TAGS,
@@ -70,6 +72,7 @@ export const approveTicketRoute = createRoute({
 });
 
 export const editTicketRoute = createRoute({
+  operationId: "editTicket",
   method: "post",
   path: "/tickets/{key}/edit",
   tags: TAGS,
@@ -80,6 +83,7 @@ export const editTicketRoute = createRoute({
 });
 
 export const ignoreTicketRoute = createRoute({
+  operationId: "ignoreTicket",
   method: "post",
   path: "/tickets/{key}/ignore",
   tags: TAGS,
@@ -89,6 +93,7 @@ export const ignoreTicketRoute = createRoute({
 });
 
 export const scheduleTicketRoute = createRoute({
+  operationId: "scheduleTicket",
   method: "post",
   path: "/tickets/{key}/backlog",
   tags: TAGS,
@@ -99,6 +104,7 @@ export const scheduleTicketRoute = createRoute({
 });
 
 export const cardTicketRoute = createRoute({
+  operationId: "createCardFromTicket",
   method: "post",
   path: "/tickets/{key}/card",
   tags: TAGS,

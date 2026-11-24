@@ -1,9 +1,62 @@
 // OpenAPI definition of the live stream: `GET /events` is Server-Sent Events, so its 200 is `text/event-stream`, not JSON.
+import type { BudgetAlert, StreamMessage, TaskShipped } from "@hardness/contracts";
 import { createRoute, z } from "@hono/zod-openapi";
 
-import { errorResponses } from "../openapi/schemas.ts";
+import { errorResponses, expectSame, type Same } from "../openapi/schemas.ts";
+import { TaskSchema } from "../openapi/task.schema.ts";
+import { PrSnapshotSchema } from "./github.openapi.ts";
+import { MetricsSchema } from "./machine.openapi.ts";
+import { SlackSnapshotSchema } from "./slack.openapi.ts";
+import { TaskEventSchema } from "./tasks.openapi.ts";
+
+export const BudgetAlertSchema = z
+  .object({
+    scope: z.enum(["task", "repo", "day", "engine"]),
+    taskId: z.string().nullable(),
+    repo: z.string().nullable(),
+    engine: z.string().optional(),
+    pct: z.union([z.literal(80), z.literal(90), z.literal(100)]),
+    spentUsd: z.number(),
+    limitUsd: z.number(),
+  })
+  .openapi("BudgetAlert");
+expectSame<Same<z.infer<typeof BudgetAlertSchema>, BudgetAlert>>();
+
+export const TaskShippedSchema = z
+  .object({
+    id: z.string(),
+    title: z.string(),
+    prUrl: z.string(),
+    number: z.number().int(),
+    mergedSha: z.string().nullable(),
+    format: z.string().nullable(),
+    howToVerify: z.string().nullable(),
+    media: z.array(z.object({ kind: z.string(), label: z.string(), url: z.string() })),
+    at: z.string(),
+  })
+  .openapi("TaskShipped");
+expectSame<Same<z.infer<typeof TaskShippedSchema>, TaskShipped>>();
+
+/** What each event's `data:` carries, keyed by `type` (the event's `event:` name). */
+export const StreamMessageSchema = z
+  .discriminatedUnion("type", [
+    z.object({ type: z.literal("task.updated"), task: TaskSchema, seq: z.number().int() }),
+    z.object({ type: z.literal("budget.alert"), alert: BudgetAlertSchema }),
+    z.object({ type: z.literal("task.event"), event: TaskEventSchema }),
+    z.object({ type: z.literal("task.deleted"), id: z.string(), seq: z.number().int() }),
+    z.object({ type: z.literal("task.metrics"), metrics: MetricsSchema }),
+    z.object({ type: z.literal("stage.started"), taskId: z.string(), label: z.string(), cwd: z.string(), container: z.string() }),
+    z.object({ type: z.literal("task.closed"), id: z.string() }),
+    z.object({ type: z.literal("github.prs"), snapshot: PrSnapshotSchema }),
+    z.object({ type: z.literal("github.prs.all"), snapshot: PrSnapshotSchema }),
+    z.object({ type: z.literal("slack.items"), snapshot: SlackSnapshotSchema }),
+    z.object({ type: z.literal("task.shipped"), shipped: TaskShippedSchema }),
+  ])
+  .openapi("StreamMessage", { description: "One Server-Sent Event's `data:`, as JSON; the event's `event:` is its `type`. `ready` and `ping` events carry `{}` and are not StreamMessages." });
+expectSame<Same<z.infer<typeof StreamMessageSchema>, StreamMessage>>();
 
 export const eventsRoute = createRoute({
+  operationId: "streamEvents",
   method: "get",
   path: "/events",
   tags: ["Events"],
@@ -22,7 +75,8 @@ export const eventsRoute = createRoute({
   responses: {
     200: {
       description: "The event stream; it stays open until the client leaves",
-      content: { "text/event-stream": { schema: z.string().openapi({ description: "`event: <type>\\ndata: <JSON message>\\n\\n` frames" }) } },
+      // Each frame is `event: <type>` and `data: <StreamMessage as JSON>`; the schema is the message, so a generated client gets its type.
+      content: { "text/event-stream": { schema: StreamMessageSchema } },
     },
     ...errorResponses(400),
   },

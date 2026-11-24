@@ -32,6 +32,7 @@ expectSame<Same<z.infer<typeof BacklogEntrySchema>, BacklogEntry>>();
 const ItemParams = z.object({ id: z.string().openapi({ param: { name: "id", in: "path" }, description: "The item's id (a UUID)" }) });
 
 export const listBacklogRoute = createRoute({
+  operationId: "listBacklog",
   method: "get",
   path: "/backlog",
   tags: TAGS,
@@ -41,6 +42,7 @@ export const listBacklogRoute = createRoute({
 });
 
 export const addBacklogRoute = createRoute({
+  operationId: "addBacklogItem",
   method: "post",
   path: "/backlog",
   tags: TAGS,
@@ -50,6 +52,7 @@ export const addBacklogRoute = createRoute({
 });
 
 export const bumpBacklogRoute = createRoute({
+  operationId: "bumpBacklogItem",
   method: "post",
   path: "/backlog/{id}/bump",
   tags: TAGS,
@@ -60,6 +63,7 @@ export const bumpBacklogRoute = createRoute({
 });
 
 export const promoteBacklogRoute = createRoute({
+  operationId: "promoteBacklogItem",
   method: "post",
   path: "/backlog/{id}/promote",
   tags: TAGS,
@@ -70,6 +74,7 @@ export const promoteBacklogRoute = createRoute({
 });
 
 export const declineBacklogRoute = createRoute({
+  operationId: "declineBacklogItem",
   method: "post",
   path: "/backlog/{id}/decline",
   tags: TAGS,

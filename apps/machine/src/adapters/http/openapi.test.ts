@@ -76,6 +76,18 @@ describe("GET /openapi.json", () => {
   });
 });
 
+describe("what a client generator reads", () => {
+  it("gives every operation a unique operationId, the name a generated client calls it by", async () => {
+    const doc = await documentOf();
+    const ids = Object.entries(doc.paths).flatMap(([path, methods]) => Object.entries(methods).map(([method, op]) => ({ at: `${method} ${path}`, id: (op as { operationId?: string }).operationId })));
+    expect(ids.filter((op) => !op.id).map((op) => op.at)).toEqual([]);
+    const seen = new Map<string, string>();
+    const duplicated = ids.filter((op) => (seen.has(op.id!) ? true : (seen.set(op.id!, op.at), false))).map((op) => `${op.id}: ${op.at} and ${seen.get(op.id!)}`);
+    expect(duplicated).toEqual([]);
+    for (const op of ids) expect(op.id, op.at).toMatch(/^[a-z][A-Za-z]+$/);
+  });
+});
+
 describe("GET /docs", () => {
   it("is Swagger UI on /openapi.json, read without the token", async () => {
     const response = await everything().request("/docs");
@@ -120,5 +132,33 @@ describe("a route's schema at the door", () => {
     const none = await everything().request("/slots", { method: "PATCH", headers: { authorization: "Bearer s3cret" } });
     expect(none.status).toBe(400);
     expect(await none.json()).toMatchObject({ error: "invalid_request" });
+  });
+});
+
+describe("the conformance check the tests run (openapi/conformance.ts)", () => {
+  it("bites: reports a body that breaks its schema, a status the route does not document, and an undocumented content type; passes a good answer", async () => {
+    const { createRoute, z } = await import("@hono/zod-openapi");
+    const { createOpenApiRouter } = await import("./openapi/router.ts");
+    const { responseConformance } = await import("./openapi/conformance.ts");
+    const { jsonContent } = await import("./openapi/schemas.ts");
+    const found: Array<{ route: string; status: number; problem: string }> = [];
+    const probe = createOpenApiRouter();
+    probe.use(responseConformance(probe, (violation) => found.push(violation)));
+    const route = createRoute({ method: "get", path: "/probe/{mode}", operationId: "probe", tags: ["Probe"], summary: "probe", request: { params: z.object({ mode: z.string() }) }, responses: { 200: jsonContent(z.object({ n: z.number() }), "ok") } });
+    // Untyped on purpose: the handler answers what the route does not say, which the type checker would refuse.
+    probe.openapi(route, ((c: { req: { param: (k: string) => string }; json: (b: unknown, s: number) => Response; text: (b: string) => Response }) => {
+      const mode = c.req.param("mode");
+      if (mode === "good") return c.json({ n: 1 }, 200);
+      if (mode === "body") return c.json({ n: "one" }, 200);
+      if (mode === "status") return c.json({ n: 1 }, 418);
+      return c.text("plain");
+    }) as never);
+    for (const mode of ["good", "body", "status", "type"]) await probe.request(`/probe/${mode}`);
+    expect(found.map((v) => [v.status, v.problem.split(" ")[0]])).toEqual([
+      [200, "✖"],
+      [418, "status"],
+      [200, "content"],
+    ]);
+    expect(found.every((v) => v.route === "GET /probe/{mode}")).toBe(true);
   });
 });

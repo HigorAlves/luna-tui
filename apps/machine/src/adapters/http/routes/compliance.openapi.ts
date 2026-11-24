@@ -106,6 +106,7 @@ const DraftIdParams = z.object({
 });
 
 export const incidentsRoute = createRoute({
+  operationId: "listIncidents",
   method: "get",
   path: "/compliance/incidents",
   tags: TAGS,
@@ -115,6 +116,7 @@ export const incidentsRoute = createRoute({
 });
 
 export const draftsRoute = createRoute({
+  operationId: "listComplianceDrafts",
   method: "get",
   path: "/compliance/drafts",
   tags: TAGS,
@@ -124,6 +126,7 @@ export const draftsRoute = createRoute({
 });
 
 export const approveDraftRoute = createRoute({
+  operationId: "approveComplianceDraft",
   method: "post",
   path: "/compliance/drafts/{id}/approve",
   tags: TAGS,
@@ -134,6 +137,7 @@ export const approveDraftRoute = createRoute({
 });
 
 export const editDraftRoute = createRoute({
+  operationId: "editComplianceDraft",
   method: "post",
   path: "/compliance/drafts/{id}/edit",
   tags: TAGS,
@@ -144,6 +148,7 @@ export const editDraftRoute = createRoute({
 });
 
 export const ignoreDraftRoute = createRoute({
+  operationId: "ignoreComplianceDraft",
   method: "post",
   path: "/compliance/drafts/{id}/ignore",
   tags: TAGS,
@@ -154,6 +159,7 @@ export const ignoreDraftRoute = createRoute({
 });
 
 export const reposRoute = createRoute({
+  operationId: "listComplianceRepos",
   method: "get",
   path: "/compliance/repos",
   tags: TAGS,
@@ -163,6 +169,7 @@ export const reposRoute = createRoute({
 });
 
 export const rerunDraftRoute = createRoute({
+  operationId: "rerunComplianceDraft",
   method: "post",
   path: "/compliance/drafts/{id}/repo",
   tags: TAGS,
@@ -173,6 +180,7 @@ export const rerunDraftRoute = createRoute({
 });
 
 export const vulnsRoute = createRoute({
+  operationId: "listVulnerabilities",
   method: "get",
   path: "/compliance/vulns",
   tags: TAGS,
@@ -182,6 +190,7 @@ export const vulnsRoute = createRoute({
 });
 
 export const releaseNotesRoute = createRoute({
+  operationId: "draftReleaseNotes",
   method: "post",
   path: "/compliance/release-notes",
   tags: TAGS,
@@ -192,6 +201,7 @@ export const releaseNotesRoute = createRoute({
 });
 
 export const evidenceRunRoute = createRoute({
+  operationId: "runChangeEvidence",
   method: "post",
   path: "/compliance/evidence/run",
   tags: TAGS,
@@ -202,6 +212,7 @@ export const evidenceRunRoute = createRoute({
 });
 
 export const statusRunRoute = createRoute({
+  operationId: "runStatusReport",
   method: "post",
   path: "/compliance/status/run",
   tags: TAGS,
@@ -212,6 +223,7 @@ export const statusRunRoute = createRoute({
 });
 
 export const accessRunRoute = createRoute({
+  operationId: "runAccessReview",
   method: "post",
   path: "/compliance/access/run",
   tags: TAGS,

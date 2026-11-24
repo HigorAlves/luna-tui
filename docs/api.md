@@ -2,7 +2,12 @@
 
 This is the machine's HTTP API. Each area's routes are in `apps/machine/src/adapters/http/routes/<area>.routes.ts`, and their OpenAPI definitions (request and every response, in zod) are beside them in `<area>.openapi.ts`. `packages/contracts/src/api.ts` defines the shapes.
 
-**Swagger.** The machine describes itself: `GET /openapi.json` is the OpenAPI 3.1 document built from every route's schemas, and `GET /docs` is Swagger UI on it. Open http://127.0.0.1:4318/docs (`pnpm start`) or http://127.0.0.1:4317/docs (`pnpm dev`). Both pages are read without the token. To try a route from Swagger, press **Authorize** and paste the token (`MACHINE_API_TOKEN`, else `~/.config/hardness/machine-api-token`). A test keeps the document complete: a route without a description fails it.
+**Swagger.** The machine describes itself: `GET /openapi.json` is the OpenAPI 3.1 document built from every route's schemas, and `GET /docs` is Swagger UI on it. Open http://127.0.0.1:4318/docs (`pnpm start`) or http://127.0.0.1:4317/docs (`pnpm dev`). Both pages are read without the token. To try a route from Swagger, press **Authorize** and paste the token (`MACHINE_API_TOKEN`, else `~/.config/hardness/machine-api-token`). Three tests keep the document true:
+- **Complete:** a route the app serves that is missing from the document, or has no tag, summary, `operationId` or response schema, fails `openapi.test.ts`.
+- **Accurate:** in the machine's tests, every answer is held to the document (`openapi/conformance.ts`). A status the route does not declare, or a body its schema refuses, fails the test file that caused it.
+- **Committed:** `apps/machine/openapi.json` is the whole document, with every optional area on. A frontend generates its client from that file (each operation's `operationId` is the function name), so it needs no running machine. After you change a route, run `pnpm --filter @hardness/machine openapi`. `openapi-file.test.ts` fails while the file is stale.
+
+`GET /events` is documented with its messages: each event's `data:` is a `StreamMessage` (the `StreamMessage` schema in the document), keyed by `type`.
 
 | Method | Path | Does |
 |---|---|---|

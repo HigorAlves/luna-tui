@@ -26,6 +26,7 @@ expectSame<Same<z.infer<typeof SlotsSchema>, Slots>>();
 const policy = { sandboxPolicy: MachinePolicySchema.optional(), notInForce: z.array(z.string()).optional() };
 
 export const healthRoute = createRoute({
+  operationId: "getHealth",
   method: "get",
   path: "/health",
   tags: TAGS,
@@ -41,6 +42,7 @@ export const healthRoute = createRoute({
 export const SlotsInput = z.object({ max: z.number().int().min(1).openapi({ example: 4, description: "How many stages may run at once" }) });
 
 export const setSlotsRoute = createRoute({
+  operationId: "setSlots",
   method: "patch",
   path: "/slots",
   tags: TAGS,
@@ -70,6 +72,7 @@ export const PackInfoSchema = z
 expectSame<Same<z.infer<typeof PackInfoSchema>, PackInfo>>();
 
 export const packsRoute = createRoute({
+  operationId: "listPacks",
   method: "get",
   path: "/packs",
   tags: TAGS,
@@ -94,6 +97,7 @@ export const EngineInfoSchema = z
 expectSame<Same<z.infer<typeof EngineInfoSchema>, EngineInfo>>();
 
 export const enginesRoute = createRoute({
+  operationId: "listEngines",
   method: "get",
   path: "/engines",
   tags: TAGS,
@@ -118,6 +122,7 @@ export const RunResultSchema = z
 expectSame<Same<z.infer<typeof RunResultSchema>, RunResult>>();
 
 export const runsRoute = createRoute({
+  operationId: "runPack",
   method: "post",
   path: "/runs",
   tags: TAGS,
@@ -144,6 +149,7 @@ export const ForemanReplySchema = z
   .openapi("ForemanReply");
 
 export const foremanRoute = createRoute({
+  operationId: "askForeman",
   method: "post",
   path: "/foreman",
   tags: TAGS,
@@ -159,6 +165,7 @@ export const foremanRoute = createRoute({
 // --- Ticket chat ---------------------------------------------------------------------------------
 
 export const ticketChatRoute = createRoute({
+  operationId: "ticketChat",
   method: "post",
   path: "/ticket-chat",
   tags: TAGS,
@@ -174,6 +181,7 @@ export const ticketChatRoute = createRoute({
 // --- Slot knobs ----------------------------------------------------------------------------------
 
 export const drainRoute = createRoute({
+  operationId: "drain",
   method: "post",
   path: "/drain",
   tags: TAGS,
@@ -182,6 +190,7 @@ export const drainRoute = createRoute({
 });
 
 export const resumeRoute = createRoute({
+  operationId: "resumeClaims",
   method: "post",
   path: "/resume",
   tags: TAGS,
@@ -252,6 +261,7 @@ export const MetricsSchema = z
 expectSame<Same<z.infer<typeof MetricsSchema>, Metrics>>();
 
 export const metricsRoute = createRoute({
+  operationId: "getMetrics",
   method: "get",
   path: "/metrics",
   tags: METRICS_TAGS,
@@ -270,6 +280,7 @@ export const metricsRoute = createRoute({
 // --- Dev stubs -----------------------------------------------------------------------------------
 
 export const devStubsRoute = createRoute({
+  operationId: "planDevStubs",
   method: "post",
   path: "/dev/stubs",
   tags: TAGS,

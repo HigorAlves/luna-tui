@@ -71,6 +71,7 @@ const PrParams = z.object({
 });
 
 export const prsRoute = createRoute({
+  operationId: "listPullRequests",
   method: "get",
   path: "/github/prs",
   tags: TAGS,
@@ -80,6 +81,7 @@ export const prsRoute = createRoute({
 });
 
 export const refreshPrsRoute = createRoute({
+  operationId: "refreshPullRequests",
   method: "post",
   path: "/github/prs/refresh",
   tags: TAGS,
@@ -88,6 +90,7 @@ export const refreshPrsRoute = createRoute({
 });
 
 export const allPrsRoute = createRoute({
+  operationId: "listAllPullRequests",
   method: "get",
   path: "/github/prs/all",
   tags: TAGS,
@@ -97,6 +100,7 @@ export const allPrsRoute = createRoute({
 });
 
 export const refreshAllPrsRoute = createRoute({
+  operationId: "refreshAllPullRequests",
   method: "post",
   path: "/github/prs/all/refresh",
   tags: TAGS,
@@ -106,6 +110,7 @@ export const refreshAllPrsRoute = createRoute({
 });
 
 export const mergePrRoute = createRoute({
+  operationId: "mergePullRequest",
   method: "post",
   path: "/github/prs/{owner}/{name}/{number}/merge",
   tags: TAGS,
@@ -116,6 +121,7 @@ export const mergePrRoute = createRoute({
 });
 
 export const closePrRoute = createRoute({
+  operationId: "closePullRequest",
   method: "post",
   path: "/github/prs/{owner}/{name}/{number}/close",
   tags: TAGS,
@@ -126,6 +132,7 @@ export const closePrRoute = createRoute({
 });
 
 export const prActionRoute = createRoute({
+  operationId: "runPullRequestAction",
   method: "post",
   path: "/github/prs/{owner}/{name}/{number}/actions",
   tags: TAGS,
@@ -136,6 +143,7 @@ export const prActionRoute = createRoute({
 });
 
 export const cloneRoute = createRoute({
+  operationId: "cloneRepository",
   method: "post",
   path: "/github/clone",
   tags: TAGS,

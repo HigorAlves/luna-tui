@@ -20,6 +20,7 @@ export const McpServerStatusSchema = z
   .openapi("McpServerStatus");
 
 export const mcpStatusRoute = createRoute({
+  operationId: "listMcpServers",
   method: "get",
   path: "/mcp",
   tags: TAGS,
@@ -29,6 +30,7 @@ export const mcpStatusRoute = createRoute({
 });
 
 export const mcpLoginRoute = createRoute({
+  operationId: "startMcpLogin",
   method: "post",
   path: "/mcp/{server}/login",
   tags: TAGS,
@@ -44,6 +46,7 @@ export const mcpLoginRoute = createRoute({
 const html = (description: string) => ({ description, content: { "text/html": { schema: z.string() } } });
 
 export const mcpCallbackRoute = createRoute({
+  operationId: "mcpCallback",
   method: "get",
   path: "/mcp/{server}/callback",
   tags: TAGS,

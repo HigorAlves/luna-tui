@@ -105,6 +105,7 @@ export const ProposalAnswerSchema = z
 expectSame<Same<z.infer<typeof ProposalAnswerSchema>, ProposalAnswer>>();
 
 export const listReposRoute = createRoute({
+  operationId: "listRepos",
   method: "get",
   path: "/repos",
   tags: TAGS,
@@ -123,6 +124,7 @@ const ApproveBaseBody = z
   });
 
 export const approveBaseRoute = createRoute({
+  operationId: "approveRepoBase",
   method: "post",
   path: "/repos/base/approve",
   tags: TAGS,
@@ -136,6 +138,7 @@ export const approveBaseRoute = createRoute({
 });
 
 export const setupRepoRoute = createRoute({
+  operationId: "setupRepo",
   method: "post",
   path: "/repos/setup",
   tags: TAGS,
@@ -146,6 +149,7 @@ export const setupRepoRoute = createRoute({
 });
 
 export const proposalsRoute = createRoute({
+  operationId: "proposeConfig",
   method: "post",
   path: "/repos/proposals",
   tags: TAGS,
@@ -156,6 +160,7 @@ export const proposalsRoute = createRoute({
 });
 
 export const checkConfigRoute = createRoute({
+  operationId: "checkConfig",
   method: "post",
   path: "/repos/config/check",
   tags: TAGS,
@@ -166,6 +171,7 @@ export const checkConfigRoute = createRoute({
 });
 
 export const proveConfigRoute = createRoute({
+  operationId: "proveConfig",
   method: "post",
   path: "/repos/config/prove",
   tags: TAGS,
@@ -176,6 +182,7 @@ export const proveConfigRoute = createRoute({
 });
 
 export const proofJobRoute = createRoute({
+  operationId: "getConfigProof",
   method: "get",
   path: "/repos/config/prove/{id}",
   tags: TAGS,

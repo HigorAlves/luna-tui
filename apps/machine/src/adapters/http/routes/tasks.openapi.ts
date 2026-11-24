@@ -148,6 +148,7 @@ const taskResponse = (description: string) => jsonContent(TaskSchema, descriptio
 const changes = errorResponses(400, 404, 409);
 
 export const listTasksRoute = createRoute({
+  operationId: "listTasks",
   method: "get",
   path: "/tasks",
   tags: TAGS,
@@ -157,6 +158,7 @@ export const listTasksRoute = createRoute({
 });
 
 export const createTaskRoute = createRoute({
+  operationId: "createTask",
   method: "post",
   path: "/tasks",
   tags: TAGS,
@@ -176,6 +178,7 @@ export const createTaskRoute = createRoute({
 });
 
 export const getTaskRoute = createRoute({
+  operationId: "getTask",
   method: "get",
   path: "/tasks/{id}",
   tags: TAGS,
@@ -186,6 +189,7 @@ export const getTaskRoute = createRoute({
 });
 
 export const updateTaskRoute = createRoute({
+  operationId: "updateTask",
   method: "patch",
   path: "/tasks/{id}",
   tags: TAGS,
@@ -195,6 +199,7 @@ export const updateTaskRoute = createRoute({
 });
 
 export const editPlanRoute = createRoute({
+  operationId: "editTaskPlan",
   method: "patch",
   path: "/tasks/{id}/plan",
   tags: TAGS,
@@ -205,6 +210,7 @@ export const editPlanRoute = createRoute({
 });
 
 export const editRecordRoute = createRoute({
+  operationId: "editTaskRecord",
   method: "patch",
   path: "/tasks/{id}/record",
   tags: TAGS,
@@ -215,6 +221,7 @@ export const editRecordRoute = createRoute({
 });
 
 export const postQuestionsRoute = createRoute({
+  operationId: "postTaskQuestions",
   method: "post",
   path: "/tasks/{id}/questions/post",
   tags: TAGS,
@@ -225,6 +232,7 @@ export const postQuestionsRoute = createRoute({
 });
 
 export const editCasesRoute = createRoute({
+  operationId: "editTaskCases",
   method: "patch",
   path: "/tasks/{id}/cases",
   tags: TAGS,
@@ -235,6 +243,7 @@ export const editCasesRoute = createRoute({
 });
 
 export const editStagesRoute = createRoute({
+  operationId: "editTaskStages",
   method: "patch",
   path: "/tasks/{id}/stages",
   tags: TAGS,
@@ -245,6 +254,7 @@ export const editStagesRoute = createRoute({
 });
 
 export const taskDiffRoute = createRoute({
+  operationId: "getTaskDiff",
   method: "get",
   path: "/tasks/{id}/diff",
   tags: TAGS,
@@ -255,6 +265,7 @@ export const taskDiffRoute = createRoute({
 });
 
 export const deleteTaskRoute = createRoute({
+  operationId: "deleteTask",
   method: "delete",
   path: "/tasks/{id}",
   tags: TAGS,
@@ -264,6 +275,7 @@ export const deleteTaskRoute = createRoute({
 });
 
 export const startTaskRoute = createRoute({
+  operationId: "startTask",
   method: "post",
   path: "/tasks/{id}/start",
   tags: TAGS,
@@ -273,6 +285,7 @@ export const startTaskRoute = createRoute({
 });
 
 export const answersRoute = createRoute({
+  operationId: "answerTask",
   method: "post",
   path: "/tasks/{id}/answers",
   tags: TAGS,
@@ -282,6 +295,7 @@ export const answersRoute = createRoute({
 });
 
 export const decisionRoute = createRoute({
+  operationId: "decideTask",
   method: "post",
   path: "/tasks/{id}/decision",
   tags: TAGS,
@@ -292,6 +306,7 @@ export const decisionRoute = createRoute({
 });
 
 export const escalationReasonRoute = createRoute({
+  operationId: "correctEscalationReason",
   method: "post",
   path: "/tasks/{id}/escalation-reason",
   tags: TAGS,
@@ -302,6 +317,7 @@ export const escalationReasonRoute = createRoute({
 });
 
 export const archiveRoute = createRoute({
+  operationId: "archiveTask",
   method: "post",
   path: "/tasks/{id}/archive",
   tags: TAGS,
@@ -312,6 +328,7 @@ export const archiveRoute = createRoute({
 });
 
 export const contextRoute = createRoute({
+  operationId: "provideTaskContext",
   method: "post",
   path: "/tasks/{id}/context",
   tags: TAGS,
@@ -322,6 +339,7 @@ export const contextRoute = createRoute({
 });
 
 export const dedupRoute = createRoute({
+  operationId: "answerDedup",
   method: "post",
   path: "/tasks/{id}/dedup",
   tags: TAGS,
@@ -332,6 +350,7 @@ export const dedupRoute = createRoute({
 });
 
 export const mergeRoute = createRoute({
+  operationId: "mergeTask",
   method: "post",
   path: "/tasks/{id}/merge",
   tags: TAGS,
@@ -342,6 +361,7 @@ export const mergeRoute = createRoute({
 });
 
 export const unmergeRoute = createRoute({
+  operationId: "unmergeTask",
   method: "post",
   path: "/tasks/{id}/unmerge",
   tags: TAGS,
@@ -352,6 +372,7 @@ export const unmergeRoute = createRoute({
 });
 
 export const evidenceFeedbackRoute = createRoute({
+  operationId: "sendEvidenceFeedback",
   method: "post",
   path: "/tasks/{id}/evidence/feedback",
   tags: TAGS,
@@ -362,6 +383,7 @@ export const evidenceFeedbackRoute = createRoute({
 });
 
 export const dismissFindingRoute = createRoute({
+  operationId: "dismissFinding",
   method: "post",
   path: "/tasks/{id}/findings/{findingId}/dismiss",
   tags: TAGS,
@@ -372,6 +394,7 @@ export const dismissFindingRoute = createRoute({
 });
 
 export const waiveDesignFindingRoute = createRoute({
+  operationId: "waiveDesignFinding",
   method: "post",
   path: "/tasks/{id}/design/findings/{findingId}/waive",
   tags: TAGS,
@@ -382,6 +405,7 @@ export const waiveDesignFindingRoute = createRoute({
 });
 
 export const addFindingRoute = createRoute({
+  operationId: "addFinding",
   method: "post",
   path: "/tasks/{id}/findings",
   tags: TAGS,
@@ -392,6 +416,7 @@ export const addFindingRoute = createRoute({
 });
 
 export const abortRoute = createRoute({
+  operationId: "abortTask",
   method: "post",
   path: "/tasks/{id}/abort",
   tags: TAGS,
@@ -401,6 +426,7 @@ export const abortRoute = createRoute({
 });
 
 export const resumeRoute = createRoute({
+  operationId: "resumeTask",
   method: "post",
   path: "/tasks/{id}/resume",
   tags: TAGS,
@@ -411,6 +437,7 @@ export const resumeRoute = createRoute({
 });
 
 export const removeWorktreeRoute = createRoute({
+  operationId: "removeTaskWorktree",
   method: "post",
   path: "/tasks/{id}/worktree/remove",
   tags: TAGS,
