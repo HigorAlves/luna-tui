@@ -354,6 +354,8 @@ export const ReviewContext = z.object({
   existingComments: z.array(
     z.object({ path: z.string().nullable(), line: z.number().int().nullable(), author: z.string(), body: z.string() }),
   ),
+  /** Files the review leaves out of `files` and `diff`: lockfiles, generated or minified output, vendored code, snapshots. Absent reads as none. */
+  skipped: z.array(z.object({ path: z.string(), lines: z.number().int(), reason: z.string() })).optional(),
   /** The Jira tickets the PR names (title, head branch, body), when Jira is connected; absent reads as none linked. */
   tickets: z.array(ReviewTicket).optional(),
   /** The board cards the review is linked to (by a fact, or by the pr_link decision); absent reads as none. Their criteria and description are a spec too. */

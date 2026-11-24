@@ -7,6 +7,7 @@ import { type DecisionOverrides, type Finding, PrReviewAnswer, type RequestedAct
 import { type Decide } from "./check-decide.ts";
 import { diffExcerptOf } from "./diff-section.ts";
 import { type ComplianceDeps, runCompliance } from "./compliance-review.ts";
+import { type Skipped, parseDiff, splitReviewable, type DiffFile } from "./review-diff.ts";
 import { type RereviewDeps, type RereviewPlan, prepareRereview, settledReply } from "./rereview.ts";
 import { type HelperDeps, type HelpersOutcome, confirmHelperFindings, runHelpers } from "./review-helpers.ts";
 import { followUp } from "./thread-followup.ts";
@@ -134,6 +135,8 @@ export function reviewLinksOf(links: PrLinks, tickets: ReadonlyArray<{ key: stri
   return { at: new Date().toISOString(), jira, cards, ...(links.suggestion ? { suggestion: links.suggestion } : {}) };
 }
 
+const fileEntryOf = (f: DiffFile): ReviewContext["files"][number] => ({ path: f.path, additions: f.additions, deletions: f.deletions, ...(f.previousPath ? { previousPath: f.previousPath } : {}) });
+
 /** The PR's diff: host git first (whole, whatever its size), GitHub's as the fallback with the reason kept. Throws with both reasons when neither reads it. */
 async function readDiff(deps: PrReviewDeps, context: StageContext, pr: { repo: string; number: number }, baseRef: string): Promise<{ diff: string; source: "local" | "github"; note?: string }> {
   const repoPath = context.task.repoPath ?? null;
@@ -163,14 +166,18 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     let links: PrLinks;
     let diffSource: "local" | "github" = "github";
     let diffNote: string | undefined;
+    let skipped: Skipped[] = [];
     try {
       const [facts, existingComments] = await Promise.all([gatherPr(github, pr.repo, pr.number), github.prComments(pr.repo, pr.number)]);
       const read = await readDiff(deps, context, pr, facts.baseRef);
       diffSource = read.source;
       diffNote = read.note;
-      const diff = read.diff;
-      const files = await github.prFiles(pr.repo, pr.number);
-      review = { pr: facts, diff, files, existingComments };
+      // The files come from the diff itself (GitHub's file list stops at 3000 files), minus what nobody reviews.
+      const split = splitReviewable(parseDiff(read.diff));
+      const diff = split.reviewable.map((f) => f.text).join("");
+      const files = split.reviewable.map(fileEntryOf);
+      skipped = split.skipped;
+      review = { pr: facts, diff, files, existingComments, ...(skipped.length > 0 ? { skipped } : {}) };
       const repoPath = context.task.repoPath ?? null;
       // What the PR is the work of: the keys it names, the cards that match by a recorded fact and, when nothing does, the decision's pick.
       links = await linkReview(
@@ -195,6 +202,14 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       }
     }
     // The passes and the compliance lead read the diff only; the threads are the main reviewer's.
+    if (plan) {
+      // What the reviewers read is the delta, minus what nobody reviews there as well.
+      const delta = splitReviewable(parseDiff(plan.diff));
+      plan = { ...plan, diff: delta.reviewable.map((f) => f.text).join("") };
+      skipped = delta.skipped;
+      const { skipped: _all, ...rest } = review;
+      review = { ...rest, ...(skipped.length > 0 ? { skipped } : {}) };
+    }
     const shared: ReviewContext = plan ? { ...review, diff: plan.diff } : review;
     if (plan) review = { ...shared, rereview: plan.rereview };
 
@@ -291,6 +306,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       verdict,
       diffSource,
       ...(diffNote ? { diffNote } : {}),
+      ...(skipped.length > 0 ? { skipped } : {}),
       ...(helpers
         ? {
             helpers: helpers.helpers.map((h) => {

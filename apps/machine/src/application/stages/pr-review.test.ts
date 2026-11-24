@@ -406,3 +406,32 @@ describe("reading the PR's diff", () => {
     expect(String((result.detail as { error: string }).error)).toMatch(/406.*no merge base|no merge base.*406/s);
   });
 });
+
+describe("leaving out what nobody reviews", () => {
+  const answer = { verdict: "approve", summary: "Fine.", findings: [], comments: [] };
+  const sec = (path: string, n: number) => `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1,${n} @@\n` + Array.from({ length: n }, (_, i) => `+line ${i}`).join("\n") + "\n";
+
+  it("reads the files of the PR from its diff, hands the reviewers none of the lockfile or generated files, and lists them with their line counts", async () => {
+    const githubDiff = async () => sec("src/a.ts", 2) + sec("pnpm-lock.yaml", 500) + sec("dist/app.min.js", 3);
+    const { run, context, review } = setup(answer, { githubDiff });
+    const result = await run(context);
+    const seen = review() as { diff: string; files: Array<{ path: string; additions: number }>; skipped: unknown };
+    expect(seen.diff).toContain("src/a.ts");
+    expect(seen.diff).not.toContain("pnpm-lock.yaml");
+    expect(seen.diff).not.toContain("app.min.js");
+    expect(seen.files).toEqual([{ path: "src/a.ts", additions: 2, deletions: 0 }]);
+    const skipped = [
+      { path: "pnpm-lock.yaml", lines: 504, reason: "lockfile" },
+      { path: "dist/app.min.js", lines: 7, reason: "generated" },
+    ];
+    expect(seen.skipped).toEqual(skipped);
+    expect(result.detail).toMatchObject({ skipped });
+  });
+
+  it("omits the skipped list when every file is read", async () => {
+    const { run, context, review } = setup(answer);
+    const result = await run(context);
+    expect(review()).not.toHaveProperty("skipped");
+    expect(result.detail).not.toHaveProperty("skipped");
+  });
+});

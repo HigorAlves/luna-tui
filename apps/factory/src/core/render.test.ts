@@ -415,6 +415,15 @@ describe("renderPrompt", () => {
     }
   });
 
+  it("lists the files the review left out, with their line counts, and says nothing when none was", () => {
+    const pr = { repo: "o/a", number: 12, url: "https://github.com/o/a/pull/12", title: "Export CSV", body: "Adds it.", author: "them", baseRef: "main", headRef: "feat/export" };
+    const review = { pr, diff: "diff --git a/a.ts b/a.ts\n+x", files: [{ path: "a.ts", additions: 1, deletions: 0 }], existingComments: [] };
+    const render = (r: typeof review & { skipped?: Array<{ path: string; lines: number; reason: string }> }) => renderPrompt({ pack: PACKS.reviewing, input: { ...input, pack: "reviewing", stage: "reviewing", context: { projectContext: null, review: r } }, template: "{{context.review}}" });
+    const text = render({ ...review, skipped: [{ path: "pnpm-lock.yaml", lines: 4200, reason: "lockfile" }, { path: "dist/app.min.js", lines: 12, reason: "generated" }] });
+    expect(text).toContain("Left out of this review (lockfiles, generated, vendored and snapshot files; nobody reads them):\n- pnpm-lock.yaml (4200 lines, lockfile)\n- dist/app.min.js (12 lines, generated)");
+    expect(render(review)).not.toContain("Left out of this review");
+  });
+
   it("renders the PR's diff and comments for reviewing, and each thread with its id for addressing", () => {
     const pr = { repo: "o/a", number: 12, url: "https://github.com/o/a/pull/12", title: "Export CSV", body: "Adds it.", author: "them", baseRef: "main", headRef: "feat/export" };
     const review = { pr, diff: "diff --git a/a.ts b/a.ts\n+x", files: [{ path: "a.ts", additions: 1, deletions: 0 }], existingComments: [{ path: "a.ts", line: 3, author: "x", body: "old note" }] };

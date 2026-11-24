@@ -60,6 +60,15 @@ const cardsText = (cards: NonNullable<StageInput["context"]["review"]>["cards"])
   return `Linked board cards:\n${cards.map(one).join("\n\n")}`;
 };
 
+/** The files the review set aside (lockfiles, generated, vendored, snapshots), each with its line count; capped, the rest counted. Nothing when none. */
+const LEFT_OUT_SHOWN = 40;
+const leftOutText = (skipped: NonNullable<StageInput["context"]["review"]>["skipped"]): string | null => {
+  if (!skipped || skipped.length === 0) return null;
+  const rows = skipped.slice(0, LEFT_OUT_SHOWN).map((f) => `- ${f.path} (${f.lines} lines, ${f.reason})`);
+  if (skipped.length > LEFT_OUT_SHOWN) rows.push(`- and ${skipped.length - LEFT_OUT_SHOWN} more`);
+  return `Left out of this review (lockfiles, generated, vendored and snapshot files; nobody reads them):\n${rows.join("\n")}`;
+};
+
 /** The PR, the Jira tickets it names, the board cards it is linked to, its files, the comments already on it and the diff, as reviewing reads them. */
 const reviewText = (review: StageInput["context"]["review"]): string => {
   if (!review) return NONE;
@@ -70,9 +79,10 @@ const reviewText = (review: StageInput["context"]["review"]): string => {
       ? review.existingComments.map((c) => `- ${c.path ?? "(general)"}${c.line !== null ? `:${c.line}` : ""} @${c.author}: ${c.body}`).join("\n")
       : "- (none)";
   const cards = cardsText(review.cards);
+  const left = leftOutText(review.skipped);
   const again = review.rereview;
   const heading = again && !again.note ? `Diff since ${again.since.slice(0, 7)}` : "Diff";
-  return `${prLine(review.pr)}\n\n${body}\n\n${ticketsText(review.tickets)}${cards ? `\n\n${cards}` : ""}\n\nFiles:\n${files}\n\nComments already on the PR:\n${comments}${again ? `\n\n${rereviewText(again)}` : ""}\n\n${heading}:\n\`\`\`diff\n${review.diff}\n\`\`\``;
+  return `${prLine(review.pr)}\n\n${body}\n\n${ticketsText(review.tickets)}${cards ? `\n\n${cards}` : ""}\n\nFiles:\n${files}${left ? `\n\n${left}` : ""}\n\nComments already on the PR:\n${comments}${again ? `\n\n${rereviewText(again)}` : ""}\n\n${heading}:\n\`\`\`diff\n${review.diff}\n\`\`\``;
 };
 
 /** A re-review's own section: what we read last time, the note when the whole diff is below, and each of our threads with the comments in it and what the settle decision made of it. */
