@@ -97,6 +97,18 @@ export class PgTaskStore implements TaskStore {
       .getOne();
   }
 
+  findOpenTasksBySource(repo: string, number: number, kind: "github" | "github_pr" = "github"): Promise<TaskRow[]> {
+    return this.db
+      .getRepository(TaskEntity)
+      .createQueryBuilder("task")
+      .where("task.source->>'repo' = :repo", { repo })
+      .andWhere("(task.source->>'number')::int = :number", { number })
+      .andWhere("task.source->>'kind' = :kind", { kind })
+      .andWhere("task.state not in ('closed', 'archived')")
+      .orderBy("task.created_at", "DESC")
+      .getMany();
+  }
+
   /** The latest task linked to the issue: by its `jira` column, as an intake import (`source.key`), or as a notch task's `jiraKey`. */
   findTaskByJiraKey(key: string): Promise<TaskRow | null> {
     return this.db

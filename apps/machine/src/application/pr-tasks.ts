@@ -40,7 +40,10 @@ export class PrBusyError extends Error {
 export interface PrTaskDeps {
   worktreesDir: string;
   pipeline: {
-    findBySource(repo: string, number: number, kind: "github_pr"): Promise<TaskRow | null>;
+    /** Every task of this PR that has not ended, of any route. */
+    findOpenBySource(repo: string, number: number, kind: "github_pr"): Promise<TaskRow[]>;
+    /** Loops a card waiting at `pr_watch` back to its route's first stage, with no quiet window. */
+    rewatch(id: string): Promise<TaskRow>;
     createTask(input: NewTask): Promise<TaskRow>;
     start(id: string): Promise<TaskRow>;
   };
@@ -75,8 +78,13 @@ export async function createPrTask(deps: PrTaskDeps, pr: PullRequest, action: Pr
   if (pr.localPath === null) throw new NoCheckoutError(pr.repo);
   if (action !== "review" && !canPush(pr)) throw new ForkError(pr.repo, pr.number);
   if (action === "review" && pr.mine) throw new OwnPrError(pr.repo, pr.number);
-  const running = await deps.pipeline.findBySource(pr.repo, pr.number, "github_pr");
-  if (running && !isTerminal(running.state)) throw new PrBusyError(pr.repo, pr.number, running.id);
+  const open = (await deps.pipeline.findOpenBySource(pr.repo, pr.number, "github_pr")).filter((t) => !isTerminal(t.state));
+  // A card of this route that is only watching the PR takes the key as "look again now": it loops back, no new task.
+  const watching = open.find((t) => t.state === "pr_watch" && t.route === action);
+  if (watching) return deps.pipeline.rewatch(watching.id);
+  // A card watching under another route runs nothing, so it does not block this one; anything running on the PR does.
+  const running = open.find((t) => t.state !== "pr_watch");
+  if (running) throw new PrBusyError(pr.repo, pr.number, running.id);
 
   const worktreePath = prWorktreePath(pr.localPath, deps.worktreesDir, pr.number, pr.headRef);
   await (deps.ensurePrClone ?? realEnsurePrClone)(pr.localPath, pr.headRef, worktreePath);

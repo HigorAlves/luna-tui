@@ -1097,6 +1097,26 @@ export class Pipeline {
     return this.store.findTaskBySource(repo, number, kind);
   }
 
+  /** Every task of this PR that has not ended, newest first: a PR may hold a watching card of one route and a running task of another. */
+  findOpenBySource(repo: string, number: number, kind: "github" | "github_pr" = "github_pr"): Promise<TaskRow[]> {
+    return this.store.findOpenTasksBySource(repo, number, kind);
+  }
+
+  /** The cards waiting at `pr_watch` for their PR to be merged or closed. */
+  async watching(): Promise<TaskRow[]> {
+    return this.store.findStuckTasks(new Set<TaskState>(["pr_watch"]));
+  }
+
+  /** The PR watch's word about a card at `pr_watch`: merged or closed ends it; `responded` (with the key of what it saw) loops it back to its route's first stage. */
+  async prWatch(id: string, what: "merged" | "closed" | "responded", key?: string): Promise<TaskRow> {
+    return this.dispatch(id, { type: "pr_watch", what, ...(key ? { key } : {}) }, { onlyFrom: new Set<TaskState>(["pr_watch"]) });
+  }
+
+  /** A person's key on a PR whose card of that route is watching it: the card loops back at once, with no quiet window. */
+  rewatch(id: string): Promise<TaskRow> {
+    return this.prWatch(id, "responded");
+  }
+
   /** Edits the ticket's text. Stages started after this see the new text. The source never
    *  changes (the same one again is no change), and the checkout only until a worktree or branch
    *  was made from it. */

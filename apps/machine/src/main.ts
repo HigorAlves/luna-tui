@@ -61,6 +61,7 @@ import { PgSlackStore } from "./adapters/persistence/slack-store.ts";
 import { SocketMode } from "./adapters/slack/socket-mode.ts";
 import { createSlack } from "./adapters/slack/web-api.ts";
 import { createPrTask } from "./application/pr-tasks.ts";
+import { PrWatch } from "./application/pr-watch.ts";
 import { prFollowUpRunner } from "./application/stages/pr-address.ts";
 import { postVerdictRunner } from "./application/stages/pr-review.ts";
 import { RepoMap } from "./application/repo-map.ts";
@@ -620,12 +621,25 @@ const pulls = new GitHubPulls({
   resolveRepo: (repo) => repoMap.resolve(repo),
   rememberRepo: (repo, path) => repoMap.remember(repo, path),
   findTask: async (repo, number) => {
-    const task = await pipeline.findBySource(repo, number, "github_pr");
+    // A task that runs shows first; a card only watching the PR (`pr_watch`) shows when nothing runs, so the row says what a key will do.
+    const open = (await pipeline.findOpenBySource(repo, number, "github_pr")).filter((t) => !isTerminal(t.state));
+    const task = open.find((t) => t.state !== "pr_watch") ?? open[0];
     const route = task ? PrAction.safeParse(task.route) : null;
-    return task && route?.success && !isTerminal(task.state) ? { id: task.id, state: task.state, route: route.data } : null;
+    return task && route?.success ? { id: task.id, state: task.state, route: route.data } : null;
   },
   publish: (snapshot) => bus.publish({ type: "github.prs", snapshot }),
   publishAll: (snapshot) => bus.publish({ type: "github.prs.all", snapshot }),
+});
+/** Cards at `pr_watch` wait for their PR's merge or close; this loop reads each PR on the poller's interval and moves the card. */
+const prWatch = new PrWatch({
+  github,
+  intervalMs: config.githubPrs.intervalMs,
+  watching: async () =>
+    (await pipeline.watching()).flatMap((task) =>
+      task.source?.kind === "github_pr" ? [{ id: task.id, route: task.route, repoPath: task.repoPath, source: { repo: task.source.repo, number: task.source.number }, since: task.stateSince ?? task.updatedAt, ...(task.retries.watchKey ? { watchKey: task.retries.watchKey } : {}) }] : [],
+    ),
+  send: (id, what, key) => pipeline.prWatch(id, what, key),
+  policy: async (repoPath) => (repoPath ? (await policies.for(repoPath)).factory.review : FACTORY_DEFAULTS.review),
 });
 const prTasks = {
   dispatch: (pr: PullRequest, action: PrAction) => createPrTask({ worktreesDir: config.worktreesDir, pipeline }, pr, action),
@@ -1090,6 +1104,7 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: config.hos
 if (config.githubPrs.enabled) {
   console.log(`github prs: polling every open PR involving you every ${config.githubPrs.intervalMs / 1000}s, every open PR in your repos every ${config.githubPrs.allIntervalMs / 1000}s`);
   pulls.start();
+  prWatch.start();
 }
 
 let socket: SocketMode | undefined;
@@ -1273,6 +1288,7 @@ async function shutdown(): Promise<void> {
   statusTicker?.stop();
   if (accessFirst) clearTimeout(accessFirst);
   pulls.stop();
+  prWatch.stop();
   slackInbox.stop();
   socket?.stop();
   if (digestTimer) clearTimeout(digestTimer);
