@@ -149,6 +149,25 @@ export function cacheVolumeFor(repoPath: string, trust: "trusted" | "untrusted" 
   return `hardness-cache-${slug}${trust === "untrusted" ? "-untrusted" : ""}`;
 }
 
+const cacheHandedOver = new Set<string>();
+
+/** A cache volume that an earlier run left owned by another uid (root, the image's `node`, a different host user: the stage user changes between `pnpm dev`, a bare compose and `pnpm start`) cannot be written by the stage user: pnpm fails with "Failed to write cafs ... Permission denied" and the card escalates as env_broken. Before the first run that mounts the volume, a short container with no network and only the capabilities `chown` needs hands it to the stage user. It runs once per volume and user for the life of the machine, never stops a run (an install that still cannot write says so itself), and touches nothing but the volume. A name instead of `uid:gid` is left alone. */
+export async function ensureCacheWritable(deps: Pick<RunDeps, "exec">, volume: string | undefined, user: string | undefined, image: string): Promise<void> {
+  if (!volume || !user || !/^\d+:\d+$/.test(user)) return;
+  const key = `${volume}\n${user}`;
+  if (cacheHandedOver.has(key)) return;
+  cacheHandedOver.add(key);
+  const uid = user.split(":")[0];
+  const script = `if find ${CACHE_DIR} ! -uid ${uid} -print -quit | grep -q .; then chown -R ${user} ${CACHE_DIR}; fi`;
+  const args = ["run", "--rm", "--label", `${CONTAINER_LABEL}=1`, "--network", "none", "--user", "0:0", "--read-only", "--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--cap-add", "CHOWN", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER", "--ipc", "private", "--pids-limit", "64", "-v", `${volume}:${CACHE_DIR}`, "--entrypoint", "sh", image, "-c", script];
+  try {
+    const result = await deps.exec("docker", args, { timeoutMs: 120_000 });
+    if (result.code !== 0) console.warn(`cache ${volume}: could not hand it to ${user}: ${(result.stderr || result.stdout).trim().slice(0, 200)}`);
+  } catch (error) {
+    console.warn(`cache ${volume}: could not hand it to ${user}: ${error instanceof Error ? error.message.slice(0, 200) : String(error)}`);
+  }
+}
+
 /** The cache mount and env, when a volume is named. */
 function cacheArgs(volume: string | undefined): string[] {
   if (!volume) return [];
@@ -329,6 +348,7 @@ export async function runSandbox(run: SandboxRun, given: Partial<RunDeps> = {}):
   if (!run.attach) {
     await deps.checkSeccomp();
     if (run.limits?.runtime) await deps.checkRuntime?.(run.limits.runtime);
+    await ensureCacheWritable(deps, run.cacheVolume, (run.user === undefined ? hostUser() : run.user) ?? undefined, run.image);
   }
   // The run's own card network, when it has a list: opened here and removed in `finally`, whatever the outcome. A card network
   // it is handed (the browser run's, the app's) is joined and left alone; a re-attached run's is found by name and removed at its end.
@@ -514,6 +534,7 @@ export async function execInSandbox(
   const deps: RunDeps = { ...HOST_DEPS, ...given };
   await deps.checkSeccomp();
   if (run.limits?.runtime) await deps.checkRuntime?.(run.limits.runtime);
+  await ensureCacheWritable(deps, run.cacheVolume, (run.user === undefined ? hostUser() : run.user) ?? undefined, run.image);
   const own = !run.cardNetwork && run.egress ? await deps.openCardNetwork(run.name, run.egress, { proxyImage: run.egress.proxyImage }) : null;
   const card = run.cardNetwork ?? own;
   const folder = run.secrets && Object.keys(run.secrets).length > 0 ? await makeSecretFolder(run.secrets).catch(async (error) => { await own?.teardown(); throw error; }) : null;
