@@ -3,7 +3,7 @@
 import { recordIdOf } from "../decision-truth.ts";
 import { type CheckContext, type DecisionOverrides, PACKS, type Verdict, applyPolicy } from "@hardness/contracts";
 
-export type CheckPack = "red_check" | "scope_check" | "escalation_reason" | "finding_classify" | "e2e_failure_cause" | "ci_failure_class" | "frame_privacy" | "loop_judge" | "finding_confirm";
+export type CheckPack = "red_check" | "scope_check" | "escalation_reason" | "finding_classify" | "e2e_failure_cause" | "ci_failure_class" | "frame_privacy" | "loop_judge" | "finding_confirm" | "thread_settle";
 
 /** What `Decide` runs: the decision packs on a check context, and the loop guard's redirect writer, an agent pack with no tools that reads the same context. */
 export type DecidePack = CheckPack | "loop_redirect";

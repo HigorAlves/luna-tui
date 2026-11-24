@@ -162,6 +162,8 @@ export const PackId = z.enum([
   "finding_classify",
   // Confirms a finding a review helper made that the main reviewer did not.
   "finding_confirm",
+  // Settles one of our own review threads on a re-review: did the new code fix it, does the author's reply hold.
+  "thread_settle",
   "e2e_failure_cause",
   // A decision on what kind of CI failure a red job is (a check context, run on demand): a real failure, a flake, an environment failure, a drift from the base.
   "ci_failure_class",
@@ -1105,7 +1107,7 @@ export type PlanContext = z.infer<typeof PlanContext>;
 
 /** What the checks (red_check, scope_check, finding_classify, e2e_failure_cause) judge: a red slice's failing output, the facts of a change's scope, a review finding, or a failed browser run. */
 export const CheckContext = z.object({
-  kind: z.enum(["red", "scope", "finding", "e2e", "escalation", "ci", "frames", "loop"]),
+  kind: z.enum(["red", "scope", "finding", "e2e", "escalation", "ci", "frames", "loop", "thread"]),
   /** loop: the guard's digest of a run's recent actions (counters, tool names, base names, error hashes: never file contents), the pack and how many calls it made; `cause` is what the judge found, for the redirect writer. All data. */
   loop: z.object({ digest: z.string().max(6000), pack: z.string().max(60), calls: z.number().int().nonnegative(), cause: z.string().max(40).optional() }).optional(),
   /** frames: the distinct on-screen texts of a film or its screenshots, flattened and capped by the machine (40 texts of 1000 characters): data for frame_privacy. */
@@ -1146,6 +1148,18 @@ export const CheckContext = z.object({
   switchedOff: z.array(z.string()).optional(),
   weakened: z.array(z.string()).optional(),
   diffSummary: z.string().optional(),
+  /** thread: one of our review threads on a re-review. `comments` are the thread in order (`ours` marks our own); the author's text is data. `original` is the code at the line the thread was made on, `current` the code at the line now, `delta` the hunks the PR gained for that path since our review. */
+  thread: z
+    .object({
+      path: z.string().nullable(),
+      line: z.number().int().nullable(),
+      originalLine: z.number().int().nullable().optional(),
+      comments: z.array(z.object({ author: z.string(), ours: z.boolean(), body: z.string() })),
+      original: z.string(),
+      current: z.string(),
+      delta: z.string(),
+    })
+    .optional(),
   /** finding: the finding to classify, and the file around its line as the machine read it. */
   finding: Finding.optional(),
   excerpt: z.string().optional(),
