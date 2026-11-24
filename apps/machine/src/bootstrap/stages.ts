@@ -55,7 +55,7 @@ import { PACKAGE_MANAGER_CONFIG, configFilesChanged } from "../application/insta
 import { InstallFailedError, type InstallInput, type InstallOutcome, ensureInstalled } from "../application/install.ts";
 import { checkGit } from "../adapters/git/helper.ts";
 import { removeNestedRepositories } from "../adapters/git/machine-repo.ts";
-import { ensureClone, isClone, removeClone } from "../adapters/git/clone.ts";
+import { ensureClone, inUseClones, isClone, removeClone } from "../adapters/git/clone.ts";
 import { type ProofRig, proofAppDeps } from "../application/config-proof.ts";
 import type { DesignBudget } from "../domain/design-budget.ts";
 import type { Waiver } from "../domain/design-parity.ts";
@@ -657,9 +657,31 @@ export async function buildRealStages(
     reviewing: prReviewRunner({
       github,
       compliance,
-      // The security, migration, infrastructure and second-opinion passes: sub-runs of their own packs, one at a time (they share the workspace); finding_confirm is bound late like Verify's decisions.
+      // The security, migration, infrastructure and second-opinion passes: sub-runs of their own packs, all at once beside the main review. Each reads a read-only clone of its own (made like the proof rig's, at the repo's start point, so the main reviewer's workspace is never touched); finding_confirm is bound late like Verify's decisions.
       helpers: {
-        run: (subContext, pack, review) => runAgent(deps, subContext, pack, { review }),
+        workspace: {
+          make: async (subContext, pack) => {
+            const repoPath = subContext.task.repoPath;
+            if (!repoPath) throw new Error("the task has no repository");
+            const path = join(config.worktreesDir, basename(repoPath), `${subContext.runId}.review`);
+            const branch = `luna-review/${pack}`;
+            removeClone(path);
+            inUseClones.add(path);
+            try {
+              await ensureClone(repoPath, { path, branch });
+            } catch (error) {
+              inUseClones.delete(path);
+              removeClone(path);
+              throw error;
+            }
+            return { path, branch };
+          },
+          remove: (workspace) => {
+            removeClone(workspace.path);
+            inUseClones.delete(workspace.path);
+          },
+        },
+        run: (subContext, pack, review, workspace) => runAgent(deps, subContext, pack, { review, ...(workspace ? { workspace } : {}) }),
         get decide() {
           return verifyDecisions?.decide ?? null;
         },

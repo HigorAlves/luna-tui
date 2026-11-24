@@ -61,8 +61,8 @@ describe("runHelpers", () => {
     expect(out.helpers[3]!.findings).toHaveLength(1);
   });
 
-  it("runs at most `concurrency` passes at once: one by default, because the passes share a workspace", async () => {
-    for (const [concurrency, expected] of [[undefined, 1], [4, 4]] as const) {
+  it("starts every pass before any finishes by default, and runs at most `concurrency` at once when told", async () => {
+    for (const [concurrency, expected] of [[undefined, 4], [1, 1], [2, 2]] as const) {
       let live = 0;
       let peak = 0;
       await runHelpers(
@@ -81,6 +81,54 @@ describe("runHelpers", () => {
       );
       expect(peak).toBe(expected);
     }
+  });
+
+  it("proves the passes overlap with a deferred fake: all four have started while none has finished", async () => {
+    const started: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const running = runHelpers({ run: async (_c, pack) => (started.push(pack), await gate, pass([])) }, context, review);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(started).toEqual([...REVIEW_HELPER_PACKS]);
+    release();
+    expect((await running).helpers.every((h) => h.outcome === "ok")).toBe(true);
+  });
+
+  it("gives each pass a workspace of its own, hands it to the run, and removes every one, after a success and after a failure", async () => {
+    const made: string[] = [];
+    const removed: string[] = [];
+    const given: Array<[string, string | undefined]> = [];
+    const out = await runHelpers(
+      {
+        workspace: { make: async (ctx, pack) => (made.push(ctx.runId), { path: `/w/${ctx.runId}.review`, branch: `luna-review/${pack}` }), remove: (w) => void removed.push(w.path) },
+        run: async (_c, pack, _r, workspace) => {
+          given.push([pack, workspace?.path]);
+          if (pack === "review_iac") throw new Error("container did not start");
+          return pass([]);
+        },
+      },
+      context,
+      review,
+    );
+    expect(new Set(made).size).toBe(4);
+    expect(given).toEqual(REVIEW_HELPER_PACKS.map((p) => [p, `/w/r1-${p}.review`]));
+    expect([...removed].sort()).toEqual(REVIEW_HELPER_PACKS.map((p) => `/w/r1-${p}.review`).sort());
+    expect(out.helpers.find((h) => h.pack === "review_iac")!.outcome).toBe("failed");
+  });
+
+  it("turns a workspace that cannot be made into a note for that pass alone, and never runs it", async () => {
+    const ran: string[] = [];
+    const out = await runHelpers(
+      {
+        workspace: { make: async (_c, pack) => { if (pack === "review_migration") throw new Error("clone failed"); return { path: `/w/${pack}`, branch: "b" }; }, remove: () => {} },
+        run: async (_c, pack) => (ran.push(pack), pass([])),
+      },
+      context,
+      review,
+    );
+    expect(ran).toEqual(["review_security", "review_iac", "review_second"]);
+    expect(out.notes).toEqual([expect.stringContaining("review_migration did not run: clone failed")]);
+    expect(out.helpers.filter((h) => h.outcome === "ok")).toHaveLength(3);
   });
 });
 

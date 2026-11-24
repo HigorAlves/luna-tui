@@ -8,10 +8,18 @@ import type { StageContext, StageResult } from "../ports.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
 import { addUsage } from "./usage.ts";
 
+/** A workspace of a pass's own: a read-only clone made before its run and removed after, so passes never share a folder. */
+export interface PassWorkspace {
+  path: string;
+  branch: string;
+}
+
 export interface HelperDeps {
-  /** Runs one pass's pack as a sub-run beside the stage's own pack. */
-  run: (context: StageContext, pack: ReviewHelperPack, review: ReviewContext) => Promise<StageResult>;
-  /** How many passes run at once. One by default: the passes share the task's workspace folder, which each run prepares before its container starts. */
+  /** Runs one pass's pack as a sub-run beside the stage's own pack, in the workspace made for it when `workspace` is given. */
+  run: (context: StageContext, pack: ReviewHelperPack, review: ReviewContext, workspace?: PassWorkspace) => Promise<StageResult>;
+  /** Makes and removes each pass's own workspace. A pass whose workspace cannot be made becomes a note; the others go on. Absent, passes run without one (and must not run at once). */
+  workspace?: { make: (context: StageContext, pack: ReviewHelperPack) => Promise<PassWorkspace>; remove: (workspace: PassWorkspace) => void | Promise<void> };
+  /** How many passes run at once: all four by default. */
   concurrency?: number;
 }
 
@@ -35,14 +43,22 @@ const messageOf = (error: unknown): string => (error instanceof Error ? error.me
 
 /** Runs every review pass on `review`; never throws. The passes come back in the order of `REVIEW_HELPER_PACKS`. */
 export async function runHelpers(deps: HelperDeps, context: StageContext, review: ReviewContext): Promise<HelpersOutcome> {
-  const limit = Math.max(1, deps.concurrency ?? 1);
+  const limit = Math.max(1, deps.concurrency ?? REVIEW_HELPER_PACKS.length);
   const results: PromiseSettledResult<StageResult>[] = new Array(REVIEW_HELPER_PACKS.length);
   let next = 0;
   const worker = async (): Promise<void> => {
     for (let i = next++; i < REVIEW_HELPER_PACKS.length; i = next++) {
       const pack = REVIEW_HELPER_PACKS[i]!;
-      const [settled] = await Promise.allSettled([deps.run({ ...context, runId: `${context.runId}-${pack}`, started: undefined, resume: undefined, engine: undefined }, pack, review)]);
-      results[i] = settled!;
+      const sub: StageContext = { ...context, runId: `${context.runId}-${pack}`, started: undefined, resume: undefined, engine: undefined };
+      let made: PassWorkspace | undefined;
+      try {
+        if (deps.workspace) made = await deps.workspace.make(sub, pack);
+        results[i] = { status: "fulfilled", value: await deps.run(sub, pack, review, made) };
+      } catch (error) {
+        results[i] = { status: "rejected", reason: error };
+      } finally {
+        if (made) await Promise.resolve(deps.workspace!.remove(made)).catch(() => {});
+      }
     }
   };
   await Promise.all(Array.from({ length: Math.min(limit, REVIEW_HELPER_PACKS.length) }, worker));

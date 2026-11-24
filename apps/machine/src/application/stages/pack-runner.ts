@@ -180,7 +180,7 @@ const HELPER_BRANCH = /^luna-helper-\d{1,6}$/;
 const BROWSER_PACKS: ReadonlySet<PackId> = new Set<PackId>(["e2e", "a11y_audit"]);
 
 export interface AgentExtra {
-  /** ui_design (RFC 0013, phase 5): the helper's own workspace, made by the machine at the card's tip. Used instead of the task's; never persisted to it. */
+  /** ui_design (RFC 0013, phase 5): the helper's own workspace, made by the machine at the card's tip. Used instead of the task's; never persisted to it. A read-only pack (a review pass) may take one too; a writable pack other than ui_design is refused one. */
   workspace?: { path: string; branch: string };
   /** ui_design: the slice it builds, the implementer's message, the base it starts from and the files each side owns. */
   helper?: StageInput["context"]["helper"];
@@ -417,8 +417,13 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const owned = await ownedWorkspace(task, task.repoPath, deps.worktreesDir, policy.jira?.branch);
   // The ui-designer works in a workspace of its own, made by the machine; the task's is not its own and is never written.
   const helperRun = pack === "ui_design" && extra.workspace !== undefined && extra.helper !== undefined && !extra.checkout;
-  const persisted = Boolean(task.branch && task.worktreePath) && !extra.checkout && !helperRun;
-  const workspace: Workspace = helperRun ? { ...extra.workspace! } : extra.checkout ? { branch: "", path: task.repoPath } : persisted ? { branch: task.branch!, path: task.worktreePath! } : owned;
+  // A read-only sub-run (a review pass) may bring a workspace of its own, made and removed by its caller: it is never the task's, so it never touches task.worktreePath, imports nothing and records no workspace on the result.
+  if (extra.workspace !== undefined && !extra.checkout && !helperRun && PACKS[pack].writable) {
+    return { outcome: "fail", detail: { error: `refusing to run ${pack} in a workspace the caller made: only a read-only pack, or the ui-designer helper, takes one` } };
+  }
+  const isolated = extra.workspace !== undefined && !extra.checkout && !helperRun;
+  const persisted = Boolean(task.branch && task.worktreePath) && !extra.checkout && !helperRun && !isolated;
+  const workspace: Workspace = helperRun || isolated ? { ...extra.workspace! } : extra.checkout ? { branch: "", path: task.repoPath } : persisted ? { branch: task.branch!, path: task.worktreePath! } : owned;
   // The branch is a structural gate: whatever a task row says, a writable stage only ever
   // commits to a branch the pipeline owns: a `task/` branch, the one it named for a linked
   // task (the branch it persisted carries the issue key or the task id, never a protected
@@ -443,13 +448,13 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   // A card still on a linked worktree moves to a workspace of its own before its next run: branch and commits kept, uncommitted work carried over.
   if (!extra.checkout && persisted && !isClone(workspace.path)) await moveToClone(task.repoPath, workspace);
   let stackedOn: { branch: string } | undefined;
-  if (!extra.checkout && !helperRun && deps.baseFor && !isClone(workspace.path)) {
+  if (!extra.checkout && !helperRun && !isolated && deps.baseFor && !isClone(workspace.path)) {
     const answer = await deps.baseFor(task);
     if (answer?.state === "gone") return { outcome: "fail", detail: { error: answer.reason } };
     if (answer?.state === "open") stackedOn = { branch: answer.branch };
     else if (answer?.state === "merged") await deps.clearBase?.(task.id);
   }
-  if (!extra.checkout && !helperRun) {
+  if (!extra.checkout && !helperRun && !isolated) {
     try {
       await ensureClone(task.repoPath, workspace, stackedOn);
     } catch (error) {
@@ -627,7 +632,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   };
   const identity = limits.writable ? await guard(() => gitIdentity(task.repoPath!)) : null;
   // What the run commits comes back as bundles in /out/bundles, read like a fetch from an untrusted server: the host never reads the agent's own repository.
-  const importer = extra.checkout
+  const importer = extra.checkout || isolated
     ? null
     : bundleImporter({
         path: workspace.path,
@@ -956,7 +961,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     outcome: "fail",
     ...(engineEvents.length ? { events: engineEvents } : {}),
     // A checkout run has no workspace of the task's own to record.
-    ...(extra.checkout || helperRun ? {} : { workspace: { branch: workspace.branch, worktreePath: workspace.path } }),
+    ...(extra.checkout || helperRun || isolated ? {} : { workspace: { branch: workspace.branch, worktreePath: workspace.path } }),
     run: { containerId: container, transcriptPath: sandbox.transcriptPath, inputCommit },
   };
   // However this run ends without a clean, committed answer, the next attempt should not

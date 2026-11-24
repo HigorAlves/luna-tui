@@ -342,11 +342,11 @@ export const hostBaselineWorkspace = {
 
 /**
  * What a crash can leave and nothing else removes, cleared at boot: the scratch folders beside the work folders (`<folder>.scratch`, where an
- * agent's repository is made), a ui-designer helper's clones (`<folder>.helper-<slice>-<attempt>`) and the copies of bundles the host was reading (`<state>/repos/in`). Answers what it removed.
+ * agent's repository is made), a ui-designer helper's clones (`<folder>.helper-<slice>-<attempt>`), a review pass's (`<run>.review`) and the copies of bundles the host was reading (`<state>/repos/in`). Answers what it removed.
  */
 export async function removeLeftovers(workspacesDir: string): Promise<string[]> {
   const removed: string[] = [];
-  const HELPER_CLONE = /\.helper-\d+-\d+$/;
+  const HELPER_CLONE = /\.(helper-\d+-\d+|review)$/;
   const drop = (path: string) => {
     rmSync(path, { recursive: true, force: true });
     removed.push(path);

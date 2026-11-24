@@ -2161,6 +2161,28 @@ describe("the ui-designer's own run (RFC 0013, phase 5)", () => {
       expect(input().effort).toBeUndefined();
     });
   });
+
+  it("runs a read-only review pass in a workspace of its own: the card's folder and repository are never touched, nothing is recorded on the task, and a writable pack is refused one", async () => {
+    const { cardPath } = await made();
+    const sentinel = join(cardPath, "sentinel");
+    writeFileSync(sentinel, "mine");
+    const before = existsSync(join(cardPath, ".git"));
+    const ws = { path: `${cardPath}.review`, branch: "luna-review/pass-1" };
+    await ensureClone(repo, ws);
+    const review = { pr: { repo: "o/a", number: 1, url: "u", title: "t", body: null, author: "a", baseRef: "main", headRef: "h" }, diff: "d", files: [], existingComments: [] } as never;
+    const result = await runAgent(deps(box()), context("reviewing"), "review_security", { workspace: ws, review });
+    expect(result.outcome).toBe("pass");
+    expect(seen!.worktree).toBe(ws.path);
+    expect(result.workspace).toBeUndefined();
+    expect(readFileSync(sentinel, "utf8")).toBe("mine");
+    expect(existsSync(join(cardPath, ".git"))).toBe(before);
+    expect(existsSync(join(ws.path, ".git"))).toBe(true);
+    expect(input().pack).toBe("review_security");
+    expect(input().context.review).toEqual(review);
+    const refused = await runAgent(deps(box()), context("implementing"), "implementing", { workspace: ws });
+    expect(refused.outcome).toBe("fail");
+    expect(JSON.stringify(refused.detail)).toContain("refusing to run implementing in a workspace the caller made");
+  });
 });
 
 describe("the implementer's side of the ui-designer (RFC 0013, phase 5)", () => {

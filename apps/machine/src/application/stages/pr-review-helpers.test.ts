@@ -103,4 +103,27 @@ describe("reviewing with the review passes", () => {
     expect(result.findings).toHaveLength(20);
     expect(posted(result).comments).toHaveLength(15);
   });
+
+  it("starts the passes with the main review, not after it, and waits for them even when the main review does not pass", async () => {
+    const github = fakeGitHub({ prFacts: async () => node as never, prDiff: async () => "diff --git a/a.ts b/a.ts\n+x\n", prFiles: async () => [], prComments: async () => [] });
+    const events: string[] = [];
+    let finishMain!: () => void;
+    const mainGate = new Promise<void>((r) => (finishMain = r));
+    const run = prReviewRunner({
+      github,
+      runPack: async () => (events.push("main started"), await mainGate, events.push("main done"), { outcome: "fail", detail: { error: "main failed" } }),
+      helpers: {
+        decide: null,
+        run: async (_c, pack) => (events.push(`${pack} started`), await new Promise((r) => setTimeout(r, 10)), events.push(`${pack} done`), { outcome: "pass", detail: { answer: { summary: "s", findings: [] } } }),
+      },
+    });
+    const result = run(context);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(events.filter((e) => e.endsWith("started")).length).toBe(5);
+    expect(events).not.toContain("main done");
+    finishMain();
+    const out = await result;
+    expect(out.outcome).toBe("fail");
+    expect(events.filter((e) => e.endsWith("done")).length).toBe(5);
+  });
 });

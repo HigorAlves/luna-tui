@@ -142,18 +142,21 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       return { outcome: "fail", detail: { error: messageOf(error) } };
     }
 
-    const pack = await deps.runPack(context, review);
+    // The review passes start with the main review, each in a workspace of its own (they never share the reviewer's folder); runHelpers never throws.
+    const helpersRun = deps.helpers ? runHelpers(deps.helpers, context, review) : null;
+    const [mainRun, helpersDone] = await Promise.allSettled([deps.runPack(context, review), helpersRun]);
+    if (mainRun.status === "rejected") throw mainRun.reason;
+    const pack = mainRun.value;
     if (pack.outcome !== "pass") return pack;
     const parsed = PrReviewAnswer.safeParse(pack.detail?.answer);
     if (!parsed.success) {
       return { ...pack, outcome: "fail", detail: { ...pack.detail, error: `the review answer does not parse: ${parsed.error.message}` } };
     }
-    // The review passes read the same diff after the reviewer (they share its workspace, so one at a time); what only a pass found is checked once more before it joins.
+    // What only a pass found is checked once more before it joins.
     const worktree = pack.workspace?.worktreePath ?? context.task.worktreePath ?? null;
-    let helpers: HelpersOutcome | null = null;
+    const helpers: HelpersOutcome | null = helpersDone.status === "fulfilled" ? helpersDone.value : null;
     let confirmed: Awaited<ReturnType<typeof confirmHelperFindings>> | null = null;
-    if (deps.helpers) {
-      helpers = await runHelpers(deps.helpers, context, review);
+    if (deps.helpers && helpers) {
       const overrides = (await deps.helpers.decisions?.(context.task.repoPath ?? null).catch(() => ({}))) ?? {};
       const excerpt = async (finding: Finding): Promise<string> => (worktree ? await excerptOf(worktree, finding).catch(() => "") : "") || diffExcerptOf(review.diff, finding);
       confirmed = await confirmHelperFindings({ decide: deps.helpers.decide, repoPath: context.task.repoPath ?? null, decisions: overrides, excerpt, log: (line) => console.warn(`review: ${line}`) }, helpers.helpers, parsed.data.findings);
