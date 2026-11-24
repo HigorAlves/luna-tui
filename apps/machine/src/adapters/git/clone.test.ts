@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { bringBack, copiedSettings, hostBaselineWorkspace, inUseClones, removeLeftovers, ensureClone, ensurePrClone, freshClone, isClone, isFreshWorkspace, moveToClone, publishBranch, readCopy, removeClone, unpushedCommits } from "./clone.ts";
+import { bringBack, copiedSettings, hostBaselineWorkspace, inUseClones, removeLeftovers, ensureClone, ensurePrClone, freshClone, isClone, isFreshWorkspace, moveToClone, publishBranch, readCopy, removeClone, reviewClone, unpushedCommits } from "./clone.ts";
 import { configureMachineRepos, machineGitDir, machineRepoRoot } from "./machine-repo.ts";
 import { branchBase, changedPaths, commitAll, ensureWorktree, nestedLockfilesAt, removeWorktree, scopeStartOf, workspaceFor } from "./worktree.ts";
 
@@ -197,6 +197,32 @@ describe("a PR task's workspace", () => {
   it("refuses a head ref shaped like an option", async () => {
     const { repo, dir } = repository("pr-");
     await expect(ensurePrClone(repo, "--upload-pack=x", join(dir, "p"))).rejects.toThrow(/branch/);
+  });
+
+  it("gives a review pass a clone of its own at the PR's head, not the default branch, and leaves the card's alone", async () => {
+    const { repo, dir } = withRemote("pr-review-");
+    git(repo, "checkout", "-q", "-b", "feat/pr");
+    writeFileSync(join(repo, "pr.txt"), "pr\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "pr");
+    git(repo, "push", "-q", "origin", "feat/pr");
+    const head = git(repo, "rev-parse", "HEAD");
+    git(repo, "checkout", "-q", "main");
+    const card = join(dir, "pr-clone");
+    await ensurePrClone(repo, "feat/pr", card);
+    const pass = join(dir, "pass.review");
+    await reviewClone(card, pass, "luna-review/review_security");
+    expect(wgit(pass, "rev-parse", "HEAD")).toBe(head);
+    expect(existsSync(join(pass, "pr.txt"))).toBe(true);
+    expect(wgit(card, "rev-parse", "--abbrev-ref", "HEAD")).toBe("feat/pr");
+    expect(wgit(card, "rev-parse", "HEAD")).toBe(head);
+    removeClone(pass);
+    expect(existsSync(pass)).toBe(false);
+  });
+
+  it("refuses a review clone of a card that has no workspace yet", async () => {
+    const { dir } = repository("pr-review-none-");
+    await expect(reviewClone(join(dir, "missing"), join(dir, "p.review"), "luna-review/x")).rejects.toThrow(/workspace/);
   });
 });
 
