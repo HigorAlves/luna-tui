@@ -9,6 +9,7 @@ import { diffExcerptOf } from "./diff-section.ts";
 import { type ComplianceDeps, runCompliance } from "./compliance-review.ts";
 import { type RereviewDeps, type RereviewPlan, prepareRereview, settledReply } from "./rereview.ts";
 import { type HelperDeps, type HelpersOutcome, confirmHelperFindings, runHelpers } from "./review-helpers.ts";
+import { followUp } from "./thread-followup.ts";
 import { addUsage } from "./usage.ts";
 import { excerptOf } from "./verify.ts";
 import { type GitHub, type ReviewPost, messageOf } from "../github.ts";
@@ -292,6 +293,17 @@ export function postVerdictRunner(deps: { github: GitHub }): StageRunner {
     } catch (error) {
       return { outcome: "fail", detail: { error: messageOf(error) } };
     }
-    return { outcome: "pass", detail: { posted: event, prUrl: pr.url } };
+    // A re-review also answers our own threads, after the review: a reply each, and a resolve where the gate says so.
+    const replies = Array.isArray(post.payload.threadReplies)
+      ? (post.payload.threadReplies as Array<Record<string, unknown>>).flatMap((r) => (typeof r.threadId === "string" && typeof r.body === "string" && r.body !== "" ? [{ threadId: r.threadId, body: r.body, resolve: r.resolve === true }] : []))
+      : [];
+    if (replies.length === 0) return { outcome: "pass", detail: { posted: event, prUrl: pr.url } };
+    const followed = await followUp(deps.github, replies);
+    const threads = { replied: followed.replied, resolved: followed.resolved, skipped: followed.skipped };
+    if (!followed.ok) {
+      const did = `${followed.replied} ${followed.replied === 1 ? "reply" : "replies"} posted, ${followed.resolved} ${followed.resolved === 1 ? "thread" : "threads"} resolved`;
+      return { outcome: "fail", detail: { error: `the review was posted (${event}), but the thread replies stopped: ${followed.error} (${did} before it)`, posted: event, prUrl: pr.url, threads } };
+    }
+    return { outcome: "pass", detail: { posted: event, prUrl: pr.url, threads } };
   };
 }
