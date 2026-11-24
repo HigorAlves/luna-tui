@@ -5,7 +5,8 @@ import { inert, proposalsSection } from "./retro-text.ts";
 import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { isClone, unpushedCommits } from "../adapters/git/clone.ts";
+import { isClone } from "../adapters/git/clone.ts";
+import { worktreeKeepReason } from "./worktree-release.ts";
 import { at } from "../adapters/git/machine-repo.ts";
 import { HOST_GIT, defaultBranch as hostDefaultBranch, isBranchName, originSlugOf, removeWorktree } from "../adapters/git/worktree.ts";
 import type { ExecResult } from "../adapters/process/exec.ts";
@@ -30,8 +31,8 @@ export interface CloseReport {
 
 export interface CloseDeps {
   exec: (command: string, args: string[], options?: { cwd?: string }) => Promise<ExecResult>;
-  /** Remove the worktree on close. Off by default: the board's `w` removes it on demand. */
-  worktreeRemove: boolean;
+  /** Remove the worktree on close. On unless `false`: a card that ends frees its folder; the board's `w` removes it on demand. */
+  worktreeRemove?: boolean;
   watcher?: { close(taskId: string): Promise<void> };
   /** Opens the draft PR the rules of a merged task go in. */
   github?: Pick<GitHub, "openPr">;
@@ -45,6 +46,8 @@ export interface CloseTarget {
   id: string;
   repoPath: string | null;
   worktreePath: string | null;
+  /** The id of another open card that holds the same folder: the workspace stays for it. */
+  sharedWith?: string;
   /** The task's own branch, for the pending facts of a close that is not a merge. */
   branch?: string | null;
   /** The memory review's proposal; `apply` is false when the approval said to skip it. */
@@ -179,11 +182,10 @@ export async function closeTask(task: CloseTarget, deps: CloseDeps): Promise<Clo
 
   const worktree = await attempt("worktree", async () => {
     if (!task.worktreePath || !task.repoPath) return "skipped: the task has no worktree";
-    // A merged card has nothing left in its workspace to keep (the unpushed-commits guard below still holds); any other close leaves it for the board's `w`.
-    if (!deps.worktreeRemove && !task.merged) return "kept: remove it from the board with w";
+    if (deps.worktreeRemove === false && !task.merged) return "kept: remove it from the board with w";
+    const reason = await worktreeKeepReason(task.repoPath, task.worktreePath, task.sharedWith);
+    if (reason) return `kept: ${reason}`;
     if (isClone(task.worktreePath)) {
-      const unpushed = await unpushedCommits(task.worktreePath);
-      if (unpushed.length > 0) return `kept: the clone holds ${unpushed.length} unpushed commit(s); push them, or remove it from the board`;
       await removeWorktree(task.repoPath, task.worktreePath);
       worktreeRemoved = true;
       return "workspace removed";

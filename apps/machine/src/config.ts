@@ -264,7 +264,7 @@ export const DEFAULT_DATABASE_URL = "postgres://hardness:hardness@127.0.0.1:5433
 export const DEFAULT_PORT = 4317;
 export const DEFAULT_MAX_CONCURRENT_TASKS = 4;
 export const DEFAULT_RETENTION_DAYS = 90;
-export const DEFAULT_WORKTREE_RETENTION_DAYS = 7;
+export const DEFAULT_WORKTREE_RETENTION_DAYS = 1;
 
 /** The API token's file in `~/.config/hardness`, read by the board too. */
 export const API_TOKEN_FILE = "machine-api-token";

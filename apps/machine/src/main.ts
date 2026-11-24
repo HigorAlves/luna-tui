@@ -576,7 +576,7 @@ pipeline = new Pipeline(db, runnerFor, {
   maxPerStage: config.maxPerStage,
   budget: { taskUsd: config.taskBudgetUsd, dailyUsd: config.dailyBudgetUsd },
   restartPolicy: config.restartPolicy,
-  closeDeps: { exec, worktreeRemove: false, watcher, github },
+  closeDeps: { exec, worktreeRemove: true, watcher, github },
   sweepRunSecrets: (keep) => sweepRunSecrets(config.stateDir, keep),
   removeRunNetwork: (container) => removeRunNetwork(container),
   // A merged card's retro: the truth file, and the graph misses its Build Report also declared (never written into prompts or rules).

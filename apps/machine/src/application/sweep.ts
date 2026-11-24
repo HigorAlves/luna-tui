@@ -8,8 +8,8 @@ import type { DataSource } from "typeorm";
 
 import { isClone } from "../adapters/git/clone.ts";
 import { HOST_GIT, removeWorktree } from "../adapters/git/worktree.ts";
-import { TaskEntity } from "../adapters/persistence/schemas.ts";
 import { type ExecResult, exec } from "../adapters/process/exec.ts";
+import { worktreeKeepReason } from "./worktree-release.ts";
 import { JIRA_INTAKE_DIR } from "./stages/jira-intake-runner.ts";
 import { SLACK_TRIAGE_DIR } from "./stages/slack-triage-runner.ts";
 
@@ -18,29 +18,41 @@ export interface WorktreeSweep {
   branches: number;
 }
 
-/** Removes the worktree of every task closed more than `days` ago, deletes its branch when
- *  merged (`git branch -d` refuses otherwise, and that is the point), and clears the path on
- *  the row. 0 disables it. */
+/** Removes the worktree of every task closed more than `days` ago (the close step already took
+ *  most of them: this is the backstop), deletes its branch when merged (`git branch -d` refuses
+ *  otherwise, and that is the point), and clears the path on every ended row that held it. A folder
+ *  an open task still uses, one that is the repository itself, and a clone with unpushed commits stay.
+ *  0 disables it. */
 export async function sweepWorktrees(db: DataSource, days: number): Promise<WorktreeSweep> {
   const result = { worktrees: 0, branches: 0 };
   if (days <= 0) return result;
   const rows: { id: string; repo_path: string; worktree_path: string; branch: string | null }[] = await db.query(
-    `select id, repo_path, worktree_path, branch from tasks
-      where state in ('closed', 'archived') and worktree_path is not null and repo_path is not null
-        and updated_at < now() - make_interval(days => $1)`,
+    `select t.id, t.repo_path, t.worktree_path, t.branch from tasks t
+      where t.state in ('closed', 'archived') and t.worktree_path is not null and t.repo_path is not null
+        and t.updated_at < now() - make_interval(days => $1)
+        and not exists (select 1 from tasks o where o.worktree_path = t.worktree_path and o.id <> t.id and o.state not in ('closed', 'archived'))`,
     [days],
   );
   const repos = new Set<string>();
+  const done = new Set<string>();
   for (const row of rows) {
-    // A card's clone is a folder of its own; only a linked worktree is registered with the repository.
-    const clone = isClone(row.worktree_path);
-    if (clone) await removeWorktree(row.repo_path, row.worktree_path);
-    const removed = clone ? { code: 0 } : await exec("git", [...HOST_GIT, "-C", row.repo_path, "worktree", "remove", "--force", row.worktree_path]);
-    // Already gone from disk: prune the registration, the row still needs clearing.
-    if (removed.code !== 0) await exec("git", [...HOST_GIT, "-C", row.repo_path, "worktree", "prune"]);
-    await db.getRepository(TaskEntity).update({ id: row.id }, { worktreePath: null });
-    result.worktrees++;
-    repos.add(row.repo_path);
+    if (!done.has(row.worktree_path)) {
+      const reason = await worktreeKeepReason(row.repo_path, row.worktree_path);
+      if (reason) {
+        console.warn(`sweep: keeping the workspace of ${row.id}: ${reason}`);
+        continue;
+      }
+      // A card's clone is a folder of its own; only a linked worktree is registered with the repository.
+      const clone = isClone(row.worktree_path);
+      if (clone) await removeWorktree(row.repo_path, row.worktree_path);
+      const removed = clone ? { code: 0 } : await exec("git", [...HOST_GIT, "-C", row.repo_path, "worktree", "remove", "--force", row.worktree_path]);
+      // Already gone from disk: prune the registration, the row still needs clearing.
+      if (removed.code !== 0) await exec("git", [...HOST_GIT, "-C", row.repo_path, "worktree", "prune"]);
+      done.add(row.worktree_path);
+      result.worktrees++;
+      repos.add(row.repo_path);
+    }
+    await db.query(`update tasks set worktree_path = null where worktree_path = $1 and state in ('closed', 'archived')`, [row.worktree_path]);
     if (row.branch && (await exec("git", [...HOST_GIT, "-C", row.repo_path, "branch", "-d", row.branch])).code === 0) {
       result.branches++;
     }
