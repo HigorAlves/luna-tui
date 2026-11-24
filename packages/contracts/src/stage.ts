@@ -367,8 +367,14 @@ export const ThreadsContext = z.object({
       id: z.string(),
       path: z.string().nullable(),
       line: z.number().int().nullable(),
-      /** `association` is GitHub's author association of the comment (OWNER, MEMBER, COLLABORATOR, NONE, ...); absent reads as not trusted. */
-      comments: z.array(z.object({ author: z.string(), body: z.string(), at: z.string(), association: z.string().nullable().optional() })),
+      /** Whether the thread is resolved (only a read with resolved threads included shows true), and whether its code has moved on since the comment. */
+      resolved: z.boolean().optional(),
+      outdated: z.boolean().optional(),
+      /** The line and commit the first comment was made on; `line` is null once the code has moved. */
+      originalLine: z.number().int().nullable().optional(),
+      originalCommit: z.string().nullable().optional(),
+      /** `association` is GitHub's author association of the comment (OWNER, MEMBER, COLLABORATOR, NONE, ...); absent reads as not trusted. `id` is the comment's database id. */
+      comments: z.array(z.object({ id: z.number().int().optional(), author: z.string(), body: z.string(), at: z.string(), association: z.string().nullable().optional() })),
     }),
   ),
 });
