@@ -92,7 +92,8 @@ export function computeSla(input: SlaInput, now: Date): TaskSla | null {
     }
   }
 
-  const cycle: TaskSla["cycle"] = cycleTarget !== null && !isTerminal(state) ? clock(task.createdAt, cycleTarget, now) : null;
+  // A PR card watching its PR waits for a merge nobody here controls: it is not late.
+  const cycle: TaskSla["cycle"] = cycleTarget !== null && !isTerminal(state) && state !== "pr_watch" ? clock(task.createdAt, cycleTarget, now) : null;
 
   let jiraDue: TaskSla["jiraDue"] = null;
   const due = task.jira?.dueAt;

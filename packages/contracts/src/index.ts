@@ -88,6 +88,8 @@ export const TaskState = z.enum([
   // PR tasks: a code review of someone's PR, and addressing the review threads on yours.
   "reviewing",
   "addressing",
+  // A PR task's last state: the PR is posted or fixed, and the card waits in Ship until it is merged or closed (the watch loop moves it).
+  "pr_watch",
 ]);
 export type TaskState = z.infer<typeof TaskState>;
 
@@ -117,6 +119,7 @@ export const COLUMN_OF: Record<TaskState, Column> = {
   archived: "Done",
   reviewing: "Verify",
   addressing: "Build",
+  pr_watch: "Ship",
 };
 
 /** The column a card is shown in. A card that escalated, or paused on a rate limit, stays where its stage lives (the stage it resumes at), so a failed

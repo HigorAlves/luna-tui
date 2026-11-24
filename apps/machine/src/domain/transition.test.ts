@@ -47,8 +47,8 @@ describe("evidence at the ship gate", () => {
   it("a feature task sent back at awaiting_ship re-runs evidence", () => {
     expect(transition(at("awaiting_ship", { retries: { ...NO_RETRIES, total: 2 } }), { type: "sent_back" })).toMatchObject({ state: "evidence", effect: { kind: "run", stage: "evidence" }, retries: { total: 2 } });
   });
-  it("a review verdict sent back at awaiting_ship is still dropped", () => {
-    expect(transition(at("awaiting_ship", { route: "review" }), { type: "sent_back" })).toMatchObject({ state: "closed" });
+  it("a review verdict sent back at awaiting_ship is dropped, and the card keeps watching the PR", () => {
+    expect(transition(at("awaiting_ship", { route: "review" }), { type: "sent_back" })).toMatchObject({ state: "pr_watch" });
   });
   it("head_moved from shipping re-runs evidence with retries and the reason kept", () => {
     const retries = { ...NO_RETRIES, total: 2, e2e: 1 };
@@ -559,6 +559,7 @@ describe("graph coverage", () => {
     { type: "answered" },
     approved,
     { type: "window_reset" },
+    { type: "pr_watch", what: "merged" },
   ];
 
   it("lets every state but the terminal ones move forward", () => {
@@ -582,11 +583,11 @@ describe("PR task routes", () => {
 
   it("ci_fix: a green poll closes; a red one loops through implementing, checks and a push back to ci_watch", () => {
     const green = play(at("draft", { route: "ci_fix" }), [{ type: "start" }, pass]);
-    expect(green.map((s) => s.state)).toEqual(["ci_watch", "closed"]);
-    expect(green.at(-1)?.effect).toEqual({ kind: "done" });
+    expect(green.map((s) => s.state)).toEqual(["ci_watch", "pr_watch"]);
+    expect(green.at(-1)?.effect).toEqual({ kind: "move" });
 
     const red = play(at("draft", { route: "ci_fix" }), [{ type: "start" }, fail, pass, pass, pass, pass]);
-    expect(red.map((s) => s.state)).toEqual(["ci_watch", "implementing", "verifying", "delivering", "ci_watch", "closed"]);
+    expect(red.map((s) => s.state)).toEqual(["ci_watch", "implementing", "verifying", "delivering", "ci_watch", "pr_watch"]);
     expect(red[1]?.retries).toEqual({ ...NO_RETRIES, ci: 1, total: 1 });
   });
 
@@ -609,10 +610,10 @@ describe("PR task routes", () => {
     expect(gated.at(-1)?.effect).toEqual({ kind: "wait", gate: "awaiting_ship" });
 
     const posted = play(gated.at(-1)!, [approved, pass]);
-    expect(posted.map((s) => s.state)).toEqual(["shipping", "closed"]);
+    expect(posted.map((s) => s.state)).toEqual(["shipping", "pr_watch"]);
     const dropped = transition(gated.at(-1)!, sentBack);
-    expect(dropped.state).toBe("closed");
-    expect(dropped.effect).toEqual({ kind: "done" });
+    expect(dropped.state).toBe("pr_watch");
+    expect(dropped.effect).toEqual({ kind: "move" });
   });
 
   it("review: a failed review or a failed post escalates back to where it was", () => {
@@ -622,9 +623,9 @@ describe("PR task routes", () => {
 
   it("address: addressing, checks, push, then ci_watch closes on green and loops like ci_fix on red", () => {
     const steps = play(at("draft", { route: "address" }), [{ type: "start" }, pass, pass, pass, pass]);
-    expect(steps.map((s) => s.state)).toEqual(["addressing", "verifying", "delivering", "ci_watch", "closed"]);
+    expect(steps.map((s) => s.state)).toEqual(["addressing", "verifying", "delivering", "ci_watch", "pr_watch"]);
     const red = play(at("ci_watch", { route: "address" }), [fail, pass, pass, pass, pass]);
-    expect(red.map((s) => s.state)).toEqual(["implementing", "verifying", "delivering", "ci_watch", "closed"]);
+    expect(red.map((s) => s.state)).toEqual(["implementing", "verifying", "delivering", "ci_watch", "pr_watch"]);
     expect(transition(at("addressing", { route: "address" }), fail)).toMatchObject({ state: "escalated", resumeTo: "addressing" });
   });
 
@@ -643,6 +644,53 @@ describe("PR task routes", () => {
     expect(() => transition(at("reviewing"), pass)).toThrow(TransitionError);
     expect(transition(at("draft", { route: "review" }), { type: "start" }).state).toBe("reviewing");
     expect(() => transition(at("awaiting_approval", { route: "ci_fix" }), approved)).toThrow(TransitionError);
+  });
+});
+
+describe("pr_watch: a PR card waits in Ship until the PR is merged or closed", () => {
+  const watching = (route: TaskRoute, retries: Partial<Snapshot["retries"]> = {}): Snapshot => at("pr_watch", { route, retries: { ...NO_RETRIES, ...retries } });
+  const seen = (what: "merged" | "closed" | "responded"): PipelineEvent => ({ type: "pr_watch", what });
+
+  it.each(["review", "ci_fix", "address"] as const)("%s: merged or closed ends the card as closed", (route) => {
+    for (const what of ["merged", "closed"] as const) {
+      expect(transition(watching(route), seen(what))).toMatchObject({ state: "closed", effect: { kind: "done" } });
+    }
+  });
+
+  it("responded loops the card back to the stage its route started with", () => {
+    expect(transition(watching("review"), seen("responded"))).toMatchObject({ state: "reviewing", effect: { kind: "run", stage: "reviewing" } });
+    expect(transition(watching("ci_fix"), seen("responded"))).toMatchObject({ state: "ci_watch", effect: { kind: "run", stage: "ci_watch" } });
+    expect(transition(watching("address"), seen("responded"))).toMatchObject({ state: "addressing", effect: { kind: "run", stage: "addressing" } });
+  });
+
+  it("a loop-back starts with fresh retry counters, and keeps the watch key", () => {
+    const spent = { verify: 3, e2e: 1, ci: 3, total: 6, stronger: 1, failures: { ci: [{ kind: "checks", line: "red" }] }, watchKey: "abc" };
+    const step = transition(watching("ci_fix", spent), seen("responded"));
+    expect(step.retries).toEqual({ ...NO_RETRIES, watchKey: "abc" });
+  });
+
+  it("the key the watch acted on is kept, and a key press without one keeps the old key", () => {
+    expect(transition(watching("review", { watchKey: "old" }), { type: "pr_watch", what: "responded", key: "new" }).retries.watchKey).toBe("new");
+    expect(transition(watching("review", { watchKey: "old" }), seen("responded")).retries.watchKey).toBe("old");
+    expect(transition(watching("review"), seen("responded")).retries.watchKey).toBeUndefined();
+  });
+
+  it("the watching state is not a stage, a gate or the end: it takes no stage result and does not wait on a person", () => {
+    expect(() => transition(watching("review"), pass)).toThrow(TransitionError);
+    expect(() => transition(watching("review"), approved)).toThrow(TransitionError);
+    expect(() => transition(watching("review"), { type: "abort" })).toThrow(TransitionError);
+  });
+
+  it("the event is refused anywhere but the watch", () => {
+    expect(() => transition(at("reviewing", { route: "review" }), seen("merged"))).toThrow(TransitionError);
+    expect(() => transition(at("closed", { route: "review" }), seen("merged"))).toThrow(TransitionError);
+  });
+
+  it("a card watching can be archived, and a loop-back that fails escalates as before", () => {
+    expect(transition(watching("review"), { type: "archive", reason: "rejected" }).state).toBe("archived");
+    const again = transition(watching("ci_fix"), seen("responded"));
+    expect(transition(again, fail)).toMatchObject({ state: "implementing" });
+    expect(transition(transition(watching("address"), seen("responded")), fail)).toMatchObject({ state: "escalated", resumeTo: "addressing" });
   });
 });
 

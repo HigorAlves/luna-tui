@@ -419,6 +419,14 @@ describe("the sections of the v2.2 config reach the policy", () => {
     expect(() => parseLunaConfig(["economy:", "  facts: maybe", ""].join("\n"))).toThrow(/economy\.facts/);
   });
 
+  it("takes the review section (the watch on a PR card) from a real luna.yaml, and keeps the defaults when it is absent", () => {
+    expect(parseLunaConfig("").factory.review).toEqual({ auto_rereview: "on", quiet_minutes: 15 });
+    expect(parseLunaConfig(["review:", "  auto_rereview: off", "  quiet_minutes: 5", ""].join("\n")).factory.review).toEqual({ auto_rereview: "off", quiet_minutes: 5 });
+    expect(renderLunaConfig(validateLunaConfig({ review: { quiet_minutes: 5 } }))).toContain("review:");
+    expect(() => parseLunaConfig(["review:", "  auto_rereview: sometimes", ""].join("\n"))).toThrow(/review\.auto_rereview/);
+    expect(() => parseLunaConfig(["review:", "  quiet_minute: 5", ""].join("\n"))).toThrow(/review/);
+  });
+
   it("takes the learning section from a real luna.yaml, and keeps the defaults when it is absent", () => {
     expect(parseLunaConfig(["learning:", "  truth: false", "  traces: metadata", ""].join("\n")).factory.learning).toEqual({ records: true, context: "full", truth: false, traces: "metadata" });
     expect(parseLunaConfig("").factory.learning).toEqual({ records: true, context: "full", truth: true, traces: "host" });
