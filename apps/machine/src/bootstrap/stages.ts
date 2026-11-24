@@ -657,6 +657,14 @@ export async function buildRealStages(
     reviewing: prReviewRunner({
       github,
       compliance,
+      // The security, migration, infrastructure and second-opinion passes: sub-runs of their own packs, one at a time (they share the workspace); finding_confirm is bound late like Verify's decisions.
+      helpers: {
+        run: (subContext, pack, review) => runAgent(deps, subContext, pack, { review }),
+        get decide() {
+          return verifyDecisions?.decide ?? null;
+        },
+        decisions: async (repoPath) => (repoPath ? (await policies.for(repoPath)).decisions : {}),
+      },
       runPack: (context, review) => runAgent(deps, context, "reviewing", { review }),
       ...(reviewLinks ? { links: reviewLinks } : {}),
       ...(jira

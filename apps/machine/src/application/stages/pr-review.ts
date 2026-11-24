@@ -2,10 +2,13 @@
 // comments already on it (the sandbox has no GitHub credential), the pr-reviewer pack answers
 // with line-anchored comments and a verdict, and the host posts one COMMENT review at once.
 // An approve / request-changes verdict waits at the gate; `postVerdictRunner` posts it on `a`.
-import { PrReviewAnswer, type RequestedAction, type ReviewContext, type ReviewLinks } from "@hardness/contracts";
+import { type DecisionOverrides, type Finding, PrReviewAnswer, type RequestedAction, type ReviewContext, type ReviewLinks, mergeDuplicateFindings } from "@hardness/contracts";
 
+import { type Decide } from "./check-decide.ts";
 import { type ComplianceDeps, runCompliance } from "./compliance-review.ts";
+import { type HelperDeps, type HelpersOutcome, confirmHelperFindings, runHelpers } from "./review-helpers.ts";
 import { addUsage } from "./usage.ts";
+import { excerptOf } from "./verify.ts";
 import { type GitHub, type ReviewPost, messageOf } from "../github.ts";
 import type { Jira } from "../jira.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
@@ -16,6 +19,12 @@ export interface PrReviewDeps {
   github: GitHub;
   /** Runs the reviewing pack with what the host fetched. */
   runPack: (context: StageContext, review: ReviewContext) => Promise<StageResult>;
+  /** The security, migration, infrastructure and second-opinion passes, run on every PR after the main review; absent runs none. `decide` (read at call time) asks finding_confirm about what only a pass found; null keeps those findings unchecked. */
+  helpers?: HelperDeps & {
+    decide: Decide | null;
+    /** The repo's decision overrides (luna.yaml `policy.decisions`); absent, none. */
+    decisions?: (repoPath: string | null) => Promise<Record<string, DecisionOverrides>>;
+  };
   /** The compliance review beside this one, only when the machine has a wiki to read controls from; it runs when the repo declares regimes. */
   compliance?: ComplianceDeps;
   /** The Jira port, only when Jira is configured: the tickets the PR names are read and the reviewer checks the diff against them. */
@@ -60,6 +69,17 @@ export function capComments<T extends { path: string; line: number }>(comments: 
     .slice(0, MAX_INLINE_COMMENTS)
     .map(({ c }) => c);
 }
+
+/** What a finding's file looked like in the PR's diff, when the worktree cannot show it: the file's own section, capped. */
+const DIFF_EXCERPT_CAP = 2000;
+export function diffExcerptOf(diff: string, finding: Pick<Finding, "path">): string {
+  const sections = diff.split(/^(?=diff --git )/m);
+  const section = sections.find((part) => part.startsWith(`diff --git a/${finding.path} `) || part.split("\n", 1)[0]!.endsWith(` b/${finding.path}`));
+  return (section ?? "").slice(0, DIFF_EXCERPT_CAP);
+}
+
+/** Marks a finding the confirmation was not sure of; the person reads the mark before posting. */
+const UNSURE = "Unsure: ";
 
 /** The PR a task came from, or null when the task is not a PR task. */
 export function prOf(context: StageContext): { repo: string; number: number; url: string } | null {
@@ -128,9 +148,27 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     if (!parsed.success) {
       return { ...pack, outcome: "fail", detail: { ...pack.detail, error: `the review answer does not parse: ${parsed.error.message}` } };
     }
+    // The review passes read the same diff after the reviewer (they share its workspace, so one at a time); what only a pass found is checked once more before it joins.
+    const worktree = pack.workspace?.worktreePath ?? context.task.worktreePath ?? null;
+    let helpers: HelpersOutcome | null = null;
+    let confirmed: Awaited<ReturnType<typeof confirmHelperFindings>> | null = null;
+    if (deps.helpers) {
+      helpers = await runHelpers(deps.helpers, context, review);
+      const overrides = (await deps.helpers.decisions?.(context.task.repoPath ?? null).catch(() => ({}))) ?? {};
+      const excerpt = async (finding: Finding): Promise<string> => (worktree ? await excerptOf(worktree, finding).catch(() => "") : "") || diffExcerptOf(review.diff, finding);
+      confirmed = await confirmHelperFindings({ decide: deps.helpers.decide, repoPath: context.task.repoPath ?? null, decisions: overrides, excerpt, log: (line) => console.warn(`review: ${line}`) }, helpers.helpers, parsed.data.findings);
+    }
+    const kept = (confirmed?.kept ?? []).map(({ finding, unsure }) => (unsure ? { ...finding, title: `${UNSURE}${finding.title}` } : finding));
+    const helperComments = kept.map((f) => ({ path: f.path, line: f.line, side: f.side === "LEFT" ? ("LEFT" as const) : ("RIGHT" as const), body: `${f.title}: ${f.body}` }));
     // The compliance lead reads the same diff beside the reviewer; its findings join before the verdict, so a high one blocks. It never fails the review.
     const compliance = deps.compliance ? await runCompliance(deps.compliance, context, pr.repo, review) : null;
-    const answer = compliance ? { ...parsed.data, summary: [parsed.data.summary, compliance.summary ? `Compliance: ${compliance.summary}` : ""].filter(Boolean).join(" "), findings: [...parsed.data.findings, ...compliance.findings], comments: [...parsed.data.comments, ...compliance.comments] } : parsed.data;
+    const joined = {
+      ...parsed.data,
+      summary: [parsed.data.summary, compliance?.summary ? `Compliance: ${compliance.summary}` : ""].filter(Boolean).join(" "),
+      findings: [...parsed.data.findings, ...(compliance?.findings ?? [])],
+      comments: [...parsed.data.comments, ...(compliance?.comments ?? [])],
+    };
+    const answer = helpers || compliance ? { ...joined, findings: mergeDuplicateFindings([...joined.findings, ...(confirmed?.agreed ?? []), ...kept]), comments: [...joined.comments, ...helperComments] } : parsed.data;
     // The verdict is the findings', never the model's (orc review-contract): any finding keeps a review from approving.
     const verdict = verdictOf(answer.findings);
 
@@ -140,8 +178,8 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       answer.comments.map((c) => ({ path: c.path, line: c.line, side: c.side, body: c.body })),
       answer.findings,
     );
-    // The compliance sub-run's cost joins the review's, so the budget and the engine's counters see both.
-    const usage = addUsage(pack.usage, compliance?.usage);
+    // The sub-runs' cost joins the review's, so the budget and the engine's counters see all of it.
+    const usage = addUsage(addUsage(pack.usage, helpers?.usage), compliance?.usage);
     const base = { ...pack, ...(usage ? { usage } : {}), findings: answer.findings };
     const reviewLinks = reviewLinksOf(links, review.tickets ?? []);
     const detail = {
@@ -152,6 +190,16 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       // What the review was linked to and how (key | fact | decision), and a suggestion that stayed under the bar.
       ...(reviewLinks ? { links: reviewLinks } : {}),
       verdict,
+      ...(helpers
+        ? {
+            helpers: helpers.helpers.map((h) => {
+              const verdicts = confirmed?.verdicts[h.pack];
+              const dropped = h.findings.length - (confirmed?.duplicates[h.pack] ?? 0) - (confirmed?.kept.filter((k) => k.pack === h.pack).length ?? 0);
+              return { pack: h.pack, ...(h.engine ? { engine: h.engine } : {}), outcome: h.outcome, findings: h.findings.length, ...(verdicts ? { confirm: verdicts } : {}), ...(dropped > 0 ? { dropped } : {}), ...(confirmed?.duplicates[h.pack] ? { alsoFoundByReviewer: confirmed.duplicates[h.pack] } : {}) };
+            }),
+            ...(helpers.notes.length > 0 ? { helperNotes: helpers.notes } : {}),
+          }
+        : {}),
       ...(compliance ? { compliance: { regimesRun: compliance.regimesRun, findings: compliance.findings.length, notes: compliance.notes } } : {}),
       ...(parsed.data.verdict !== verdict ? { modelVerdict: parsed.data.verdict } : {}),
       posted: false,

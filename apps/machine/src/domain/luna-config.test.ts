@@ -174,6 +174,14 @@ describe("parseLunaConfig", () => {
     expect(renderLunaConfig(config)).toContain("effort:\n  triage: low");
   });
 
+  it("accepts an engine and an effort for each review pass, which runs inside the review stage, and refuses an engine the pass does not allow", () => {
+    const config = validateLunaConfig({ engines: { review_security: "claude:opus", review_second: "codex:luna" }, effort: { review_security: "high", review_iac: "low" } });
+    expect(policyOf(config).engines).toEqual({ review_security: "claude:opus", review_second: "codex:luna" });
+    expect(policyOf(config).effort).toEqual({ review_security: "high", review_iac: "low" });
+    expect(renderLunaConfig(config)).toContain("engines:\n  review_security: claude:opus");
+    expect(() => parseLunaConfig("engines:\n  review_iac: claude:haiku\n")).toThrow(/^engines\.review_iac: claude:haiku is not allowed for review_iac/);
+  });
+
   it("reads the design section into the policy, and keeps it through a render", () => {
     const config = validateLunaConfig({ design: { servers: { figma: { tools: ["get_design_context"] } } } });
     expect(policyOf(config).design).toEqual({ servers: { figma: { tools: ["get_design_context"] } } });
