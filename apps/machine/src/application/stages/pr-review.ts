@@ -301,8 +301,12 @@ export function postVerdictRunner(deps: { github: GitHub }): StageRunner {
     const followed = await followUp(deps.github, replies);
     const threads = { replied: followed.replied, resolved: followed.resolved, skipped: followed.skipped };
     if (!followed.ok) {
+      // The review is out: failing the stage would escalate it, and a retry posts the whole review again. The card watches the PR next, and
+      // the next re-review finds the threads that got no answer still open and answers them.
       const did = `${followed.replied} ${followed.replied === 1 ? "reply" : "replies"} posted, ${followed.resolved} ${followed.resolved === 1 ? "thread" : "threads"} resolved`;
-      return { outcome: "fail", detail: { error: `the review was posted (${event}), but the thread replies stopped: ${followed.error} (${did} before it)`, posted: event, prUrl: pr.url, threads } };
+      const threadsError = `the review was posted (${event}), but the thread replies stopped: ${followed.error} (${did} before it)`;
+      await context.note?.(`${threadsError}; the next re-review answers the threads left`).catch(() => {});
+      return { outcome: "pass", detail: { posted: event, prUrl: pr.url, threads, threadsError } };
     }
     return { outcome: "pass", detail: { posted: event, prUrl: pr.url, threads } };
   };

@@ -318,16 +318,19 @@ describe("posting the verdict", () => {
     expect(result.detail).toMatchObject({ threads: { replied: 1, resolved: 1, skipped: ["T1"] } });
   });
 
-  it("fails the stage when a thread reply is refused, saying the review itself was posted and what was done on the threads", async () => {
+  it("passes with a note when a thread reply is refused after the review was posted, so a retry never posts the review twice", async () => {
     const github = fakeGitHub({ postReview: async () => {}, threadResolved: async () => false, replyToThread: async (id) => { if (id === "T2") throw new Error("boom"); }, resolveThread: async () => {} });
     const { context } = setup(null);
-    const result = await postVerdictRunner({ github })({ ...context, stage: "shipping", approvals: [approval([{ kind: "pr_review_post", target: node.url, payload: { event: "REQUEST_CHANGES", body: "s", comments: [], threadReplies: [{ threadId: "T1", body: "a", resolve: true }, { threadId: "T2", body: "b", resolve: false }] } }])] });
-    expect(result.outcome).toBe("fail");
+    const note = vi.fn(async () => {});
+    const result = await postVerdictRunner({ github })({ ...context, note, stage: "shipping", approvals: [approval([{ kind: "pr_review_post", target: node.url, payload: { event: "REQUEST_CHANGES", body: "s", comments: [], threadReplies: [{ threadId: "T1", body: "a", resolve: true }, { threadId: "T2", body: "b", resolve: false }] } }])] });
+    expect(result.outcome).toBe("pass");
     expect(github.postReview).toHaveBeenCalledTimes(1);
-    expect(String(result.detail?.error)).toMatch(/review was posted/);
-    expect(String(result.detail?.error)).toMatch(/1 reply posted, 1 thread resolved/);
-    expect(String(result.detail?.error)).toMatch(/T2/);
-    expect(result.detail).toMatchObject({ posted: "REQUEST_CHANGES" });
+    expect(result.detail).toMatchObject({ posted: "REQUEST_CHANGES", threads: { replied: 1, resolved: 1 } });
+    const said = String(result.detail?.threadsError);
+    expect(said).toMatch(/review was posted/);
+    expect(said).toMatch(/1 reply posted, 1 thread resolved/);
+    expect(said).toMatch(/T2/);
+    expect(note).toHaveBeenCalledWith(expect.stringMatching(/next re-review/));
   });
 
   it("touches no thread for a gate with no thread replies", async () => {
