@@ -1309,11 +1309,12 @@ fn review_to_post(a: &Approval, width: usize) -> Vec<Line<'static>> {
     ];
     out.extend(reviewed_against(r, width));
     // The body is the one the machine will send: the review action's own payload when it is there, else the summary.
-    let body = r["actions"]
+    let post = r["actions"]
         .as_array()
         .into_iter()
         .flatten()
-        .find(|act| act["kind"].as_str() == Some("pr_review_post"))
+        .find(|act| act["kind"].as_str() == Some("pr_review_post"));
+    let body = post
         .and_then(|act| act["payload"]["body"].as_str())
         .or(r["summary"].as_str())
         .or(answer["summary"].as_str())
@@ -1346,6 +1347,46 @@ fn review_to_post(a: &Approval, width: usize) -> Vec<Line<'static>> {
                 c["body"].as_str().unwrap_or(""),
                 width,
             ));
+        }
+    }
+    // A re-review also answers our own threads: each reply, whether it resolves the thread, and who settled it.
+    let replies: Vec<&Value> = post
+        .and_then(|act| act["payload"]["threadReplies"].as_array())
+        .map(|t| t.iter().collect())
+        .unwrap_or_default();
+    if !replies.is_empty() {
+        out.push(Line::default());
+        out.push(Line::from(Span::styled(
+            format!("  Thread replies ({})", replies.len()),
+            theme::label(),
+        )));
+        for t in replies {
+            let resolves = t["resolve"].as_bool().unwrap_or(false);
+            let (word, style) = if resolves {
+                ("resolve", theme::done())
+            } else {
+                ("open", theme::flag())
+            };
+            let mut spans = vec![Span::styled(format!("    {word}  "), style)];
+            if let Some(level) = t["severity"].as_str() {
+                spans.push(Span::styled(
+                    format!("{}  ", level.replace('_', " ")),
+                    theme::flag(),
+                ));
+            }
+            let line = t["line"]
+                .as_i64()
+                .map(|l| format!(":{l}"))
+                .unwrap_or_default();
+            spans.push(Span::styled(
+                format!("{}{line}  ", plain(t["path"].as_str().unwrap_or("the PR"))),
+                theme::code(),
+            ));
+            if t["by"].as_str() == Some("decision") {
+                let why = t["settled"].as_str().unwrap_or("settled").replace('_', " ");
+                spans.push(Span::styled(format!("(Jev: {why})  "), theme::dim()));
+            }
+            out.extend(hanging(spans, t["body"].as_str().unwrap_or(""), width));
         }
     }
     let findings: Vec<&Value> = r["findings"]
@@ -1743,6 +1784,41 @@ mod tests {
         ] {
             assert!(main.contains(needle), "no {needle:?} in\n{main}");
         }
+    }
+
+    #[test]
+    fn a_re_review_lists_each_thread_reply_as_resolve_or_open_with_who_settled_it() {
+        let mut app = review_verdict_app("comment");
+        if let Some(d) = app.detail.as_mut() {
+            d.approvals[0].requested["actions"][0]["payload"]["threadReplies"] = serde_json::json!([
+                {"threadId": "T1", "body": "Fixed in `abc1234`.", "resolve": true, "by": "decision", "settled": "fixed", "path": "src/a.ts", "line": 3},
+                {"threadId": "T2", "body": "Fair point, resolving.", "resolve": true, "by": "decision", "settled": "reply_holds", "path": "src/b.ts", "line": null},
+                {"threadId": "T3", "body": "Still open because the loop still skips a row.", "resolve": false, "by": "reviewer", "severity": "bug", "path": "src/c.ts", "line": 9},
+                {"threadId": "T4", "body": "Agreed, thanks.", "resolve": true, "by": "reviewer", "path": "src/d.ts", "line": 1}
+            ]);
+        }
+        let screen = render(&mut app, 180, 60);
+        let main = main_pane(&screen);
+        for needle in [
+            "Thread replies (4)",
+            "resolve",
+            "src/a.ts:3",
+            "Fixed in `abc1234`.",
+            "Jev: fixed",
+            "Jev: reply holds",
+            "Fair point, resolving.",
+            "open",
+            "bug",
+            "src/c.ts:9",
+            "Still open because the loop still skips a row.",
+            "Agreed, thanks.",
+        ] {
+            assert!(main.contains(needle), "no {needle:?} in\n{main}");
+        }
+        // A review with no thread replies shows no such list.
+        let mut bare = review_verdict_app("comment");
+        let screen = render(&mut bare, 180, 60);
+        assert!(!main_pane(&screen).contains("Thread replies"));
     }
 
     #[test]
