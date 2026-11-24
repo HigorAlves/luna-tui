@@ -52,17 +52,32 @@ Without a keybinding, `herdr plugin action invoke hardness.board.open` opens the
 
 ```bash
 make setup    # tools, credentials, integrations, starts the machine, links the board
-make doctor   # what is set up and what is missing, any time
 ```
 
 By hand, run `pnpm start`. It builds the stage images, then starts Postgres and the machine on http://127.0.0.1:4318. To work on the harness itself, run `pnpm dev`. It runs the machine on your host with hot reload. Then press your keybinding in herdr. The board opens. For prerequisites and checks, read [docs/install.md](../docs/install.md).
+
+## Make commands
+
+`make setup` is the one-command way to set up Luna. It walks you through every step. Run any target on its own too. Details are in [docs/install.md](../docs/install.md).
+
+| Target | What it does |
+|---|---|
+| `make help` | Show these targets |
+| `make setup` | Everything, step by step: tools, credentials, integrations, the machine, the board, your repos |
+| `make doctor` | Check tools, credentials, integrations and the running machine |
+| `make tools` | Install the tools Luna needs (Homebrew) |
+| `make credentials` | Engine credentials (Claude, Codex, OpenAI, Jev), the API token, GitHub |
+| `make integrations` | Jira, the Slack inbox and machine settings, into `.env` |
+| `make luna-yaml` | Write or update a repo's `luna.yaml` (`make luna-yaml REPO=~/Developer/app`) |
+| `make up` | Build the stage images and start Postgres + the machine (pnpm start) |
+| `make down` | Stop the machine and Postgres, keeping their data |
+| `make board` | Build the board and link it into herdr |
 
 ## Docs
 
 | Page | What it answers |
 |---|---|
 | [docs/README.md](../docs/README.md) | The index |
-| [docs/install.md](../docs/install.md) | Prerequisites, quick start, checks |
 | [docs/architecture.md](../docs/architecture.md) | Pipeline stages, the hexagonal layout, factory mode |
 | [docs/configuration.md](../docs/configuration.md) | Every environment variable |
 | [docs/api.md](../docs/api.md) | HTTP routes and an example session |
