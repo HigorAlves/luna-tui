@@ -1,0 +1,38 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "ui": "stream",
+  "//": "envMode loose: tests read TEST_DATABASE_URL, Docker and credential variables that turbo strict mode would strip.",
+  "envMode": "loose",
+  "globalDependencies": [
+    "pnpm-lock.yaml",
+    "config/typescript-config/*.json"
+  ],
+  "tasks": {
+    "typecheck": {
+      "dependsOn": [
+        "^typecheck"
+      ],
+      "outputs": []
+    },
+    "test": {
+      "cache": false
+    },
+    "build": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": [
+        ".next/**",
+        "!.next/cache/**",
+        "dist/**"
+      ]
+    },
+    "lint": {
+      "outputs": []
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    }
+  }
+}

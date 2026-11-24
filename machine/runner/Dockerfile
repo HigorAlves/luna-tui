@@ -83,6 +83,8 @@ ENV CODEX_HOME=/tmp/.codex EVE_TELEMETRY_DISABLED=1
 # optional framework peers (next, react, vite) out, which the lockfile records.
 WORKDIR /opt/luna/factory-src
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .pnpmfile.cjs ./
+# The shared tsconfig/vitest presets (dev-only: --prod leaves them unlinked; nothing in the image reads a tsconfig).
+COPY config config
 COPY contracts/package.json contracts/
 COPY factory/package.json factory/
 RUN corepack enable \

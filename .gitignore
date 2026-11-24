@@ -28,3 +28,6 @@ evals/.runs/
 
 # orc session state, local only
 .orc/
+
+# turbo
+.turbo/

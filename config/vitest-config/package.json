@@ -1,0 +1,12 @@
+{
+  "name": "@hardness/vitest-config",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    "./base": "./base.ts"
+  },
+  "peerDependencies": {
+    "vitest": "^5.0.5"
+  }
+}

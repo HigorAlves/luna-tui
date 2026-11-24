@@ -1,15 +1,4 @@
 {
-  "compilerOptions": {
-    "target": "ES2023",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "skipLibCheck": true,
-    "allowImportingTsExtensions": true,
-    "noEmit": true,
-    // TypeScript 7 no longer loads @types packages on its own.
-    "types": ["node"]
-  },
+  "extends": "@hardness/typescript-config/base.json",
   "include": ["src", "runner/egress", "runner-video/tools/lib"]
 }

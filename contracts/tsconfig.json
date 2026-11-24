@@ -1,18 +1,4 @@
 {
-  "compilerOptions": {
-    "target": "ES2023",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "skipLibCheck": true,
-    "allowImportingTsExtensions": true,
-    "noEmit": true,
-    "types": [
-      "node"
-    ]
-  },
-  "include": [
-    "src"
-  ]
+  "extends": "@hardness/typescript-config/base.json",
+  "include": ["src"]
 }

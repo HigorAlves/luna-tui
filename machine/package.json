@@ -39,6 +39,8 @@
     "golden:live": "node scripts/golden-abort.mjs && node scripts/golden-retry.mjs && node scripts/golden-concurrency.mjs"
   },
   "devDependencies": {
+    "@hardness/typescript-config": "workspace:*",
+    "@hardness/vitest-config": "workspace:*",
     "@types/node": "^26.6.5",
     "@types/pg": "^8.23.1",
     "@types/picomatch": "4.0.2",
