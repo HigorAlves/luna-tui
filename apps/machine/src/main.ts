@@ -1078,7 +1078,7 @@ const app = createApp({
   taskDiff: (worktreePath, repoPath, file) => taskDiff(exec, worktreePath, repoPath, file),
   credentials,
   engineBudgets,
-  access: { host: config.host, port: config.port, token: config.apiToken },
+  access: { host: config.host, port: config.port, publicPort: config.publicPort, token: config.apiToken },
 });
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {
   const agents = [...new Set([...Object.keys(real), "verifying", "delivering", "shipping"])];

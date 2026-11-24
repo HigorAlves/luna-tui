@@ -39,6 +39,8 @@ const fields = (over: Partial<ComplianceDraft> = {}) => ({
   targets: [{ kind: "wiki" as const, repo: "acme/web", path: "Compliance/Change-Management/2026-10.md" }],
   ...over,
 });
+/** A whole draft, as the store answers it: what a job's fake returns, so the answer fits the route's documented schema. */
+const draftOf = (over: Partial<ComplianceDraft> = {}): ComplianceDraft => ({ ...fields(), status: "waiting", hash: "0123456789abcdef", history: [], createdAt: "2026-11-01T00:00:00.000Z", updatedAt: "2026-11-01T00:00:00.000Z", ...over });
 
 let incidentList: Incident[] = [];
 let wrote: unknown[][];
@@ -78,7 +80,7 @@ describe("the questionnaire routes", () => {
   });
 
   it("re-run a questionnaire draft against another known repository and answer with the reopened draft", async () => {
-    const rerun = vi.fn(async (id: string, repo: string) => ({ ...fields({ id, kind: "questionnaire", repo, period: null }), status: "waiting", hash: "0123456789abcdef" }) as unknown as ComplianceDraft);
+    const rerun = vi.fn(async (id: string, repo: string) => draftOf({ id, kind: "questionnaire", repo, period: null }));
     const { app } = mk(true, { rerun });
     const res = await repoPost(app, "questionnaire:slack:C0123ABCD:1.0", { repo: "acme/web" });
     expect(res.status).toBe(200);
@@ -226,13 +228,13 @@ describe("the compliance routes", () => {
   });
 
   it("draft release notes for a known repo and tag, and refuse an unknown repo, a bad tag or a missing job", async () => {
-    const draft = vi.fn(async (_input: unknown) => ({ id: "release_notes:acme/web:v1.4.0" }));
+    const draft = vi.fn(async (_input: unknown) => draftOf({ id: "release_notes:acme/web:v1.4.0", kind: "release_notes" }));
     const { app } = mk(true, undefined, undefined, { draft });
     const run = (body: unknown, target = app) => target.request("/compliance/release-notes", { method: "POST", headers: auth, body: JSON.stringify(body) });
     expect((await app.request("/compliance/release-notes", { method: "POST", body: "{}" })).status).toBe(401);
     const ok = await run({ repo: "acme/web", tag: "v1.4.0", since: "2026-10-01T00:00:00Z" });
     expect(ok.status).toBe(200);
-    expect(await ok.json()).toEqual({ id: "release_notes:acme/web:v1.4.0" });
+    expect(await ok.json()).toEqual(draftOf({ id: "release_notes:acme/web:v1.4.0", kind: "release_notes" }));
     expect(draft).toHaveBeenCalledWith({ repo: "acme/web", tag: "v1.4.0", since: "2026-10-01T00:00:00Z" });
     await run({ repo: "acme/web", tag: "v1.5.0" });
     expect(draft).toHaveBeenLastCalledWith({ repo: "acme/web", tag: "v1.5.0" });
@@ -248,7 +250,7 @@ describe("the status report route", () => {
   const run = (app: ReturnType<typeof mk>["app"], body: unknown) => app.request("/compliance/status/run", { method: "POST", headers: auth, body: JSON.stringify(body) });
 
   it("builds the named week on demand, and the previous week when none is named", async () => {
-    const build = vi.fn(async (week: string) => ({ id: `status_report:${week}`, kind: "status_report" }));
+    const build = vi.fn(async (week: string) => draftOf({ id: `status_report:${week}`, kind: "status_report", period: week }));
     const { app } = mk(true, undefined, undefined, undefined, { build });
     const res = await run(app, { week: "2026-W46" });
     expect(res.status).toBe(200);
@@ -259,7 +261,7 @@ describe("the status report route", () => {
   });
 
   it("refuses a week that is not an ISO week, and answers 503 without the job", async () => {
-    const { app } = mk(true, undefined, undefined, undefined, { build: async () => ({}) });
+    const { app } = mk(true, undefined, undefined, undefined, { build: async (week: string) => draftOf({ id: `status_report:${week}`, kind: "status_report", period: week }) });
     expect((await run(app, { week: "2026-46" })).status).toBe(400);
     expect((await run(app, { week: "2026-W54" })).status).toBe(400);
     expect((await run(mk().app, {})).status).toBe(503);

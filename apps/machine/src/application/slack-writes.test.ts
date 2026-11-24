@@ -115,7 +115,7 @@ describe("what may write to Slack", () => {
   });
   it("makes a Tap only in the HTTP adapter, an event's tap only in threads.ts, and a standing only in threads.ts and slack-inbox.ts", () => {
     const outside = (pattern: RegExp, allowed: string[]) => where(pattern).filter((p) => p !== "application/slack-send.ts" && !allowed.includes(p));
-    expect(outside(/\btapOf\(/, ["adapters/http/app.ts"])).toEqual([]);
+    expect(outside(/\btapOf\(/, ["adapters/http/app.ts", "adapters/http/routes/slack.routes.ts", "adapters/http/routes/compliance.routes.ts"])).toEqual([]);
     expect(outside(/\btapOfEvent\(/, ["application/threads.ts"])).toEqual([]);
     expect(outside(/\bstandingOf\(/, ["application/threads.ts", "application/slack-inbox.ts"])).toEqual([]);
   });

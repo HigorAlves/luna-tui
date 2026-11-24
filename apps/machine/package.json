@@ -22,6 +22,7 @@
     "start": "tsx --env-file-if-exists=.env src/main.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "openapi": "tsx scripts/openapi.ts",
     "db:migrate": "tsx node_modules/typeorm/cli.js migration:run -d src/adapters/persistence/data-source.ts",
     "db:revert": "tsx node_modules/typeorm/cli.js migration:revert -d src/adapters/persistence/data-source.ts",
     "db:generate": "tsx node_modules/typeorm/cli.js migration:generate -d src/adapters/persistence/data-source.ts",
@@ -53,6 +54,8 @@
   "dependencies": {
     "@hardness/contracts": "workspace:*",
     "@hono/node-server": "^2.1.6",
+    "@hono/swagger-ui": "^0.6.2",
+    "@hono/zod-openapi": "^1.6.3",
     "@lmnr-ai/lmnr": "^0.8.58",
     "@modelcontextprotocol/sdk": "1.32.1",
     "hono": "^4.13.13",

@@ -21,6 +21,7 @@ describe("loadConfig", () => {
       databaseUrl: DEFAULT_DATABASE_URL,
       port: DEFAULT_PORT,
       host: "127.0.0.1",
+      publicPort: null,
       apiToken: null,
       agents: true,
       egress: { enabled: true, engineHosts: [], relay: true },
@@ -67,6 +68,12 @@ describe("loadConfig", () => {
       sandboxPolicy: DEFAULT_MACHINE_POLICY,
       mcp: { servers: [], untrusted: "deny" },
     });
+  });
+
+  it("reads the port the host publishes the API on, for the docs page's calls (MACHINE_PUBLIC_PORT)", () => {
+    expect(loadConfig({ HOME: "/h" }).publicPort).toBeNull();
+    expect(loadConfig({ HOME: "/h", MACHINE_PUBLIC_PORT: "4318" }).publicPort).toBe(4318);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_PUBLIC_PORT: "http" })).toThrow(/MACHINE_PUBLIC_PORT/);
   });
 
   it("reads the Slack inbox's tokens and knobs", () => {

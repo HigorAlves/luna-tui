@@ -9,6 +9,8 @@ export default mergeConfig(
       // recreates its schema in each file's beforeAll). Running files in parallel races
       // that schema recreation against another file's migrations — serialize them instead.
       fileParallelism: false,
+      // Every answer the tests see is held to GET /openapi.json (src/test/openapi-conformance.ts).
+      setupFiles: ["src/test/openapi-conformance.ts"],
     },
   }),
 );

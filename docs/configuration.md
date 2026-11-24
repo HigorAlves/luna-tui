@@ -498,6 +498,7 @@ Every stage and check container mounts a docker volume named `hardness-cache-<re
 | Variable | Default | What it does |
 |---|---|---|
 | `MACHINE_DOCKER_PORT` | `4318` | host port for the machine container (`pnpm dev` keeps `4317`) |
+| `MACHINE_PUBLIC_PORT` | compose sets it to `MACHINE_DOCKER_PORT` | the port the host reaches the machine on, when it differs from `MACHINE_PORT`: the API also accepts calls from a page on it, so Swagger at `/docs` can try routes |
 | `LUNA_CHECK_WAIT_MS` | `90000` (`0` on a dry run) | how long the implementer waits in a stage container for the machine's `red_check` or `scope_check` answer (files under `/out/checks/`) before going on as `skipped` |
 | `LUNA_REPOS_DIR` | `~/Developer` | where your repos live; task repo paths must be inside it, and so must `WORKTREES_DIR` |
 | `MACHINE_STATE_DIR` | `~/.local/state/hardness` | run folders, mounted into stage containers |
