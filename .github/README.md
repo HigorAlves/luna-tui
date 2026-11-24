@@ -69,7 +69,7 @@ By hand, run `pnpm start`. It builds the stage images, then starts Postgres and 
 | `make credentials` | Engine credentials (Claude, Codex, OpenAI, Jev), the API token, GitHub |
 | `make integrations` | Jira, the Slack inbox and machine settings, into `.env` |
 | `make luna-yaml` | Write or update a repo's `luna.yaml` (`make luna-yaml REPO=~/Developer/app`) |
-| `make up` | Build the stage images and start Postgres and the machine |
+| `make up` | Build the stage images and start Postgres + the machine (pnpm start) |
 | `make down` | Stop the machine and Postgres, keeping their data |
 | `make board` | Build the board and link it into herdr |
 
