@@ -14,7 +14,6 @@ import { taskStagesProblem } from "../../../domain/engine-choice.ts";
 import type { Task } from "@hardness/contracts";
 import type { AppDeps } from "../app.ts";
 
-export const SlotsInput = z.object({ max: z.number().int().min(1) });
 
 export const PING_EVERY_MS = 15_000;
 /** Every `source.kind` a task may carry, for `GET /events?source=`. */
@@ -62,8 +61,9 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
 /** The client closed the request first (nginx's 499): nobody reads it, the log does. */
 export const CLIENT_CLOSED = 499;
 
-export const fail = (c: Context, status: 400 | 404 | 409 | 422 | 429 | 500 | 502 | 503 | typeof CLIENT_CLOSED, error: string, message: string, extra: Record<string, unknown> = {}) =>
-  c.json<ApiError>({ error, message, ...extra }, status as ContentfulStatusCode);
+/** An error answer. The status stays its literal type, so an OpenAPI route's handler type-checks it against the statuses the route declares. */
+export const fail = <S extends 400 | 404 | 409 | 422 | 429 | 500 | 502 | 503 | typeof CLIENT_CLOSED>(c: Context, status: S, error: string, message: string, extra: Record<string, unknown> = {}) =>
+  c.json<ApiError, S & ContentfulStatusCode>({ error, message, ...extra }, status as S & ContentfulStatusCode);
 
 /** `X-Luna-Client`: who calls `POST /runs` (`notch`), for its record. */
 export const CLIENT_NAME = /^[\w.-]{1,64}$/;

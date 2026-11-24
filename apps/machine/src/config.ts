@@ -22,6 +22,8 @@ export interface Config {
   port: number;
   /** Interface the API binds to. 127.0.0.1 on the host; 0.0.0.0 inside the compose container. */
   host: string;
+  /** The port the host publishes the API on when it differs from `port` (compose maps 4318 to 4317; `MACHINE_PUBLIC_PORT`), so Swagger at `/docs` may call it; null when it is `port`. */
+  publicPort: number | null;
   /** The bearer token every API call must carry (`MACHINE_API_TOKEN`, else `~/.config/hardness/machine-api-token`); null asks for none. Required beyond loopback. Never logged. */
   apiToken: string | null;
   /** Run Triage and Implementer as real agents. Off: every stage is a stub. */
@@ -588,6 +590,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     databaseUrl: env.DATABASE_URL ?? DEFAULT_DATABASE_URL,
     port,
     host,
+    publicPort: env.MACHINE_PUBLIC_PORT === undefined || env.MACHINE_PUBLIC_PORT === "" ? null : portFrom(env, "MACHINE_PUBLIC_PORT", port),
     apiToken,
     agents: env.MACHINE_AGENTS !== "off",
     egress: egressFrom(env),

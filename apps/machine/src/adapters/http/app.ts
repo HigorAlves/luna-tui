@@ -42,6 +42,8 @@ import { type ApiAccess, guard } from "./access.ts";
 import { EngineNotAllowedError, NotOnDemandError, type PackRunsPort, QueueFullError, RunAbortedError, RunEngineBudgetError, RunEngineDisabledError, RunFailedError, RunNoCredentialError, RunOverBudgetError, RunRateLimitedError } from "../../application/pack-runs.ts";
 import type { Bus } from "./bus.ts";
 import { toTask } from "./serialize.ts";
+import { swaggerUI } from "@hono/swagger-ui";
+import { HTTPException } from "hono/http-exception";
 import { createOpenApiRouter } from "./openapi/router.ts";
 import { BadRequest, CLIENT_CLOSED, body, fail, type RouteDeps } from "./routes/kit.ts";
 import { machineRoutes } from "./routes/machine.routes.ts";
@@ -58,6 +60,12 @@ import { jiraRoutes } from "./routes/jira.routes.ts";
 
 export type { ApiAccess } from "./access.ts";
 
+/** What `GET /docs` says above the routes. */
+const OPENAPI_DESCRIPTION = [
+  "The machine's HTTP API: what the Luna TUI board, Luna Notch and scripts call. Every route but `/openapi.json` and `/docs` needs the machine's token: press **Authorize** and paste it (`MACHINE_API_TOKEN`, else `~/.config/hardness/machine-api-token`).",
+  "",
+  "Live updates come from `GET /events` (Server-Sent Events). Errors are `{ error, message }` with a stable `error` code.",
+].join("\n");
 const DEFAULT_ACCESS: ApiAccess = { host: "127.0.0.1", port: DEFAULT_PORT, token: null };
 
 export interface AppDeps {
@@ -211,6 +219,8 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     if (error instanceof QueueFullError) return fail(c, 429, "queue_full", error.message);
     if (error instanceof RunOverBudgetError) return fail(c, 429, "budget", error.message);
     if (error instanceof RunAbortedError) return fail(c, CLIENT_CLOSED, "client_closed", error.message);
+    // A route's validator could not read the body as JSON (an OpenAPI route's `jsonBody`): the same 400 `body()` gave.
+    if (error instanceof HTTPException && error.status === 400) return fail(c, 400, "invalid_request", "body must be JSON");
     if (error instanceof ZodError) return fail(c, 400, "invalid_request", z.prettifyError(error));
     if (error instanceof BadRequest) return fail(c, 400, "invalid_request", error.message);
     if (error instanceof ConfigProofError) return fail(c, 400, "invalid_request", error.message);
@@ -231,6 +241,22 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
   app.route("/", githubRoutes(deps));
   app.route("/", slackRoutes(deps));
   app.route("/", jiraRoutes(deps));
+
+  // The API's own description, as workbench serves it: the OpenAPI 3.1 document every route's schemas build, and Swagger UI on it.
+  // Both are read without the token (access.ts); a call made from Swagger carries it (Authorize).
+  app.openAPIRegistry.registerComponent("securitySchemes", "bearerAuth", { type: "http", scheme: "bearer", description: "MACHINE_API_TOKEN, else ~/.config/hardness/machine-api-token" });
+  app.get("/openapi.json", (c) => {
+    const host = c.req.header("host") ?? `127.0.0.1:${access.publicPort ?? access.port}`;
+    return c.json(
+      app.getOpenAPI31Document({
+        openapi: "3.1.0",
+        info: { title: "Luna machine API", version: "1", description: OPENAPI_DESCRIPTION },
+        servers: [{ url: `http://${host}`, description: "this machine" }],
+        security: [{ bearerAuth: [] }],
+      }),
+    );
+  });
+  app.get("/docs", swaggerUI({ url: "/openapi.json", persistAuthorization: true }));
 
   return app;
 }

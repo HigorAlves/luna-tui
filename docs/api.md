@@ -1,6 +1,8 @@
 # API
 
-This is the machine's HTTP API. It comes straight from `apps/machine/src/adapters/http/app.ts`. `packages/contracts/src/api.ts` defines the shapes.
+This is the machine's HTTP API. Each area's routes are in `apps/machine/src/adapters/http/routes/<area>.routes.ts`, and their OpenAPI definitions (request and every response, in zod) are beside them in `<area>.openapi.ts`. `packages/contracts/src/api.ts` defines the shapes.
+
+**Swagger.** The machine describes itself: `GET /openapi.json` is the OpenAPI 3.1 document built from every route's schemas, and `GET /docs` is Swagger UI on it. Open http://127.0.0.1:4318/docs (`pnpm start`) or http://127.0.0.1:4317/docs (`pnpm dev`). Both pages are read without the token. To try a route from Swagger, press **Authorize** and paste the token (`MACHINE_API_TOKEN`, else `~/.config/hardness/machine-api-token`). A test keeps the document complete: a route without a description fails it.
 
 | Method | Path | Does |
 |---|---|---|
@@ -107,8 +109,8 @@ Errors use `{ "error", "message" }`: 400 for invalid input, 404 for an unknown t
 The machine's clients are the board, Luna Notch and scripts. None is a web page. Every request passes these checks in order. This applies to every route, including `/events` and `/health`. The checks are in `apps/machine/src/adapters/http/access.ts`:
 
 - **Host**: while `MACHINE_HOST` is a loopback address, a `Host` header must be `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`. Any other host gets 403 `forbidden_host`. This stops a DNS name that rebinds to 127.0.0.1. Beyond loopback, the machine skips the check and requires the token instead.
-- **Origin**: only browsers send one. Any origin but the machine's own gets 403 `forbidden_origin`. The machine's own origins are `http://127.0.0.1:<port>` and `http://localhost:<port>`.
-- **Token**: when you set `MACHINE_API_TOKEN` (env, else `~/.config/hardness/machine-api-token`), each request needs `Authorization: Bearer <token>`. Without it, the response is 401 `unauthorized`. A machine that binds beyond loopback with no token refuses to start. The board and the golden scripts read the same variable and file.
+- **Origin**: only browsers send one. Any origin but the machine's own gets 403 `forbidden_origin`. The machine's own origins are `http://127.0.0.1:<port>` and `http://localhost:<port>`, and the same on `MACHINE_PUBLIC_PORT`, the port compose publishes it on (4318), so Swagger at `/docs` can call the API.
+- **Token**: when you set `MACHINE_API_TOKEN` (env, else `~/.config/hardness/machine-api-token`), each request needs `Authorization: Bearer <token>`. Without it, the response is 401 `unauthorized`. `GET /openapi.json` and `GET /docs` are the exception: they describe the API and hold no data. A machine that binds beyond loopback with no token refuses to start. The board and the golden scripts read the same variable and file.
 - **Body**: a request that sends a body must say `Content-Type: application/json`. A `; charset=…` is fine. Any other type gets 415 `unsupported_media_type`. A page can send that type across sites only after a CORS preflight. The machine never allows a CORS preflight. So a cross-site form or `no-cors` fetch cannot create, start, merge or close anything.
 
 ## What a run was refused

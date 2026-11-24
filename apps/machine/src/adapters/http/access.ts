@@ -4,7 +4,9 @@
 // - Host: while the machine binds to loopback, the `Host` header must name it (127.0.0.1,
 //   localhost or [::1] on its port), so a rebound DNS name gets 403 `forbidden_host`.
 // - Origin: one is only sent by a browser; any but the machine's own is 403 `forbidden_origin`.
-// - Token: with `MACHINE_API_TOKEN`, `Authorization: Bearer <token>` or 401 `unauthorized`.
+// - Token: with `MACHINE_API_TOKEN`, `Authorization: Bearer <token>` or 401 `unauthorized`. The API's own
+//   description (`GET /openapi.json`, `GET /docs`) is read without it: it holds no data, and a browser opening
+//   the docs cannot send a header. A call made from the docs page still carries the token (Swagger's Authorize).
 // - Body: bytes that are not `application/json` are 415 `unsupported_media_type`. A page can
 //   only send JSON across sites after a CORS preflight, which the machine never allows.
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -17,7 +19,12 @@ export interface ApiAccess {
   port: number;
   /** The bearer token every request must carry; null asks for none. */
   token: string | null;
+  /** The port the host publishes the machine on when it differs from `port` (Docker maps 4318 to 4317), so the docs page opened there may call the API. */
+  publicPort?: number | null;
 }
+
+/** The API's own description, read without the token. */
+export const DOCS_PATHS: ReadonlySet<string> = new Set(["/openapi.json", "/docs"]);
 
 /** Whether a bind address only listens on this computer. */
 export function isLoopback(host: string): boolean {
@@ -38,7 +45,8 @@ export function guard(access: ApiAccess): MiddlewareHandler {
   const names = ["127.0.0.1", "localhost", "[::1]"];
   if (isLoopback(access.host) && !names.includes(access.host)) names.push(access.host.includes(":") ? `[${access.host}]` : access.host);
   const hosts = new Set(names.map((name) => `${name}:${access.port}`));
-  const origins = new Set(names.map((name) => `http://${name}:${access.port}`));
+  const ports = access.publicPort && access.publicPort !== access.port ? [access.port, access.publicPort] : [access.port];
+  const origins = new Set(names.flatMap((name) => ports.map((port) => `http://${name}:${port}`)));
   const checkHost = isLoopback(access.host);
   return async (c, next) => {
     const host = c.req.header("host")?.toLowerCase();
@@ -49,7 +57,7 @@ export function guard(access: ApiAccess): MiddlewareHandler {
     if (origin !== undefined && !origins.has(origin.toLowerCase())) {
       return c.json({ error: "forbidden_origin", message: "the machine does not take requests from web pages" }, 403);
     }
-    if (access.token !== null) {
+    if (access.token !== null && !(DOCS_PATHS.has(c.req.path) && c.req.method === "GET")) {
       const match = /^Bearer\s+(\S+)\s*$/i.exec(c.req.header("authorization") ?? "");
       if (!match || !sameToken(match[1]!, access.token)) {
         c.header("WWW-Authenticate", "Bearer");

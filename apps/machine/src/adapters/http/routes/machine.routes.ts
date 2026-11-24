@@ -12,17 +12,18 @@ import { engineInfo } from "../../../domain/engines.ts";
 import { RunCredentialBusyError, RunFailedError } from "../../../application/pack-runs.ts";
 import { InvalidSince, parseSince } from "../metrics.ts";
 import { createOpenApiRouter } from "../openapi/router.ts";
-import { SlotsInput, ForemanInput, ROUTE_ONLY_PACKS, ROUTE_OF, realOrNull, TicketChatInput, BadRequest, fail, CLIENT_NAME, body, type RouteDeps } from "./kit.ts";
+import { healthRoute, setSlotsRoute } from "./machine.openapi.ts";
+import { ForemanInput, ROUTE_ONLY_PACKS, ROUTE_OF, realOrNull, TicketChatInput, BadRequest, fail, CLIENT_NAME, body, type RouteDeps } from "./kit.ts";
 
 export function machineRoutes(deps: RouteDeps) {
   const { repoHealth, economy, db, pipeline, stubs, credentials, engineBudgets, runs, knownRepos, chatRepos, problemsOf, sandboxPolicy } = deps;
   const app = createOpenApiRouter();
-  app.get("/health", async (c) => {
+  app.openapi(healthRoute, async (c) => {
     const problems = (await problemsOf?.()) ?? [];
     const idle = sandboxPolicy ? sandboxPolicyNotes(sandboxPolicy).notInForce : [];
     const policy = sandboxPolicy ? { sandboxPolicy, ...(idle.length > 0 ? { notInForce: idle } : {}) } : {};
-    if (problems.length === 0) return c.json({ ok: true, slots: pipeline.slots, ...policy });
-    return c.json({ ok: false, problems, slots: pipeline.slots, ...policy }, 503);
+    if (problems.length === 0) return c.json({ ok: true as const, slots: pipeline.slots, ...policy }, 200);
+    return c.json({ ok: false as const, problems, slots: pipeline.slots, ...policy }, 503);
   });
 
   /** Every pack in the registry, with the task states it runs in. */
@@ -113,9 +114,9 @@ export function machineRoutes(deps: RouteDeps) {
   // "Stop picking up work" / "carry on" / "run N at once": the knobs for leaving and for debugging.
   app.post("/drain", (c) => c.json(pipeline.drain()));
   app.post("/resume", (c) => c.json(pipeline.resumeClaims()));
-  app.patch("/slots", async (c) => {
-    const { max } = await body(c, SlotsInput);
-    return c.json(pipeline.setSlots(max));
+  app.openapi(setSlotsRoute, (c) => {
+    const { max } = c.req.valid("json");
+    return c.json(pipeline.setSlots(max), 200);
   });
 
   app.get("/metrics", async (c) => {

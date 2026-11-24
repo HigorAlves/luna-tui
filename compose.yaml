@@ -48,6 +48,8 @@ services:
       # Required beyond loopback: from the shell, else ~/.config/hardness/machine-api-token (mounted below).
       MACHINE_API_TOKEN: ${MACHINE_API_TOKEN:-}
       MACHINE_PORT: "4317"
+      # The port the host publishes it on (below), so Swagger at http://127.0.0.1:4318/docs may call the API.
+      MACHINE_PUBLIC_PORT: ${MACHINE_DOCKER_PORT:-4318}
       # Stage containers are started through the host's Docker, which resolves mounts on the
       # host. So every path the machine hands to `docker run` must be the same path in here:
       # repos and worktrees under LUNA_REPOS_DIR, run folders under the state dir.
