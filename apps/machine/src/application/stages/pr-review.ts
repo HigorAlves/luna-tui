@@ -11,7 +11,7 @@ import { type DiffFile, type Shard, type Skipped, capShards, parseDiff, shardDif
 import { shardedSummary } from "./review-summary.ts";
 import { PR_DIFF_MOUNT } from "./review-diff-files.ts";
 import { type CriterionResult, checkCriteria } from "./criteria-check.ts";
-import { type RiskRead, readRisk } from "./review-risk.ts";
+import { type RiskRead, rankShards, readRisk } from "./review-risk.ts";
 import { type RereviewDeps, type RereviewPlan, prepareRereview, settledReply } from "./rereview.ts";
 import { type HelperDeps, type HelpersOutcome, type PassMount, type PassWorkspace, confirmHelperFindings, runHelpers } from "./review-helpers.ts";
 import { followUp } from "./thread-followup.ts";
@@ -389,17 +389,22 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     // The review passes start with the main review, each in a workspace of its own (they never share the reviewer's folder); runHelpers never throws.
     const helpersRun = deps.helpers && !quiet && (!sharded || diffMount) ? runHelpers(deps.helpers, context, sharded ? fileReview : shared, diffMount ? [diffMount] : undefined, risk?.passes) : null;
     let unreviewed: Array<{ path: string; lines: number }> = [];
-    let shardStats: { count: number; reviewed: number; capped: number; failed: number } | null = null;
+    let shardStats: { count: number; reviewed: number; capped: number; failed: number; rankedBy?: string } | null = null;
     let shardFailures: Array<{ shard: number; files: number; reason: string }> = [];
     const mainPromise: Promise<StageResult> = !reviewerNeeded
       ? Promise.resolve(silent)
       : sharded
       ? (async () => {
           const shards = shardDiff(readable, limits.shardLines, SHARD_CHARS);
-          const capped = capShards(shards, limits.maxShards);
+          // Over the cap, pr_risk scores each part from its paths and line counts; a part it cannot score keeps the path heuristic.
+          const h = deps.helpers;
+          const scores = h && shards.length > limits.maxShards
+            ? await rankShards({ decide: h.decide, decisions: (await h.decisions?.(context.task.repoPath ?? null).catch(() => ({}))) ?? {}, log: (line) => console.warn(`review: ${line}`) }, { title: review.pr.title, shards, repoPath: context.task.repoPath ?? null }).catch(() => new Map<number, number>())
+            : new Map<number, number>();
+          const capped = capShards(shards, limits.maxShards, scores);
           const ran = await runShards(deps, mainContext, review, capped.kept);
           unreviewed = mergeLines([...capped.unreviewed, ...ran.failed]);
-          shardStats = { count: shards.length, reviewed: capped.kept.length - ran.failedShards, capped: shards.length - capped.kept.length, failed: ran.failedShards };
+          shardStats = { count: shards.length, reviewed: capped.kept.length - ran.failedShards, capped: shards.length - capped.kept.length, failed: ran.failedShards, ...(scores.size > 0 ? { rankedBy: "jev" } : {}) };
           shardFailures = ran.failures;
           return ran.result;
         })()
@@ -466,7 +471,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     // The verdict is the findings' (and the open threads'), never the model's (orc review-contract): any finding keeps a review from approving.
     // What no shard read is said in the summary, and a review never approves past it.
     // A review read in parts gets one body written by the machine for the whole PR: the parts' own summaries each describe a slice.
-    const stats = shardStats as { count: number; reviewed: number; capped: number; failed: number } | null;
+    const stats = shardStats as { count: number; reviewed: number; capped: number; failed: number; rankedBy?: string } | null;
     const summary = stats
       ? [
           shardedSummary({

@@ -4,6 +4,7 @@ import { type DecisionOverrides, type EngineId, type Effort, PACKS, REVIEW_DEPTH
 
 import { decidedBy } from "../decision-truth.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
+import type { Shard } from "./review-diff.ts";
 
 export type Risk = "low" | "medium" | "high";
 export interface Suggested {
@@ -95,4 +96,39 @@ export async function readRisk(deps: RiskDeps, input: { title: string; files: Re
     passes,
     applied: { ...(empty(main) ? {} : { main }), ...(empty(depth.passes) ? {} : { passes: depth.passes }), ...(second ? { second } : {}) },
   };
+}
+
+const SCORE: Record<Risk, number> = { low: 1, medium: 2, high: 3 };
+const SHARD_CONCURRENCY = 5;
+
+/** A part of a big PR scored by pr_risk from its paths and line counts: the shard's index to 1 (low), 2 or 3 (high). A part with no answer has no entry, and keeps the path heuristic. */
+export async function rankShards(deps: RiskDeps, input: { title: string; shards: readonly Shard[]; repoPath: string | null }): Promise<Map<number, number>> {
+  const overrides = deps.decisions ?? {};
+  const scores = new Map<number, number>();
+  const counts = (text: string): { additions: number; deletions: number } => {
+    let additions = 0;
+    let deletions = 0;
+    for (const l of text.split("\n")) {
+      if (l.startsWith("+") && !l.startsWith("+++")) additions++;
+      else if (l.startsWith("-") && !l.startsWith("---")) deletions++;
+    }
+    return { additions, deletions };
+  };
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (let i = next++; i < input.shards.length; i = next++) {
+      const shard = input.shards[i]!;
+      const byPath = new Map<string, { path: string; additions: number; deletions: number }>();
+      for (const part of shard.parts) {
+        const c = counts(part.text);
+        const have = byPath.get(part.path);
+        byPath.set(part.path, { path: part.path, additions: (have?.additions ?? 0) + c.additions, deletions: (have?.deletions ?? 0) + c.deletions });
+      }
+      const check = riskCheck(input.title, `part ${shard.index} of ${input.shards.length}`, [...byPath.values()]);
+      const { answer } = await judgeCheck(deps.decide, "pr_risk", check, input.repoPath, overrides, deps.log);
+      if (answer) scores.set(shard.index, SCORE[riskLevelOf(answer, overrides.pr_risk)]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(SHARD_CONCURRENCY, input.shards.length) }, worker));
+  return scores;
 }
