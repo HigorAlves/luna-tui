@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "activity.choice",
+      "value": "discussion"
+    }
+  ],
+  "rubric": "A question about the design that a reviewer should answer: discussion.",
+  "label": {
+    "activity": {
+      "choice": "discussion"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "activity": "An argument, a question, a disagreement or a request that a reviewer should answer"
+    },
+    "why": "The author asks a real question about the intent of the bound; a reviewer should answer it.",
+    "ruledOut": [
+      {
+        "question": "activity",
+        "label": "code",
+        "why": "The author asks a real question about the intent of the bound; a reviewer should answer it. It is not code: A real code change: new or rewritten logic, a fix, a new file, or a change of behaviour"
+      },
+      {
+        "question": "activity",
+        "label": "noise",
+        "why": "The author asks a real question about the intent of the bound; a reviewer should answer it. It is not noise: Thanks or an acknowledgement, a bot or agent restating what was said, or a change only to CI or configuration"
+      }
+    ],
+    "second": {
+      "label": {
+        "activity": {
+          "choice": "discussion"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

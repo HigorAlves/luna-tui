@@ -1,0 +1,46 @@
+{
+  "schema": 3,
+  "stage": "thread_settle",
+  "pack": "thread_settle",
+  "attempt": 1,
+  "task": {
+    "id": "thread-settle",
+    "title": "Thread: null-check-added",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "thread",
+      "thread": {
+        "path": "src/cart/export.ts",
+        "line": 8,
+        "originalLine": 3,
+        "comments": [
+          {
+            "author": "luna",
+            "ours": true,
+            "body": "`user.name` may be null here."
+          }
+        ],
+        "original": "8    return user.name.trim();",
+        "current": "8    return (user.name ?? \"\").trim();",
+        "delta": "@@ -8 +8 @@\n-  return user.name.trim();\n+  return (user.name ?? \"\").trim();"
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

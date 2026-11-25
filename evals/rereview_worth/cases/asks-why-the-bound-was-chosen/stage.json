@@ -1,0 +1,43 @@
+{
+  "schema": 3,
+  "stage": "rereview_worth",
+  "pack": "rereview_worth",
+  "attempt": 1,
+  "task": {
+    "id": "rereview-worth",
+    "title": "Activity: asks-why-the-bound-was-chosen",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "rereview",
+      "activity": {
+        "comments": [
+          {
+            "author": "bo",
+            "path": "src/cart/export.ts",
+            "body": "Why `rows.length - 1` and not the length? I thought the last row was meant to be left for the footer, can you explain which it is?"
+          }
+        ],
+        "commits": 0,
+        "files": [],
+        "delta": ""
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "schema": 3,
+  "stage": "finding_confirm",
+  "pack": "finding_confirm",
+  "attempt": 1,
+  "task": {
+    "id": "finding-confirm",
+    "title": "Finding: Missing user is dereferenced",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "finding",
+      "finding": {
+        "path": "src/users/profile.ts",
+        "line": 4,
+        "severity": "bug",
+        "title": "Missing user is dereferenced",
+        "body": "`find` returns undefined for an unknown id and the next line reads `.email` on it.",
+        "confidence": 0.85
+      },
+      "excerpt": "1  export async function profile(id) {\n2    const user = await users.find(id);\n3    // find() returns undefined when the id is unknown\n4    return { email: user.email.toLowerCase() };\n5  }"
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

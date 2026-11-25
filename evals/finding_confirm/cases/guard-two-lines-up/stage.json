@@ -1,0 +1,40 @@
+{
+  "schema": 3,
+  "stage": "finding_confirm",
+  "pack": "finding_confirm",
+  "attempt": 1,
+  "task": {
+    "id": "finding-confirm",
+    "title": "Finding: No authorisation check before the cancel",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "finding",
+      "finding": {
+        "path": "src/orders/cancel.ts",
+        "line": 6,
+        "severity": "bug",
+        "title": "No authorisation check before the cancel",
+        "body": "Any caller can cancel any order: nothing checks who is asking.",
+        "confidence": 0.85
+      },
+      "excerpt": "1  export async function cancel(req, res) {\n2    const user = requireUser(req);\n3    const order = await orders.find(req.params.id);\n4    if (order.ownerId !== user.id) return res.status(403).end();\n5    \n6    await orders.cancel(order.id);\n7    res.status(204).end();\n8  }"
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}
