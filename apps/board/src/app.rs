@@ -2695,7 +2695,10 @@ impl App {
                 }
             }
             'r' => {
-                if crate::keys::sendable_back_now(self, &task) {
+                // A card watching its PR runs its route's first stage again now: a re-review, a CI watch, addressing the threads.
+                if task.state == "pr_watch" {
+                    self.act(|m| m.rewatch(id), "looking at the PR again");
+                } else if crate::keys::sendable_back_now(self, &task) {
                     self.mode = Mode::Reason {
                         id: id.to_string(),
                         approve: false,

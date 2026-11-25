@@ -827,11 +827,12 @@ const SHARED: &[Binding] = &[
     },
     b(
         "r",
-        "send back with a reason",
+        "send back, or re-run a watched PR",
         Group::Gate,
         Scope::Board,
         |app| match task_of(app) {
             None => Avail::Off("no ticket selected"),
+            Some(t) if t.state == "pr_watch" => Avail::On,
             Some(t) if sendable_back_now(app, t) => Avail::On,
             Some(t) if open_ship_approval(app, t) => {
                 Avail::Off("the release question is approved or rejected")
@@ -3981,6 +3982,21 @@ mod tests {
     }
 
     #[test]
+    fn r_looks_at_the_pr_again_on_a_card_watching_it() {
+        let find = |app: &App, key: &str| {
+            bindings_for(app, Scope::Board)
+                .into_iter()
+                .find(|(b, _)| b.keys == key)
+                .map(|(_, a)| a)
+                .unwrap()
+        };
+        let mut watching = task("t1", "pr_watch", true, false, true);
+        watching.route = "review".to_string();
+        assert_eq!(find(&app_with(vec![watching.clone()]), "r"), Avail::On);
+        assert!(!sendable_back(&watching), "a watching card is looped back, not sent back with a reason");
+    }
+
+    #[test]
     fn send_back_is_available_at_the_ship_gate_for_a_feature_task_only() {
         let find = |app: &App, key: &str| {
             bindings_for(app, Scope::Board)
@@ -4032,7 +4048,7 @@ mod tests {
         assert_eq!(approval[0], "? keys");
         assert_eq!(approval[1], "a open to approve");
         assert!(
-            approval.contains(&"r send back with a reason".to_string())
+            approval.contains(&"r send back, or re-run a watched PR".to_string())
                 && approval.contains(&"e edit the plan and the ticket".to_string()),
             "{approval:?}"
         );

@@ -101,7 +101,7 @@ generates the tables below. A test fails when they drift from the registry.
 | `A` | memory review: approve, skip the rules |
 | `N` | reject the plan, with a comment; reject the split, with a comment; reject the proposal, archive the card; reject the release, archive the card |
 | `u` | open to excuse untestable criteria |
-| `r` | send back with a reason |
+| `r` | send back, or re-run a watched PR |
 | `x` then `S` | ship: approve and open the PR |
 
 **Ticket**
@@ -275,7 +275,7 @@ These are the popup's keys. `?` inside it lists them with the ticket's state.
 | `A` | memory review: approve, skip the rules |
 | `N` | reject the plan, with a comment; reject the split, with a comment; reject the proposal, archive the card; reject the release, archive the card |
 | `u` | approve, excusing untestable criteria |
-| `r` | send back with a reason |
+| `r` | send back, or re-run a watched PR |
 | `S` | ship: approve and open the PR |
 
 **Ticket**
@@ -754,7 +754,7 @@ The plan review page has a council section when the plan had a council. It says 
 | `p` | post these questions at the source |
 | `N` | reject the plan, with a comment; reject the split, with a comment; reject the proposal, archive the card; reject the release, archive the card |
 | `u` | approve, excusing untestable criteria |
-| `r` | send back with a reason |
+| `r` | send back, or re-run a watched PR |
 | `S` | ship: approve and open the PR |
 
 **Ticket**

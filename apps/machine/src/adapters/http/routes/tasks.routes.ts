@@ -225,6 +225,9 @@ export function tasksRoutes(deps: RouteDeps) {
   /** Re-runs the stage a task paused in after a usage limit. */
   app.openapi(r.resumeRoute, async (c) => c.json(await serialize(await pipeline.windowReset(taskId(c))), 200));
 
+  /** A card watching its PR runs its route's first stage again now, on the PR's head as it is now (the board's `r` on a card in Ship). */
+  app.openapi(r.rewatchRoute, async (c) => c.json(await serialize(await pipeline.rewatchNow(taskId(c))), 200));
+
   /** Removes the task's worktree from disk; the task and its branch stay. */
   app.openapi(r.removeWorktreeRoute, async (c) => c.json(await serialize(await pipeline.removeWorktree(taskId(c), { discard: c.req.query("discard") === "true" })), 200));
   return app;

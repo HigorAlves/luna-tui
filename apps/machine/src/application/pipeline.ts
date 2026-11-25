@@ -26,7 +26,7 @@ import { canSeeKept, contextAsk, mergedNotice, questionsComment } from "../domai
 import { triageVerdicts } from "../domain/triage-policy.ts";
 import { packForState, packStates } from "../domain/packs.ts";
 import { type PipelineEvent, type Step, TransitionError, transition } from "../domain/transition.ts";
-import { isClone, unpushedCommits } from "../adapters/git/clone.ts";
+import { isClone, syncPrHead, unpushedCommits } from "../adapters/git/clone.ts";
 import { releaseWorktree } from "./worktree-release.ts";
 import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
 import { containerRunning, removeContainer } from "../adapters/docker/docker.ts";
@@ -121,6 +121,14 @@ export class NoContextGateError extends Error {
 }
 
 /** The gate was opened for one way of splitting (cards or tickets) and the approval would now do the other: the person read something else. */
+/** A card asked to look at its PR again is not watching one: it runs, waits on a person, or has ended. */
+export class NotWatchingError extends Error {
+  constructor(id: string, state: string) {
+    super(`task ${id} is ${state}, not watching its PR`);
+    this.name = "NotWatchingError";
+  }
+}
+
 export class SplitChangedError extends Error {
   constructor(id: string, was: string, now: string) {
     super(`task ${id}: the split was proposed to make ${was}, and an approval would now make ${now}: read it again`);
@@ -222,6 +230,8 @@ export interface NewTask extends Omit<CardFieldsInput, "source"> {
 }
 
 export interface PipelineOptions {
+  /** Moves a watching card's workspace to its PR's head as it is now, before a person loops it back from the board; tests inject a fake, the default runs git. */
+  syncPrHead?: (repoPath: string, headRef: string, path: string) => Promise<void>;
   /** A card that came from a ticket the tracker port knows is split into child tickets, never child cards (slice 11 wires it): `knows` answers where the card's ticket lives, `create` makes the children there once a person approved. */
   splitTickets?: {
     knows(task: TaskRow): Promise<{ tool: string; key: string } | null>;
@@ -463,6 +473,7 @@ export class Pipeline {
   private readonly store: TaskStore;
   private readonly onEvent: (event: EventRow) => void;
   private readonly hasConfig: (repoPath: string) => boolean;
+  private readonly syncPrHead: (repoPath: string, headRef: string, path: string) => Promise<void>;
   private readonly contextDeps: ContextDeps | null;
   private readonly dedupDeps: DedupPort | null;
   private readonly boardUrl: string | null;
@@ -543,6 +554,7 @@ export class Pipeline {
     this.boardUrl = options.publicBoardUrl ?? null;
     this.knownRepos = options.knownRepos ?? null;
     this.hasConfig = options.hasConfig ?? ((repoPath) => existsSync(join(repoPath, CONFIG_FILE)));
+    this.syncPrHead = options.syncPrHead ?? syncPrHead;
     this.writeConfig = options.writeConfig ?? ((repoPath, text) => writeFile(join(repoPath, CONFIG_FILE), text));
     this.inline = options.inline ?? false;
     this.maxConcurrentTasks = options.maxConcurrentTasks ?? 4;
@@ -1116,6 +1128,18 @@ export class Pipeline {
   /** A person's key on a PR whose card of that route is watching it: the card loops back at once, with no quiet window. */
   rewatch(id: string): Promise<TaskRow> {
     return this.prWatch(id, "responded");
+  }
+
+  /**
+   * A person's word on a watching card itself (the board's `r` on a card in Ship): it works on the PR's head as it is now, then runs its
+   * route's first stage again at once. A card that is not watching refuses; a head that cannot be moved (commits never pushed) fails and the
+   * card keeps watching.
+   */
+  async rewatchNow(id: string): Promise<TaskRow> {
+    const task = await this.get(id);
+    if (task.state !== "pr_watch") throw new NotWatchingError(id, task.state);
+    if (task.repoPath && task.worktreePath && task.source?.kind === "github_pr") await this.syncPrHead(task.repoPath, task.source.headRef, task.worktreePath);
+    return this.rewatch(id);
   }
 
   /** Edits the ticket's text. Stages started after this see the new text. The source never

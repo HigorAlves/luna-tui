@@ -436,6 +436,17 @@ export const resumeRoute = createRoute({
   responses: { 200: taskResponse("The task, running again"), ...changes },
 });
 
+export const rewatchRoute = createRoute({
+  operationId: "rewatchTask",
+  method: "post",
+  path: "/tasks/{id}/rewatch",
+  tags: TAGS,
+  summary: "Look at the PR again now",
+  description: "A card watching its PR (`pr_watch`) runs its route's first stage again at once (a re-review, a CI watch, addressing the threads), on the PR's head as it is now. 409 `not_watching` for a card that is not watching; 409 `task_busy` or 500 when its workspace cannot be moved to the head (commits never pushed).",
+  request: { params: TaskIdParams },
+  responses: { 200: taskResponse("The task, running its first stage again"), ...changes },
+});
+
 export const removeWorktreeRoute = createRoute({
   operationId: "removeTaskWorktree",
   method: "post",
