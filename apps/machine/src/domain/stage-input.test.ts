@@ -2,7 +2,7 @@ import { PACKS, type PackId, StageInput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { ApprovalRow, TaskRow } from "./task.ts";
-import { PACK_LIMITS, designSpecOf, browserCases, withoutBrowserCases, buildJiraIntakeInput, buildSlackTriageInput, buildStageInput } from "./stage-input.ts";
+import { PACK_LIMITS, limitsFor, sizeLinesOf, designSpecOf, browserCases, withoutBrowserCases, buildJiraIntakeInput, buildSlackTriageInput, buildStageInput } from "./stage-input.ts";
 
 const task = {
   id: "t1",
@@ -579,5 +579,42 @@ describe("designSpecOf and the e2e capture plan", () => {
     const base = { task, attempt: 1, approvals: [], priorFindings: [] as never[], parity };
     expect(buildStageInput({ ...base, stage: "e2e", pack: "design_parity" }).context.parity).toEqual(parity);
     expect(buildStageInput({ ...base, stage: "e2e", pack: "e2e" }).context.parity).toBeUndefined();
+  });
+});
+
+describe("limitsFor: a card's size grows its stages' turns and time", () => {
+  const slice = (est_loc: number) => ({ title: "s", est_loc, touchpoints: ["a.ts"], acceptance: ["ok"] });
+  const sized = (size: Record<string, unknown>) => [approval({ kind: "awaiting_approval", requested: { size } })];
+
+  it("leaves a small card at the pack's default", () => {
+    expect(limitsFor({ pack: "build_tests", slices: [slice(500)], approvals: [] })).toEqual({ maxTurns: 40, timeoutMs: 15 * 60_000, by: "default" });
+  });
+  it("doubles from the plan's own lines above 2,000 and triples above 8,000", () => {
+    expect(limitsFor({ pack: "verifying", slices: [slice(1500), slice(1500)], approvals: [] })).toEqual({ maxTurns: 120, timeoutMs: 40 * 60_000, by: "size×2" });
+    expect(limitsFor({ pack: "e2e", slices: [slice(9000)], approvals: [] })).toEqual({ maxTurns: 180, timeoutMs: 60 * 60_000, by: "size×3" });
+  });
+  it("takes the larger of the size factor and implementing's slice count, not their product", () => {
+    expect(limitsFor({ pack: "implementing", slices: [slice(3000)], approvals: [] })).toMatchObject({ maxTurns: 160, by: "size×2" });
+    expect(limitsFor({ pack: "implementing", slices: [slice(10), slice(10), slice(10)], approvals: [] })).toMatchObject({ maxTurns: 240, by: "default" });
+  });
+  it("reads the card's size record when there are no slices: a sure estimate counts, an unsure one does not", () => {
+    expect(limitsFor({ pack: "test_design", approvals: sized({ estLoc: 5000, planned: null, sure: true }) })).toMatchObject({ maxTurns: 80, by: "size×2" });
+    expect(limitsFor({ pack: "test_design", approvals: sized({ estLoc: 5000, planned: null, sure: false }) })).toMatchObject({ maxTurns: 40, by: "default" });
+    expect(sizeLinesOf(undefined, sized({ estLoc: 100, planned: 9000, sure: false }))).toBe(9000);
+    expect(sizeLinesOf(undefined, [])).toBeNull();
+  });
+  it("never scales the fast lane, triage or the review packs", () => {
+    expect(limitsFor({ pack: "plan_fast", slices: [slice(9000)], approvals: [] })).toMatchObject({ maxTurns: 15, by: "default" });
+    expect(limitsFor({ pack: "triage", slices: [slice(9000)], approvals: [] })).toMatchObject({ maxTurns: 12, by: "default" });
+  });
+  it("lets the repo's limits win over the scaling, per field", () => {
+    expect(limitsFor({ pack: "implementing", slices: [slice(9000)], approvals: [], repo: { implementing: { maxTurns: 100, minutes: 90 } } })).toEqual({ maxTurns: 100, timeoutMs: 90 * 60_000, by: "luna.yaml" });
+    expect(limitsFor({ pack: "plan", approvals: [], repo: { plan: { minutes: 5 } } })).toEqual({ maxTurns: 60, timeoutMs: 5 * 60_000, by: "luna.yaml" });
+  });
+  it("reaches the stage input", () => {
+    const input = buildStageInput({ task, stage: "implementing", attempt: 1, approvals: [], priorFindings: [], plan: { record: null, brief: "b", criteria: [], assumptions: [], slices: [slice(5000)] } as never, limitsConfig: { implementing: { maxTurns: 7 } } });
+    expect(input.limits.maxTurns).toBe(7);
+    const scaled = buildStageInput({ task, stage: "implementing", attempt: 1, approvals: [], priorFindings: [], plan: { record: null, brief: "b", criteria: [], assumptions: [], slices: [slice(5000)] } as never });
+    expect(scaled.limits).toEqual({ maxTurns: 160, timeoutMs: 60 * 60_000 });
   });
 });
