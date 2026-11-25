@@ -5,6 +5,7 @@ import type { TaskRow } from "../../domain/task.ts";
 import { fakeGitHub } from "../../test/github.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 import type { Decide } from "./check-decide.ts";
+import { tagged } from "../decision-truth.ts";
 import { prReviewRunner } from "./pr-review.ts";
 
 const node = { number: 12, title: "Export CSV", body: "Adds the export.", url: "https://github.com/o/a/pull/12", isDraft: false, updatedAt: "t", baseRefName: "main", headRefName: "feat/export", author: { login: "them" }, headRepository: { nameWithOwner: "o/a" }, reviewDecision: null, mergeable: "MERGEABLE", reviewRequests: { nodes: [] }, reviewThreads: { nodes: [] }, commits: { nodes: [] } };
@@ -37,6 +38,22 @@ function setup(opts: { answer?: unknown; helperFindings?: Partial<Record<string,
 }
 
 const posted = (result: Awaited<ReturnType<ReturnType<typeof setup>["run"]>>) => (result.requested?.[0] as unknown as { payload: { event: string; body: string; comments: Array<{ path: string; line: number; side: string; body: string }> } }).payload;
+
+describe("what the gate keeps of the finding_confirm records", () => {
+  const recording: Decide = async (pack) => (pack === "finding_confirm" ? tagged({ answer: { real: { value: true, p: 0.95 } }, recordId: "rec-sec" }) : { severity: { choice: "should_fix", confidence: 0.9 } });
+
+  it("names the record of each finding that goes to the gate as a comment, by its file and line", async () => {
+    const { run } = setup({ helperFindings: { review_security: [idor] }, decide: recording });
+    const result = await run(context);
+    expect(result.detail).toMatchObject({ decisions: { finding_confirm: { "a.ts:1": "rec-sec" } } });
+  });
+
+  it("keeps no record id of a finding the check dropped: it has no comment for a person to keep or delete", async () => {
+    const { run } = setup({ helperFindings: { review_security: [idor] }, decide: async (pack) => (pack === "finding_confirm" ? tagged({ answer: { real: { value: false, p: 0.03 } }, recordId: "rec-gone" }) : { severity: { choice: "should_fix", confidence: 0.9 } }) });
+    const result = await run(context);
+    expect(result.detail?.decisions).toBeUndefined();
+  });
+});
 
 describe("reviewing with the review passes", () => {
   it("runs all four passes on every PR, and a clean review stays an approve", async () => {

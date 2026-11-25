@@ -1,0 +1,336 @@
+{
+  "schema": 1,
+  "pack": "thread_settle",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-25T12:32:43.588Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 8,
+    "passed": 7,
+    "passRate": 0.875,
+    "meanJudgeScore": null,
+    "meanTurns": 2.125,
+    "meanDurationMs": 3188.75,
+    "costUsd": 0.00297766,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
+      "accuracy": 0.8571428571428571,
+      "actedOnAccuracy": 0.8571428571428571,
+      "coverage": 1,
+      "brier": 0.11062500000000001,
+      "ece": 0.09357142857142864,
+      "meanConfidence": 0.94125,
+      "overconfident": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "author-reason-is-sound",
+      "pass": false,
+      "schema": {
+        "check": "answer on the thread_settle schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reply_holds.value = true",
+          "pass": false,
+          "detail": "found false"
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2497,
+      "costUsd": 0.0005369000000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "addressed": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "reply_holds": {
+            "correct": false,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.875,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "code-moved-not-fixed",
+      "pass": true,
+      "schema": {
+        "check": "answer on the thread_settle schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "addressed.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 4056,
+      "costUsd": 0.00036115,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "addressed": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "reply_holds": {
+            "correct": null,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.965,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "fixed-in-the-delta",
+      "pass": true,
+      "schema": {
+        "check": "answer on the thread_settle schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "addressed.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3493,
+      "costUsd": 0.00032485,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "addressed": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "reply_holds": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.95,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "half-moved-code",
+      "pass": true,
+      "schema": {
+        "check": "answer on the thread_settle schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "addressed.p within 0.2..0.85",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2821,
+      "costUsd": 0.00037915,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "addressed": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "reply_holds": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": null,
+        "confidence": 0.875,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "null-check-added",
+      "pass": true,
+      "schema": {
+        "check": "answer on the thread_settle schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "addressed.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2533,
+      "costUsd": 0.00031345,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "addressed": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "reply_holds": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.95,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "reply-is-only-trust-me",
+      "pass": true,
+      "schema": {
+        "check": "answer on the thread_settle schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reply_holds.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3420,
+      "costUsd": 0.00031605,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "addressed": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "reply_holds": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.965,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "untouched-and-reply-claims-a-fix",
+      "pass": true,
+      "schema": {
+        "check": "answer on the thread_settle schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "addressed.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 3,
+      "durationMs": 3802,
+      "costUsd": 0.00043516,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "addressed": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "reply_holds": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.98,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "untouched-and-reply-is-a-plea",
+      "pass": true,
+      "schema": {
+        "check": "answer on the thread_settle schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "addressed.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2888,
+      "costUsd": 0.00031095000000000005,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "addressed": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "reply_holds": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.97,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

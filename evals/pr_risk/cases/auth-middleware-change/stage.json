@@ -1,0 +1,50 @@
+{
+  "schema": 3,
+  "stage": "pr_risk",
+  "pack": "pr_risk",
+  "attempt": 1,
+  "task": {
+    "id": "pr-risk",
+    "title": "PR: Let service accounts skip the session check",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "pr_risk",
+      "risk": {
+        "title": "Let service accounts skip the session check",
+        "scope": "the whole PR",
+        "files": [
+          {
+            "path": "src/auth/middleware.ts",
+            "additions": 18,
+            "deletions": 4
+          },
+          {
+            "path": "src/auth/middleware.test.ts",
+            "additions": 30,
+            "deletions": 0
+          }
+        ],
+        "filesTotal": 2,
+        "additions": 48,
+        "deletions": 4
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

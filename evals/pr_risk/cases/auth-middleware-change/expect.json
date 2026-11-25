@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "level.choice",
+      "value": "high"
+    }
+  ],
+  "rubric": "A change to the authentication middleware: high.",
+  "label": {
+    "level": {
+      "choice": "high"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "level": "Auth, payments, secrets, migrations, infrastructure, a public contract, or a large change across many areas"
+    },
+    "why": "It changes who may pass the authentication middleware: auth is a high-risk area whatever the size.",
+    "ruledOut": [
+      {
+        "question": "level",
+        "label": "low",
+        "why": "It changes who may pass the authentication middleware: auth is a high-risk area whatever the size. It is not low: Docs, tests, copy, styling or a small change in one place with no data, auth, money or shared contract near it"
+      },
+      {
+        "question": "level",
+        "label": "medium",
+        "why": "It changes who may pass the authentication middleware: auth is a high-risk area whatever the size. It is not medium: An ordinary feature or fix across a few files in one area"
+      }
+    ],
+    "second": {
+      "label": {
+        "level": {
+          "choice": "high"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

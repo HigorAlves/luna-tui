@@ -33,6 +33,8 @@ export interface PrWatchOptions {
   sync?: (card: WatchedCard) => Promise<void>;
   /** Sends the card its event (the pipeline applies it). `key` goes with `responded`. */
   send: (id: string, what: "merged" | "closed" | "responded", key?: string) => Promise<unknown>;
+  /** Told of a merged PR before its card gets the event: what the merge says about the card's earlier decisions. A throw is a warning, never a stop. */
+  onMerged?: (card: WatchedCard, source: { repo: string; number: number }) => Promise<void>;
   /** The repository's `review.*` keys. */
   policy: (repoPath: string | null) => Promise<PrWatchPolicy>;
   intervalMs?: number;
@@ -110,6 +112,7 @@ export class PrWatch {
     const { github } = this.options;
     const state = await github.prMerged(source.repo, source.number);
     if (state.state === "closed") {
+      if (state.merged) await this.options.onMerged?.(card, source).catch((error) => this.warn(`pr watch: merge hook of ${card.id} failed`, error));
       await this.options.send(card.id, state.merged ? "merged" : "closed");
       return;
     }

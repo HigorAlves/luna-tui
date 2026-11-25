@@ -122,6 +122,8 @@ export interface Confirmed {
   main: Array<{ finding: Finding; unsure: boolean }>;
   /** How many of the main reviewer's findings landed on each verdict. */
   mainVerdicts: Record<string, number>;
+  /** The record id of each finding_confirm decision beside the finding it judged, for the truth a person's word at the gate gives. */
+  records: Array<{ finding: Finding; recordId: string }>;
 }
 
 /** A finding the main reviewer made too: adding it to the main's findings folds into one of them. */
@@ -129,7 +131,7 @@ const madeToo = (main: readonly Finding[], f: Finding): boolean => mergeDuplicat
 
 /** Checks the findings once more against the code: the helpers' own (what the main reviewer did not make too) and the main reviewer's. For a helper's: proceed on a yes keeps it, proceed on a no drops it, flag keeps it marked unsure, ask drops it, and a check that did not run keeps it. */
 export async function confirmHelperFindings(deps: ConfirmDeps, helpers: readonly Pick<HelperRun, "pack" | "findings">[], main: readonly Finding[]): Promise<Confirmed> {
-  const out: Confirmed = { kept: [], agreed: [], verdicts: {}, duplicates: {}, main: [], mainVerdicts: {} };
+  const out: Confirmed = { kept: [], agreed: [], verdicts: {}, duplicates: {}, main: [], mainVerdicts: {}, records: [] };
   const asked: Array<{ pack: ReviewHelperPack; finding: Finding }> = [];
   for (const helper of helpers) {
     for (const finding of helper.findings) {
@@ -141,7 +143,8 @@ export async function confirmHelperFindings(deps: ConfirmDeps, helpers: readonly
   }
   const judge = async (finding: Finding): Promise<{ verdict: Verdict | "skipped"; real: unknown }> => {
     const excerpt = await deps.excerpt(finding).catch(() => "");
-    const { verdict, answer } = await judgeCheck(deps.decide, "finding_confirm", { kind: "finding", finding, excerpt }, deps.repoPath, deps.decisions, deps.log);
+    const { verdict, answer, recordId } = await judgeCheck(deps.decide, "finding_confirm", { kind: "finding", finding, excerpt }, deps.repoPath, deps.decisions, deps.log);
+    if (recordId) out.records.push({ finding, recordId });
     return { verdict, real: (answer?.real as { value?: unknown } | undefined)?.value };
   };
   const [judged, judgedMain] = await Promise.all([

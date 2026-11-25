@@ -1,6 +1,6 @@
 # Decision scorecard
 
-Generated 2026-11-06 by `pnpm eval scorecard` from `evals/baselines/<engine>/<pack>.json`. Do not edit by hand: re-run the baselines (docs/runbooks/calibrate-decisions.md).
+Generated 2026-11-25 by `pnpm eval scorecard` from `evals/baselines/<engine>/<pack>.json`. Do not edit by hand: re-run the baselines (docs/runbooks/calibrate-decisions.md).
 
 ## The rule
 
@@ -10,6 +10,8 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 
 | pack | engine | n | accuracy | acted-on accuracy | coverage | Brier | ECE | cost per case | p50 latency | measured at |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| already_raised | claude:haiku | 8 | 100% | 100% (72-100) | 88% | 0.004 | 0.057 | $0.0003 | 2.5s | 2026-11-25 |
+| already_raised | jev | 8 | 100% | 100% (72-100) | 100% | 0.001 | 0.021 | $0.0000 | 0.5s | 2026-11-25 |
 | ci_failure_class | claude:haiku | 9 | 100% | 100% (75-100) | 100% | 0.006 | 0.074 | $0.0004 | 1.8s | 2026-11-06 |
 | ci_failure_class | codex:luna | 9 | 100% | 100% (75-100) | 100% | 0.000 | 0.011 | n/a | 2.4s | 2026-11-06 |
 | ci_failure_class | jev | 9 | 88% | 100% (72-100) | 89% | 0.024 | 0.084 | $0.0000 | 0.5s | 2026-11-06 |
@@ -25,6 +27,8 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 | coverage_check | claude:haiku | 8 | 86% | 86% (55-97) | 100% | 0.117 | 0.023 | $0.0006 | 2.6s | 2026-11-06 |
 | coverage_check | codex:luna | 8 | 86% | 86% (55-97) | 100% | 0.128 | 0.118 | n/a | 3.3s | 2026-11-06 |
 | coverage_check | jev | 8 | 57% | 100% (53-100) | 50% | 0.231 | 0.320 | $0.0000 | 0.5s | 2026-11-06 |
+| criteria_met | claude:haiku | 8 | 71% | 100% (65-100) | 75% | 0.114 | 0.253 | $0.0003 | 2.6s | 2026-11-25 |
+| criteria_met | jev | 8 | 71% | 83% (50-96) | 88% | 0.122 | 0.236 | $0.0000 | 0.5s | 2026-11-25 |
 | e2e_failure_cause | claude:haiku | 8 | 100% | 100% (72-100) | 88% | 0.011 | 0.093 | $0.0005 | 2.2s | 2026-11-06 |
 | e2e_failure_cause | codex:luna | 8 | 100% | 100% (72-100) | 88% | 0.000 | 0.014 | n/a | 2.4s | 2026-11-06 |
 | e2e_failure_cause | jev | 8 | 86% | 100% (69-100) | 75% | 0.015 | 0.069 | $0.0000 | 0.5s | 2026-11-06 |
@@ -43,6 +47,8 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 | finding_classify | claude:haiku | 8 | 71% | 83% (50-96) | 75% | 0.179 | 0.180 | $0.0004 | 1.8s | 2026-11-06 |
 | finding_classify | codex:luna | 8 | 86% | 86% (55-97) | 100% | 0.143 | 0.106 | n/a | 2.2s | 2026-11-06 |
 | finding_classify | jev | 8 | 43% | 75% (36-94) | 50% | 0.276 | 0.377 | $0.0000 | 0.4s | 2026-11-06 |
+| finding_confirm | claude:haiku | 8 | 100% | 100% (72-100) | 88% | 0.005 | 0.067 | $0.0003 | 2.9s | 2026-11-25 |
+| finding_confirm | jev | 8 | 100% | 100% (72-100) | 88% | 0.004 | 0.061 | $0.0000 | 0.5s | 2026-11-25 |
 | fix_scope | claude:haiku | 8 | 100% | 100% (65-100) | 75% | 0.060 | 0.203 | $0.0004 | 2.0s | 2026-11-06 |
 | fix_scope | codex:luna | 8 | 100% | 100% (72-100) | 100% | 0.002 | 0.033 | n/a | 2.0s | 2026-11-06 |
 | fix_scope | jev | 8 | 86% | 100% (60-100) | 50% | 0.118 | 0.207 | $0.0000 | 0.4s | 2026-11-06 |
@@ -55,9 +61,13 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 | plan_check | claude:haiku | 8 | 100% | 100% (69-100) | 75% | 0.047 | 0.206 | $0.0007 | 2.9s | 2026-11-06 |
 | plan_check | codex:luna | 8 | 71% | 71% (41-90) | 88% | 0.281 | 0.265 | n/a | 3.0s | 2026-11-06 |
 | plan_check | jev | 8 | 86% | 100% (43-100) | 25% | 0.134 | 0.127 | $0.0000 | 0.6s | 2026-11-06 |
+| pr_risk | claude:haiku | 8 | 100% | 100% (72-100) | 100% | 0.011 | 0.091 | $0.0003 | 2.0s | 2026-11-25 |
+| pr_risk | jev | 8 | 100% | 100% (72-100) | 100% | 0.006 | 0.059 | $0.0000 | 0.5s | 2026-11-25 |
 | red_check | claude:haiku | 8 | 100% | 100% (53-100) | 50% | 0.041 | 0.190 | $0.0006 | 2.8s | 2026-11-06 |
 | red_check | codex:luna | 8 | 100% | 100% (72-100) | 100% | 0.000 | 0.014 | n/a | 3.2s | 2026-11-06 |
 | red_check | jev | 8 | 100% | 100% (27-100) | 13% | 0.060 | 0.240 | $0.0000 | 0.5s | 2026-11-06 |
+| rereview_worth | claude:haiku | 8 | 100% | 100% (72-100) | 100% | 0.005 | 0.069 | $0.0003 | 2.2s | 2026-11-25 |
+| rereview_worth | jev | 8 | 100% | 100% (72-100) | 100% | 0.000 | 0.019 | $0.0000 | 0.5s | 2026-11-25 |
 | risk_score | claude:haiku | 8 | 86% | 100% (27-100) | 13% | 0.145 | 0.129 | $0.0007 | 2.7s | 2026-11-06 |
 | risk_score | codex:luna | 8 | 86% | 80% (44-95) | 75% | 0.147 | 0.079 | n/a | 3.3s | 2026-11-06 |
 | risk_score | jev | 8 | 86% | 50% (12-88) | 25% | 0.299 | 0.487 | $0.0000 | 0.6s | 2026-11-06 |
@@ -70,6 +80,8 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 | split_check | claude:haiku | 6 | 80% | 67% (25-92) | 67% | 0.174 | 0.207 | $0.0006 | 7.3s | 2026-11-06 |
 | split_check | codex:luna | 8 | 86% | 86% (55-97) | 100% | 0.124 | 0.092 | n/a | 2.6s | 2026-11-06 |
 | split_check | jev | 8 | 57% | 100% (53-100) | 50% | 0.198 | 0.306 | $0.0000 | 0.5s | 2026-11-06 |
+| thread_settle | claude:haiku | 8 | 86% | 86% (55-97) | 100% | 0.111 | 0.094 | $0.0004 | 3.2s | 2026-11-25 |
+| thread_settle | jev | 8 | 100% | 100% (72-100) | 100% | 0.005 | 0.048 | $0.0000 | 0.4s | 2026-11-25 |
 | ticket_assess | claude:haiku | 8 | 71% | n/a | 0% | 0.171 | 0.144 | $0.0017 | 3.8s | 2026-11-06 |
 | ticket_assess | codex:luna | 8 | 86% | 100% (43-100) | 25% | 0.096 | 0.103 | n/a | 5.3s | 2026-11-06 |
 | ticket_assess | jev | 8 | 29% | n/a | 0% | 0.344 | 0.370 | $0.0001 | 0.6s | 2026-11-06 |
@@ -221,28 +233,45 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 
 | pack | default | why |
 | --- | --- | --- |
+| already_raised | jev | jev: acted-on accuracy 1.00 at coverage 1.00 (n 8), it acted on every case and was right on every one |
+| breach_assess | jev | unmeasured: 0 engines measured, two are needed |
+| capacity_check | jev | unmeasured: 0 engines measured, two are needed |
 | ci_failure_class | jev | jev: pinned by the owner on 2026-11-06, to try Jev on real cards first (measured: acted-on accuracy 1.00 at coverage 0.89, n 9) |
 | comment_intent | jev | jev: acted-on accuracy 1.00 at coverage 0.75 (n 8), a tie within 2 points that goes to Jev, the cheapest |
 | conversation_assess | claude:haiku | claude:haiku: per answer, acted-on accuracy 1.00 at coverage 0.76 (n 80), a tie within 2 points settled by cost |
 | conversation_relation | jev | jev: pinned by the owner on 2026-11-06, to try Jev on real cards first (measured: acted-on accuracy 0.75 at coverage 0.63, n 8) |
 | coverage_check | claude:haiku | claude:haiku: acted-on accuracy 0.86 at coverage 1.00 (n 8), a tie within 2 points settled by cost |
+| criteria_met | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 8) |
 | e2e_failure_cause | jev | jev: acted-on accuracy 1.00 at coverage 0.75 (n 8), a tie within 2 points that goes to Jev, the cheapest |
 | escalation_reason | jev | jev: pinned by the owner on 2026-11-06, to try Jev on real cards first (measured: acted-on accuracy 1.00 at coverage 0.75, n 8) |
 | event_class | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.93 (n 14) |
 | evidence_format | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 1.00 (n 8), it acted on every case and was right on every one; so did others, and it is the cheaper |
 | evidence_valid | codex:luna | codex:luna: acted-on accuracy 1.00 at coverage 1.00 (n 8), it acted on every case and was right on every one |
 | finding_classify | codex:luna | codex:luna: acted-on accuracy 0.86 at coverage 1.00 (n 8) |
+| finding_confirm | jev | jev: acted-on accuracy 1.00 at coverage 0.88 (n 8), a tie within 2 points that goes to Jev, the cheapest |
 | fix_scope | jev | jev: pinned by the owner on 2026-11-06, to try Jev on real cards first (measured: acted-on accuracy 1.00 at coverage 0.50, n 8) |
 | frame_privacy | jev | jev: acted-on accuracy 1.00 at coverage 1.00 (n 8), it acted on every case and was right on every one; so did others, and Jev is the cheapest |
 | intake_dedup | jev | jev: acted-on accuracy 1.00 at coverage 0.63 (n 8), a tie within 2 points that goes to Jev, the cheapest |
+| loop_judge | jev | unmeasured: 0 engines measured, two are needed |
 | plan_check | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 8) |
+| pr_link | jev | unmeasured: 0 engines measured, two are needed |
+| pr_risk | jev | jev: acted-on accuracy 1.00 at coverage 1.00 (n 8), it acted on every case and was right on every one; so did others, and Jev is the cheapest |
 | red_check | codex:luna | codex:luna: acted-on accuracy 1.00 at coverage 1.00 (n 8), it acted on every case and was right on every one |
+| rereview_worth | jev | jev: acted-on accuracy 1.00 at coverage 1.00 (n 8), it acted on every case and was right on every one; so did others, and Jev is the cheapest |
 | risk_score | codex:luna | codex:luna: acted-on accuracy 0.80 at coverage 0.75 (n 8) |
 | scope_check | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 1.00 (n 8), it acted on every case and was right on every one |
 | size_estimate | codex:luna | codex:luna: acted-on accuracy 0.50 at coverage 0.88 (n 8) |
 | split_check | codex:luna | codex:luna: acted-on accuracy 0.86 at coverage 1.00 (n 8) |
+| thread_settle | jev | jev: acted-on accuracy 1.00 at coverage 1.00 (n 8), it acted on every case and was right on every one |
 | ticket_assess | claude:haiku | claude:haiku: per answer, acted-on accuracy 1.00 at coverage 0.65 (n 160), a tie within 2 points settled by cost |
 | ticket_recommend | codex:luna | codex:luna: acted-on accuracy 1.00 at coverage 1.00 (n 8), it acted on every case and was right on every one |
 | ticket_validity | codex:luna | codex:luna: acted-on accuracy 1.00 at coverage 0.88 (n 8) |
 | triage_signals | codex:luna | codex:luna: per answer, acted-on accuracy 0.88 at coverage 0.67 (n 96) |
 | worth_learning | jev | jev: pinned by the owner on 2026-11-06, to try Jev on real cards first (measured: acted-on accuracy 1.00 at coverage 0.75, n 8) |
+
+## Agent packs
+
+| pack | engine | effort | n | pass rate | mean turns | cost per case | measured at |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| slack_triage | claude:haiku | low | 3 | 100% | 2.0 | $0.0007 | 2026-11-03 |
+| slack_triage | codex:luna | low | 3 | 67% | 1.0 | n/a | 2026-11-03 |

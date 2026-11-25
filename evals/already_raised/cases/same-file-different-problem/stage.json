@@ -1,0 +1,45 @@
+{
+  "schema": 3,
+  "stage": "already_raised",
+  "pack": "already_raised",
+  "attempt": 1,
+  "task": {
+    "id": "already-raised",
+    "title": "Finding: Header row is written twice",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "finding",
+      "finding": {
+        "path": "src/cart/export.ts",
+        "line": 9,
+        "severity": "bug",
+        "title": "Header row is written twice",
+        "body": "`out` already holds the header, then it is pushed again before the rows.",
+        "confidence": 0.85
+      },
+      "existing": {
+        "author": "coderabbit",
+        "path": "src/cart/export.ts",
+        "line": 9,
+        "body": "Consider renaming `out` to `lines` for readability."
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

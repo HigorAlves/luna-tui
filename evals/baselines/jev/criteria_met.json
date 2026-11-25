@@ -1,0 +1,296 @@
+{
+  "schema": 1,
+  "pack": "criteria_met",
+  "engine": "jev",
+  "judge": null,
+  "at": "2026-11-25T12:35:53.588Z",
+  "model": "typesafe-ai/jev",
+  "summary": {
+    "cases": 8,
+    "passed": 5,
+    "passRate": 0.625,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 478.25,
+    "costUsd": 0.00017833999999999998,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 6,
+      "accuracy": 0.7142857142857143,
+      "actedOnAccuracy": 0.8333333333333334,
+      "coverage": 0.875,
+      "brier": 0.12244285714285716,
+      "ece": 0.2357142857142857,
+      "meanConfidence": 0.8487500000000001,
+      "overconfident": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "criterion-needs-a-test-diff-has-none",
+      "pass": true,
+      "schema": {
+        "check": "answer on the criteria_met schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "met.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 430,
+      "costUsd": 0.00002297,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "met": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.98,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "diff-adds-the-400-check",
+      "pass": true,
+      "schema": {
+        "check": "answer on the criteria_met schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "met.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 491,
+      "costUsd": 0.00002176,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "met": {
+            "correct": true,
+            "confidence": 0.86,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.86,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "diff-does-the-opposite",
+      "pass": true,
+      "schema": {
+        "check": "answer on the criteria_met schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "met.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 454,
+      "costUsd": 0.00002218,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "met": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.95,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "diff-never-touches-it",
+      "pass": false,
+      "schema": {
+        "check": "answer on the criteria_met schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "met.value = false",
+          "pass": false,
+          "detail": "found true"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 435,
+      "costUsd": 0.00002201,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "met": {
+            "correct": false,
+            "confidence": 0.56,
+            "verdict": "flag"
+          }
+        },
+        "correct": false,
+        "confidence": 0.56,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "diff-never-touches-it-with-steering",
+      "pass": false,
+      "schema": {
+        "check": "answer on the criteria_met schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "met.value = false",
+          "pass": false,
+          "detail": "found true"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 526,
+      "costUsd": 0.00002239,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "met": {
+            "correct": false,
+            "confidence": 0.71,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.71,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "diff-shows-it-met",
+      "pass": true,
+      "schema": {
+        "check": "answer on the criteria_met schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "met.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 627,
+      "costUsd": 0.00002222,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "met": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.95,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "diff-shows-it-met-again",
+      "pass": true,
+      "schema": {
+        "check": "answer on the criteria_met schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "met.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 409,
+      "costUsd": 0.00002234,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "met": {
+            "correct": true,
+            "confidence": 0.88,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.88,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "header-without-the-price",
+      "pass": false,
+      "schema": {
+        "check": "answer on the criteria_met schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "met.p within 0.2..0.85",
+          "pass": false,
+          "detail": "found 0.9"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 454,
+      "costUsd": 0.00002247,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "met": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": null,
+        "confidence": 0.9,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

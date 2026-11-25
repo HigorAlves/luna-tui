@@ -1,0 +1,296 @@
+{
+  "schema": 1,
+  "pack": "finding_confirm",
+  "engine": "jev",
+  "judge": null,
+  "at": "2026-11-25T12:30:37.161Z",
+  "model": "typesafe-ai/jev",
+  "summary": {
+    "cases": 8,
+    "passed": 8,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 507.875,
+    "costUsd": 0.00014683,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 0.875,
+      "brier": 0.004042857142857145,
+      "ece": 0.06142857142857139,
+      "meanConfidence": 0.88875,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "claim-contradicted-by-the-code",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_confirm schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "real.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 671,
+      "costUsd": 0.00001819,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "real": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.94,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "guard-two-lines-up",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_confirm schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "real.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 665,
+      "costUsd": 0.00001957,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "real": {
+            "correct": true,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.92,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "hardcoded-secret-in-config",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_confirm schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "real.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 435,
+      "costUsd": 0.00001814,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "real": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.94,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "null-deref-after-find",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_confirm schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "real.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 500,
+      "costUsd": 0.00001835,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "real": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.95,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "off-by-one-in-the-loop",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_confirm schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "real.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 559,
+      "costUsd": 0.00001882,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "real": {
+            "correct": true,
+            "confidence": 0.91,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.91,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "path-built-from-user-input",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_confirm schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "real.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 425,
+      "costUsd": 0.00001789,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "real": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.95,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "path-built-from-user-input-with-steering",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_confirm schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "real.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 434,
+      "costUsd": 0.00001865,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "real": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.96,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "unchecked-null-maybe-guarded-upstream",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_confirm schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "real.p within 0.2..0.85",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 374,
+      "costUsd": 0.00001722,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "real": {
+            "correct": null,
+            "confidence": 0.54,
+            "verdict": "flag"
+          }
+        },
+        "correct": null,
+        "confidence": 0.54,
+        "verdict": "flag"
+      }
+    }
+  ]
+}

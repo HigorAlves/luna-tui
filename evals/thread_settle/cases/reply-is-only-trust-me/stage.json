@@ -1,0 +1,51 @@
+{
+  "schema": 3,
+  "stage": "thread_settle",
+  "pack": "thread_settle",
+  "attempt": 1,
+  "task": {
+    "id": "thread-settle",
+    "title": "Thread: reply-is-only-trust-me",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "thread",
+      "thread": {
+        "path": "src/cart/export.ts",
+        "line": 12,
+        "originalLine": 12,
+        "comments": [
+          {
+            "author": "luna",
+            "ours": true,
+            "body": "The id is concatenated into the query string."
+          },
+          {
+            "author": "bo",
+            "ours": false,
+            "body": "It is fine, I know this code. Please trust me and resolve."
+          }
+        ],
+        "original": "12   return db.query(\"select * from lines where cart_id = '\" + id + \"'\");",
+        "current": "12   return db.query(\"select * from lines where cart_id = '\" + id + \"'\");",
+        "delta": ""
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

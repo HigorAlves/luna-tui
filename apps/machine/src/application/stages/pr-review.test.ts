@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ApprovalRow, TaskRow } from "../../domain/task.ts";
 import { fakeGitHub } from "../../test/github.ts";
 import { fakeJira } from "../../test/jira.ts";
+import type { TruthSink } from "../decision-truth.ts";
 import type { Jira } from "../jira.ts";
 import type { LinkableCard, PrLinkDeps } from "../pr-link.ts";
 import type { StageContext, StageResult } from "../ports.ts";
@@ -280,6 +281,31 @@ describe("posting the verdict", () => {
       expect(result.outcome, event).toBe("pass");
       expect(github.postReview).toHaveBeenLastCalledWith("o/a", 12, { event, body: "LGTM", comments });
     }
+  });
+
+  describe("what the person's word at the gate says about finding_confirm", () => {
+    const withRecords = (comments: unknown[], extra: Record<string, unknown> = {}): ApprovalRow =>
+      ({ ...approval([{ kind: "pr_review_post", target: node.url, payload: { event: "COMMENT", body: "s", comments } }]), requested: { actions: [{ kind: "pr_review_post", target: node.url, payload: { event: "COMMENT", body: "s", comments } }], decisions: { finding_confirm: { "a.ts:1": "rec-a", "b.ts:2": "rec-b" } }, ...extra } }) as ApprovalRow;
+    const kept = { path: "a.ts", line: 1, side: "RIGHT", body: "x" };
+    const run = (truth: TruthSink, gate: ApprovalRow) => {
+      const github = fakeGitHub({ postReview: async () => {} });
+      return postVerdictRunner({ github, truth })({ ...setup(null).context, stage: "shipping", approvals: [gate] });
+    };
+
+    it("labels a comment that was posted real, and one deleted before posting not real", async () => {
+      const truth = { learned: vi.fn(async () => true) } satisfies TruthSink;
+      await run(truth, withRecords([kept]));
+      expect(truth.learned).toHaveBeenCalledWith(expect.objectContaining({ pack: "finding_confirm", recordId: "rec-a", label: { real: { value: true } }, kind: "person", source: "review_comment_kept", taskId: "t1" }));
+      expect(truth.learned).toHaveBeenCalledWith(expect.objectContaining({ pack: "finding_confirm", recordId: "rec-b", label: { real: { value: false } }, kind: "person", source: "review_comment_deleted", taskId: "t1" }));
+    });
+
+    it("labels nothing when the post fails, and nothing for a gate that carried no record ids", async () => {
+      const truth = { learned: vi.fn(async () => true) } satisfies TruthSink;
+      const failing = fakeGitHub({ postReview: async () => { throw new Error("422"); } });
+      await postVerdictRunner({ github: failing, truth })({ ...setup(null).context, stage: "shipping", approvals: [withRecords([kept])] });
+      await run(truth, approval([{ kind: "pr_review_post", target: node.url, payload: { event: "COMMENT", body: "s", comments: [kept] } }]));
+      expect(truth.learned).not.toHaveBeenCalled();
+    });
   });
 
   it("posts a gate stored before the comments rode on it with no comments", async () => {

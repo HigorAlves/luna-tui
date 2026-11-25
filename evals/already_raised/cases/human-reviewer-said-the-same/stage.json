@@ -1,0 +1,45 @@
+{
+  "schema": 3,
+  "stage": "already_raised",
+  "pack": "already_raised",
+  "attempt": 1,
+  "task": {
+    "id": "already-raised",
+    "title": "Finding: Cancel never checks the owner",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "finding",
+      "finding": {
+        "path": "src/orders/cancel.ts",
+        "line": 6,
+        "severity": "bug",
+        "title": "Cancel never checks the owner",
+        "body": "Any signed-in user can cancel another user's order.",
+        "confidence": 0.85
+      },
+      "existing": {
+        "author": "mina",
+        "path": "src/orders/cancel.ts",
+        "line": 5,
+        "body": "Should only the owner be able to cancel? Right now any signed-in user can cancel someone else's order."
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

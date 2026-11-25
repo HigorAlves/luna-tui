@@ -1,0 +1,40 @@
+{
+  "schema": 3,
+  "stage": "finding_confirm",
+  "pack": "finding_confirm",
+  "attempt": 1,
+  "task": {
+    "id": "finding-confirm",
+    "title": "Finding: API key committed in source",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "finding",
+      "finding": {
+        "path": "src/billing/client.ts",
+        "line": 3,
+        "severity": "security",
+        "title": "API key committed in source",
+        "body": "The billing key is a string literal in the client, so anyone with the repo has it.",
+        "confidence": 0.85
+      },
+      "excerpt": "1  import { Billing } from \"./sdk\";\n2  \n3  const KEY = \"live_8f2c1d9e47ab\";\n4  export const billing = new Billing({ key: KEY });"
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

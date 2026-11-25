@@ -1,0 +1,46 @@
+{
+  "schema": 3,
+  "stage": "thread_settle",
+  "pack": "thread_settle",
+  "attempt": 1,
+  "task": {
+    "id": "thread-settle",
+    "title": "Thread: code-moved-not-fixed",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "thread",
+      "thread": {
+        "path": "src/cart/export.ts",
+        "line": 20,
+        "originalLine": 7,
+        "comments": [
+          {
+            "author": "luna",
+            "ours": true,
+            "body": "No limit on the retry loop: it can spin forever."
+          }
+        ],
+        "original": "7    while (true) { await attempt(); }",
+        "current": "20    while (true) { await attempt(); }",
+        "delta": "@@ -5,3 +5,0 @@\n-function run() {\n@@ -18,0 +18,3 @@\n+function run() {\n+  while (true) { await attempt(); }\n+}"
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

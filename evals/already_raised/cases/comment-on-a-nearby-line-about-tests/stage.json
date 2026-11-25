@@ -1,0 +1,45 @@
+{
+  "schema": 3,
+  "stage": "already_raised",
+  "pack": "already_raised",
+  "attempt": 1,
+  "task": {
+    "id": "already-raised",
+    "title": "Finding: Rounding differs from the invoice code",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "finding",
+      "finding": {
+        "path": "src/cart/export.ts",
+        "line": 30,
+        "severity": "should_fix",
+        "title": "Rounding differs from the invoice code",
+        "body": "`toFixed(2)` rounds half up, the invoice code rounds half to even.",
+        "confidence": 0.85
+      },
+      "existing": {
+        "author": "mina",
+        "path": "src/cart/export.ts",
+        "line": 28,
+        "body": "Please add a test for the empty-cart case."
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}
