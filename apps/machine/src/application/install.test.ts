@@ -64,8 +64,10 @@ describe("ensureInstalled", () => {
     const out = await ensureInstalled(deps, input);
     expect(out.ok).toBe(true);
     expect(runs).toHaveLength(1);
-    expect(runs[0]).toMatchObject({ image: "repo-image:1", worktree: "/ws/repo/card-1", argv: ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"], limits: { cpu: 6, memoryGb: 12 }, egress: { allow: ["registry.npmjs.org:443"], proxyImage: "machine:dev" } });
+    expect(runs[0]).toMatchObject({ image: "repo-image:1", worktree: "/ws/repo/card-1", argv: ["sh", "-c", 'mkdir -p -- "$TMPDIR" && exec "$@"', "install", "pnpm", "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"], limits: { cpu: 6, memoryGb: 12 }, egress: { allow: ["registry.npmjs.org:443"], proxyImage: "machine:dev" } });
     expect(runs[0]!.cacheVolume).toBe("hardness-cache-repo");
+    // Temp files go on the cache volume, not the 512 MB /tmp tmpfs: a big monorepo's install (Yarn 4 zips every package through its temp folder) fills it.
+    expect(runs[0]!.env).toMatchObject({ TMPDIR: "/cache/tmp" });
     expect(asked).toContainEqual({ repoPath: "/user/repo", kind: "install" });
     // the lockfiles are read from the card's repository at the commit, never the folder
     expect(asked).toContainEqual({ path: "/ws/repo/card-1", commit: input.commit });
@@ -179,9 +181,9 @@ describe("ensureInstalled: lockfiles in subfolders", () => {
     const out = await ensureInstalled(deps, input);
     expect(out).toMatchObject({ ok: true, ran: ["pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile", "board: cargo fetch --locked", "tools/web: npm ci --ignore-scripts"] });
     expect(runs.map((r) => r.argv)).toEqual([
-      ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"],
-      ["sh", "-c", 'cd -- "$1" && shift && exec "$@"', "install-in", "board", "cargo", "fetch", "--locked"],
-      ["sh", "-c", 'cd -- "$1" && shift && exec "$@"', "install-in", "tools/web", "npm", "ci", "--ignore-scripts"],
+      ["sh", "-c", 'mkdir -p -- "$TMPDIR" && exec "$@"', "install", "pnpm", "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"],
+      ["sh", "-c", 'mkdir -p -- "$TMPDIR" && cd -- "$1" && shift && exec "$@"', "install-in", "board", "cargo", "fetch", "--locked"],
+      ["sh", "-c", 'mkdir -p -- "$TMPDIR" && cd -- "$1" && shift && exec "$@"', "install-in", "tools/web", "npm", "ci", "--ignore-scripts"],
     ]);
   });
 
@@ -191,7 +193,7 @@ describe("ensureInstalled: lockfiles in subfolders", () => {
     expect(out.ok).toBe(true);
     expect(out.ok && out.ran).toEqual(["pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile", "tools/web: npm ci --ignore-scripts"]);
     expect(out.ok && out.notes.join("\n")).toContain("installing from board/Cargo.lock: a check under board may fail for it");
-    const root = setup({ sub, exitFor: (argv) => (argv[0] === "pnpm" ? 1 : 0) });
+    const root = setup({ sub, exitFor: (argv) => (argv.includes("pnpm") ? 1 : 0) });
     expect(await ensureInstalled(root.deps, root.input)).toMatchObject({ ok: false, detail: { step: "install", lockfile: "pnpm-lock.yaml" } });
   });
 

@@ -468,7 +468,7 @@ How the bounds apply to a repo's `luna.yaml`, each with a reason left where you 
 | Key | Effect | Where the reason is |
 |---|---|---|
 | `limits.max_cpu`, `limits.max_memory_gb` | a repo's `sandbox.cpu` and `sandbox.memory_gb` are capped | a note on the task, at the start of a stage |
-| `egress.deny` | every host the repo chose is dropped when it matches an entry (`*.x.com` covers subdomains): `sandbox.egress.allow`, the hosts a lockfile's `resolved` URLs name, the `qa_targets` hosts and the `deploy.url_pattern` host. A repo wildcard `*.S` goes too when a deny names `S` or a host under it. Case, a trailing dot and a port are ignored. GitHub, each ecosystem's own registries and the engines' hosts are the machine's and stay | `bounds` on the repo's row in `GET /repos` |
+| `egress.deny` | every host the repo chose is dropped when it matches an entry (`*.x.com` covers subdomains): `sandbox.egress.allow`, the hosts a lockfile's `resolved` URLs name (and a Yarn 2+ lockfile's `resolution:` URLs, such as `xlsx` fetched from `cdn.sheetjs.com`), the `qa_targets` hosts and the `deploy.url_pattern` host. A repo wildcard `*.S` goes too when a deny names `S` or a host under it. Case, a trailing dot and a port are ignored. GitHub, each ecosystem's own registries and the engines' hosts are the machine's and stay | `bounds` on the repo's row in `GET /repos` |
 | `egress.repo_hosts: deny` | every one of those repo hosts is dropped | the same |
 | `egress.max_repo_hosts` | only the first N repo hosts are kept, counted over all of them in that order: allow list, lockfile, QA targets, preview | the same |
 | `images.repo_base: deny` | `sandbox.image.base` is ignored (the machine's image runs) and `POST /repos/base/approve` refuses | the same, and the refusal |

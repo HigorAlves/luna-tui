@@ -6,7 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { type SandboxExec, cacheVolumeFor } from "../adapters/docker/docker.ts";
+import { CACHE_DIR, type SandboxExec, cacheVolumeFor } from "../adapters/docker/docker.ts";
 import type { BlockedRow } from "../adapters/docker/egress.ts";
 import type { ExecResult } from "../adapters/process/exec.ts";
 import { LOCKFILES } from "../domain/env-hash.ts";
@@ -136,7 +136,9 @@ export async function ensureInstalled(deps: InstallDeps, input: InstallInput): P
         worktree: input.workspace,
         limits,
         argv: argvIn(step),
-        env: { ...containerEnv, ...step.env },
+        // Temp files on the cache volume, not the container's 512 MB /tmp tmpfs: Yarn 4 zips every package through its temp folder, and a big
+        // monorepo's install fills the tmpfs (ENOSPC). The volume is the repo's own and already holds the package caches.
+        env: { ...containerEnv, ...step.env, TMPDIR: `${CACHE_DIR}/tmp` },
         cacheVolume: cacheVolumeFor(input.repoPath, limits.cacheTrust),
         ...(spec ? { egress: spec } : {}),
       },
