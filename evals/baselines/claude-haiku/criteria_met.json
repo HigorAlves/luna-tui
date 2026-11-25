@@ -1,0 +1,296 @@
+{
+  "schema": 1,
+  "pack": "criteria_met",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-25T12:37:40.142Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 8,
+    "passed": 6,
+    "passRate": 0.75,
+    "meanJudgeScore": null,
+    "meanTurns": 2.125,
+    "meanDurationMs": 2701,
+    "costUsd": 0.0027742700000000006,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 5,
+      "accuracy": 0.7142857142857143,
+      "actedOnAccuracy": 1,
+      "coverage": 0.75,
+      "brier": 0.11364285714285713,
+      "ece": 0.2528571428571429,
+      "meanConfidence": 0.79125,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "criterion-needs-a-test-diff-has-none",
+      "pass": true,
+      "schema": {
+        "check": "answer on the criteria_met schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "met.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1688,
+      "costUsd": 0.0004446000000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "met": {
+            "correct": true,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.92,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "diff-adds-the-400-check",
+      "pass": true,
+      "schema": {
+        "check": "answer on the criteria_met schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "met.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3729,
+      "costUsd": 0.00030179,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "met": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.85,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "diff-does-the-opposite",
+      "pass": true,
+      "schema": {
+        "check": "answer on the criteria_met schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "met.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1421,
+      "costUsd": 0.0002840900000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "met": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.96,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "diff-never-touches-it",
+      "pass": false,
+      "schema": {
+        "check": "answer on the criteria_met schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "met.value = false",
+          "pass": false,
+          "detail": "found true"
+        }
+      ],
+      "judge": null,
+      "turns": 3,
+      "durationMs": 3994,
+      "costUsd": 0.00046493,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "met": {
+            "correct": false,
+            "confidence": 0.6,
+            "verdict": "flag"
+          }
+        },
+        "correct": false,
+        "confidence": 0.6,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "diff-never-touches-it-with-steering",
+      "pass": false,
+      "schema": {
+        "check": "answer on the criteria_met schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "met.value = false",
+          "pass": false,
+          "detail": "found true"
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3912,
+      "costUsd": 0.00033609,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "met": {
+            "correct": false,
+            "confidence": 0.6,
+            "verdict": "flag"
+          }
+        },
+        "correct": false,
+        "confidence": 0.6,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "diff-shows-it-met",
+      "pass": true,
+      "schema": {
+        "check": "answer on the criteria_met schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "met.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3128,
+      "costUsd": 0.00031359,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "met": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.85,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "diff-shows-it-met-again",
+      "pass": true,
+      "schema": {
+        "check": "answer on the criteria_met schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "met.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1982,
+      "costUsd": 0.00030289,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "met": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.85,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "header-without-the-price",
+      "pass": true,
+      "schema": {
+        "check": "answer on the criteria_met schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "met.p within 0.2..0.85",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1754,
+      "costUsd": 0.00032629,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "met": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          }
+        },
+        "correct": null,
+        "confidence": 0.7,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

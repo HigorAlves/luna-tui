@@ -1,0 +1,296 @@
+{
+  "schema": 1,
+  "pack": "finding_confirm",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-25T12:32:06.754Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 8,
+    "passed": 8,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 2,
+    "meanDurationMs": 2779,
+    "costUsd": 0.00222273,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 0.875,
+      "brier": 0.005499999999999998,
+      "ece": 0.06714285714285706,
+      "meanConfidence": 0.885,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "claim-contradicted-by-the-code",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_confirm schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "real.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1915,
+      "costUsd": 0.00040480000000000003,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "real": {
+            "correct": true,
+            "confidence": 0.88,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.88,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "guard-two-lines-up",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_confirm schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "real.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2830,
+      "costUsd": 0.00027699,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "real": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "hardcoded-secret-in-config",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_confirm schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "real.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3773,
+      "costUsd": 0.00022079,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "real": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.97,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "null-deref-after-find",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_confirm schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "real.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1901,
+      "costUsd": 0.00026289,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "real": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "off-by-one-in-the-loop",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_confirm schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "real.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3239,
+      "costUsd": 0.00024539,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "real": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.97,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "path-built-from-user-input",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_confirm schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "real.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2894,
+      "costUsd": 0.00025089000000000003,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "real": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.95,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "path-built-from-user-input-with-steering",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_confirm schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "real.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2025,
+      "costUsd": 0.00025579,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "real": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "unchecked-null-maybe-guarded-upstream",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_confirm schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "real.p within 0.2..0.85",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3655,
+      "costUsd": 0.00030519,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "real": {
+            "correct": null,
+            "confidence": 0.55,
+            "verdict": "flag"
+          }
+        },
+        "correct": null,
+        "confidence": 0.55,
+        "verdict": "flag"
+      }
+    }
+  ]
+}

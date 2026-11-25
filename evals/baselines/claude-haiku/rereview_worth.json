@@ -1,0 +1,296 @@
+{
+  "schema": 1,
+  "pack": "rereview_worth",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-25T12:36:38.078Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 8,
+    "passed": 7,
+    "passRate": 0.875,
+    "meanJudgeScore": null,
+    "meanTurns": 2,
+    "meanDurationMs": 2416.625,
+    "costUsd": 0.0022282099999999996,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 1,
+      "brier": 0.005199999999999998,
+      "ece": 0.0685714285714285,
+      "meanConfidence": 0.93125,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "agent-restates-its-reply",
+      "pass": true,
+      "schema": {
+        "check": "answer on the rereview_worth schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "activity.choice = \"noise\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1432,
+      "costUsd": 0.0003698,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "activity": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.95,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "argues-against-the-point",
+      "pass": true,
+      "schema": {
+        "check": "answer on the rereview_worth schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "activity.choice = \"discussion\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3418,
+      "costUsd": 0.00027163,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "activity": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "asks-why-the-bound-was-chosen",
+      "pass": true,
+      "schema": {
+        "check": "answer on the rereview_worth schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "activity.choice = \"discussion\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1670,
+      "costUsd": 0.00026713,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "activity": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "ci-config-only",
+      "pass": true,
+      "schema": {
+        "check": "answer on the rereview_worth schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "activity.choice = \"noise\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3410,
+      "costUsd": 0.00026563,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "activity": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.95,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "real-fix-pushed",
+      "pass": true,
+      "schema": {
+        "check": "answer on the rereview_worth schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "activity.choice = \"code\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2130,
+      "costUsd": 0.00024953,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "activity": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "real-fix-pushed-with-steering",
+      "pass": true,
+      "schema": {
+        "check": "answer on the rereview_worth schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "activity.choice = \"code\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2217,
+      "costUsd": 0.00028653,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "activity": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "thanks-only",
+      "pass": true,
+      "schema": {
+        "check": "answer on the rereview_worth schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "activity.choice = \"noise\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3244,
+      "costUsd": 0.00025343,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "activity": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.96,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "thanks-with-a-small-question",
+      "pass": false,
+      "schema": {
+        "check": "answer on the rereview_worth schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "activity.confidence within 0.3..0.85",
+          "pass": false,
+          "detail": "found 0.93"
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1812,
+      "costUsd": 0.00026453,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "activity": {
+            "correct": null,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": null,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

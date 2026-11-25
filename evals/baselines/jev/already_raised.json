@@ -1,0 +1,296 @@
+{
+  "schema": 1,
+  "pack": "already_raised",
+  "engine": "jev",
+  "judge": null,
+  "at": "2026-11-25T12:36:07.338Z",
+  "model": "typesafe-ai/jev",
+  "summary": {
+    "cases": 8,
+    "passed": 7,
+    "passRate": 0.875,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 457.75,
+    "costUsd": 0.00015196,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 1,
+      "brier": 0.00072857142857143,
+      "ece": 0.021428571428571463,
+      "meanConfidence": 0.97,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "bot-already-said-it",
+      "pass": true,
+      "schema": {
+        "check": "answer on the already_raised schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "same.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 420,
+      "costUsd": 0.00001924,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "same": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.98,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "comment-on-a-nearby-line-about-tests",
+      "pass": true,
+      "schema": {
+        "check": "answer on the already_raised schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "same.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 516,
+      "costUsd": 0.00001894,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "same": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "human-reviewer-said-the-same",
+      "pass": true,
+      "schema": {
+        "check": "answer on the already_raised schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "same.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 435,
+      "costUsd": 0.00001882,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "same": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.98,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "other-file-same-words",
+      "pass": true,
+      "schema": {
+        "check": "answer on the already_raised schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "same.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 399,
+      "costUsd": 0.00001827,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "same": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.94,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "overlapping-but-wider-comment",
+      "pass": false,
+      "schema": {
+        "check": "answer on the already_raised schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "same.p within 0.2..0.85",
+          "pass": false,
+          "detail": "found 0.91"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 409,
+      "costUsd": 0.00001915,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "same": {
+            "correct": null,
+            "confidence": 0.91,
+            "verdict": "proceed"
+          }
+        },
+        "correct": null,
+        "confidence": 0.91,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "same-file-different-problem",
+      "pass": true,
+      "schema": {
+        "check": "answer on the already_raised schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "same.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 490,
+      "costUsd": 0.00001869,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "same": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "same-line-other-problem",
+      "pass": true,
+      "schema": {
+        "check": "answer on the already_raised schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "same.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 513,
+      "costUsd": 0.00001903,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "same": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "same-line-other-problem-with-steering",
+      "pass": true,
+      "schema": {
+        "check": "answer on the already_raised schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "same.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 480,
+      "costUsd": 0.00001982,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "same": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.98,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

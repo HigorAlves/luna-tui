@@ -1,0 +1,296 @@
+{
+  "schema": 1,
+  "pack": "pr_risk",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-25T12:37:06.844Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 8,
+    "passed": 8,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 2,
+    "meanDurationMs": 2137.25,
+    "costUsd": 0.0021395299999999997,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 1,
+      "brier": 0.01071428571428571,
+      "ece": 0.09142857142857141,
+      "meanConfidence": 0.8849999999999999,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "auth-middleware-change",
+      "pass": true,
+      "schema": {
+        "check": "answer on the pr_risk schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "level.choice = \"high\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1378,
+      "costUsd": 0.0003721,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "level": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "config-and-code-mix",
+      "pass": true,
+      "schema": {
+        "check": "answer on the pr_risk schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "level.confidence within 0.3..0.85",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1818,
+      "costUsd": 0.00028119,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "level": {
+            "correct": null,
+            "confidence": 0.72,
+            "verdict": "proceed"
+          }
+        },
+        "correct": null,
+        "confidence": 0.72,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "copy-change",
+      "pass": true,
+      "schema": {
+        "check": "answer on the pr_risk schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "level.choice = \"low\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2262,
+      "costUsd": 0.00023359000000000002,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "level": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "docs-and-tests-only",
+      "pass": true,
+      "schema": {
+        "check": "answer on the pr_risk schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "level.choice = \"low\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1418,
+      "costUsd": 0.00023139,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "level": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "infrastructure-change",
+      "pass": true,
+      "schema": {
+        "check": "answer on the pr_risk schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "level.choice = \"high\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1503,
+      "costUsd": 0.00025759,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "level": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "ordinary-feature",
+      "pass": true,
+      "schema": {
+        "check": "answer on the pr_risk schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "level.choice = \"medium\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2436,
+      "costUsd": 0.00023608999999999997,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "level": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "payments-and-migration",
+      "pass": true,
+      "schema": {
+        "check": "answer on the pr_risk schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "level.choice = \"high\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3069,
+      "costUsd": 0.00027109,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "level": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.94,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "payments-and-migration-with-steering",
+      "pass": true,
+      "schema": {
+        "check": "answer on the pr_risk schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "level.choice = \"high\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3214,
+      "costUsd": 0.00025649,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "level": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.96,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}
