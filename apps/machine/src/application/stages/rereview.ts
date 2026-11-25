@@ -35,6 +35,8 @@ export interface RereviewPlan {
   head: string;
   /** Our threads by id, for the reviewer's answers to point at. */
   threads: Thread[];
+  /** No commit since the review we read: nothing new to review, only our threads may have moved. */
+  quiet: boolean;
 }
 
 /** Threads settled in one go; the rest go to the reviewer. */
@@ -76,12 +78,14 @@ export async function prepareRereview(
   const [delta, head] = await Promise.all([deps.git.diffSince(opts.worktree, since), deps.git.head(opts.worktree)]);
   const note = delta === null ? `Our last review read ${since.slice(0, 7)}, which is no longer in the branch (a force-push or a rebase), so the whole diff is below.` : undefined;
   const diff = delta ?? opts.fullDiff;
+  const quiet = delta !== null && delta.trim() === "";
+  const reviewedAt = ms(ours.at);
 
   const mine = (await github.prThreads(opts.repo, opts.number)).filter((t) => same(t.comments[0]?.author, me));
   const overrides: Record<string, DecisionOverrides> = (await deps.decisions?.(opts.repoPath).catch(() => ({}))) ?? {};
   const settled = await Promise.all(
     mine.map(async (thread, i): Promise<Settle> => {
-      if (i >= MAX_SETTLE || !deps.decide) return "unsettled";
+      if (i >= MAX_SETTLE || !deps.decide) return quiet && thread.comments.some((c, j) => j > 0 && same(c.author, me) && ms(c.at) >= reviewedAt) ? "answered" : "unsettled";
       const comments = thread.comments.slice(-KEEP_COMMENTS).map((c) => ({ author: c.author, ours: same(c.author, me), body: (same(c.author, me) ? "" : UNTRUSTED) + c.body.slice(0, COMMENT_CAP) }));
       const original = thread.originalCommit && thread.path && thread.originalLine ? around((await deps.git.fileAt(opts.worktree, thread.originalCommit, thread.path).catch(() => null)) ?? "", thread.originalLine) : "";
       const current = thread.path && thread.line ? await deps.readNow(opts.worktree, thread.path, thread.line).catch(() => "") : "";
@@ -90,6 +94,8 @@ export async function prepareRereview(
       if (confidentYes(answer, "addressed", overrides.thread_settle)) return "fixed";
       // A reply nobody wrote cannot hold.
       if (thread.comments.some((c) => !same(c.author, me)) && confidentYes(answer, "reply_holds", overrides.thread_settle)) return "reply_holds";
+      // With no new commit, a thread we already answered after the review we read is not answered again.
+      if (quiet && thread.comments.some((c, j) => j > 0 && same(c.author, me) && ms(c.at) >= reviewedAt)) return "answered";
       return "unsettled";
     }),
   );
@@ -100,7 +106,7 @@ export async function prepareRereview(
     comments: t.comments.slice(-KEEP_COMMENTS).map((c) => ({ author: c.author, ours: same(c.author, me), body: c.body.slice(0, COMMENT_CAP) })),
     settle: settled[i]!,
   }));
-  return { diff, head, threads: mine, rereview: { since, ...(note ? { note } : {}), threads } };
+  return { diff, head, threads: mine, quiet, rereview: { since, ...(note ? { note } : {}), threads } };
 }
 
 /** The templated reply of a thread the decision settled. */

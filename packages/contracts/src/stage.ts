@@ -369,8 +369,9 @@ export const ReviewContext = z.object({
           path: z.string().nullable(),
           line: z.number().int().nullable(),
           comments: z.array(z.object({ author: z.string(), ours: z.boolean(), body: z.string() })),
-          /** fixed and reply_holds are settled by the decision; unsettled is the reviewer's to answer. */
-          settle: z.enum(["fixed", "reply_holds", "unsettled"]),
+          /** fixed and reply_holds are settled by the decision; unsettled is the reviewer's to answer; answered is one we already replied to since a review that read
+           *  the PR's head, so with no new commit it is not answered again (the review and the author, or the author's agent, would answer each other forever). */
+          settle: z.enum(["fixed", "reply_holds", "unsettled", "answered"]),
         }),
       ),
     })

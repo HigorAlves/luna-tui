@@ -38,11 +38,11 @@ function setup(opts: { reviews?: unknown[]; threads?: unknown[]; mainAnswer?: un
     prReviews: async () => (opts.reviews ?? [mine]) as never,
     prThreads: async () => (opts.threads ?? []) as never,
   });
-  const seen: { review?: ReviewContext; helperReview?: ReviewContext; asked: Array<{ pack: string; check: Record<string, unknown> }>; since: string[] } = { asked: [], since: [] };
+  const seen: { review?: ReviewContext; helperReview?: ReviewContext; asked: Array<{ pack: string; check: Record<string, unknown> }>; since: string[]; packs: number; helpers: number } = { asked: [], since: [], packs: 0, helpers: 0 };
   const run = prReviewRunner({
     github,
-    runPack: async (_c, review) => ((seen.review = review), { outcome: "pass", detail: { answer: opts.mainAnswer ?? clean } }),
-    helpers: { run: async (_c, _p, review) => ((seen.helperReview = review), { outcome: "pass", detail: { answer: { summary: "ok", findings: [] } } }), decide: null },
+    runPack: async (_c, review) => ((seen.packs++, seen.review = review), { outcome: "pass", detail: { answer: opts.mainAnswer ?? clean } }),
+    helpers: { run: async (_c, _p, review) => ((seen.helpers++, seen.helperReview = review), { outcome: "pass", detail: { answer: { summary: "ok", findings: [] } } }), decide: null },
     rereview: {
       git: {
         head: async () => HEAD,
@@ -174,5 +174,47 @@ describe("a re-review", () => {
     expect(t.original).toContain("l3 at old1234:a.ts");
     expect(t.current).toBe("now a.ts:3");
     expect(t.delta).toContain("+only the delta");
+  });
+});
+
+describe("a re-review when the PR has no new commits since our latest review", () => {
+  // Our latest review read HEAD itself: the delta is empty, so only our threads can have moved.
+  const atHead = { ...mine, commitId: HEAD, at: "2026-11-24T10:00:00Z" };
+  const ourReply = { author: "luna", body: "Still open because it still loops.", at: "2026-11-24T10:00:05Z" };
+  const theirAgain = { author: "them", body: "Confirmed unchanged.", at: "2026-11-24T10:01:00Z", association: "NONE" };
+  const finding = { id: "f1", path: "b.ts", line: 9, severity: "bug", title: "new thing", body: "b", confidence: 0.9 };
+
+  it("runs no review pass and posts no new finding: there is no new code to read", async () => {
+    const { run, seen } = setup({ reviews: [atHead], delta: "", threads: [thread("T1")], mainAnswer: { ...clean, findings: [finding], comments: [{ path: "b.ts", line: 9, side: "RIGHT", body: "new" }], threads: [{ threadId: "T1", decision: "open", severity: "question", body: "Still open because the reply does not change it." }] } });
+    const result = await run(context);
+    expect(seen.helpers).toBe(0);
+    expect(seen.packs).toBe(1);
+    expect(payload(result).comments).toEqual([]);
+    expect(result.findings ?? []).toEqual([]);
+    expect(payload(result).threadReplies).toEqual([expect.objectContaining({ threadId: "T1", resolve: false })]);
+  });
+
+  it("never answers a thread twice at the same head: one we already replied to since our review is left quiet, so the review and the author's agent cannot ping-pong", async () => {
+    const { run, seen } = setup({ reviews: [atHead], delta: "", threads: [thread("T1", { comments: [{ author: "luna", body: "problem", at: "2026-11-24T10:00:00Z" }, { author: "them", body: "reply", at: "2026-11-24T09:59:00Z" }, ourReply, theirAgain] })] });
+    const result = await run(context);
+    expect(seen.packs).toBe(0);
+    expect(seen.helpers).toBe(0);
+    expect(result.outcome).toBe("pass");
+    expect(result.requested ?? []).toEqual([]);
+    expect(result.detail).toMatchObject({ reason: "watching", rereview: { settled: 0, threads: 1 } });
+  });
+
+  it("still resolves such a thread when the author's latest reply holds, without asking the reviewer", async () => {
+    const { run, seen } = setup({ reviews: [atHead], delta: "", decide: async () => ({ addressed: no, reply_holds: yes }), threads: [thread("T1", { comments: [{ author: "luna", body: "problem", at: "2026-11-24T10:00:00Z" }, ourReply, theirAgain] })] });
+    const result = await run(context);
+    expect(seen.packs).toBe(0);
+    expect(payload(result).threadReplies).toEqual([expect.objectContaining({ threadId: "T1", body: "Fair point, resolving.", resolve: true, by: "decision" })]);
+  });
+
+  it("answers a thread again once new commits came in, even if we replied before them", async () => {
+    const { run, seen } = setup({ reviews: [atHead], delta: DELTA, threads: [thread("T1", { comments: [{ author: "luna", body: "problem", at: "2026-11-24T09:00:00Z" }, { ...ourReply, at: "2026-11-24T09:30:00Z" }, theirAgain] })] });
+    await run(context);
+    expect(seen.packs).toBe(1);
+    expect(seen.review!.rereview!.threads[0]).toMatchObject({ id: "T1", settle: "unsettled" });
   });
 });

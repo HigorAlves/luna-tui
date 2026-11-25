@@ -69,6 +69,13 @@ export function verdictOf(findings: ReadonlyArray<{ severity: string }>): "appro
   return findings.some((f) => blocking.has(f.severity)) ? "request_changes" : "comment";
 }
 
+/** "2 bugs, 1 suggestion": a list of findings by severity, gravest first. */
+function severityCounts(findings: ReadonlyArray<{ severity: string }>): string {
+  const by = new Map<string, number>();
+  for (const f of findings) by.set(f.severity, (by.get(f.severity) ?? 0) + 1);
+  return [...by].sort((a, b) => (SEVERITY_RANK[a[0]] ?? 9) - (SEVERITY_RANK[b[0]] ?? 9)).map(([s, n]) => `${n} ${s}${n === 1 || s === "api-surface" ? "" : "s"}`).join(", ");
+}
+
 /** inline-review's cap: more than this erodes signal, so the lowest severities stay in findings only. */
 export const MAX_INLINE_COMMENTS = 15;
 const SEVERITY_RANK: Record<string, number> = { security: 0, bug: 1, "api-surface": 2, test: 3, suggestion: 4, question: 5, nit: 6 };
@@ -167,9 +174,14 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     const shared: ReviewContext = plan ? { ...review, diff: plan.diff } : review;
     if (plan) review = { ...shared, rereview: plan.rereview };
 
+    // No commit since the review we read: there is no new code, so no pass runs and no new finding is made; the reviewer runs only for a thread
+    // that still needs a first answer at this head.
+    const quiet = plan?.quiet === true;
+    const reviewerNeeded = !quiet || plan!.rereview.threads.some((t) => t.settle === "unsettled");
+    const silent: StageResult = { outcome: "pass", detail: { answer: { verdict: "comment", summary: "", findings: [], comments: [] } } };
     // The review passes start with the main review, each in a workspace of its own (they never share the reviewer's folder); runHelpers never throws.
-    const helpersRun = deps.helpers ? runHelpers(deps.helpers, context, shared) : null;
-    const [mainRun, helpersDone] = await Promise.allSettled([deps.runPack(context, review), helpersRun]);
+    const helpersRun = deps.helpers && !quiet ? runHelpers(deps.helpers, context, shared) : null;
+    const [mainRun, helpersDone] = await Promise.allSettled([reviewerNeeded ? deps.runPack(context, review) : Promise.resolve(silent), helpersRun]);
     if (mainRun.status === "rejected") throw mainRun.reason;
     const pack = mainRun.value;
     if (pack.outcome !== "pass") return pack;
@@ -189,14 +201,16 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     const kept = (confirmed?.kept ?? []).map(({ finding, unsure }) => (unsure ? { ...finding, title: `${UNSURE}${finding.title}` } : finding));
     const helperComments = kept.map((f) => ({ path: f.path, line: f.line, side: f.side === "LEFT" ? ("LEFT" as const) : ("RIGHT" as const), body: `${f.title}: ${f.body}` }));
     // The compliance lead reads the same diff beside the reviewer; its findings join before the verdict, so a high one blocks. It never fails the review.
-    const compliance = deps.compliance ? await runCompliance(deps.compliance, context, pr.repo, shared) : null;
+    const compliance = deps.compliance && !quiet ? await runCompliance(deps.compliance, context, pr.repo, shared) : null;
     const joined = {
       ...parsed.data,
       summary: [parsed.data.summary, compliance?.summary ? `Compliance: ${compliance.summary}` : ""].filter(Boolean).join(" "),
       findings: [...parsed.data.findings, ...(compliance?.findings ?? [])],
       comments: [...parsed.data.comments, ...(compliance?.comments ?? [])],
     };
-    const answer = helpers || compliance ? { ...joined, findings: mergeDuplicateFindings([...joined.findings, ...(confirmed?.agreed ?? []), ...kept]), comments: [...joined.comments, ...helperComments] } : parsed.data;
+    const reviewed = helpers || compliance ? { ...joined, findings: mergeDuplicateFindings([...joined.findings, ...(confirmed?.agreed ?? []), ...kept]), comments: [...joined.comments, ...helperComments] } : parsed.data;
+    // With no new code, whatever the reviewer found is about code already reviewed: only its thread answers count.
+    const answer = quiet ? { ...reviewed, findings: [], comments: [] } : reviewed;
     // Our threads: what the decision settled, what the reviewer resolved, and what stays open. An open thread counts at its severity, and one the reviewer
     // did not answer stays open as a question, so a review never approves past a thread nobody looked at.
     const threadReplies: ThreadReply[] = [];
@@ -205,6 +219,11 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       const answered = new Map((parsed.data.threads ?? []).map((t) => [t.threadId, t]));
       for (const t of plan.rereview.threads) {
         const where = { path: t.path, line: t.line };
+        // Answered since the review we read and no new commit: left as it is, still open.
+        if (t.settle === "answered") {
+          stillOpen.push({ severity: "question" });
+          continue;
+        }
         if (t.settle !== "unsettled") {
           threadReplies.push({ threadId: t.id, body: settledReply(t.settle, plan.head), resolve: true, by: "decision", settled: t.settle, ...where });
           continue;
@@ -232,9 +251,15 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     const usage = addUsage(addUsage(pack.usage, helpers?.usage), compliance?.usage);
     const base = { ...pack, ...(usage ? { usage } : {}), findings: answer.findings };
     const reviewLinks = reviewLinksOf(links, review.tickets ?? []);
+    // The body says what the review did. The reviewer's own summary counts only its findings, so what the passes added is said beside it; with no
+    // new commit and no reviewer run, the machine says it in one line.
+    const settledCount = plan ? plan.rereview.threads.filter((t) => t.settle === "fixed" || t.settle === "reply_holds").length : 0;
+    const body = quiet && !reviewerNeeded
+      ? `No new commits since our review at ${plan!.rereview.since.slice(0, 7)}. ${settledCount} of ${plan!.rereview.threads.length} of our threads settled; the rest stay open.`
+      : [answer.summary, !quiet && kept.length > 0 ? `The review passes found ${kept.length} more: ${severityCounts(kept)}.` : ""].filter(Boolean).join(" ");
     const detail = {
       ...pack.detail,
-      summary: answer.summary,
+      summary: body,
       // Which tickets the review was checked against, for the board's Result page.
       ...(review.tickets?.length ? { tickets: review.tickets.map((t) => ({ key: t.key, url: t.url, summary: t.summary })) } : {}),
       // What the review was linked to and how (key | fact | decision), and a suggestion that stayed under the bar.
@@ -251,7 +276,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
           }
         : {}),
       ...(plan
-        ? { rereview: { since: plan.rereview.since, ...(plan.rereview.note ? { note: plan.rereview.note } : {}), settled: plan.rereview.threads.filter((t) => t.settle !== "unsettled").length, open: stillOpen.length, threads: plan.rereview.threads.length } }
+        ? { rereview: { since: plan.rereview.since, ...(plan.rereview.note ? { note: plan.rereview.note } : {}), settled: plan.rereview.threads.filter((t) => t.settle === "fixed" || t.settle === "reply_holds").length, open: stillOpen.length, threads: plan.rereview.threads.length } }
         : {}),
       ...(compliance ? { compliance: { regimesRun: compliance.regimesRun, findings: compliance.findings.length, notes: compliance.notes } } : {}),
       ...(parsed.data.verdict !== verdict ? { modelVerdict: parsed.data.verdict } : {}),
@@ -259,6 +284,8 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       comments: comments.length,
       reason: "verdict",
     };
+    // With no new commit and nothing to say on any thread, no review goes out: the card goes back to watching the PR.
+    if (quiet && threadReplies.length === 0) return { ...base, detail: { ...detail, reason: "watching" } };
     if (reviewLinks && deps.links?.record) {
       try {
         await deps.links.record(context.task.id, reviewLinks, { url: pr.url, number: pr.number, repo: pr.repo });
@@ -267,7 +294,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       }
     }
     const requested: RequestedAction[] = [
-      { kind: "pr_review_post", target: pr.url, payload: { event: EVENT_OF[verdict], body: answer.summary, comments, ...(plan ? { threadReplies } : {}) } },
+      { kind: "pr_review_post", target: pr.url, payload: { event: EVENT_OF[verdict], body, comments, ...(plan ? { threadReplies } : {}) } },
     ];
     return { ...base, detail, requested };
   };
