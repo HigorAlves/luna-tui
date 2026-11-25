@@ -386,6 +386,8 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
         await note(`answered ${a.actor ?? "ghost"}'s question from the pack`);
         return {};
       }
+      // A reviewer who only agrees ("good catch", "ok") has asked for nothing: there is nothing to answer or fix.
+      if (intent.choice === "acknowledgement") return {};
       if (intent.choice === "disagreement") return { result: escalated(`a reviewer disagrees: ${quoted(thread)}`) };
       if (intent.choice !== "change_request" && intent.choice !== "nit") return { result: escalated(`a review comment needs a person: ${quoted(thread)}`) };
       // A nit is sized like any other change request: it can still need a new plan.

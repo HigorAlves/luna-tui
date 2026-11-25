@@ -675,6 +675,9 @@
                     "kind"
                   ]
                 },
+                "unsure": {
+                  "type": "boolean"
+                },
                 "merged": {
                   "type": "array",
                   "items": {
@@ -820,6 +823,7 @@
               "finding_classify",
               "finding_confirm",
               "thread_settle",
+              "already_raised",
               "rereview_worth",
               "pr_risk",
               "criteria_met",
@@ -1477,6 +1481,7 @@
                             "finding_classify",
                             "finding_confirm",
                             "thread_settle",
+                            "already_raised",
                             "rereview_worth",
                             "pr_risk",
                             "criteria_met",
@@ -1865,6 +1870,7 @@
                       "finding_classify",
                       "finding_confirm",
                       "thread_settle",
+                      "already_raised",
                       "rereview_worth",
                       "pr_risk",
                       "criteria_met",
@@ -5102,6 +5108,19 @@
                 ]
               },
               "thread_settle": {
+                "type": "string",
+                "enum": [
+                  "claude:opus",
+                  "claude:sonnet",
+                  "claude:haiku",
+                  "codex:sol",
+                  "codex:luna",
+                  "openai:sol",
+                  "openai:luna",
+                  "jev"
+                ]
+              },
+              "already_raised": {
                 "type": "string",
                 "enum": [
                   "claude:opus",
@@ -8809,6 +8828,7 @@
                     "finding_classify",
                     "finding_confirm",
                     "thread_settle",
+                    "already_raised",
                     "rereview_worth",
                     "pr_risk",
                     "criteria_met",
@@ -8920,6 +8940,7 @@
               "finding_classify",
               "finding_confirm",
               "thread_settle",
+              "already_raised",
               "rereview_worth",
               "pr_risk",
               "criteria_met",
@@ -10318,6 +10339,9 @@
                             "kind"
                           ]
                         },
+                        "unsure": {
+                          "type": "boolean"
+                        },
                         "merged": {
                           "type": "array",
                           "items": {
@@ -10947,6 +10971,9 @@
                                 "element",
                                 "kind"
                               ]
+                            },
+                            "unsure": {
+                              "type": "boolean"
                             },
                             "merged": {
                               "type": "array",
@@ -14990,6 +15017,7 @@
                       "finding_classify",
                       "finding_confirm",
                       "thread_settle",
+                      "already_raised",
                       "rereview_worth",
                       "pr_risk",
                       "criteria_met",
@@ -18218,6 +18246,71 @@
                         }
                       },
                       "thread_settle": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "engine": {
+                              "type": "string",
+                              "enum": [
+                                "claude:opus",
+                                "claude:sonnet",
+                                "claude:haiku",
+                                "codex:sol",
+                                "codex:luna",
+                                "openai:sol",
+                                "openai:luna",
+                                "jev"
+                              ]
+                            },
+                            "effort": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "enum": [
+                                "low",
+                                "medium",
+                                "high",
+                                null
+                              ]
+                            },
+                            "n": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "quality": {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 1
+                            },
+                            "costPerCase": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "at": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "model": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "engine",
+                            "effort",
+                            "n",
+                            "quality",
+                            "costPerCase",
+                            "at"
+                          ]
+                        }
+                      },
+                      "already_raised": {
                         "type": "array",
                         "items": {
                           "type": "object",
@@ -22743,6 +22836,7 @@
                       "finding_classify",
                       "finding_confirm",
                       "thread_settle",
+                      "already_raised",
                       "rereview_worth",
                       "pr_risk",
                       "criteria_met",
@@ -22934,6 +23028,7 @@
                       "finding_classify",
                       "finding_confirm",
                       "thread_settle",
+                      "already_raised",
                       "rereview_worth",
                       "pr_risk",
                       "criteria_met",
@@ -23854,6 +23949,19 @@
                         ]
                       },
                       "thread_settle": {
+                        "type": "string",
+                        "enum": [
+                          "claude:opus",
+                          "claude:sonnet",
+                          "claude:haiku",
+                          "codex:sol",
+                          "codex:luna",
+                          "openai:sol",
+                          "openai:luna",
+                          "jev"
+                        ]
+                      },
+                      "already_raised": {
                         "type": "string",
                         "enum": [
                           "claude:opus",
@@ -26856,6 +26964,23 @@
                         ]
                       },
                       "thread_settle": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "enum": [
+                          "claude:opus",
+                          "claude:sonnet",
+                          "claude:haiku",
+                          "codex:sol",
+                          "codex:luna",
+                          "openai:sol",
+                          "openai:luna",
+                          "jev",
+                          null
+                        ]
+                      },
+                      "already_raised": {
                         "type": [
                           "string",
                           "null"

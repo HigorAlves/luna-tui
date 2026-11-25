@@ -76,6 +76,18 @@ describe("the thread_settle pack", () => {
   });
 });
 
+describe("the already_raised pack", () => {
+  it("asks one yes/no question, same, that calls both texts data", () => {
+    const pack = PACKS.already_raised;
+    expect(pack.kind).toBe("decision");
+    if (pack.kind !== "decision") return;
+    expect(Object.keys(pack.questions)).toEqual(["same"]);
+    expect(pack.questions.same).toMatchObject({ type: "yesno" });
+    expect(pack.questions.same!.instructions).toMatch(/data/);
+    expect(applyPolicy(pack, { same: { value: true, p: 0.95 } }, undefined).overall).toBe("proceed");
+  });
+});
+
 describe("the rereview_worth pack", () => {
   it("asks one choice, code, discussion or noise, and calls the activity's text data", () => {
     const pack = PACKS.rereview_worth;

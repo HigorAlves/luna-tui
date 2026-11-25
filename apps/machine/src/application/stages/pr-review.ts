@@ -6,6 +6,8 @@ import { type DecisionOverrides, type Finding, PrReviewAnswer, type RequestedAct
 
 import { type Decide } from "./check-decide.ts";
 import { diffExcerptOf } from "./diff-section.ts";
+import { dropAlreadyRaised } from "./already-raised.ts";
+import { type Recalibrated, recalibrateSeverity } from "./recalibrate.ts";
 import { type ComplianceDeps, runCompliance } from "./compliance-review.ts";
 import { type DiffFile, type Shard, type Skipped, capShards, parseDiff, shardDiff, splitReviewable } from "./review-diff.ts";
 import { shardedSummary } from "./review-summary.ts";
@@ -76,7 +78,11 @@ function criteriaLine(results: readonly CriterionResult[] | undefined): string {
   if (checked.length === 0) return "";
   const count = (v: CriterionResult["verdict"]) => checked.filter((r) => r.verdict === v).length;
   const parts = [`${count("met")} of ${checked.length} met`, ...(count("unmet") > 0 ? [`${count("unmet")} not met`] : []), ...(count("unsure") > 0 ? [`${count("unsure")} unclear`] : [])];
-  return `Acceptance criteria: ${parts.join(", ")}.`;
+  // The criteria that are not met, or unclear, are named here: their findings carry no line comment, since no line of the diff is theirs.
+  const named = (v: CriterionResult["verdict"]) => checked.filter((r) => r.verdict === v).map((r) => `"${r.criterion.replace(/\s+/g, " ").slice(0, 160)}" (${r.source})`).join(", ");
+  const unmet = count("unmet") > 0 ? ` Not met: ${named("unmet")}.` : "";
+  const unclear = count("unsure") > 0 ? ` Unclear: ${named("unsure")}.` : "";
+  return `Acceptance criteria: ${parts.join(", ")}.${unmet}${unclear}`;
 }
 
 const EVENT_OF = { approve: "APPROVE", request_changes: "REQUEST_CHANGES", comment: "COMMENT" } as const;
@@ -115,9 +121,6 @@ export function capComments<T extends { path: string; line: number }>(comments: 
 }
 
 export { diffExcerptOf };
-
-/** Marks a finding the confirmation was not sure of; the person reads the mark before posting. */
-const UNSURE = "Unsure: ";
 
 /** The PR a task came from, or null when the task is not a PR task. */
 export function prOf(context: StageContext): { repo: string; number: number; url: string } | null {
@@ -336,7 +339,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     const quiet = plan?.quiet === true;
     const noise = plan?.noise === true;
     // Noise (a thanks, a merge of the base, a CI-only change) settles our threads and nothing more: no reviewer runs for an unsettled one.
-    const reviewerNeeded = !noise && (!quiet || plan!.rereview.threads.some((t) => t.settle === "unsettled"));
+    const reviewerNeeded = !noise && (!quiet || plan!.rereview.threads.some((t) => t.settle === "unsettled" || t.settle === "question"));
     const silent: StageResult = { outcome: "pass", detail: { answer: { verdict: "comment", summary: "", findings: [], comments: [] } } };
     // A diff too big for one reviewer is read in shards by module; the passes and the compliance lead read the whole PR once, as files.
     const limits = (await deps.limits?.(context.task.repoPath ?? null).catch(() => null)) ?? DEFAULT_LIMITS;
@@ -421,13 +424,19 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     const worktree = pack.workspace?.worktreePath ?? context.task.worktreePath ?? null;
     const helpers: HelpersOutcome | null = helpersDone.status === "fulfilled" ? helpersDone.value : null;
     let confirmed: Awaited<ReturnType<typeof confirmHelperFindings>> | null = null;
+    const excerpt = async (finding: Finding): Promise<string> => (worktree ? await excerptOf(worktree, finding).catch(() => "") : "") || diffExcerptOf(review.diff, finding);
     if (deps.helpers && helpers) {
       const overrides = (await deps.helpers.decisions?.(context.task.repoPath ?? null).catch(() => ({}))) ?? {};
-      const excerpt = async (finding: Finding): Promise<string> => (worktree ? await excerptOf(worktree, finding).catch(() => "") : "") || diffExcerptOf(review.diff, finding);
       confirmed = await confirmHelperFindings({ decide: deps.helpers.decide, repoPath: context.task.repoPath ?? null, decisions: overrides, excerpt, log: (line) => console.warn(`review: ${line}`) }, helpers.helpers, parsed.data.findings);
     }
-    const kept = (confirmed?.kept ?? []).map(({ finding, unsure }) => (unsure ? { ...finding, title: `${UNSURE}${finding.title}` } : finding));
+    // An unsure finding is marked (`unsure`) for the gate only: the posted title and comment stay clean.
+    const kept = (confirmed?.kept ?? []).map(({ finding, unsure }) => (unsure ? { ...finding, unsure: true } : finding));
     const helperComments = kept.map((f) => ({ path: f.path, line: f.line, side: f.side === "LEFT" ? ("LEFT" as const) : ("RIGHT" as const), body: `${f.title}: ${f.body}` }));
+    // The main reviewer's findings are marked the same way when the check doubts them; they are never dropped.
+    const mainUnsure = new Set((confirmed?.main ?? []).filter((m) => m.unsure).map((m) => `${m.finding.path}:${m.finding.line}:${m.finding.title}`));
+    if (mainUnsure.size > 0) {
+      parsed.data.findings = parsed.data.findings.map((f) => (mainUnsure.has(`${f.path}:${f.line}:${f.title}`) ? { ...f, unsure: true } : f));
+    }
     // The compliance lead reads the same diff beside the reviewer; its findings join before the verdict, so a high one blocks. It never fails the review.
     const compliance = deps.compliance && !quiet ? await runCompliance(deps.compliance, context, pr.repo, sharded ? (diffMount ? fileReview : null) : shared, diffMount ? [diffMount] : undefined) : null;
     const joined = {
@@ -436,10 +445,32 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       findings: [...parsed.data.findings, ...(compliance?.findings ?? [])],
       comments: [...parsed.data.comments, ...(compliance?.comments ?? [])],
     };
-    const reviewed = helpers || compliance ? { ...joined, findings: mergeDuplicateFindings([...joined.findings, ...(confirmed?.agreed ?? []), ...kept]), comments: [...joined.comments, ...helperComments] } : parsed.data;
+    const merged = helpers || compliance ? { ...joined, findings: mergeDuplicateFindings([...joined.findings, ...(confirmed?.agreed ?? []), ...kept]), comments: [...joined.comments, ...helperComments] } : parsed.data;
+    // A finding that repeats a comment someone else already left on the PR is dropped, with its line comment.
+    let alreadyRaised: Awaited<ReturnType<typeof dropAlreadyRaised>>["dropped"] = [];
+    let reviewed = merged;
+    if (deps.helpers && !quiet && merged.findings.length > 0 && review.existingComments.length > 0) {
+      const overrides = (await deps.helpers.decisions?.(context.task.repoPath ?? null).catch(() => ({}))) ?? {};
+      const me = (await github.viewer().catch(() => null))?.login ?? null;
+      const raised = await dropAlreadyRaised({ decide: deps.helpers.decide, repoPath: context.task.repoPath ?? null, decisions: overrides, me, log: (line) => console.warn(`review: ${line}`) }, merged.findings, review.existingComments);
+      alreadyRaised = raised.dropped;
+      if (alreadyRaised.length > 0) {
+        const gone = new Set(alreadyRaised.map((d) => `${d.path}:${d.line}`));
+        reviewed = { ...merged, findings: raised.kept, comments: merged.comments.filter((c) => !gone.has(`${c.path}:${c.line}`)) };
+      }
+    }
+    // Severity is recalibrated both ways by finding_classify before the verdict is computed; each change is recorded and shown at the gate.
+    let recalibrated: Recalibrated[] = [];
+    if (deps.helpers && !quiet && reviewed.findings.length > 0) {
+      const overrides = (await deps.helpers.decisions?.(context.task.repoPath ?? null).catch(() => ({}))) ?? {};
+      const moved = await recalibrateSeverity({ decide: deps.helpers.decide, repoPath: context.task.repoPath ?? null, decisions: overrides, excerpt }, reviewed.findings);
+      recalibrated = moved.changes;
+      if (recalibrated.length > 0) reviewed = { ...reviewed, findings: moved.findings };
+    }
     // With no new code, whatever the reviewer found is about code already reviewed: only its thread answers count.
     const criteria = (await criteriaRun) ?? null;
-    const withCriteria = criteria ? { ...reviewed, findings: [...reviewed.findings, ...criteria.findings], comments: [...reviewed.comments, ...criteria.comments] } : reviewed;
+    // An unmet criterion is a finding (it counts toward the verdict) but no line comment: the body names it.
+    const withCriteria = criteria ? { ...reviewed, findings: [...reviewed.findings, ...criteria.findings] } : reviewed;
     const answer = quiet ? { ...withCriteria, findings: [], comments: [] } : withCriteria;
     // Our threads: what the decision settled, what the reviewer resolved, and what stays open. An open thread counts at its severity, and one the reviewer
     // did not answer stays open as a question, so a review never approves past a thread nobody looked at.
@@ -452,6 +483,23 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
         // Answered since the review we read and no new commit: left as it is, still open.
         if (t.settle === "answered") {
           stillOpen.push({ severity: "question" });
+          continue;
+        }
+        // An acknowledgement ("will fix") gets no reply: the thread stays open until a later commit addresses it.
+        if (t.settle === "acknowledged") {
+          stillOpen.push({ severity: "question" });
+          continue;
+        }
+        // A question is answered directly by the reviewer and the thread stays open: only a defect the question exposed counts above question level.
+        if (t.settle === "question") {
+          const q = answered.get(t.id);
+          if (!q) {
+            stillOpen.push({ severity: "question" });
+            continue;
+          }
+          const severity = ["bug", "security", "api-surface", "test"].includes(q.severity) ? q.severity : "question";
+          threadReplies.push({ threadId: t.id, body: q.body.trim() || "See the code above.", resolve: false, by: "reviewer", severity, ...where });
+          stillOpen.push({ severity });
           continue;
         }
         if (t.settle !== "unsettled") {
@@ -495,8 +543,9 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
 
     // Nothing is posted here: the review goes out under the person's name, so every verdict, its body and its line
     // comments wait at "post the verdict?" until the person says yes (or edits or drops it).
+    const unsureAt = new Set(answer.findings.filter((f) => f.unsure).map((f) => `${f.path}:${f.line}`));
     const comments = capComments(
-      answer.comments.map((c) => ({ path: c.path, line: c.line, side: c.side, body: c.body })),
+      answer.comments.map((c) => ({ path: c.path, line: c.line, side: c.side, body: c.body, ...(unsureAt.has(`${c.path}:${c.line}`) ? { unsure: true } : {}) })),
       answer.findings,
     );
     // The sub-runs' cost joins the review's, so the budget and the engine's counters see all of it.
@@ -540,6 +589,9 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       ...(plan
         ? { rereview: { since: plan.rereview.since, ...(plan.rereview.note ? { note: plan.rereview.note } : {}), settled: plan.rereview.threads.filter((t) => t.settle === "fixed" || t.settle === "reply_holds").length, open: stillOpen.length, threads: plan.rereview.threads.length, ...(plan.worth ? { worth: plan.worth } : {}) } }
         : {}),
+      ...(alreadyRaised.length > 0 ? { alreadyRaised } : {}),
+      ...(recalibrated.length > 0 ? { recalibrated } : {}),
+      ...(confirmed && confirmed.main.length > 0 ? { mainConfirm: confirmed.mainVerdicts } : {}),
       ...(compliance ? { compliance: { regimesRun: compliance.regimesRun, findings: compliance.findings.length, notes: compliance.notes } } : {}),
       ...(parsed.data.verdict !== verdict ? { modelVerdict: parsed.data.verdict } : {}),
       posted: false,
@@ -576,7 +628,8 @@ export function postVerdictRunner(deps: { github: GitHub }): StageRunner {
     }
     const body = typeof post.payload.body === "string" ? post.payload.body : "";
     // The line comments ride on the gate since every review waits for the person; a gate stored before that has none.
-    const comments = Array.isArray(post.payload.comments) ? (post.payload.comments as ReviewPost["comments"]) : [];
+    // `unsure` is the gate's mark only; GitHub gets the clean comment.
+    const comments = Array.isArray(post.payload.comments) ? (post.payload.comments as Array<ReviewPost["comments"][number] & { unsure?: boolean }>).map(({ unsure: _unsure, ...c }) => c) : [];
     try {
       await deps.github.postReview(pr.repo, pr.number, { event, body, comments });
     } catch (error) {

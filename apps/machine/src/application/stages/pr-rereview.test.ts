@@ -5,6 +5,7 @@ import type { TaskRow } from "../../domain/task.ts";
 import { fakeGitHub } from "../../test/github.ts";
 import type { StageContext } from "../ports.ts";
 import type { Decide } from "./check-decide.ts";
+import type { ShipDecide } from "./ship-fixes.ts";
 import { prReviewRunner } from "./pr-review.ts";
 
 const node = { number: 12, title: "Export CSV", body: "Adds the export.", url: "https://github.com/o/a/pull/12", isDraft: false, updatedAt: "t", baseRefName: "main", headRefName: "feat/export", author: { login: "them" }, headRepository: { nameWithOwner: "o/a" }, reviewDecision: null, mergeable: "MERGEABLE", reviewRequests: { nodes: [] }, reviewThreads: { nodes: [] }, commits: { nodes: [] } };
@@ -28,7 +29,7 @@ const thread = (id: string, over: Record<string, unknown> = {}) => ({
 const yes = { value: true, p: 0.97 };
 const no = { value: false, p: 0.03 };
 
-function setup(opts: { reviews?: unknown[]; threads?: unknown[]; mainAnswer?: unknown; decide?: Decide | null; delta?: string | null; ownCommits?: number | null } = {}) {
+function setup(opts: { reviews?: unknown[]; threads?: unknown[]; mainAnswer?: unknown; decide?: Decide | null; delta?: string | null; intent?: ShipDecide | null; intentSeen?: unknown[]; ownCommits?: number | null } = {}) {
   const github = fakeGitHub({
     viewer: async () => ({ login: "Luna", teams: [] }),
     prFacts: async () => node as never,
@@ -55,6 +56,10 @@ function setup(opts: { reviews?: unknown[]; threads?: unknown[]; mainAnswer?: un
         return opts.decide === undefined ? d : opts.decide;
       },
       readNow: async (_w, path, line) => `now ${path}:${line}`,
+      get intent() {
+        const i = opts.intent;
+        return i ? (async (pack, ship, repo) => (opts.intentSeen?.push({ pack, ship }), i(pack, ship, repo))) as ShipDecide : null;
+      },
     },
   });
   return { run, seen, github };
@@ -218,6 +223,64 @@ describe("a re-review when the PR has no new commits since our latest review", (
     await run(context);
     expect(seen.packs).toBe(1);
     expect(seen.review!.rereview!.threads[0]).toMatchObject({ id: "T1", settle: "unsettled" });
+  });
+});
+
+describe("a re-review routes an author's reply by its intent", () => {
+  const intent = (choice: string, p = 0.95): ShipDecide => async () => ({ intent: { choice, confidence: p } });
+  const settleOf = (seen: { review?: ReviewContext }) => seen.review!.rereview!.threads.map((t) => t.settle);
+
+  it("asks comment_intent with the thread as untrusted data, only for a thread the settle decision left open", async () => {
+    const intentSeen: unknown[] = [];
+    const { run } = setup({ threads: [thread("T1"), thread("T2")], intent: intent("change_request"), intentSeen, decide: async (_p, check) => (check.thread?.comments[0]?.body.endsWith("T2") ? { addressed: yes, reply_holds: no } : { addressed: no, reply_holds: no }) });
+    await run(context);
+    expect(intentSeen).toHaveLength(1);
+    const asked = intentSeen[0] as { pack: string; ship: { kind: string; comment: { thread: { id: string; comments: Array<{ author: string; body: string }> } } } };
+    expect(asked.pack).toBe("comment_intent");
+    expect(asked.ship.kind).toBe("comment");
+    expect(asked.ship.comment.thread.id).toBe("T1");
+    expect(asked.ship.comment.thread.comments[1]!.body).toMatch(/^\[untrusted/);
+    expect(asked.ship.comment.thread.comments[0]!.body).toBe("problem T1");
+  });
+
+  it("a question is answered by the reviewer directly: the thread stays open at question level, never resolved", async () => {
+    const { run, seen } = setup({ threads: [thread("T1")], intent: intent("question"), mainAnswer: { ...clean, threads: [{ threadId: "T1", decision: "resolve", severity: "nit", body: "The export flushes per row, so the last row is written." }] } });
+    const result = await run(context);
+    expect(settleOf(seen)).toEqual(["question"]);
+    expect(payload(result).threadReplies).toEqual([expect.objectContaining({ threadId: "T1", body: "The export flushes per row, so the last row is written.", resolve: false, severity: "question", by: "reviewer" })]);
+    expect(payload(result).event).toBe("COMMENT");
+  });
+
+  it("a question with no new commit still reaches the reviewer", async () => {
+    const atHead = { ...mine, commitId: HEAD };
+    const { run, seen } = setup({ reviews: [atHead], delta: "", threads: [thread("T1")], intent: intent("question"), mainAnswer: { ...clean, threads: [{ threadId: "T1", decision: "open", severity: "question", body: "It does." }] } });
+    await run(context);
+    expect(seen.packs).toBe(1);
+  });
+
+  it("an acknowledgement gets no reply and no reviewer run; it keeps the review from approving, and a fix in a later commit resolves it", async () => {
+    const atHead = { ...mine, commitId: HEAD };
+    const quiet = setup({ reviews: [atHead], delta: "", threads: [thread("T1")], intent: intent("acknowledgement") });
+    const a = await quiet.run(context);
+    expect(a.detail).toMatchObject({ rereview: { threads: 1, open: 1 } });
+    expect(quiet.seen.packs).toBe(0);
+    expect(a.detail).toMatchObject({ reason: "watching" });
+    const later = setup({ threads: [thread("T1")], intent: intent("acknowledgement"), mainAnswer: clean });
+    const b = await later.run(context);
+    expect(settleOf(later.seen)).toEqual(["acknowledged"]);
+    expect(payload(b).threadReplies).toEqual([]);
+    expect(payload(b).event).toBe("COMMENT");
+    const fixed = setup({ threads: [thread("T1")], intent: intent("acknowledgement"), decide: async () => ({ addressed: yes, reply_holds: no }) });
+    const c = await fixed.run(context);
+    expect(payload(c).threadReplies).toEqual([expect.objectContaining({ threadId: "T1", resolve: true, by: "decision", body: expect.stringContaining("Fixed in") })]);
+  });
+
+  it("a change request, a disagreement, a nit, an unsure or failed intent all take the old path: unsettled, the reviewer argues", async () => {
+    for (const i of [intent("change_request"), intent("disagreement"), intent("nit"), intent("question", 0.55), async () => { throw new Error("no key"); }, null]) {
+      const probe = setup({ threads: [thread("T1")], intent: i as ShipDecide | null });
+      await probe.run(context);
+      expect(settleOf(probe.seen), String(i)).toEqual(["unsettled"]);
+    }
   });
 });
 

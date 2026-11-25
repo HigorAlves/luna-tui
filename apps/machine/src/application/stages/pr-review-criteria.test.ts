@@ -40,13 +40,15 @@ describe("reviewing against the acceptance criteria of the linked cards", () => 
     });
     expect(result.findings).toEqual([expect.objectContaining({ severity: "bug", path: "src/export.ts", line: 2 })]);
     const payload = (result.requested![0] as unknown as { payload: { body: string; comments: Array<{ path: string; line: number }> } }).payload;
-    expect(payload.body).toContain("Acceptance criteria: 1 of 2 met, 1 not met.");
-    expect(payload.comments).toEqual([expect.objectContaining({ path: "src/export.ts", line: 2 })]);
+    // The body names what is not met; no line comment is pinned to a line that has nothing to do with the criterion.
+    expect(payload.body).toContain('Acceptance criteria: 1 of 2 met, 1 not met. Not met: "Rows exported" (card abcdef12).');
+    expect(payload.comments).toEqual([]);
   });
 
   it("makes an unsure criterion a question that only comments, and does nothing without a linked criterion", async () => {
     const unsure = await setup({ criteria: ["Header first"], decide: byMet([{ value: true, p: 0.55 }]) })(context);
     expect(unsure.detail).toMatchObject({ verdict: "comment", criteria: [{ verdict: "unsure" }] });
+    expect((unsure.requested![0] as unknown as { payload: { body: string; comments: unknown[] } }).payload).toMatchObject({ body: expect.stringContaining('Unclear: "Header first" (card abcdef12).'), comments: [] });
     const none = await setup({ criteria: [], decide: byMet([]) })(context);
     expect(none.detail).not.toHaveProperty("criteria");
     expect(none.detail).toMatchObject({ verdict: "approve" });

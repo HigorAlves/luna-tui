@@ -101,7 +101,7 @@ const KEY: Record<ShipDecisionPack, string> = { event_class: "event", comment_in
 
 /** Asks a ship decision and applies its policy and the repo's overrides; never throws. A failed or unsure answer is `ok: false` with why. */
 export async function judgeShip(
-  deps: Pick<FixDeps, "loop" | "policies">,
+  deps: { loop: Pick<ReviewLoop, "decide">; policies: Pick<FixDeps["policies"], "for"> },
   pack: ShipDecisionPack,
   ship: ShipContext,
   repoPath: string | null,

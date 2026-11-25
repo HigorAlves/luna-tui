@@ -33,6 +33,7 @@ export const CONTEXT_OF = {
   finding_classify: { key: "check", schema: CheckContext },
   finding_confirm: { key: "check", schema: CheckContext },
   thread_settle: { key: "check", schema: CheckContext },
+  already_raised: { key: "check", schema: CheckContext },
   rereview_worth: { key: "check", schema: CheckContext },
   pr_risk: { key: "check", schema: CheckContext },
   criteria_met: { key: "check", schema: CheckContext },

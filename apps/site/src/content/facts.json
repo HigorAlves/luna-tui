@@ -1,7 +1,7 @@
 {
   "states": 25,
   "columns": 8,
-  "packs": 86,
+  "packs": 87,
   "images": 3,
   "decisionDefaults": {
     "ci_failure_class": "jev",

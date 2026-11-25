@@ -175,6 +175,13 @@ describe("a finding and an e2e check context", () => {
     expect(state.description).toContain("Excerpt:\nfor (let i = 0; i <= n; i++) {}");
   });
 
+  it("renders an existing PR comment beside the finding as data, when already_raised asks", () => {
+    const check = { kind: "finding", finding: { path: "src/a.ts", line: 3, severity: "bug", title: "off by one", body: "loops past the end", confidence: 0.8 }, existing: { author: "coderabbit", path: "src/a.ts", line: 4, body: "the loop runs one too far" } };
+    const state = stateOf({ ...base, context: { projectContext: null, check } } as never);
+    expect(state.description).toContain("An existing comment on the PR by coderabbit at src/a.ts:4");
+    expect(state.description).toContain("the loop runs one too far");
+  });
+
   it("renders a review thread with its comments marked ours or the author's, and the three code views", () => {
     const check = { kind: "thread", thread: { path: "src/a.ts", line: 9, originalLine: 4, comments: [{ author: "luna", ours: true, body: "off by one" }, { author: "bo", ours: false, body: "fixed it" }], original: "4  for (i <= n)", current: "9  for (i < n)", delta: "@@ -4 +9 @@" } };
     const state = stateOf({ ...base, context: { projectContext: null, check } } as never);

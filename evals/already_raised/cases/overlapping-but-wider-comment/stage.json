@@ -1,0 +1,45 @@
+{
+  "schema": 3,
+  "stage": "already_raised",
+  "pack": "already_raised",
+  "attempt": 1,
+  "task": {
+    "id": "already-raised",
+    "title": "Already raised",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "finding",
+      "finding": {
+        "path": "src/cart/export.ts",
+        "line": 3,
+        "severity": "bug",
+        "title": "Loop skips the last row",
+        "body": "`i < rows.length - 1` never reaches the last row.",
+        "confidence": 0.85
+      },
+      "existing": {
+        "author": "augment",
+        "path": "src/cart/export.ts",
+        "line": 3,
+        "body": "This function has several problems: the loop bounds look off, there is no header row, and the join uses the wrong newline for Windows."
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

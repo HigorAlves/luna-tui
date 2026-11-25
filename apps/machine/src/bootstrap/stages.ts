@@ -703,6 +703,9 @@ export async function buildRealStages(
         get decide() {
           return verifyDecisions?.decide ?? null;
         },
+        get intent() {
+          return shipDecisions.decide;
+        },
         decisions: async (repoPath) => (repoPath ? (await policies.for(repoPath)).decisions : {}),
       },
       runPack: (context, review, workspace) => runAgent(deps, context, "reviewing", { review, ...(workspace ? { workspace } : {}) }),

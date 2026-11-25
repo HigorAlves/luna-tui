@@ -171,9 +171,25 @@ describe("confirmHelperFindings", () => {
     const decide: Decide = async () => (asked++, answerOf(true, 0.95));
     const same = finding({ line: 4, title: "idor" });
     const out = await confirmHelperFindings(deps(decide), [helper("review_security", [same, finding({ path: "c.ts", title: "other" })])], [finding()]);
-    expect(asked).toBe(1);
+    // The main reviewer's own finding is checked too (see the next test); the duplicate adds no question.
+    expect(asked).toBe(2);
     expect(out.kept.map((k) => k.finding.path)).toEqual(["c.ts"]);
     expect(out.duplicates).toEqual({ review_security: 1 });
     expect(out.agreed).toEqual([same]);
+  });
+
+  it("checks the main reviewer's own findings too, and a confident no only marks one unsure: it is never dropped", async () => {
+    const mk = (n: number) => finding({ line: n, title: `main${n}`, severity: "bug" });
+    const table: Array<Record<string, unknown>> = [answerOf(true, 0.97), answerOf(false, 0.02), answerOf(true, 0.6)];
+    const asked: number[] = [];
+    const decide: Decide = async (_p, check) => (asked.push((check as { finding: Finding }).finding.line), table[(check as { finding: Finding }).finding.line - 1]!);
+    const out = await confirmHelperFindings(deps(decide), [], [mk(1), mk(2), mk(3)]);
+    expect(asked.sort()).toEqual([1, 2, 3]);
+    expect(out.main.map((m) => [m.finding.line, m.unsure])).toEqual([[1, false], [2, true], [3, true]]);
+    expect(out.mainVerdicts).toEqual({ proceed: 2, flag: 1 });
+    expect(out.kept).toEqual([]);
+    // No decision to ask: every main finding stays, unmarked.
+    const none = await confirmHelperFindings(deps(null), [], [mk(1)]);
+    expect(none.main).toEqual([{ finding: mk(1), unsure: false }]);
   });
 });

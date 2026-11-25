@@ -118,6 +118,8 @@ export const Finding = z.object({
   resolution: z.object({ status: z.enum(["fixed", "kept", "dismissed", "waived"]), by: z.string(), commit: z.string().optional(), /** True when the machine worked the resolution out (a finding that stopped being raised), rather than a person or a stage saying so. */ inferred: z.boolean().optional() }).optional(),
   /** A design finding (RFC 0013): where in the frame and where in the build. */
   design: z.object({ source: z.enum(["parity", "a11y"]), frame: z.string().optional(), node: z.string().optional(), element: z.string(), viewport: z.string().optional(), state: z.string().optional(), kind: z.string(), expected: z.string().optional(), actual: z.string().optional() }).optional(),
+  /** A review's confirmation was not sure of this finding: the gate shows it marked; the posted comment carries no mark. */
+  unsure: z.boolean().optional(),
   /** Ids of the duplicates folded into this finding by `mergeDuplicateFindings`. */
   merged: z.array(z.string()).optional(),
 });
@@ -164,6 +166,8 @@ export const PackId = z.enum([
   "finding_confirm",
   // Settles one of our own review threads on a re-review: did the new code fix it, does the author's reply hold.
   "thread_settle",
+  // Is a review finding the same point as a comment someone else already left on the PR.
+  "already_raised",
   // Reads the activity on a PR since our review (new comments, the delta) and says whether it is worth a full re-review.
   "rereview_worth",
   // Scores a PR (or one part of a big one) low, medium or high from its files and line counts.
@@ -382,8 +386,10 @@ export const ReviewContext = z.object({
           line: z.number().int().nullable(),
           comments: z.array(z.object({ author: z.string(), ours: z.boolean(), body: z.string() })),
           /** fixed and reply_holds are settled by the decision; unsettled is the reviewer's to answer; answered is one we already replied to since a review that read
-           *  the PR's head, so with no new commit it is not answered again (the review and the author, or the author's agent, would answer each other forever). */
-          settle: z.enum(["fixed", "reply_holds", "unsettled", "answered"]),
+           *  the PR's head, so with no new commit it is not answered again (the review and the author, or the author's agent, would answer each other forever).
+           *  question is an author reply `comment_intent` read as a question: the reviewer answers it directly and the thread stays open. acknowledged is a reply
+           *  that only agrees ("will fix"): no reply from us, and the thread resolves only when a later commit addresses it. */
+          settle: z.enum(["fixed", "reply_holds", "unsettled", "answered", "question", "acknowledged"]),
         }),
       ),
     })
@@ -1223,6 +1229,8 @@ export const CheckContext = z.object({
   /** finding: the finding to classify, and the file around its line as the machine read it. */
   finding: Finding.optional(),
   excerpt: z.string().optional(),
+  /** finding, for already_raised: a comment someone else left on the PR (data: people and bots wrote it). */
+  existing: z.object({ author: z.string(), path: z.string().nullable(), line: z.number().int().nullable(), body: z.string() }).optional(),
   /** e2e: the failed run, with the rows that did not pass. */
   e2e: z
     .object({
