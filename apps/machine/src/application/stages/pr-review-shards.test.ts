@@ -166,7 +166,8 @@ describe("a diff too big for one reviewer", () => {
     const unreviewed = (result.detail as { unreviewed: Array<{ path: string }> }).unreviewed.map((u) => u.path);
     expect(unreviewed).toEqual(["m3/a.ts", "m3/b.ts"]);
     expect(result.detail).toMatchObject({ verdict: "comment" });
-    expect(payload(result).body).toContain("Not reviewed: m3/a.ts, m3/b.ts");
+    expect(payload(result).body).toContain("Not reviewed: 2 files in 1 part that did not finish, in m3/ (2 files).");
+    expect((result.detail as { shardFailures: unknown }).shardFailures).toEqual([expect.objectContaining({ files: 2, reason: expect.any(String) })]);
   });
 
   it("fails the review when no shard could run", async () => {
@@ -187,7 +188,9 @@ describe("a diff too big for one reviewer", () => {
     const findings = result.findings!.map((f) => f.path).sort();
     expect(findings).toEqual(["m1/a.ts", "m2/a.ts", "m3/a.ts", "m4/a.ts", "m5/a.ts", "m6/a.ts"]);
     const body = payload(result).body;
-    for (const m of modules) expect(body).toContain(`Read ${m}/a.ts.`);
+    // One body for the whole PR, written by the machine: the parts' own summaries describe a slice each and are not glued in.
+    expect(body).toBe("Export CSV, reviewed in 6 parts by module (12 files, 360 lines). 6 findings: 6 bugs. No Jira ticket or board card linked; reviewed against the PR description.");
+    for (const m of modules) expect(body).not.toContain(`Read ${m}/a.ts.`);
     expect(payload(result).event).toBe("REQUEST_CHANGES");
     expect(result.usage).toMatchObject({ turns: 12 + 4 * 0 });
   });
@@ -242,14 +245,14 @@ describe("a diff over the cap", () => {
     expect(read).toEqual(["src/auth/login.ts", "src/auth/token.ts", "src/x/more.ts", "src/x/util.ts"]);
     expect(log.shardRuns.map((s) => s.review.shard)).toEqual(expect.arrayContaining([{ n: 1, of: 2 }, { n: 2, of: 2 }]));
     const detail = result.detail as { unreviewed: Array<{ path: string; lines: number }>; shards: { count: number; reviewed: number } };
-    expect(detail.shards).toEqual({ count: 4, reviewed: 2 });
+    expect(detail.shards).toEqual({ count: 4, reviewed: 2, capped: 2, failed: 0 });
     expect(detail.unreviewed).toEqual([
       { path: "test/a.test.ts", lines: 30 },
       { path: "test/b.test.ts", lines: 30 },
       { path: "docs/a.md", lines: 30 },
       { path: "docs/b.md", lines: 30 },
     ]);
-    expect(payload(result).body).toContain("Not reviewed: test/a.test.ts, test/b.test.ts, docs/a.md, docs/b.md");
+    expect(payload(result).body).toContain("Not reviewed: 4 files in 2 parts over the review.max_shards cap, in docs/ (2 files) and test/ (2).");
     // Nothing unread can be approved past.
     expect(result.detail).toMatchObject({ verdict: "comment" });
     expect(payload(result).event).toBe("COMMENT");

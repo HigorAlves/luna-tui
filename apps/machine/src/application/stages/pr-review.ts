@@ -8,6 +8,7 @@ import { type Decide } from "./check-decide.ts";
 import { diffExcerptOf } from "./diff-section.ts";
 import { type ComplianceDeps, runCompliance } from "./compliance-review.ts";
 import { type DiffFile, type Shard, type Skipped, capShards, parseDiff, shardDiff, splitReviewable } from "./review-diff.ts";
+import { shardedSummary } from "./review-summary.ts";
 import { PR_DIFF_MOUNT } from "./review-diff-files.ts";
 import { type RereviewDeps, type RereviewPlan, prepareRereview, settledReply } from "./rereview.ts";
 import { type HelperDeps, type HelpersOutcome, type PassMount, type PassWorkspace, confirmHelperFindings, runHelpers } from "./review-helpers.ts";
@@ -168,7 +169,6 @@ const DEFAULT_LIMITS = { shardLines: 4000, maxShards: 25 };
 const SHARD_CHARS = 150_000;
 /** The most shards run at once. */
 const SHARD_CONCURRENCY = 4;
-const NOT_REVIEWED_SHOWN = 30;
 
 /** Adds up lines per path, in the order paths first appear. */
 const mergeLines = (rows: ReadonlyArray<{ path: string; lines: number }>): Array<{ path: string; lines: number }> => {
@@ -187,7 +187,7 @@ async function runShards(
   context: StageContext,
   review: ReviewContext,
   shards: readonly Shard[],
-): Promise<{ result: StageResult; failed: Array<{ path: string; lines: number }>; failedShards: number }> {
+): Promise<{ result: StageResult; failed: Array<{ path: string; lines: number }>; failedShards: number; failures: Array<{ shard: number; files: number; reason: string }> }> {
   const maker = deps.helpers?.workspace;
   const limit = maker ? Math.min(SHARD_CONCURRENCY, shards.length) : 1;
   const outcomes: Array<{ result: StageResult; answer: Answer | null; note?: string }> = new Array(shards.length);
@@ -231,10 +231,13 @@ async function runShards(
     else for (const p of shards[i]!.parts) failed.push({ path: p.path, lines: p.lines });
   });
   const failedShards = outcomes.filter((o) => !o.answer).length;
+  // Why each part gave no answer, kept on the stage and said on the card: a part that fails is never silent.
+  const failures = outcomes.flatMap((o, i) => (o.answer ? [] : [{ shard: shards[i]!.index, files: shards[i]!.parts.length, reason: (o.note ?? String(o.result.detail?.error ?? o.result.outcome)).slice(0, 300) }]));
+  for (const f of failures) await context.note?.(`review part ${f.shard} of ${shards.length} (${f.files} files) gave no answer: ${f.reason}`).catch(() => {});
   if (answers.length === 0) {
     const first = outcomes[0]!;
     const result = first.result.outcome === "pass" ? { ...first.result, outcome: "fail" as const, detail: { ...first.result.detail, error: `the review answer does not parse: ${first.note ?? "no shard answered"}` } } : first.result;
-    return { result, failed, failedShards };
+    return { result, failed, failedShards, failures };
   }
   const findings = mergeDuplicateFindings(answers.flatMap((a) => a.findings));
   const seen = new Set<string>();
@@ -249,7 +252,7 @@ async function runShards(
     comments,
     ...(answers.some((a) => a.threads?.length) ? { threads: answers.flatMap((a) => a.threads ?? []) } : {}),
   };
-  return { result: { outcome: "pass", ...(usage ? { usage } : {}), detail: { answer: merged, summary: merged.summary } }, failed, failedShards };
+  return { result: { outcome: "pass", ...(usage ? { usage } : {}), detail: { answer: merged, summary: merged.summary } }, failed, failedShards, failures };
 }
 
 export function prReviewRunner(deps: PrReviewDeps): StageRunner {
@@ -347,7 +350,8 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     // The review passes start with the main review, each in a workspace of its own (they never share the reviewer's folder); runHelpers never throws.
     const helpersRun = deps.helpers && !quiet && (!sharded || diffMount) ? runHelpers(deps.helpers, context, sharded ? fileReview : shared, diffMount ? [diffMount] : undefined) : null;
     let unreviewed: Array<{ path: string; lines: number }> = [];
-    let shardStats: { count: number; reviewed: number } | null = null;
+    let shardStats: { count: number; reviewed: number; capped: number; failed: number } | null = null;
+    let shardFailures: Array<{ shard: number; files: number; reason: string }> = [];
     const mainPromise: Promise<StageResult> = !reviewerNeeded
       ? Promise.resolve(silent)
       : sharded
@@ -356,7 +360,8 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
           const capped = capShards(shards, limits.maxShards);
           const ran = await runShards(deps, context, review, capped.kept);
           unreviewed = mergeLines([...capped.unreviewed, ...ran.failed]);
-          shardStats = { count: shards.length, reviewed: capped.kept.length - ran.failedShards };
+          shardStats = { count: shards.length, reviewed: capped.kept.length - ran.failedShards, capped: shards.length - capped.kept.length, failed: ran.failedShards };
+          shardFailures = ran.failures;
           return ran.result;
         })()
       : deps.runPack(context, review);
@@ -419,8 +424,27 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     }
     // The verdict is the findings' (and the open threads'), never the model's (orc review-contract): any finding keeps a review from approving.
     // What no shard read is said in the summary, and a review never approves past it.
-    const notReadLine = unreviewed.length > 0 ? `Not reviewed: ${unreviewed.slice(0, NOT_REVIEWED_SHOWN).map((u) => u.path).join(", ")}${unreviewed.length > NOT_REVIEWED_SHOWN ? ` and ${unreviewed.length - NOT_REVIEWED_SHOWN} more` : ""}.` : "";
-    const summary = [answer.summary, notReadLine].filter(Boolean).join(" ");
+    // A review read in parts gets one body written by the machine for the whole PR: the parts' own summaries each describe a slice.
+    const stats = shardStats as { count: number; reviewed: number; capped: number; failed: number } | null;
+    const summary = stats
+      ? [
+          shardedSummary({
+            title: review.pr.title,
+            parts: { reviewed: stats.reviewed, of: stats.count },
+            files: readable.length,
+            lines: diffLines,
+            skipped: skipped.length,
+            findings: [...answer.findings, ...stillOpen],
+            against: { tickets: (review.tickets ?? []).map((t) => t.key), cards: (review.cards ?? []).map((c) => c.id.slice(0, 8)) },
+            unreviewed,
+            capped: stats.capped,
+            failed: stats.failed,
+          }),
+          compliance?.summary ? `Compliance: ${compliance.summary}` : "",
+        ]
+          .filter(Boolean)
+          .join(" ")
+      : answer.summary;
     const verdict = verdictOf([...answer.findings, ...stillOpen, ...(unreviewed.length > 0 ? [{ severity: "question" }] : [])]);
 
     // Nothing is posted here: the review goes out under the person's name, so every verdict, its body and its line
@@ -438,7 +462,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     const settledCount = plan ? plan.rereview.threads.filter((t) => t.settle === "fixed" || t.settle === "reply_holds").length : 0;
     const body = quiet && !reviewerNeeded
       ? `No new commits since our review at ${plan!.rereview.since.slice(0, 7)}. ${settledCount} of ${plan!.rereview.threads.length} of our threads settled; the rest stay open.`
-      : [summary, !quiet && kept.length > 0 ? `The review passes found ${kept.length} more: ${severityCounts(kept)}.` : ""].filter(Boolean).join(" ");
+      : [summary, !quiet && !stats && kept.length > 0 ? `The review passes found ${kept.length} more: ${severityCounts(kept)}.` : ""].filter(Boolean).join(" ");
     const detail = {
       ...pack.detail,
       summary: body,
@@ -463,6 +487,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
           ? { helperNotes: passNotes }
           : {}),
       ...(shardStats ? { shards: shardStats } : {}),
+      ...(shardFailures.length > 0 ? { shardFailures } : {}),
       ...(unreviewed.length > 0 ? { unreviewed } : {}),
       ...(plan
         ? { rereview: { since: plan.rereview.since, ...(plan.rereview.note ? { note: plan.rereview.note } : {}), settled: plan.rereview.threads.filter((t) => t.settle === "fixed" || t.settle === "reply_holds").length, open: stillOpen.length, threads: plan.rereview.threads.length } }

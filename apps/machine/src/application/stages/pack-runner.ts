@@ -1,5 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
+import { createHash } from "node:crypto";
 import { designSettings, writableHelper, AnswerScenario, AnswerStep, type CapturePlan, type DesignSpec, type ParityCapture, type CiContext, type ComplianceReviewContext, type CoverageSummary, type DesignContext, type DocsDriftContext, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, visionProblem, type StageInput, type PackId, type PlanContext, type QuestionsContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
@@ -472,7 +473,10 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const gitDir = extra.checkout ? await commonGitDir(task.repoPath) : null;
   // A pack the state is not named for (the planner in test_design) names its container after itself.
   const unit = pack === context.stage ? context.stage : pack;
-  const container = resume?.container ?? `hardness-${task.id.slice(0, 8)}-${unit.replaceAll("_", "-")}-${context.attempt}`;
+  // Runs in a workspace of their own run beside each other on the same pack and attempt (the shards of a big review): their run id tells
+  // their containers apart, or Docker refuses every one but the first by name.
+  const apart = isolated ? `-${createHash("sha256").update(context.runId).digest("hex").slice(0, 6)}` : "";
+  const container = resume?.container ?? `hardness-${task.id.slice(0, 8)}-${unit.replaceAll("_", "-")}-${context.attempt}${apart}`;
   const runDir = join(deps.stateDir, "runs", context.runId);
   // The task's own engine for the pack, else luna.yaml's, else the default; a re-attached run
   // keeps the engine its container started on, and a fallback after a usage limit runs the engine
