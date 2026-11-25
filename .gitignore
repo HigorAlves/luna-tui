@@ -1,10 +1,14 @@
 
-# Rust
-/apps/board/target
+# Rust build output, wherever a crate sits (the board moved from board/ to apps/board/)
+target/
 
 # Node
 node_modules/
 dist/
+*.tsbuildinfo
+.eslintcache
+.vite/
+coverage/
 
 # Local settings and secrets
 .env
@@ -18,10 +22,9 @@ events.jsonl
 # Built by apps/machine/runner/build.sh
 apps/machine/runner/vendor/
 
-# site
-apps/site/.next/
-apps/site/next-env.d.ts
-apps/site/*.tsbuildinfo
+# Next.js build output, wherever the site sits (it moved from site/ to apps/site/)
+.next/
+next-env.d.ts
 
 # Replay eval run folders (evals/run.ts)
 evals/.runs/
@@ -31,3 +34,23 @@ evals/.runs/
 
 # turbo
 .turbo/
+
+# Logs
+*.log
+
+# OS and editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Vercel CLI link (the site deploys from the Vercel project)
+.vercel/
+
+# Local tool output
+graphify-out/
+.claude/settings.local.json
+.claude/worktrees/
+# Written by gpui-shell for the herdr app; it asks to be ignored
+gpui-kit.d.ts
+herdr-app/**/jsconfig.json
