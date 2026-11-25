@@ -29,7 +29,7 @@ const thread = (id: string, over: Record<string, unknown> = {}) => ({
 const yes = { value: true, p: 0.97 };
 const no = { value: false, p: 0.03 };
 
-function setup(opts: { reviews?: unknown[]; threads?: unknown[]; mainAnswer?: unknown; decide?: Decide | null; delta?: string | null; intent?: ShipDecide | null; intentSeen?: unknown[] } = {}) {
+function setup(opts: { reviews?: unknown[]; threads?: unknown[]; mainAnswer?: unknown; decide?: Decide | null; delta?: string | null; intent?: ShipDecide | null; intentSeen?: unknown[]; ownCommits?: number | null } = {}) {
   const github = fakeGitHub({
     viewer: async () => ({ login: "Luna", teams: [] }),
     prFacts: async () => node as never,
@@ -49,6 +49,7 @@ function setup(opts: { reviews?: unknown[]; threads?: unknown[]; mainAnswer?: un
         head: async () => HEAD,
         diffSince: async (_w, since) => (seen.since.push(since), opts.delta === undefined ? DELTA : opts.delta),
         fileAt: async (_w, rev, path) => `l1\nl2\nl3 at ${rev}:${path}\nl4`,
+        ...(opts.ownCommits === undefined ? {} : { ownCommits: async () => opts.ownCommits! }),
       },
       get decide() {
         const d: Decide = async () => ({ addressed: { value: false, p: 0.5 }, reply_holds: { value: false, p: 0.5 } });
@@ -168,6 +169,7 @@ describe("a re-review", () => {
     const asked: Array<{ pack: string; check: Record<string, unknown> }> = [];
     const { run } = setup({ threads: [thread("T1")], decide: (async (pack, check) => (asked.push({ pack, check: check as never }), { addressed: no, reply_holds: no })) as Decide });
     await run(context);
+    asked.splice(0, asked.length, ...asked.filter((a) => a.pack === "thread_settle"));
     expect(asked).toHaveLength(1);
     expect(asked[0]!.pack).toBe("thread_settle");
     const t = (asked[0]!.check as { kind: string; thread: { comments: Array<{ ours: boolean; body: string }>; original: string; current: string; delta: string; path: string } }).thread;
@@ -279,5 +281,87 @@ describe("a re-review routes an author's reply by its intent", () => {
       await probe.run(context);
       expect(settleOf(probe.seen), String(i)).toEqual(["unsettled"]);
     }
+  });
+});
+
+describe("a re-review asks whether the activity since our review is worth it", () => {
+  const noise = { activity: { choice: "noise", confidence: 0.95 } };
+  const byPack = (worth: Record<string, unknown>, settle: Record<string, unknown> = { addressed: no, reply_holds: no }, asked: Array<{ pack: string; check: Record<string, unknown> }> = []): Decide =>
+    (async (pack, check) => (asked.push({ pack, check: check as never }), pack === "rereview_worth" ? worth : settle)) as Decide;
+  const thanks = thread("T1", { comments: [{ author: "luna", body: "problem T1", at: "2026-11-24T10:00:00Z" }, { author: "them", body: "Thanks!", at: "2026-11-24T11:00:00Z", association: "NONE" }] });
+
+  it("runs only thread_settle on noise: no reviewer, no pass, and a thread the code fixed is still resolved at the gate", async () => {
+    const { run, seen } = setup({ threads: [thread("T1")], decide: byPack(noise, { addressed: yes, reply_holds: no }) });
+    const result = await run(context);
+    expect(seen.packs).toBe(0);
+    expect(seen.helpers).toBe(0);
+    expect(payload(result).threadReplies).toEqual([expect.objectContaining({ threadId: "T1", body: "Fixed in `9f8e7d6`.", resolve: true, by: "decision" })]);
+    expect(result.detail).toMatchObject({ rereview: { worth: { by: "jev", activity: "noise" } } });
+  });
+
+  it("opens no gate when noise leaves nothing to post: the card keeps watching", async () => {
+    const { run, seen } = setup({ threads: [thanks], decide: byPack(noise) });
+    const result = await run(context);
+    expect(seen.packs).toBe(0);
+    expect(result.requested ?? []).toEqual([]);
+    expect(result.detail).toMatchObject({ reason: "watching", rereview: { worth: { by: "jev", activity: "noise" } } });
+  });
+
+  it("reviews on code, on a discussion, on a noise answer short of the bar, and when no decision can be made", async () => {
+    const cases: Array<Decide | null> = [byPack({ activity: { choice: "code", confidence: 0.95 } }), byPack({ activity: { choice: "discussion", confidence: 0.9 } }), byPack({ activity: { choice: "noise", confidence: 0.55 } }), null, async () => { throw new Error("jev down"); }];
+    for (const decide of cases) {
+      const { run, seen } = setup({ threads: [thanks], decide });
+      await run(context);
+      expect(seen.packs).toBe(1);
+      expect(seen.helpers).toBeGreaterThan(0);
+    }
+  });
+
+  it("hands the decision the new comments as data, the delta's files and the commits of its own", async () => {
+    const asked: Array<{ pack: string; check: Record<string, unknown> }> = [];
+    const { run } = setup({ threads: [thanks], ownCommits: 3, decide: byPack(noise, undefined, asked) });
+    await run(context);
+    const worth = asked.find((a) => a.pack === "rereview_worth")!;
+    expect(worth.check.kind).toBe("rereview");
+    const activity = worth.check.activity as { comments: Array<{ author: string; path: string; body: string }>; commits: number; files: Array<{ path: string; additions: number }>; delta: string };
+    expect(activity.comments).toHaveLength(1);
+    expect(activity.comments[0]).toMatchObject({ author: "them", path: "a.ts" });
+    expect(activity.comments[0]!.body).toMatch(/^\[untrusted.*Thanks!/);
+    expect(activity.commits).toBe(3);
+    expect(activity.files).toEqual([{ path: "a.ts", additions: 1, deletions: 0 }]);
+    expect(activity.delta).toContain("+only the delta");
+  });
+
+  it("does not ask when nothing happened since our review: no new comment, no new code", async () => {
+    const asked: Array<{ pack: string; check: Record<string, unknown> }> = [];
+    const atHead = { ...mine, commitId: HEAD };
+    const { run } = setup({ reviews: [atHead], delta: "", threads: [thread("T1", { comments: [{ author: "luna", body: "problem", at: "2026-11-24T10:00:00Z" }] })], decide: byPack(noise, undefined, asked) });
+    await run(context);
+    expect(asked.map((a) => a.pack)).toEqual(["thread_settle"]);
+  });
+
+  it("treats a delta of only merges of the base branch as no new code, by git, without asking", async () => {
+    const asked: Array<{ pack: string; check: Record<string, unknown> }> = [];
+    const { run, seen } = setup({ ownCommits: 0, threads: [{ ...thread("T1"), comments: [{ author: "luna", body: "problem", at: "2026-11-24T10:00:00Z" }] }], decide: byPack(noise, undefined, asked) });
+    const result = await run(context);
+    expect(asked.map((a) => a.pack)).toEqual(["thread_settle"]);
+    expect(seen.packs).toBe(0);
+    expect(seen.helpers).toBe(0);
+    expect(result.detail).toMatchObject({ reason: "watching", rereview: { worth: { by: "git", activity: "base_merge" } } });
+  });
+
+  it("still asks about a comment after a merge of the base, with the base's changes out of the delta", async () => {
+    const asked: Array<{ pack: string; check: Record<string, unknown> }> = [];
+    const { run } = setup({ ownCommits: 0, threads: [thanks], decide: byPack(noise, undefined, asked) });
+    await run(context);
+    const worth = asked.find((a) => a.pack === "rereview_worth")!;
+    expect((worth.check.activity as { delta: string; files: unknown[] }).delta).toBe("");
+    expect((worth.check.activity as { files: unknown[] }).files).toEqual([]);
+  });
+
+  it("reviews as before when git cannot count the commits", async () => {
+    const { run, seen } = setup({ ownCommits: null, threads: [thread("T1")] });
+    await run(context);
+    expect(seen.packs).toBe(1);
   });
 });

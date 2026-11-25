@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { TaskRow } from "../../domain/task.ts";
 import { fakeGitHub } from "../../test/github.ts";
 import type { StageContext, StageResult } from "../ports.ts";
+import type { Decide } from "./check-decide.ts";
 import { prReviewRunner } from "./pr-review.ts";
 
 const node = { number: 12, title: "Export CSV", body: "Adds the export.", url: "https://github.com/o/a/pull/12", isDraft: false, updatedAt: "t", baseRefName: "main", headRefName: "feat/export", author: { login: "them" }, headRepository: { nameWithOwner: "o/a" }, reviewDecision: null, mergeable: "MERGEABLE", reviewRequests: { nodes: [] }, reviewThreads: { nodes: [] }, commits: { nodes: [] } };
@@ -26,6 +27,7 @@ interface Opts {
   withFiles?: boolean;
   answer?: (review: ReviewContext) => unknown;
   failShard?: number;
+  decide?: Decide | null;
   rereview?: { delta: string; threads: unknown[] };
 }
 
@@ -80,7 +82,9 @@ function setup(opts: Opts = {}) {
         log.passRuns.push({ pack, review, ...(workspace ? { workspace } : {}), mounts });
         return { outcome: "pass", detail: { answer: { summary: `${pack} looked`, findings: [] } } } satisfies StageResult;
       },
-      decide: null,
+      get decide() {
+        return opts.decide ?? null;
+      },
     },
     ...(opts.withFiles === false
       ? {}
@@ -256,6 +260,39 @@ describe("a diff over the cap", () => {
     // Nothing unread can be approved past.
     expect(result.detail).toMatchObject({ verdict: "comment" });
     expect(payload(result).event).toBe("COMMENT");
+  });
+
+  it("lets pr_risk rank the parts over the cap, a part at a time from its paths, and keeps the path heuristic for a part it did not score", async () => {
+    const asked: Array<{ scope: string; files: string[] }> = [];
+    const decide: Decide = async (pack, check) => {
+      if (pack !== "pr_risk") throw new Error("not asked");
+      const risk = (check as unknown as { risk: { scope: string; files: Array<{ path: string; additions: number }> } }).risk;
+      if (!risk.scope.startsWith("part")) return { level: { choice: "medium", confidence: 0.9 } };
+      asked.push({ scope: risk.scope, files: risk.files.map((f) => f.path) });
+      // Jev thinks the docs and the test parts are the risky ones here.
+      const risky = risk.files.some((f) => f.path.startsWith("docs/") || f.path.startsWith("test/"));
+      return { level: { choice: risky ? "high" : "low", confidence: 0.95 } };
+    };
+    const { run, log } = setup({ diff: withAuth(), maxShards: 2, decide });
+    const result = await run(context);
+    expect(asked).toHaveLength(4);
+    expect(asked[0]!.scope).toBe("part 1 of 4");
+    expect(asked.flatMap((a) => a.files).sort()).toEqual(["docs/a.md", "docs/b.md", "src/auth/login.ts", "src/auth/token.ts", "src/x/more.ts", "src/x/util.ts", "test/a.test.ts", "test/b.test.ts"]);
+    const read = log.shardRuns.flatMap((s) => pathsOf(s.review.diff)).sort();
+    expect(read).toEqual(["docs/a.md", "docs/b.md", "test/a.test.ts", "test/b.test.ts"]);
+    expect((result.detail as { shards: { rankedBy?: string } }).shards).toMatchObject({ count: 4, reviewed: 2, capped: 2, rankedBy: "jev" });
+  });
+
+  it("asks nothing about the parts when they all fit, and ranks by the paths when no decision can be made", async () => {
+    const asked: string[] = [];
+    const decide: Decide = async (pack) => (asked.push(pack), { level: { choice: "medium", confidence: 0.9 } });
+    const fits = setup({ diff: withAuth(), maxShards: 4, decide });
+    await fits.run(context);
+    expect(asked.filter((p) => p === "pr_risk")).toHaveLength(1);
+    const down = setup({ diff: withAuth(), maxShards: 2, decide: async () => { throw new Error("jev down"); } });
+    const result = await down.run(context);
+    expect(down.log.shardRuns.flatMap((s) => pathsOf(s.review.diff)).sort()).toEqual(["src/auth/login.ts", "src/auth/token.ts", "src/x/more.ts", "src/x/util.ts"]);
+    expect((result.detail as { shards: object }).shards).not.toHaveProperty("rankedBy");
   });
 
   it("the passes still read the whole PR", async () => {

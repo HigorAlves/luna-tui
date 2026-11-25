@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "level.confidence",
+      "min": 0.3,
+      "max": 0.85
+    }
+  ],
+  "rubric": "A flag and a small code change: low or medium, readers split.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "level": {
+            "choice": "low"
+          }
+        },
+        "criteria": {
+          "level": "Docs, tests, copy, styling or a small change in one place with no data, auth, money or shared contract near it"
+        },
+        "why": "A flag and one small change in one place, nothing sensitive near it."
+      },
+      {
+        "label": {
+          "level": {
+            "choice": "medium"
+          }
+        },
+        "criteria": {
+          "level": "An ordinary feature or fix across a few files in one area"
+        },
+        "why": "It changes live behaviour for users across the export path, so it is an ordinary feature."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
+}

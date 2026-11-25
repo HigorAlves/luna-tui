@@ -56,7 +56,7 @@ import { InstallFailedError, type InstallInput, type InstallOutcome, ensureInsta
 import { checkGit } from "../adapters/git/helper.ts";
 import { removeNestedRepositories } from "../adapters/git/machine-repo.ts";
 import { removeDiffFiles, writeDiffFiles } from "../application/stages/review-diff-files.ts";
-import { ensureClone, inUseClones, isClone, localPrDiff, removeClone, reviewClone } from "../adapters/git/clone.ts";
+import { ensureClone, inUseClones, isClone, localPrDiff, ownCommitsSince, removeClone, reviewClone } from "../adapters/git/clone.ts";
 import { type ProofRig, proofAppDeps } from "../application/config-proof.ts";
 import type { DesignBudget } from "../domain/design-budget.ts";
 import type { Waiver } from "../domain/design-parity.ts";
@@ -689,10 +689,16 @@ export async function buildRealStages(
           return verifyDecisions?.decide ?? null;
         },
         decisions: async (repoPath) => (repoPath ? (await policies.for(repoPath)).decisions : {}),
+        // The risk read never suggests over luna.yaml, and asks the Codex login before it plans a second opinion on it.
+        policy: async (repoPath) => {
+          const policy = repoPath ? await policies.for(repoPath) : null;
+          return { engines: policy?.engines ?? null, effort: policy?.effort ?? null };
+        },
+        engineReady: async (engine, repoPath) => (await deps.credentials.check(engine, { repo: repoPath })).available,
       },
       // A PR we reviewed before is reviewed again on the delta since, and our open threads are settled by thread_settle (bound late like finding_confirm).
       rereview: {
-        git: { head: headCommit, diffSince: (worktree, since) => diffSince(worktree, since), fileAt: fileAtRev },
+        git: { head: headCommit, diffSince: (worktree, since) => diffSince(worktree, since), fileAt: fileAtRev, ownCommits: (worktree, since, baseRef, repoPath) => ownCommitsSince(repoPath, baseRef, worktree, since) },
         readNow: (worktree, path, line) => excerptOf(worktree, { path, line, severity: "nit", title: "", body: "", confidence: 1 }),
         get decide() {
           return verifyDecisions?.decide ?? null;

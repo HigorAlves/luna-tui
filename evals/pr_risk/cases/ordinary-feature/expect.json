@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "level.choice",
+      "value": "medium"
+    }
+  ],
+  "rubric": "A feature across a few files of one area: medium risk.",
+  "label": {
+    "level": {
+      "choice": "medium"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "level": "An ordinary feature or fix across a few files in one area"
+    },
+    "why": "A feature across a few files of one area: medium risk.",
+    "ruledOut": [
+      {
+        "question": "level",
+        "label": "low",
+        "why": "A feature across a few files of one area: medium risk. It is not low: docs, tests, copy, styling or a small change in one place with no data, auth, money or shared contract near it."
+      },
+      {
+        "question": "level",
+        "label": "high",
+        "why": "A feature across a few files of one area: medium risk. It is not high: auth, payments, secrets, migrations, infrastructure, a public contract, or a large change across many areas."
+      }
+    ],
+    "second": {
+      "label": {
+        "level": {
+          "choice": "medium"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "schema": 3,
+  "stage": "pr_risk",
+  "pack": "pr_risk",
+  "attempt": 1,
+  "task": {
+    "id": "pr-risk",
+    "title": "Pr risk",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "pr_risk",
+      "risk": {
+        "title": "Turn on the export flag",
+        "scope": "the whole PR",
+        "files": [
+          {
+            "path": "config/feature-flags.yaml",
+            "additions": 4,
+            "deletions": 1
+          },
+          {
+            "path": "src/cart/export.ts",
+            "additions": 20,
+            "deletions": 6
+          }
+        ],
+        "filesTotal": 2,
+        "additions": 24,
+        "deletions": 7
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

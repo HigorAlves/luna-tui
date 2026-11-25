@@ -1,7 +1,7 @@
 import { PACKS } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { DecisionTruth, commentIntentTruth, e2eCauseTruth, eventClassTruth, evidenceFormatTruth, findingTruth, planTruth, recordIdOf, redCheckTruth, tagged, triageConfirmTruth, triageEditTruth, triageOutcomeTruth, worthLearningTruth, ciClassTruth, e2eCompareTruth, escalationResumedTruth, fixScopeTruth, frameCredentialTruth, scopeFactsTruth, sizeTruth } from "./decision-truth.ts";
+import { DecisionTruth, commentIntentTruth, e2eCauseTruth, eventClassTruth, evidenceFormatTruth, findingTruth, planTruth, decidedBy, recordIdOf, redCheckTruth, tagged, triageConfirmTruth, triageEditTruth, triageOutcomeTruth, worthLearningTruth, ciClassTruth, e2eCompareTruth, escalationResumedTruth, fixScopeTruth, frameCredentialTruth, scopeFactsTruth, sizeTruth } from "./decision-truth.ts";
 
 describe("what each fact says about the answer", () => {
   it("e2e_failure_cause: a re-run that passed makes env_flake right; one that failed the same way rules it out", () => {
@@ -57,6 +57,13 @@ describe("tagging an answer with its record", () => {
     expect(JSON.stringify(answer)).toBe('{"worth":{"value":true,"p":0.9}}');
     expect(recordIdOf({ worth: 1 })).toBeUndefined();
     expect(recordIdOf(tagged({ answer: { a: 1 } }))).toBeUndefined();
+  });
+
+  it("says who answered: Jev, the fallback engine, or nobody", () => {
+    expect(decidedBy(tagged({ answer: { a: 1 }, usage: { engine: "jev" } }))).toBe("jev");
+    expect(decidedBy({ ...tagged({ answer: { a: 1 }, usage: { engine: "claude:haiku" } }) })).toBe("fallback");
+    expect(decidedBy({ a: 1 })).toBe("jev");
+    expect(decidedBy(null)).toBe("skipped");
   });
 });
 

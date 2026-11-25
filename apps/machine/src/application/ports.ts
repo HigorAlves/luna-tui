@@ -1,5 +1,6 @@
 import type {
   ArtifactKind,
+  Effort,
   EngineId,
   Finding,
   NeedsInputItem,
@@ -52,6 +53,8 @@ export interface StageContext {
   signal: AbortSignal;
   /** Set after a restart found the stage's container still running: wait on it, do not start another. `engine` is the one it started on. */
   resume?: { container: string; inputCommit: string | null; engine?: EngineId | null };
+  /** What the review's risk read suggests for this run: used only where the task and luna.yaml name no engine or effort for the pack. */
+  suggested?: { engine?: EngineId; effort?: Effort };
   /** The engine to run on over the usual pick: the next of the pack's fallbacks after a usage limit. */
   engine?: EngineId;
   /** Tells the machine the container's name, the commit it started from and the engine it runs on, as soon as they are known. */

@@ -169,6 +169,18 @@ describe("keeping the shards a review can afford", () => {
     ]);
   });
 
+  it("ranks by the scores it is given over the paths, and falls back to the paths for a shard without one", () => {
+    const docs = shard(50, "docs/guide.md");
+    const tests = shard(50, "src/a.test.ts");
+    const auth = shard(50, "src/auth/login.ts");
+    const src = shard(50, "src/x/util.ts");
+    const shards = [docs, tests, auth, src].map((s, i) => ({ ...s, index: i + 1 }));
+    // docs and tests are scored high; auth keeps its path heuristic (3); src is scored low.
+    const scores = new Map([[1, 3], [2, 3], [4, 1]]);
+    const { kept } = capShards(shards, 3, scores);
+    expect(kept.map(paths)).toEqual([["docs/guide.md"], ["src/a.test.ts"], ["src/auth/login.ts"]]);
+  });
+
   it("hands the kept shards back in the diff's own order, renumbered", () => {
     const a = shard(5, "a/docs.md");
     const b = shard(5, "b/routes/api.ts");

@@ -2184,6 +2184,25 @@ describe("the ui-designer's own run (RFC 0013, phase 5)", () => {
     expect(JSON.stringify(refused.detail)).toContain("refusing to run implementing in a workspace the caller made");
   });
 
+  it("runs a review pass on the engine and effort the risk read suggests, unless luna.yaml names them", async () => {
+    const { cardPath } = await made();
+    const review = { pr: { repo: "o/a", number: 1, url: "u", title: "t", body: null, author: "a", baseRef: "main", headRef: "h" }, diff: "d", files: [], existingComments: [] } as never;
+    const suggested = { engine: "claude:haiku" as const, effort: "low" as const };
+    const pass = async (n: number) => {
+      const ws = { path: `${cardPath}-pass-${n}.review`, branch: `luna-review/pass-${n}` };
+      await ensureClone(repo, ws);
+      await runAgent(deps(box()), { ...context("reviewing"), suggested }, "review_security", { workspace: ws, review });
+      return seen!.input as unknown as StageInput;
+    };
+    const suggestedRun = await pass(1);
+    expect(suggestedRun.engine).toBe("claude:haiku");
+    expect(suggestedRun.effort).toBe("low");
+    writeFileSync(join(repo, "luna.yaml"), "engines:\n  review_security: claude:opus\neffort:\n  review_security: high\n");
+    const named = await pass(2);
+    expect(named.engine).toBe("claude:opus");
+    expect(named.effort).toBe("high");
+  });
+
   it("names the container of each run in a workspace of its own apart, so the shards of one pack never collide on one name", async () => {
     const { cardPath } = await made();
     const review = { pr: { repo: "o/a", number: 1, url: "u", title: "t", body: null, author: "a", baseRef: "main", headRef: "h" }, diff: "d", files: [], existingComments: [] } as never;

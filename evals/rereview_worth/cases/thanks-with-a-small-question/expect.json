@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "activity.confidence",
+      "min": 0.3,
+      "max": 0.85
+    }
+  ],
+  "rubric": "A thanks with a small question tucked in: a reviewer could call it noise or a discussion, so the answer should not be near-certain.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "activity": {
+            "choice": "noise"
+          }
+        },
+        "criteria": {
+          "activity": "Thanks or an acknowledgement, a bot or agent restating what was said, or a change only to CI or configuration"
+        },
+        "why": "The thanks is the point and the question is a passing aside the author can settle."
+      },
+      {
+        "label": {
+          "activity": {
+            "choice": "discussion"
+          }
+        },
+        "criteria": {
+          "activity": "An argument, a question, a disagreement or a request that a reviewer should answer"
+        },
+        "why": "The author asks about behaviour the reviewer should answer, so it needs a reply."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
+}

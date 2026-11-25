@@ -1276,6 +1276,42 @@ fn reviewed_against(r: &Value, width: usize) -> Vec<Line<'static>> {
     out
 }
 
+/// The acceptance criteria of the linked tickets and cards, each ticked, failed, unclear or unchecked. Nothing for a review with none.
+fn review_criteria(r: &Value, width: usize) -> Vec<Line<'static>> {
+    let rows: Vec<&Value> = r["criteria"]
+        .as_array()
+        .map(|a| a.iter().filter(|c| c["criterion"].is_string()).collect())
+        .unwrap_or_default();
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    let met = rows.iter().filter(|c| c["verdict"].as_str() == Some("met")).count();
+    let mut out = vec![
+        Line::default(),
+        Line::from(Span::styled(
+            format!("  Acceptance criteria ({met} of {} met)", rows.len()),
+            theme::label(),
+        )),
+    ];
+    for c in rows {
+        let (glyph, style) = match c["verdict"].as_str() {
+            Some("met") => ("✓", theme::done()),
+            Some("unmet") => ("✗", theme::lost()),
+            Some("unsure") => ("?", theme::flag()),
+            _ => ("·", theme::dim()),
+        };
+        out.extend(hanging(
+            vec![Span::styled(
+                format!("    {glyph} {}  ", plain(c["source"].as_str().unwrap_or("?"))),
+                style,
+            )],
+            c["criterion"].as_str().unwrap_or(""),
+            width,
+        ));
+    }
+    out
+}
+
 /// What a big PR's review did not read (a cap on its shards) and the generated or lock files it left out before reading, so the
 /// person sees both before posting. Nothing for a review that read everything.
 fn review_coverage(r: &Value, width: usize) -> Vec<Line<'static>> {
@@ -1350,6 +1386,7 @@ fn review_to_post(a: &Approval, width: usize) -> Vec<Line<'static>> {
     ];
     out.extend(review_coverage(r, width));
     out.extend(reviewed_against(r, width));
+    out.extend(review_criteria(r, width));
     // The body is the one the machine will send: the review action's own payload when it is there, else the summary.
     let post = r["actions"]
         .as_array()
@@ -1970,6 +2007,33 @@ mod tests {
         let screen = render(&mut bare, 180, 60);
         let main = main_pane(&screen);
         assert!(!main.contains("Not reviewed") && !main.contains("Skipped:"));
+    }
+
+    #[test]
+    fn a_review_shows_its_acceptance_criteria_checklist_and_none_when_nothing_was_linked() {
+        let mut app = review_verdict_app("comment");
+        if let Some(d) = app.detail.as_mut() {
+            d.approvals[0].requested["criteria"] = serde_json::json!([
+                {"source": "DISC-12", "criterion": "Rows are exported", "verdict": "met"},
+                {"source": "DISC-12", "criterion": "Header is first", "verdict": "unmet"},
+                {"source": "card abcdef12", "criterion": "Works offline", "verdict": "unsure"},
+                {"source": "card abcdef12", "criterion": "Is fast", "verdict": "unchecked"}
+            ]);
+        }
+        let screen = render(&mut app, 180, 60);
+        let main = main_pane(&screen);
+        for needle in [
+            "Acceptance criteria (1 of 4 met)",
+            "✓ DISC-12  Rows are exported",
+            "✗ DISC-12  Header is first",
+            "? card abcdef12  Works offline",
+            "· card abcdef12  Is fast",
+        ] {
+            assert!(main.contains(needle), "no {needle:?} in\n{main}");
+        }
+        let mut bare = review_verdict_app("comment");
+        let screen = render(&mut bare, 180, 60);
+        assert!(!main_pane(&screen).contains("Acceptance criteria"));
     }
 
     #[test]

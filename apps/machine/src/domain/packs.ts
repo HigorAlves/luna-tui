@@ -38,6 +38,12 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   thread_settle: [],
   // A decision on a review finding against a comment already on the PR, run on demand by the PR review.
   already_raised: [],
+  // A decision on the activity after our review, run on demand by a PR re-review.
+  rereview_worth: [],
+  // A decision on a PR's risk, run on demand by a PR review.
+  pr_risk: [],
+  // A decision on one acceptance criterion against a PR's diff, run on demand by a PR review.
+  criteria_met: [],
   e2e_failure_cause: [],
   ci_failure_class: [],
   frame_privacy: [],

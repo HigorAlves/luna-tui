@@ -179,7 +179,7 @@ describe("parseLunaConfig", () => {
     expect(policyOf(config).engines).toEqual({ review_security: "claude:opus", review_second: "codex:luna" });
     expect(policyOf(config).effort).toEqual({ review_security: "high", review_iac: "low" });
     expect(renderLunaConfig(config)).toContain("engines:\n  review_security: claude:opus");
-    expect(() => parseLunaConfig("engines:\n  review_iac: claude:haiku\n")).toThrow(/^engines\.review_iac: claude:haiku is not allowed for review_iac/);
+    expect(() => parseLunaConfig("engines:\n  review_iac: openai:luna\n")).toThrow(/^engines\.review_iac: openai:luna is not allowed for review_iac/);
   });
 
   it("reads the design section into the policy, and keeps it through a render", () => {
