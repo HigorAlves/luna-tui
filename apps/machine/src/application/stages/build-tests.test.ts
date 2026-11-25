@@ -650,6 +650,13 @@ describe("a red that fails only because the code the plan creates is not there y
     expect(rows).toContainEqual(["scenario.red_check", expect.objectContaining({ scenario: "S1", verdict: "proceed", planned: "web/cart.ts" })]);
   });
 
+  it("resolves an importer named without its folder against the scenario's tagged test file", async () => {
+    const waived: Array<readonly string[] | undefined> = [];
+    const f = fakes([tagged("S1")], { judgeRed: async (_c, _r, waive) => (waived.push(waive), { verdict: "proceed", problems: [] }) }, [{ S1: "Error: Cannot find module './cart' imported from cart.test.ts" }]);
+    await buildTestsStep(f.deps)(context([newModule]));
+    expect(waived).toEqual([["right_reason"]]);
+  });
+
   it("still escalates a tautological test whose module the plan creates", async () => {
     const f = fakes([tagged("S1")], { judgeRed: async () => ({ verdict: "flag", problems: ["the test would still pass without the behaviour"] }) }, [{ S1: "Error: Cannot find module 'web/cart.ts'" }]);
     const result = await buildTestsStep(f.deps)(context([newModule]));
@@ -678,5 +685,44 @@ describe("what the writer is told when a test is rejected", () => {
     const f = fakes([tagged("S1")], { judgeRed: async () => (n++ < 2 ? { verdict: "flag", problems: [tautological] } : { verdict: "proceed", problems: [] }) }, [{ S1: "AssertionError: expected 0 to be 3" }]);
     await buildTestsStep(f.deps)(context([withThen]));
     expect(f.reviews[1]!.join("\n")).toContain(`assert this outcome itself: "only that manager's visible participants are returned"`);
+  });
+});
+
+describe("rounds of the tests step on a big card", () => {
+  const many = gate({
+    plan: { goal: "g", steps: [{ title: "x", est_loc: 80, touchpoints: ["web/cart.ts"], acceptance: ["a"] }], acceptance_criteria: [{ id: "C1", text: "c1" }], out_of_scope: [], assumptions: [], rollback: "r", version: 3 },
+    cases: ["S1", "S2", "S3", "S4", "S5"].map((id) => ({ id, title: id, criterion: "c1", criterion_ref: "C1", approach: "a" })),
+  });
+  const reds = { S1: "AssertionError: x", S2: "AssertionError: x", S3: "AssertionError: x", S4: "AssertionError: x", S5: "AssertionError: x" };
+
+  it("keeps sending the writer back while each round flags fewer scenarios, past the third (DISC-53: 30 scenarios, a few fixed each round)", async () => {
+    let round = 0;
+    const flaggedIn = (r: number) => ["S1", "S2", "S3", "S4"].slice(r); // round 0: four flagged, round 4: none
+    const f = fakes([tagged("S1", "S2", "S3", "S4", "S5")], {
+      runWriter: async () => (round += 1, { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/w" }, run: { inputCommit: "base0" }, detail: { scenarioReds: reds } }) as StageResult,
+      judgeRed: async (c) => (flaggedIn(round - 1).includes(c.scenario!.id) ? { verdict: "flag", problems: ["the test fails on an import"] } : { verdict: "proceed", problems: [] }),
+    });
+    const result = await buildTestsStep(f.deps)(context([many]));
+    expect(round).toBe(5);
+    expect(result.outcome).not.toBe("escalated");
+  });
+
+  it("stops after the third round when a round flags as many as the one before", async () => {
+    let round = 0;
+    const f = fakes([tagged("S1", "S2", "S3", "S4", "S5")], {
+      runWriter: async () => (round += 1, { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/w" }, run: { inputCommit: "base0" }, detail: { scenarioReds: reds } }) as StageResult,
+      judgeRed: async (c) => (c.scenario!.id === "S1" ? { verdict: "flag", problems: ["the test fails on an import"] } : { verdict: "proceed", problems: [] }),
+    });
+    const result = await buildTestsStep(f.deps)(context([many]));
+    expect(round).toBe(3);
+    expect(result.outcome).toBe("escalated");
+  });
+
+  it("sends a red that is the writer's summary, with no error line, back without asking the judge", async () => {
+    const asked: string[] = [];
+    const f = fakes([tagged("S1")], { judgeRed: async (c) => (asked.push(c.scenario!.id), { verdict: "proceed", problems: [] }) }, [{ S1: "behaviour.integration.test.ts: ./testing/harness missing (lambda not built)" }, { S1: "Error: Cannot find module 'web/cart.ts'" }]);
+    await buildTestsStep(f.deps)(context([v2]));
+    expect(asked).toEqual(["S1"]);
+    expect(f.reviews[1]!.join(" ")).toMatch(/S1: .*runner's own/);
   });
 });

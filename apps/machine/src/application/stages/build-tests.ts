@@ -191,6 +191,8 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
     // A missing tag is sent back once; a red that is missing or wrong, twice.
     let tagMisses = 0;
     let redMisses = 0;
+    /** Scenarios the last round flagged: a round that flags fewer earns another, up to RED_ROUNDS_MAX. */
+    let lastFlagged = Number.POSITIVE_INFINITY;
     let review: string[] | undefined;
     let holdsToday: { scenario: string; reason: string }[] = [];
     // A red judged right once keeps its verdict while its test and its output are the same: a round sends the writer back as a whole, and
@@ -236,6 +238,8 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
           const id = s.id!;
           const output = reds[id];
           if (output === undefined) return { id, verdict: "missing", problems: [`${id}: no red reported; run its test and report the failing output with scenario_red`] };
+          // A summary of the failure ("./testing/harness missing (lambda not built)") is no output: neither the machine nor the judge can read it.
+          if (!RUNNER_LINE.test(output)) return { id, verdict: "summary", problems: [`${id}: the reported red is a summary, not the runner's own lines; run the test and paste the runner's own error lines with their file paths`] };
           const file = facts.tagged[id];
           const test = file && deps.readTest ? await deps.readTest(where, file, id).catch(() => null) : null;
           const check: CheckContext = { kind: "red", scenario: { id, title: s.title, given: s.given ?? null, when: s.when ?? null, then: s.then ?? null, approach: s.approach }, exists: id in facts.tagged, output, ...(test ? { test } : {}) };
@@ -247,7 +251,7 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
           // New code's test cannot import what the plan creates yet: a missing module the plan names is the right reason, so that question is
           // waived (red_check reads an import error as a wrong reason, and a card that adds a lambda failed every scenario on it). Whether the
           // test would pass without the behaviour is still asked.
-          const planned = plannedMissingModule(output, touchpoints);
+          const planned = plannedMissingModule(output, touchpoints, file);
           const vote = await voteRed(deps.judgeRed, check, task.repoPath, planned !== null ? ["right_reason"] : undefined);
           if (vote.verdict === "proceed") accepted.add(same);
           // The task's events say what each scenario's judge said, so an escalation is never only a sentence.
@@ -259,7 +263,11 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       const problems = judged.flatMap((j) => j.problems);
       if (problems.length > 0) {
         review = problems;
-        if (redMisses >= 2) return escalate(where, base, problems, judged.map((j) => ({ scenario: j.id, verdict: j.verdict })));
+        // Three rounds, and more while each flags fewer scenarios than the one before (a 30-scenario card fixes a few each round).
+        const flaggedNow = judged.filter((j) => j.problems.length > 0).length;
+        const progressing = flaggedNow < lastFlagged;
+        lastFlagged = flaggedNow;
+        if (redMisses >= RED_ROUNDS_MAX - 1 || (redMisses >= 2 && !progressing)) return escalate(where, base, problems, judged.map((j) => ({ scenario: j.id, verdict: j.verdict })));
         redMisses += 1;
         continue;
       }
@@ -275,6 +283,10 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
 
 /** How many scenarios' red_check run at once: the machine's pack calls run two at a time. */
 const RED_JUDGES_AT_ONCE = 2;
+/** Writer rounds when every round flags fewer scenarios than the last; three when one does not. */
+const RED_ROUNDS_MAX = 5;
+/** What a runner's failure prints, in any common runner: a summary the writer wrote has none of it. */
+const RUNNER_LINE = /error|fail|expected|assert|panic|traceback|exception|cannot|not found|no such|undefined|exit(?:ed)? (?:with )?(?:code|status)|✗|×|✕|thrown|timed? ?out|!==|===|!=|does not match|does not (?:equal|contain|include)|to (?:be|equal|match|contain|have)|received|actual|deepStrictEqual|not ok/i;
 
 /** `work` over `items`, at most `width` at a time, results in the items' order. */
 async function inTurns<T, R>(items: readonly T[], width: number, work: (item: T) => Promise<R>): Promise<R[]> {

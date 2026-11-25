@@ -1,0 +1,41 @@
+{
+  "schema": 3,
+  "stage": "red_check",
+  "pack": "red_check",
+  "attempt": 1,
+  "task": {
+    "id": "red-check",
+    "title": "Red check",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "red",
+      "scenario": {
+        "id": "S15",
+        "title": "the second organization's rows are unchanged",
+        "given": "two organizations with forms",
+        "when": "an admin of the first deletes a form of the second",
+        "then": "the second organization's rows are unchanged"
+      },
+      "exists": true,
+      "output": "Error: Cannot find module './app' imported from /work/apps/lambdas/evaluation/src/behaviour.integration.test.ts",
+      "test": "\t// @scenario:S15\n\tit('changes only rows of the target organization', async () => {\n\t\tconst before = await seed.snapshotOrganization(OTHER_ORG)\n\t\tawait call('admin', 'DELETE', `/admin/forms/${seed.otherFormId}`)\n\t\texpect(await seed.snapshotOrganization(OTHER_ORG)).toEqual(before)\n\t})\n"
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}
