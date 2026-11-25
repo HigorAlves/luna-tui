@@ -7,6 +7,7 @@ import { type DecisionOverrides, type Finding, PrReviewAnswer, type RequestedAct
 import { type Decide } from "./check-decide.ts";
 import { diffExcerptOf } from "./diff-section.ts";
 import { dropAlreadyRaised } from "./already-raised.ts";
+import { type Recalibrated, recalibrateSeverity } from "./recalibrate.ts";
 import { type ComplianceDeps, runCompliance } from "./compliance-review.ts";
 import { type DiffFile, type Shard, type Skipped, capShards, parseDiff, shardDiff, splitReviewable } from "./review-diff.ts";
 import { shardedSummary } from "./review-summary.ts";
@@ -375,9 +376,9 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     const worktree = pack.workspace?.worktreePath ?? context.task.worktreePath ?? null;
     const helpers: HelpersOutcome | null = helpersDone.status === "fulfilled" ? helpersDone.value : null;
     let confirmed: Awaited<ReturnType<typeof confirmHelperFindings>> | null = null;
+    const excerpt = async (finding: Finding): Promise<string> => (worktree ? await excerptOf(worktree, finding).catch(() => "") : "") || diffExcerptOf(review.diff, finding);
     if (deps.helpers && helpers) {
       const overrides = (await deps.helpers.decisions?.(context.task.repoPath ?? null).catch(() => ({}))) ?? {};
-      const excerpt = async (finding: Finding): Promise<string> => (worktree ? await excerptOf(worktree, finding).catch(() => "") : "") || diffExcerptOf(review.diff, finding);
       confirmed = await confirmHelperFindings({ decide: deps.helpers.decide, repoPath: context.task.repoPath ?? null, decisions: overrides, excerpt, log: (line) => console.warn(`review: ${line}`) }, helpers.helpers, parsed.data.findings);
     }
     // An unsure finding is marked (`unsure`) for the gate only: the posted title and comment stay clean.
@@ -400,7 +401,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     // A finding that repeats a comment someone else already left on the PR is dropped, with its line comment.
     let alreadyRaised: Awaited<ReturnType<typeof dropAlreadyRaised>>["dropped"] = [];
     let reviewed = merged;
-    if (deps.helpers && merged.findings.length > 0 && review.existingComments.length > 0) {
+    if (deps.helpers && !quiet && merged.findings.length > 0 && review.existingComments.length > 0) {
       const overrides = (await deps.helpers.decisions?.(context.task.repoPath ?? null).catch(() => ({}))) ?? {};
       const me = (await github.viewer().catch(() => null))?.login ?? null;
       const raised = await dropAlreadyRaised({ decide: deps.helpers.decide, repoPath: context.task.repoPath ?? null, decisions: overrides, me, log: (line) => console.warn(`review: ${line}`) }, merged.findings, review.existingComments);
@@ -409,6 +410,14 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
         const gone = new Set(alreadyRaised.map((d) => `${d.path}:${d.line}`));
         reviewed = { ...merged, findings: raised.kept, comments: merged.comments.filter((c) => !gone.has(`${c.path}:${c.line}`)) };
       }
+    }
+    // Severity is recalibrated both ways by finding_classify before the verdict is computed; each change is recorded and shown at the gate.
+    let recalibrated: Recalibrated[] = [];
+    if (deps.helpers && !quiet && reviewed.findings.length > 0) {
+      const overrides = (await deps.helpers.decisions?.(context.task.repoPath ?? null).catch(() => ({}))) ?? {};
+      const moved = await recalibrateSeverity({ decide: deps.helpers.decide, repoPath: context.task.repoPath ?? null, decisions: overrides, excerpt }, reviewed.findings);
+      recalibrated = moved.changes;
+      if (recalibrated.length > 0) reviewed = { ...reviewed, findings: moved.findings };
     }
     // With no new code, whatever the reviewer found is about code already reviewed: only its thread answers count.
     const answer = quiet ? { ...reviewed, findings: [], comments: [] } : reviewed;
@@ -511,6 +520,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
         ? { rereview: { since: plan.rereview.since, ...(plan.rereview.note ? { note: plan.rereview.note } : {}), settled: plan.rereview.threads.filter((t) => t.settle === "fixed" || t.settle === "reply_holds").length, open: stillOpen.length, threads: plan.rereview.threads.length } }
         : {}),
       ...(alreadyRaised.length > 0 ? { alreadyRaised } : {}),
+      ...(recalibrated.length > 0 ? { recalibrated } : {}),
       ...(confirmed && confirmed.main.length > 0 ? { mainConfirm: confirmed.mainVerdicts } : {}),
       ...(compliance ? { compliance: { regimesRun: compliance.regimesRun, findings: compliance.findings.length, notes: compliance.notes } } : {}),
       ...(parsed.data.verdict !== verdict ? { modelVerdict: parsed.data.verdict } : {}),

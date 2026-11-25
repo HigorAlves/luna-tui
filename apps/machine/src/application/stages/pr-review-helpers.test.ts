@@ -14,7 +14,7 @@ const clean = { verdict: "approve", summary: "Fine.", findings: [], comments: []
 const idor: Finding = { path: "a.ts", line: 1, severity: "security", title: "IDOR on export", body: "No owner check on the export route.", confidence: 0.9 };
 const usage = { turns: 1, costUsd: 0.25, tokens: null };
 
-function setup(opts: { answer?: unknown; helperFindings?: Partial<Record<string, Finding[]>>; helperRun?: (pack: string) => Promise<StageResult>; decide?: Decide | null; mainAnswer?: unknown; existing?: Array<{ path: string | null; line: number | null; author: string; body: string }> } = {}) {
+function setup(opts: { answer?: unknown; helperFindings?: Partial<Record<string, Finding[]>>; helperRun?: (pack: string) => Promise<StageResult>; decide?: Decide | null; mainAnswer?: unknown; classify?: Record<string, unknown>; existing?: Array<{ path: string | null; line: number | null; author: string; body: string }> } = {}) {
   const github = fakeGitHub({ prFacts: async () => node as never, prDiff: async () => "diff --git a/a.ts b/a.ts\n+route(export)\n", prFiles: async () => [{ path: "a.ts", additions: 1, deletions: 0 }], prComments: async () => opts.existing ?? [], viewer: async () => ({ login: "luna" }) as never });
   const ran: string[] = [];
   const checks: Array<{ pack: string; check: { finding: Finding; excerpt: string } }> = [];
@@ -28,7 +28,7 @@ function setup(opts: { answer?: unknown; helperFindings?: Partial<Record<string,
         return { outcome: "pass", usage, detail: { answer: { summary: `${pack} looked`, findings: opts.helperFindings?.[pack] ?? [] } } };
       },
       get decide() {
-        const confirming: Decide = async (pack, check) => pack === "already_raised" ? ({ same: { value: true, p: 0.95 } }) : (checks.push({ pack, check: check as never }), { real: { value: true, p: 0.95 } });
+        const confirming: Decide = async (pack, check) => pack === "already_raised" ? ({ same: { value: true, p: 0.95 } }) : pack === "finding_classify" ? (opts.classify ?? { severity: { choice: "should_fix", confidence: 0.9 } }) : (checks.push({ pack, check: check as never }), { real: { value: true, p: 0.95 } });
         return opts.decide === undefined ? confirming : opts.decide;
       },
     },
@@ -160,5 +160,32 @@ describe("reviewing against the comments already on the PR", () => {
     const result = await other.run(context);
     expect(result.findings).toEqual([idor]);
     expect(result.detail).not.toHaveProperty("alreadyRaised");
+  });
+});
+
+describe("recalibrating severity before the verdict", () => {
+  const main = (severity: string) => ({ verdict: "comment", summary: "One.", findings: [{ ...idor, severity, title: "Wrong total" }], comments: [{ path: "a.ts", line: 1, side: "RIGHT", body: "Wrong total: sums twice." }] });
+  const classify = (choice: string, confidence = 0.95) => ({ severity: { choice, confidence } });
+
+  it("lowers a bug the classifier calls a nit, so the verdict follows: a comment, not request changes, and the change is recorded", async () => {
+    const { run } = setup({ mainAnswer: main("bug"), classify: classify("nit") });
+    const result = await run(context);
+    expect(result.findings).toMatchObject([{ severity: "suggestion", title: "Wrong total" }]);
+    expect(result.detail).toMatchObject({ verdict: "comment", recalibrated: [{ from: "bug", to: "suggestion" }] });
+    expect(posted(result).event).toBe("COMMENT");
+  });
+
+  it("raises a suggestion the classifier calls a blocker to a bug, and requests changes", async () => {
+    const { run } = setup({ mainAnswer: main("suggestion"), classify: classify("blocker") });
+    const result = await run(context);
+    expect(result.detail).toMatchObject({ verdict: "request_changes", recalibrated: [{ from: "suggestion", to: "bug" }] });
+    expect(posted(result).event).toBe("REQUEST_CHANGES");
+  });
+
+  it("changes nothing without a confident answer, and records nothing", async () => {
+    const { run } = setup({ mainAnswer: main("bug"), classify: classify("nit", 0.6) });
+    const result = await run(context);
+    expect(result.detail).toMatchObject({ verdict: "request_changes" });
+    expect(result.detail).not.toHaveProperty("recalibrated");
   });
 });
