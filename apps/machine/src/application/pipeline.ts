@@ -27,6 +27,7 @@ import { triageVerdicts } from "../domain/triage-policy.ts";
 import { packForState, packStates } from "../domain/packs.ts";
 import { type PipelineEvent, type Step, TransitionError, transition } from "../domain/transition.ts";
 import { isClone, unpushedCommits } from "../adapters/git/clone.ts";
+import { releaseWorktree } from "./worktree-release.ts";
 import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
 import { containerRunning, removeContainer } from "../adapters/docker/docker.ts";
 import type { Credentials } from "../adapters/credentials/index.ts";
@@ -2861,11 +2862,45 @@ export class Pipeline {
 
   /** Runs the host-side close step for a task that just closed and logs what it did. Never throws. */
   private async close(id: string): Promise<void> {
-    await this.closeOut(id);
+    const before = await this.get(id).catch(() => null);
+    const path = before?.worktreePath ?? null;
+    const holder = path ? await this.openHolderOf(id, path) : null;
+    await this.closeOut(id, holder);
+    if (path) await this.releaseWorktreeOf(id, path, holder);
     await this.releaseHeld();
     // The proposer is a pack run of minutes: nothing waits on it, and it never throws.
     const tick = this.factTick(id).finally(() => void this.factTicks.delete(tick));
     this.factTicks.add(tick);
+  }
+
+  /** The id of a card that is still open and holds the same folder, if any: it owns the workspace now. */
+  private async openHolderOf(id: string, path: string): Promise<string | null> {
+    return (await this.store.listTasks()).find((r) => r.id !== id && r.worktreePath === path && !TERMINAL.has(r.state))?.id ?? null;
+  }
+
+  /** The card ended: its workspace goes now, unless another open card holds the folder or the clone has commits no remote has. Best effort, after the state is stored: a failure is logged and the nightly sweep tries again. Never throws. */
+  private async releaseWorktreeOf(id: string, path: string, holder: string | null): Promise<void> {
+    try {
+      const task = await this.get(id);
+      if (!TERMINAL.has(task.state)) return;
+      let removed = task.worktreePath === null; // the close step already took it
+      if (!removed && task.repoPath) {
+        const result = await releaseWorktree(task.repoPath, path, holder);
+        if (result.kind === "kept") {
+          if (!holder) await this.log(id, "worktree.kept", { path, reason: result.reason });
+          return;
+        }
+        await this.store.updateTask(id, { worktreePath: null });
+        removed = true;
+      }
+      if (!removed) return;
+      await this.log(id, "worktree.removed", { path, on: "close" });
+      for (const row of await this.store.listTasks()) {
+        if (row.id !== id && row.worktreePath === path && TERMINAL.has(row.state)) await this.store.updateTask(row.id, { worktreePath: null });
+      }
+    } catch (error) {
+      console.warn(`could not remove the workspace of ended task ${id}; the sweep will retry`, error instanceof Error ? error.message : error);
+    }
   }
 
   /** The fact-proposer ticks still running after closes. Tests wait on it; nothing else does. */
@@ -2886,12 +2921,12 @@ export class Pipeline {
     }
   }
 
-  private async closeOut(id: string): Promise<void> {
+  private async closeOut(id: string, sharedWith: string | null = null): Promise<void> {
     await this.releaseKept?.(id).catch((error: unknown) => console.error(`could not release the kept sandbox of ${id}`, error));
     if (!this.closeDeps) return;
     try {
       const task = await this.get(id);
-      const report = await closeTask({ ...task, rules: await this.approvedRules(id), merged: await this.mergedPr(id) }, this.closeDeps);
+      const report = await closeTask({ ...task, rules: await this.approvedRules(id), merged: await this.mergedPr(id), ...(sharedWith ? { sharedWith } : {}) }, this.closeDeps);
       if (report.worktreeRemoved) {
         await this.store.updateTask(id, { worktreePath: null });
       }

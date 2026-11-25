@@ -3967,6 +3967,84 @@ describe("removing a card's clone", () => {
   });
 });
 
+describe("a card that ends removes its workspace", () => {
+  /** A repo and a card's clone of it, wired onto a PR card waiting at pr_watch. */
+  const watchedClone = async (over: { path?: string } = {}) => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "endclone-")));
+    const repoPath = join(root, "repo");
+    mkdirSync(repoPath);
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", repoPath, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" });
+    git("init", "-q", "-b", "main");
+    writeFileSync(join(repoPath, "a.txt"), "a\n");
+    git("add", "-A");
+    git("commit", "-q", "-m", "init");
+    const task = await pipeline.createTask({ title: "PR #12", repoPath, route: "review", source: { kind: "github_pr", repo: "o/a", number: 12, url: "https://github.com/o/a/pull/12", headRef: "feat/x", baseRef: "main" } });
+    const workspace = workspaceFor(task, repoPath, join(root, "wt"));
+    await ensureClone(repoPath, workspace);
+    const path = over.path ?? workspace.path;
+    await db.query("update tasks set state = 'pr_watch', branch = $2, worktree_path = $3 where id = $1", [task.id, workspace.branch, path]);
+    return { task, workspace, repoPath, root };
+  };
+
+  it("removes the clone when the PR merges, and clears the path and logs it", async () => {
+    const { task, workspace } = await watchedClone();
+    expect((await pipeline.prWatch(task.id, "merged")).state).toBe("closed");
+    expect(existsSync(workspace.path)).toBe(false);
+    expect((await pipeline.get(task.id)).worktreePath).toBeNull();
+    expect((await pipeline.events(task.id)).some((e) => e.kind === "worktree.removed")).toBe(true);
+  });
+
+  it("removes the clone of an archived card too", async () => {
+    const { task, workspace } = await watchedClone();
+    expect((await pipeline.archive(task.id, "pr_closed")).state).toBe("archived");
+    expect(existsSync(workspace.path)).toBe(false);
+    expect((await pipeline.get(task.id)).worktreePath).toBeNull();
+  });
+
+  it("clears the path of every ended card that shared the folder", async () => {
+    const { task, workspace, repoPath } = await watchedClone();
+    const other = await pipeline.createTask({ title: "older review", repoPath });
+    await db.query("update tasks set state = 'closed', worktree_path = $2 where id = $1", [other.id, workspace.path]);
+    await pipeline.prWatch(task.id, "merged");
+    expect(existsSync(workspace.path)).toBe(false);
+    expect((await pipeline.get(other.id)).worktreePath).toBeNull();
+  });
+
+  it("keeps the folder while another open card uses it", async () => {
+    const { task, workspace, repoPath } = await watchedClone();
+    const holder = await pipeline.createTask({ title: "next review", repoPath });
+    await db.query("update tasks set worktree_path = $2 where id = $1", [holder.id, workspace.path]);
+    await pipeline.prWatch(task.id, "merged");
+    expect(existsSync(workspace.path)).toBe(true);
+    expect((await pipeline.get(holder.id)).worktreePath).toBe(workspace.path);
+  });
+
+  it("keeps a clone with unpushed commits and says why on the card", async () => {
+    const { task, workspace } = await watchedClone();
+    writeFileSync(join(workspace.path, "b.txt"), "b\n");
+    await commitAll(workspace.path, "feat: b");
+    expect((await pipeline.prWatch(task.id, "merged")).state).toBe("closed");
+    expect(existsSync(workspace.path)).toBe(true);
+    expect((await pipeline.get(task.id)).worktreePath).toBe(workspace.path);
+    const kept = (await pipeline.events(task.id)).find((e) => e.kind === "worktree.kept");
+    expect(kept?.payload).toMatchObject({ reason: expect.stringMatching(/unpushed/) });
+  });
+
+  it("never removes the repository's own checkout", async () => {
+    const { task, repoPath } = await watchedClone();
+    await db.query("update tasks set worktree_path = $2 where id = $1", [task.id, repoPath]);
+    await pipeline.prWatch(task.id, "merged");
+    expect(existsSync(join(repoPath, "a.txt"))).toBe(true);
+  });
+
+  it("a failed removal does not fail the close", async () => {
+    const { task } = await watchedClone({ path: "/nonexistent/not-a-workspace" });
+    expect((await pipeline.prWatch(task.id, "merged")).state).toBe("closed");
+    expect((await pipeline.get(task.id)).worktreePath).toBe("/nonexistent/not-a-workspace");
+  });
+});
+
 describe("a card's kept sandbox", () => {
   it("is released when the card's next stage starts, so the extra folders of an escalation do not outlive the resume", async () => {
     const released: string[] = [];

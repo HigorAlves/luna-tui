@@ -30,6 +30,18 @@ function worktree(): string {
 
 const task = (worktreePath: string | null) => ({ id: "t1", repoPath: "/repo", worktreePath });
 
+describe("closeTask: removal is the default", () => {
+  it("removes the worktree when worktreeRemove is not set, but keeps it for an open card sharing the folder", async () => {
+    const kept = fakeExec();
+    const shared = await closeTask({ ...task(worktree()), sharedWith: "other" }, { exec: kept.exec });
+    expect(shared.worktreeRemoved).toBe(false);
+    expect(shared.steps.find((s) => s.step === "worktree")?.note).toMatch(/other/);
+    const removed = fakeExec();
+    const report = await closeTask(task(worktree()), { exec: removed.exec });
+    expect(report.worktreeRemoved).toBe(true);
+  });
+});
+
 describe("closeTask: a card whose PR merged", () => {
   it("removes its workspace after the rules step even when removal is not switched on; any other close keeps it", async () => {
     const path = worktree();
@@ -64,7 +76,7 @@ describe("closeTask", () => {
     expect(bad.steps.find((s) => s.step === "watch-tab")).toMatchObject({ ok: false, note: "herdr down" });
   });
 
-  it("keeps the worktree unless removal is switched on", async () => {
+  it("keeps the worktree when removal is switched off", async () => {
     const path = worktree();
     const kept = fakeExec();
     const report = await closeTask(task(path), { exec: kept.exec, worktreeRemove: false });
@@ -73,7 +85,7 @@ describe("closeTask", () => {
     expect(report.steps.find((s) => s.step === "worktree")).toMatchObject({ ok: true, note: expect.stringMatching(/kept/) });
 
     const removed = fakeExec();
-    const second = await closeTask(task(path), { exec: removed.exec, worktreeRemove: true });
+    const second = await closeTask(task(path), { exec: removed.exec });
     expect(removed.calls).toEqual([
       { command: "git", args: [...HOST_GIT, "-C", "/repo", "worktree", "remove", "--force", path], cwd: undefined },
     ]);

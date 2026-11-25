@@ -43,7 +43,7 @@ describe("loadConfig", () => {
       engineBudgets: {},
       restartPolicy: "requeue",
       traces: { mode: "off" },
-      worktreeRetentionDays: 7,
+      worktreeRetentionDays: 1,
       maxPerRepo: null,
       maxPerStage: {},
       repoMap: {},
@@ -294,7 +294,7 @@ describe("loadConfig", () => {
   });
 
   it("sweeps closed tasks' worktrees after a week unless told otherwise", () => {
-    expect(loadConfig({ HOME: "/home/me" }).worktreeRetentionDays).toBe(7);
+    expect(loadConfig({ HOME: "/home/me" }).worktreeRetentionDays).toBe(1);
     expect(loadConfig({ HOME: "/home/me", MACHINE_WORKTREE_RETENTION_DAYS: "0" }).worktreeRetentionDays).toBe(0);
     expect(() => loadConfig({ MACHINE_WORKTREE_RETENTION_DAYS: "soon" })).toThrow(/MACHINE_WORKTREE_RETENTION_DAYS/);
   });

@@ -68,6 +68,49 @@ describe("sweepWorktrees", () => {
     expect((await db.getRepository(TaskEntity).findOneByOrFail({ id: recent.id })).worktreePath).toBe(kept.path);
   });
 
+  it("keeps a folder an open task still uses, and clears nothing", async () => {
+    const repoPath = repo();
+    const { task, workspace } = await closedTask(repoPath, 10);
+    const holder = await db.getRepository(TaskEntity).save({
+      title: "y", description: "", criteria: [], repoPath, worktreePath: workspace.path,
+      state: "reviewing", retries: { ...NO_RETRIES }, resumeTo: null, reason: null,
+    });
+    expect(await sweepWorktrees(db, 1)).toEqual({ worktrees: 0, branches: 0 });
+    expect(existsSync(workspace.path)).toBe(true);
+    expect((await db.getRepository(TaskEntity).findOneByOrFail({ id: task.id })).worktreePath).toBe(workspace.path);
+    expect((await db.getRepository(TaskEntity).findOneByOrFail({ id: holder.id })).worktreePath).toBe(workspace.path);
+  });
+
+  it("removes a folder shared by several ended tasks once and clears them all", async () => {
+    const repoPath = repo();
+    const { workspace } = await closedTask(repoPath, 10);
+    const second = await db.getRepository(TaskEntity).save({
+      title: "z", description: "", criteria: [], repoPath, worktreePath: workspace.path,
+      state: "archived", retries: { ...NO_RETRIES }, resumeTo: null, reason: null,
+    });
+    expect(await sweepWorktrees(db, 1)).toMatchObject({ worktrees: 1 });
+    expect(existsSync(workspace.path)).toBe(false);
+    expect((await db.getRepository(TaskEntity).findOneByOrFail({ id: second.id })).worktreePath).toBeNull();
+  });
+
+  it("keeps a clone with unpushed commits", async () => {
+    const { ensureClone } = await import("../adapters/git/clone.ts");
+    const { commitAll } = await import("../adapters/git/worktree.ts");
+    const repoPath = repo();
+    const workspace = workspaceFor({ id: "33333333-2222-3333-4444-555555555555", title: "Fix it" }, repoPath, join(repoPath, "..", "wt"));
+    await ensureClone(repoPath, workspace);
+    writeFileSync(join(workspace.path, "b.txt"), "b\n");
+    await commitAll(workspace.path, "work");
+    const task = await db.getRepository(TaskEntity).save({
+      title: "x", description: "", criteria: [], repoPath, branch: workspace.branch, worktreePath: workspace.path,
+      state: "closed", retries: { ...NO_RETRIES }, resumeTo: null, reason: null,
+    });
+    await db.query("update tasks set updated_at = now() - make_interval(days => 10) where id = $1", [task.id]);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    expect(await sweepWorktrees(db, 1)).toEqual({ worktrees: 0, branches: 0 });
+    expect(existsSync(workspace.path)).toBe(true);
+  });
+
   it("keeps a branch with unmerged commits, so nothing shipped only on the branch is lost", async () => {
     const repoPath = repo();
     const { workspace } = await closedTask(repoPath, 10);
