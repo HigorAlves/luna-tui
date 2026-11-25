@@ -522,10 +522,16 @@ describe("the size estimate of a ticket (wave 15)", () => {
     expect(x.writes).toEqual([]);
   });
 
-  it("makes it split when a sure answer says one reviewer cannot read it as one change", async () => {
-    const x = setup({ size: { answer: sizeAnswer(2, 0.95, false) } });
+  it("makes it split when a sure answer says one reviewer cannot read it as one change and the estimate is over the target's upper bound", async () => {
+    const x = setup({ size: { answer: sizeAnswer(4.2, 0.95, false) } });
     await x.machine.ingest(ticket(), ctx);
     expect(await last(x)).toMatchObject({ recommendation: { action: "split", reason: expect.stringContaining("one change") } });
+  });
+
+  it("does not split a ticket under the target's upper bound just because it is not reviewable: it stays a flag", async () => {
+    const x = setup({ size: { answer: sizeAnswer(2, 0.95, false) } });
+    await x.machine.ingest(ticket(), ctx);
+    expect((await last(x)).recommendation).not.toMatchObject({ action: "split" });
   });
 
   it("changes nothing when the estimate is unsure or fails: the recommendation is asked as before", async () => {
