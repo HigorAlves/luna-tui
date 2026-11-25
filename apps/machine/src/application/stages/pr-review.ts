@@ -19,7 +19,9 @@ import { type HelperDeps, type HelpersOutcome, type PassMount, type PassWorkspac
 import { followUp } from "./thread-followup.ts";
 import { addUsage } from "./usage.ts";
 import { excerptOf } from "./verify.ts";
+import type { TruthSink } from "../decision-truth.ts";
 import { type GitHub, type ReviewPost, messageOf } from "../github.ts";
+import type { ApprovalRow } from "../../domain/task.ts";
 import type { Jira } from "../jira.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { type LinkableCard, type PrLinkDeps, type PrLinks, linkReview } from "../pr-link.ts";
@@ -548,6 +550,8 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       answer.comments.map((c) => ({ path: c.path, line: c.line, side: c.side, body: c.body, ...(unsureAt.has(`${c.path}:${c.line}`) ? { unsure: true } : {}) })),
       answer.findings,
     );
+    const commented = new Set(comments.map((c) => `${c.path}:${c.line}`));
+    const proposed = new Map((confirmed?.records ?? []).filter((r) => commented.has(`${r.finding.path}:${r.finding.line}`)).map((r) => [`${r.finding.path}:${r.finding.line}`, r.recordId] as const));
     // The sub-runs' cost joins the review's, so the budget and the engine's counters see all of it.
     const usage = addUsage(addUsage(pack.usage, helpers?.usage), compliance?.usage);
     const base = { ...pack, ...(usage ? { usage } : {}), findings: answer.findings };
@@ -592,6 +596,8 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       ...(alreadyRaised.length > 0 ? { alreadyRaised } : {}),
       ...(recalibrated.length > 0 ? { recalibrated } : {}),
       ...(confirmed && confirmed.main.length > 0 ? { mainConfirm: confirmed.mainVerdicts } : {}),
+      // finding_confirm's record of each finding that reached the gate as a comment: what the person keeps or deletes there is its truth.
+      ...(proposed.size > 0 ? { decisions: { finding_confirm: Object.fromEntries(proposed) } } : {}),
       ...(compliance ? { compliance: { regimesRun: compliance.regimesRun, findings: compliance.findings.length, notes: compliance.notes } } : {}),
       ...(parsed.data.verdict !== verdict ? { modelVerdict: parsed.data.verdict } : {}),
       posted: false,
@@ -614,8 +620,20 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
   }
 }
 
+/** A comment the person left in the review is a finding they judged real; one that was proposed and is gone from what was posted, one they judged not. Only an approval tells it (a dropped review says nothing of each finding). Never throws. */
+async function learnFromPostedComments(truth: TruthSink | undefined, gate: ApprovalRow | undefined, posted: ReadonlyArray<{ path: string; line: number }>, taskId: string): Promise<void> {
+  const ids = (gate?.requested as { decisions?: { finding_confirm?: unknown } } | undefined)?.decisions?.finding_confirm;
+  if (!truth || ids === null || typeof ids !== "object") return;
+  const kept = new Set(posted.map((c) => `${c.path}:${c.line}`));
+  for (const [at, recordId] of Object.entries(ids)) {
+    if (typeof recordId !== "string") continue;
+    const real = kept.has(at);
+    await truth.learned({ pack: "finding_confirm", recordId, label: { real: { value: real } }, kind: "person", source: real ? "review_comment_kept" : "review_comment_deleted", taskId }).catch(() => false);
+  }
+}
+
 /** The review route's `shipping`: posts the review the gate carried (APPROVE, REQUEST_CHANGES or COMMENT) with its line comments. */
-export function postVerdictRunner(deps: { github: GitHub }): StageRunner {
+export function postVerdictRunner(deps: { github: GitHub; truth?: TruthSink }): StageRunner {
   return async (context) => {
     const pr = prOf(context);
     if (!pr) return { outcome: "fail", detail: { error: "not a PR task" } };
@@ -635,6 +653,7 @@ export function postVerdictRunner(deps: { github: GitHub }): StageRunner {
     } catch (error) {
       return { outcome: "fail", detail: { error: messageOf(error) } };
     }
+    await learnFromPostedComments(deps.truth, gate, comments, context.task.id);
     // A re-review also answers our own threads, after the review: a reply each, and a resolve where the gate says so.
     const replies = Array.isArray(post.payload.threadReplies)
       ? (post.payload.threadReplies as Array<Record<string, unknown>>).flatMap((r) => (typeof r.threadId === "string" && typeof r.body === "string" && r.body !== "" ? [{ threadId: r.threadId, body: r.body, resolve: r.resolve === true }] : []))

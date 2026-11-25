@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { TaskRow } from "../../domain/task.ts";
 import type { StageContext, StageResult } from "../ports.ts";
+import { tagged } from "../decision-truth.ts";
 import type { Decide } from "./check-decide.ts";
 import { confirmHelperFindings, runHelpers } from "./review-helpers.ts";
 
@@ -145,6 +146,13 @@ describe("confirmHelperFindings", () => {
     expect(asked).toEqual([{ pack: "finding_confirm", check: { kind: "finding", finding: f, excerpt: "excerpt of a.ts:3" }, repoPath: "/r/a" }]);
     expect(out.kept).toEqual([{ finding: f, unsure: false, pack: "review_security" }]);
     expect(out.verdicts).toEqual({ review_security: { proceed: 1 } });
+  });
+
+  it("returns the record id of each decision beside its finding, helper's and main reviewer's", async () => {
+    const decide: Decide = async (_pack, check) => tagged({ answer: answerOf(true, 0.95), recordId: `rec-${(check as { finding: Finding }).finding.line}` });
+    const out = await confirmHelperFindings(deps(decide), [helper("review_security", [finding({ line: 3 })])], [finding({ line: 9, path: "b.ts", title: "other" })]);
+    expect(out.records).toEqual(expect.arrayContaining([{ finding: expect.objectContaining({ line: 3 }), recordId: "rec-3" }, { finding: expect.objectContaining({ line: 9 }), recordId: "rec-9" }]));
+    expect(out.records).toHaveLength(2);
   });
 
   it("drops a confident no and an ask, keeps a flag marked unsure, and keeps a finding when there is no decision to ask", async () => {

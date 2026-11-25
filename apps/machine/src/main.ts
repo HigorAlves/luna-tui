@@ -457,7 +457,7 @@ const runnerFor = buildRunnerFor({
       exec,
       latestAnswer: async (taskId) => (await pipeline.latestStageFinish(taskId, "addressing"))?.detail?.answer,
     }),
-    postVerdictRunner: postVerdictRunner({ github }),
+    postVerdictRunner: postVerdictRunner({ github, truth: decisionTruth }),
   },
 });
 
