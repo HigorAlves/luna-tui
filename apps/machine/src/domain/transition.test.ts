@@ -581,6 +581,12 @@ describe("graph coverage", () => {
 describe("PR task routes", () => {
   const verdict: PipelineEvent = { type: "stage_done", outcome: "pass", reason: "verdict" };
 
+  it("review: a run with nothing to post (a re-review with no new commit and no thread to answer) goes back to watching the PR, never to Done", () => {
+    const step = transition(at("reviewing", { route: "review" }), { type: "stage_done", outcome: "pass", reason: "watching" });
+    expect(step.state).toBe("pr_watch");
+    expect(step.effect).toEqual({ kind: "move" });
+  });
+
   it("ci_fix: a green poll closes; a red one loops through implementing, checks and a push back to ci_watch", () => {
     const green = play(at("draft", { route: "ci_fix" }), [{ type: "start" }, pass]);
     expect(green.map((s) => s.state)).toEqual(["ci_watch", "pr_watch"]);
@@ -601,9 +607,9 @@ describe("PR task routes", () => {
     expect(push.resumeTo).toBe("delivering");
   });
 
-  it("review: a comment verdict closes; approve or request changes waits, then a posts it or r closes", () => {
+  it("review: a run with no verdict watches the PR; a verdict waits, then a posts it or r drops it, and the card watches the PR either way", () => {
     const comment = play(at("draft", { route: "review" }), [{ type: "start" }, pass]);
-    expect(comment.map((s) => s.state)).toEqual(["reviewing", "closed"]);
+    expect(comment.map((s) => s.state)).toEqual(["reviewing", "pr_watch"]);
 
     const gated = play(at("draft", { route: "review" }), [{ type: "start" }, verdict]);
     expect(gated.map((s) => s.state)).toEqual(["reviewing", "awaiting_ship"]);

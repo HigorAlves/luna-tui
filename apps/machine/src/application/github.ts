@@ -197,8 +197,8 @@ export interface GitHub {
   prDiff(slug: string, number: number): Promise<string>;
   prFiles(slug: string, number: number): Promise<ReviewContext["files"]>;
   prComments(slug: string, number: number): Promise<ReviewContext["existingComments"]>;
-  /** The unresolved review threads, with the ids replies and resolutions address. */
-  prThreads(slug: string, number: number): Promise<ThreadsContext["threads"]>;
+  /** The unresolved review threads, with the ids replies and resolutions address; `includeResolved` keeps the resolved ones too (each says `resolved`). */
+  prThreads(slug: string, number: number, options?: { includeResolved?: boolean }): Promise<ThreadsContext["threads"]>;
   /** Merges. `method` is used when the repository allows it, else squash, merge, rebase in that order. With `sha`, GitHub refuses (409) when the head is no
    *  longer that commit. `title` and `message` are the commit's, when given. The head branch goes only with `deleteBranch` (default true: what a merge did before
    *  `ship.merge`). A repo with a merge queue gets the PR enqueued instead (the branch stays) unless `queue` is false, where the refusal is an error.

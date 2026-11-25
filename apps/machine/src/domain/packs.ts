@@ -34,6 +34,8 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   finding_classify: [],
   // A decision on a helper's review finding, run on demand by the PR review.
   finding_confirm: [],
+  // A decision on one of our review threads, run on demand by a PR re-review.
+  thread_settle: [],
   e2e_failure_cause: [],
   ci_failure_class: [],
   frame_privacy: [],

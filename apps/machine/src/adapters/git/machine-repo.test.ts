@@ -9,7 +9,7 @@ import { pushBranch } from "../../application/stages/deliver.ts";
 import { exec } from "../process/exec.ts";
 import { ensureClone } from "./clone.ts";
 import { at, machineGitDir } from "./machine-repo.ts";
-import { HOST_GIT, commitAll, diffText, dirtyFiles, headCommit, resetWorktree, restoreFiles, stagePending, workspaceFor } from "./worktree.ts";
+import { HOST_GIT, commitAll, diffSince, fileAtRev, diffText, dirtyFiles, headCommit, resetWorktree, restoreFiles, stagePending, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
@@ -59,6 +59,30 @@ describe("a hostile .git in the work folder is data", () => {
     writeFileSync(join(workspace.path, "b.txt"), "b\n");
     await exec("git", ["-C", workspace.path, "add", "-A"]);
     expect(existsSync(join(markers, "filter"))).toBe(true);
+  });
+
+  it("diffs a card from an ancestor commit, and answers null for an unknown or rewritten one", async () => {
+    const { workspace } = await card();
+    const before = await headCommit(workspace.path);
+    writeFileSync(join(workspace.path, "b.txt"), "b\n");
+    const sha = await commitAll(workspace.path, "feat: b");
+    const delta = await diffSince(workspace.path, before, sha!);
+    expect(delta).toContain("+b");
+    expect(await diffSince(workspace.path, sha!, before)).toBeNull();
+    expect(await diffSince(workspace.path, "c".repeat(40), sha!)).toBeNull();
+    expect(await diffSince(workspace.path, "main; rm -rf", sha!)).toBeNull();
+  });
+
+  it("reads a file as it was at an earlier commit, and null for an unknown commit, file or a hostile name", async () => {
+    const { workspace } = await card();
+    const before = await headCommit(workspace.path);
+    writeFileSync(join(workspace.path, "b.txt"), "b\n");
+    await commitAll(workspace.path, "feat: b");
+    expect(await fileAtRev(workspace.path, before, "b.txt")).toBeNull();
+    expect(await fileAtRev(workspace.path, before, "a.txt")).toContain("a");
+    expect(await fileAtRev(workspace.path, "c".repeat(40), "a.txt")).toBeNull();
+    expect(await fileAtRev(workspace.path, "--output=x", "a.txt")).toBeNull();
+    expect(await fileAtRev(workspace.path, before, "--x")).toBeNull();
   });
 
   it("changes nothing the host does: add, commit, status, diff and a push behave as with a clean folder, and no marker appears", async () => {

@@ -5,8 +5,11 @@
 import { type DecisionOverrides, type Finding, PrReviewAnswer, type RequestedAction, type ReviewContext, type ReviewLinks, mergeDuplicateFindings } from "@hardness/contracts";
 
 import { type Decide } from "./check-decide.ts";
+import { diffExcerptOf } from "./diff-section.ts";
 import { type ComplianceDeps, runCompliance } from "./compliance-review.ts";
+import { type RereviewDeps, type RereviewPlan, prepareRereview, settledReply } from "./rereview.ts";
 import { type HelperDeps, type HelpersOutcome, confirmHelperFindings, runHelpers } from "./review-helpers.ts";
+import { followUp } from "./thread-followup.ts";
 import { addUsage } from "./usage.ts";
 import { excerptOf } from "./verify.ts";
 import { type GitHub, type ReviewPost, messageOf } from "../github.ts";
@@ -25,6 +28,8 @@ export interface PrReviewDeps {
     /** The repo's decision overrides (luna.yaml `policy.decisions`); absent, none. */
     decisions?: (repoPath: string | null) => Promise<Record<string, DecisionOverrides>>;
   };
+  /** Re-reviewing a PR we reviewed before (by this login): the delta since that review, and our open threads settled by `thread_settle` or answered by the reviewer. Absent, every review reads the whole diff. */
+  rereview?: RereviewDeps;
   /** The compliance review beside this one, only when the machine has a wiki to read controls from; it runs when the repo declares regimes. */
   compliance?: ComplianceDeps;
   /** The Jira port, only when Jira is configured: the tickets the PR names are read and the reviewer checks the diff against them. */
@@ -42,6 +47,18 @@ export interface PrReviewDeps {
 const CARD_DESCRIPTION_CAP = 4000;
 const cardOf = (c: LinkableCard) => ({ id: c.id, title: c.title, criteria: c.criteria, description: c.description.trim().slice(0, CARD_DESCRIPTION_CAP) });
 
+/** What a re-review posts on one of our threads: a reply, and whether the thread is resolved after it. `by` says who settled it (the decision's templated reply, or the reviewer's own); `settled` is the decision's reason. */
+export interface ThreadReply {
+  threadId: string;
+  body: string;
+  resolve: boolean;
+  by: "decision" | "reviewer";
+  settled?: "fixed" | "reply_holds";
+  severity?: string;
+  path: string | null;
+  line: number | null;
+}
+
 const EVENT_OF = { approve: "APPROVE", request_changes: "REQUEST_CHANGES", comment: "COMMENT" } as const;
 
 /** The review event from the set of severities, as orc's review-contract defines it: no finding approves; a bug, a
@@ -50,6 +67,13 @@ export function verdictOf(findings: ReadonlyArray<{ severity: string }>): "appro
   if (findings.length === 0) return "approve";
   const blocking = new Set(["bug", "security", "api-surface", "test"]);
   return findings.some((f) => blocking.has(f.severity)) ? "request_changes" : "comment";
+}
+
+/** "2 bugs, 1 suggestion": a list of findings by severity, gravest first. */
+function severityCounts(findings: ReadonlyArray<{ severity: string }>): string {
+  const by = new Map<string, number>();
+  for (const f of findings) by.set(f.severity, (by.get(f.severity) ?? 0) + 1);
+  return [...by].sort((a, b) => (SEVERITY_RANK[a[0]] ?? 9) - (SEVERITY_RANK[b[0]] ?? 9)).map(([s, n]) => `${n} ${s}${n === 1 || s === "api-surface" ? "" : "s"}`).join(", ");
 }
 
 /** inline-review's cap: more than this erodes signal, so the lowest severities stay in findings only. */
@@ -70,13 +94,7 @@ export function capComments<T extends { path: string; line: number }>(comments: 
     .map(({ c }) => c);
 }
 
-/** What a finding's file looked like in the PR's diff, when the worktree cannot show it: the file's own section, capped. */
-const DIFF_EXCERPT_CAP = 2000;
-export function diffExcerptOf(diff: string, finding: Pick<Finding, "path">): string {
-  const sections = diff.split(/^(?=diff --git )/m);
-  const section = sections.find((part) => part.startsWith(`diff --git a/${finding.path} `) || part.split("\n", 1)[0]!.endsWith(` b/${finding.path}`));
-  return (section ?? "").slice(0, DIFF_EXCERPT_CAP);
-}
+export { diffExcerptOf };
 
 /** Marks a finding the confirmation was not sure of; the person reads the mark before posting. */
 const UNSURE = "Unsure: ";
@@ -142,9 +160,28 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       return { outcome: "fail", detail: { error: messageOf(error) } };
     }
 
+    // A PR we reviewed before is reviewed again on what changed since, and our open threads are settled first. Anything unreadable falls back to the whole diff.
+    let plan: RereviewPlan | null = null;
+    const cardPath = context.task.worktreePath ?? null;
+    if (deps.rereview && cardPath) {
+      try {
+        plan = await prepareRereview(deps.rereview, github, { repo: pr.repo, number: pr.number, worktree: cardPath, repoPath: context.task.repoPath ?? null, fullDiff: review.diff, log: (line) => console.warn(`review: ${line}`) });
+      } catch (error) {
+        console.warn(`review: could not prepare a re-review of ${pr.url} (${messageOf(error)}); reviewing the whole diff`);
+      }
+    }
+    // The passes and the compliance lead read the diff only; the threads are the main reviewer's.
+    const shared: ReviewContext = plan ? { ...review, diff: plan.diff } : review;
+    if (plan) review = { ...shared, rereview: plan.rereview };
+
+    // No commit since the review we read: there is no new code, so no pass runs and no new finding is made; the reviewer runs only for a thread
+    // that still needs a first answer at this head.
+    const quiet = plan?.quiet === true;
+    const reviewerNeeded = !quiet || plan!.rereview.threads.some((t) => t.settle === "unsettled");
+    const silent: StageResult = { outcome: "pass", detail: { answer: { verdict: "comment", summary: "", findings: [], comments: [] } } };
     // The review passes start with the main review, each in a workspace of its own (they never share the reviewer's folder); runHelpers never throws.
-    const helpersRun = deps.helpers ? runHelpers(deps.helpers, context, review) : null;
-    const [mainRun, helpersDone] = await Promise.allSettled([deps.runPack(context, review), helpersRun]);
+    const helpersRun = deps.helpers && !quiet ? runHelpers(deps.helpers, context, shared) : null;
+    const [mainRun, helpersDone] = await Promise.allSettled([reviewerNeeded ? deps.runPack(context, review) : Promise.resolve(silent), helpersRun]);
     if (mainRun.status === "rejected") throw mainRun.reason;
     const pack = mainRun.value;
     if (pack.outcome !== "pass") return pack;
@@ -164,16 +201,45 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     const kept = (confirmed?.kept ?? []).map(({ finding, unsure }) => (unsure ? { ...finding, title: `${UNSURE}${finding.title}` } : finding));
     const helperComments = kept.map((f) => ({ path: f.path, line: f.line, side: f.side === "LEFT" ? ("LEFT" as const) : ("RIGHT" as const), body: `${f.title}: ${f.body}` }));
     // The compliance lead reads the same diff beside the reviewer; its findings join before the verdict, so a high one blocks. It never fails the review.
-    const compliance = deps.compliance ? await runCompliance(deps.compliance, context, pr.repo, review) : null;
+    const compliance = deps.compliance && !quiet ? await runCompliance(deps.compliance, context, pr.repo, shared) : null;
     const joined = {
       ...parsed.data,
       summary: [parsed.data.summary, compliance?.summary ? `Compliance: ${compliance.summary}` : ""].filter(Boolean).join(" "),
       findings: [...parsed.data.findings, ...(compliance?.findings ?? [])],
       comments: [...parsed.data.comments, ...(compliance?.comments ?? [])],
     };
-    const answer = helpers || compliance ? { ...joined, findings: mergeDuplicateFindings([...joined.findings, ...(confirmed?.agreed ?? []), ...kept]), comments: [...joined.comments, ...helperComments] } : parsed.data;
-    // The verdict is the findings', never the model's (orc review-contract): any finding keeps a review from approving.
-    const verdict = verdictOf(answer.findings);
+    const reviewed = helpers || compliance ? { ...joined, findings: mergeDuplicateFindings([...joined.findings, ...(confirmed?.agreed ?? []), ...kept]), comments: [...joined.comments, ...helperComments] } : parsed.data;
+    // With no new code, whatever the reviewer found is about code already reviewed: only its thread answers count.
+    const answer = quiet ? { ...reviewed, findings: [], comments: [] } : reviewed;
+    // Our threads: what the decision settled, what the reviewer resolved, and what stays open. An open thread counts at its severity, and one the reviewer
+    // did not answer stays open as a question, so a review never approves past a thread nobody looked at.
+    const threadReplies: ThreadReply[] = [];
+    const stillOpen: Array<{ severity: string }> = [];
+    if (plan) {
+      const answered = new Map((parsed.data.threads ?? []).map((t) => [t.threadId, t]));
+      for (const t of plan.rereview.threads) {
+        const where = { path: t.path, line: t.line };
+        // Answered since the review we read and no new commit: left as it is, still open.
+        if (t.settle === "answered") {
+          stillOpen.push({ severity: "question" });
+          continue;
+        }
+        if (t.settle !== "unsettled") {
+          threadReplies.push({ threadId: t.id, body: settledReply(t.settle, plan.head), resolve: true, by: "decision", settled: t.settle, ...where });
+          continue;
+        }
+        const a = answered.get(t.id);
+        if (!a) {
+          stillOpen.push({ severity: "question" });
+          continue;
+        }
+        const resolve = a.decision === "resolve";
+        threadReplies.push({ threadId: t.id, body: a.body.trim() || (resolve ? "Resolving." : "Still open."), resolve, by: "reviewer", ...(resolve ? {} : { severity: a.severity }), ...where });
+        if (!resolve) stillOpen.push({ severity: a.severity });
+      }
+    }
+    // The verdict is the findings' (and the open threads'), never the model's (orc review-contract): any finding keeps a review from approving.
+    const verdict = verdictOf([...answer.findings, ...stillOpen]);
 
     // Nothing is posted here: the review goes out under the person's name, so every verdict, its body and its line
     // comments wait at "post the verdict?" until the person says yes (or edits or drops it).
@@ -185,9 +251,15 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     const usage = addUsage(addUsage(pack.usage, helpers?.usage), compliance?.usage);
     const base = { ...pack, ...(usage ? { usage } : {}), findings: answer.findings };
     const reviewLinks = reviewLinksOf(links, review.tickets ?? []);
+    // The body says what the review did. The reviewer's own summary counts only its findings, so what the passes added is said beside it; with no
+    // new commit and no reviewer run, the machine says it in one line.
+    const settledCount = plan ? plan.rereview.threads.filter((t) => t.settle === "fixed" || t.settle === "reply_holds").length : 0;
+    const body = quiet && !reviewerNeeded
+      ? `No new commits since our review at ${plan!.rereview.since.slice(0, 7)}. ${settledCount} of ${plan!.rereview.threads.length} of our threads settled; the rest stay open.`
+      : [answer.summary, !quiet && kept.length > 0 ? `The review passes found ${kept.length} more: ${severityCounts(kept)}.` : ""].filter(Boolean).join(" ");
     const detail = {
       ...pack.detail,
-      summary: answer.summary,
+      summary: body,
       // Which tickets the review was checked against, for the board's Result page.
       ...(review.tickets?.length ? { tickets: review.tickets.map((t) => ({ key: t.key, url: t.url, summary: t.summary })) } : {}),
       // What the review was linked to and how (key | fact | decision), and a suggestion that stayed under the bar.
@@ -203,12 +275,17 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
             ...(helpers.notes.length > 0 ? { helperNotes: helpers.notes } : {}),
           }
         : {}),
+      ...(plan
+        ? { rereview: { since: plan.rereview.since, ...(plan.rereview.note ? { note: plan.rereview.note } : {}), settled: plan.rereview.threads.filter((t) => t.settle === "fixed" || t.settle === "reply_holds").length, open: stillOpen.length, threads: plan.rereview.threads.length } }
+        : {}),
       ...(compliance ? { compliance: { regimesRun: compliance.regimesRun, findings: compliance.findings.length, notes: compliance.notes } } : {}),
       ...(parsed.data.verdict !== verdict ? { modelVerdict: parsed.data.verdict } : {}),
       posted: false,
       comments: comments.length,
       reason: "verdict",
     };
+    // With no new commit and nothing to say on any thread, no review goes out: the card goes back to watching the PR.
+    if (quiet && threadReplies.length === 0) return { ...base, detail: { ...detail, reason: "watching" } };
     if (reviewLinks && deps.links?.record) {
       try {
         await deps.links.record(context.task.id, reviewLinks, { url: pr.url, number: pr.number, repo: pr.repo });
@@ -217,7 +294,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       }
     }
     const requested: RequestedAction[] = [
-      { kind: "pr_review_post", target: pr.url, payload: { event: EVENT_OF[verdict], body: answer.summary, comments } },
+      { kind: "pr_review_post", target: pr.url, payload: { event: EVENT_OF[verdict], body, comments, ...(plan ? { threadReplies } : {}) } },
     ];
     return { ...base, detail, requested };
   };
@@ -243,6 +320,21 @@ export function postVerdictRunner(deps: { github: GitHub }): StageRunner {
     } catch (error) {
       return { outcome: "fail", detail: { error: messageOf(error) } };
     }
-    return { outcome: "pass", detail: { posted: event, prUrl: pr.url } };
+    // A re-review also answers our own threads, after the review: a reply each, and a resolve where the gate says so.
+    const replies = Array.isArray(post.payload.threadReplies)
+      ? (post.payload.threadReplies as Array<Record<string, unknown>>).flatMap((r) => (typeof r.threadId === "string" && typeof r.body === "string" && r.body !== "" ? [{ threadId: r.threadId, body: r.body, resolve: r.resolve === true }] : []))
+      : [];
+    if (replies.length === 0) return { outcome: "pass", detail: { posted: event, prUrl: pr.url } };
+    const followed = await followUp(deps.github, replies);
+    const threads = { replied: followed.replied, resolved: followed.resolved, skipped: followed.skipped };
+    if (!followed.ok) {
+      // The review is out: failing the stage would escalate it, and a retry posts the whole review again. The card watches the PR next, and
+      // the next re-review finds the threads that got no answer still open and answers them.
+      const did = `${followed.replied} ${followed.replied === 1 ? "reply" : "replies"} posted, ${followed.resolved} ${followed.resolved === 1 ? "thread" : "threads"} resolved`;
+      const threadsError = `the review was posted (${event}), but the thread replies stopped: ${followed.error} (${did} before it)`;
+      await context.note?.(`${threadsError}; the next re-review answers the threads left`).catch(() => {});
+      return { outcome: "pass", detail: { posted: event, prUrl: pr.url, threads, threadsError } };
+    }
+    return { outcome: "pass", detail: { posted: event, prUrl: pr.url, threads } };
   };
 }

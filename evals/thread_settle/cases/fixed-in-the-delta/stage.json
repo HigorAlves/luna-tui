@@ -1,0 +1,46 @@
+{
+  "schema": 3,
+  "stage": "thread_settle",
+  "pack": "thread_settle",
+  "attempt": 1,
+  "task": {
+    "id": "thread-settle",
+    "title": "Thread settle",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "thread",
+      "thread": {
+        "path": "src/cart/export.ts",
+        "line": 3,
+        "originalLine": 3,
+        "comments": [
+          {
+            "author": "luna",
+            "ours": true,
+            "body": "`i < rows.length - 1` skips the last row."
+          }
+        ],
+        "original": "3    for (let i = 0; i < rows.length - 1; i++) {",
+        "current": "3    for (let i = 0; i < rows.length; i++) {",
+        "delta": "@@ -3 +3 @@\n-  for (let i = 0; i < rows.length - 1; i++) {\n+  for (let i = 0; i < rows.length; i++) {"
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

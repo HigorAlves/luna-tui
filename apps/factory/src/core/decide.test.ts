@@ -175,6 +175,13 @@ describe("a finding and an e2e check context", () => {
     expect(state.description).toContain("Excerpt:\nfor (let i = 0; i <= n; i++) {}");
   });
 
+  it("renders a review thread with its comments marked ours or the author's, and the three code views", () => {
+    const check = { kind: "thread", thread: { path: "src/a.ts", line: 9, originalLine: 4, comments: [{ author: "luna", ours: true, body: "off by one" }, { author: "bo", ours: false, body: "fixed it" }], original: "4  for (i <= n)", current: "9  for (i < n)", delta: "@@ -4 +9 @@" } };
+    const state = stateOf({ ...base, context: { projectContext: null, check } } as never);
+    expect(state.title).toBe("Review thread on src/a.ts");
+    for (const part of ["[1] ours: off by one", "[2] author bo: fixed it", "made on:\n4  for (i <= n)", "now:\n9  for (i < n)", "since our review:\n@@ -4 +9 @@"]) expect(state.description).toContain(part);
+  });
+
   it("renders an e2e failure's attempt, summary and each row that did not pass", () => {
     const check = { kind: "e2e", e2e: { verdict: "fail", summary: "the page never loaded", attempt: 2, criteria: [{ text: "login works", result: "fail", note: "timeout" }, { text: "logout works", result: "pass" }, { text: "reset works", result: "partial" }] } };
     const state = stateOf({ ...base, context: { projectContext: null, check } } as never);

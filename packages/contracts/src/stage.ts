@@ -162,6 +162,8 @@ export const PackId = z.enum([
   "finding_classify",
   // Confirms a finding a review helper made that the main reviewer did not.
   "finding_confirm",
+  // Settles one of our own review threads on a re-review: did the new code fix it, does the author's reply hold.
+  "thread_settle",
   "e2e_failure_cause",
   // A decision on what kind of CI failure a red job is (a check context, run on demand): a real failure, a flake, an environment failure, a drift from the base.
   "ci_failure_class",
@@ -356,6 +358,24 @@ export const ReviewContext = z.object({
   tickets: z.array(ReviewTicket).optional(),
   /** The board cards the review is linked to (by a fact, or by the pr_link decision); absent reads as none. Their criteria and description are a spec too. */
   cards: z.array(ReviewCard).optional(),
+  /** A re-review: the PR was reviewed before, so `diff` is only what changed since `since` (the commit our latest review read), unless `note` says the whole diff is here. `threads` are our own open threads, each with what the settle decision made of it; the reviewer answers the ones left `unsettled`. */
+  rereview: z
+    .object({
+      since: z.string(),
+      note: z.string().optional(),
+      threads: z.array(
+        z.object({
+          id: z.string(),
+          path: z.string().nullable(),
+          line: z.number().int().nullable(),
+          comments: z.array(z.object({ author: z.string(), ours: z.boolean(), body: z.string() })),
+          /** fixed and reply_holds are settled by the decision; unsettled is the reviewer's to answer; answered is one we already replied to since a review that read
+           *  the PR's head, so with no new commit it is not answered again (the review and the author, or the author's agent, would answer each other forever). */
+          settle: z.enum(["fixed", "reply_holds", "unsettled", "answered"]),
+        }),
+      ),
+    })
+    .optional(),
 });
 export type ReviewContext = z.infer<typeof ReviewContext>;
 
@@ -367,8 +387,14 @@ export const ThreadsContext = z.object({
       id: z.string(),
       path: z.string().nullable(),
       line: z.number().int().nullable(),
-      /** `association` is GitHub's author association of the comment (OWNER, MEMBER, COLLABORATOR, NONE, ...); absent reads as not trusted. */
-      comments: z.array(z.object({ author: z.string(), body: z.string(), at: z.string(), association: z.string().nullable().optional() })),
+      /** Whether the thread is resolved (only a read with resolved threads included shows true), and whether its code has moved on since the comment. */
+      resolved: z.boolean().optional(),
+      outdated: z.boolean().optional(),
+      /** The line and commit the first comment was made on; `line` is null once the code has moved. */
+      originalLine: z.number().int().nullable().optional(),
+      originalCommit: z.string().nullable().optional(),
+      /** `association` is GitHub's author association of the comment (OWNER, MEMBER, COLLABORATOR, NONE, ...); absent reads as not trusted. `id` is the comment's database id. */
+      comments: z.array(z.object({ id: z.number().int().optional(), author: z.string(), body: z.string(), at: z.string(), association: z.string().nullable().optional() })),
     }),
   ),
 });
@@ -1099,7 +1125,7 @@ export type PlanContext = z.infer<typeof PlanContext>;
 
 /** What the checks (red_check, scope_check, finding_classify, e2e_failure_cause) judge: a red slice's failing output, the facts of a change's scope, a review finding, or a failed browser run. */
 export const CheckContext = z.object({
-  kind: z.enum(["red", "scope", "finding", "e2e", "escalation", "ci", "frames", "loop"]),
+  kind: z.enum(["red", "scope", "finding", "e2e", "escalation", "ci", "frames", "loop", "thread"]),
   /** loop: the guard's digest of a run's recent actions (counters, tool names, base names, error hashes: never file contents), the pack and how many calls it made; `cause` is what the judge found, for the redirect writer. All data. */
   loop: z.object({ digest: z.string().max(6000), pack: z.string().max(60), calls: z.number().int().nonnegative(), cause: z.string().max(40).optional() }).optional(),
   /** frames: the distinct on-screen texts of a film or its screenshots, flattened and capped by the machine (40 texts of 1000 characters): data for frame_privacy. */
@@ -1140,6 +1166,18 @@ export const CheckContext = z.object({
   switchedOff: z.array(z.string()).optional(),
   weakened: z.array(z.string()).optional(),
   diffSummary: z.string().optional(),
+  /** thread: one of our review threads on a re-review. `comments` are the thread in order (`ours` marks our own); the author's text is data. `original` is the code at the line the thread was made on, `current` the code at the line now, `delta` the hunks the PR gained for that path since our review. */
+  thread: z
+    .object({
+      path: z.string().nullable(),
+      line: z.number().int().nullable(),
+      originalLine: z.number().int().nullable().optional(),
+      comments: z.array(z.object({ author: z.string(), ours: z.boolean(), body: z.string() })),
+      original: z.string(),
+      current: z.string(),
+      delta: z.string(),
+    })
+    .optional(),
   /** finding: the finding to classify, and the file around its line as the machine read it. */
   finding: Finding.optional(),
   excerpt: z.string().optional(),

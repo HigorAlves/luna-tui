@@ -290,6 +290,58 @@ describe("posting the verdict", () => {
     expect(github.postReview).toHaveBeenCalledWith("o/a", 12, { event: "APPROVE", body: "LGTM", comments: [] });
   });
 
+  it("posts a re-review's review first, then replies on each thread and resolves the ones marked", async () => {
+    const order: string[] = [];
+    const github = fakeGitHub({
+      postReview: async () => void order.push("review"),
+      threadResolved: async () => false,
+      replyToThread: async (id) => void order.push(`reply ${id}`),
+      resolveThread: async (id) => void order.push(`resolve ${id}`),
+    });
+    const { context } = setup(null);
+    const threadReplies = [
+      { threadId: "T1", body: "Fixed in `abc1234`.", resolve: true, by: "decision" },
+      { threadId: "T2", body: "Still open because x.", resolve: false, by: "reviewer" },
+    ];
+    const result = await postVerdictRunner({ github })({ ...context, stage: "shipping", approvals: [approval([{ kind: "pr_review_post", target: node.url, payload: { event: "APPROVE", body: "LGTM", comments: [], threadReplies } }])] });
+    expect(result.outcome).toBe("pass");
+    expect(order).toEqual(["review", "reply T1", "resolve T1", "reply T2"]);
+    expect(github.replyToThread).toHaveBeenCalledWith("T1", "Fixed in `abc1234`.");
+    expect(result.detail).toMatchObject({ posted: "APPROVE", threads: { replied: 2, resolved: 1, skipped: [] } });
+  });
+
+  it("skips a thread someone resolved meanwhile, and says so", async () => {
+    const github = fakeGitHub({ postReview: async () => {}, threadResolved: async (id) => id === "T1", replyToThread: async () => {}, resolveThread: async () => {} });
+    const { context } = setup(null);
+    const result = await postVerdictRunner({ github })({ ...context, stage: "shipping", approvals: [approval([{ kind: "pr_review_post", target: node.url, payload: { event: "COMMENT", body: "s", comments: [], threadReplies: [{ threadId: "T1", body: "a", resolve: true }, { threadId: "T2", body: "b", resolve: true }] } }])] });
+    expect(github.replyToThread).toHaveBeenCalledTimes(1);
+    expect(result.detail).toMatchObject({ threads: { replied: 1, resolved: 1, skipped: ["T1"] } });
+  });
+
+  it("passes with a note when a thread reply is refused after the review was posted, so a retry never posts the review twice", async () => {
+    const github = fakeGitHub({ postReview: async () => {}, threadResolved: async () => false, replyToThread: async (id) => { if (id === "T2") throw new Error("boom"); }, resolveThread: async () => {} });
+    const { context } = setup(null);
+    const note = vi.fn(async () => {});
+    const result = await postVerdictRunner({ github })({ ...context, note, stage: "shipping", approvals: [approval([{ kind: "pr_review_post", target: node.url, payload: { event: "REQUEST_CHANGES", body: "s", comments: [], threadReplies: [{ threadId: "T1", body: "a", resolve: true }, { threadId: "T2", body: "b", resolve: false }] } }])] });
+    expect(result.outcome).toBe("pass");
+    expect(github.postReview).toHaveBeenCalledTimes(1);
+    expect(result.detail).toMatchObject({ posted: "REQUEST_CHANGES", threads: { replied: 1, resolved: 1 } });
+    const said = String(result.detail?.threadsError);
+    expect(said).toMatch(/review was posted/);
+    expect(said).toMatch(/1 reply posted, 1 thread resolved/);
+    expect(said).toMatch(/T2/);
+    expect(note).toHaveBeenCalledWith(expect.stringMatching(/next re-review/));
+  });
+
+  it("touches no thread for a gate with no thread replies", async () => {
+    const github = fakeGitHub({ postReview: async () => {} });
+    const { context } = setup(null);
+    const result = await postVerdictRunner({ github })({ ...context, stage: "shipping", approvals: [approval([{ kind: "pr_review_post", target: node.url, payload: { event: "APPROVE", body: "s", comments: [] } }])] });
+    expect(result.outcome).toBe("pass");
+    expect(github.threadResolved).not.toHaveBeenCalled();
+    expect(result.detail).not.toHaveProperty("threads");
+  });
+
   it("fails with gh's words when the post is refused", async () => {
     const github = fakeGitHub({ postReview: async () => { throw new Error("posting a review failed (422): Unprocessable"); } });
     const run = postVerdictRunner({ github });

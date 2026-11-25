@@ -41,7 +41,7 @@ import { type ReviewLoop, type ShipDecide } from "../application/stages/ship-fix
 import { mergeRound } from "../application/stages/ship-merge.ts";
 import type { DeliverDeps } from "../application/stages/deliver.ts";
 import { type ShipMonitorDeps, shipMonitor } from "../application/stages/ship-monitor.ts";
-import { verifyRunner } from "../application/stages/verify.ts";
+import { excerptOf, verifyRunner } from "../application/stages/verify.ts";
 import { loadCredential } from "../adapters/credentials/claude.ts";
 import { type ApprovedBases, approvedBases } from "../adapters/fs/approved-bases.ts";
 import { dockerImages } from "../adapters/docker/image-build.ts";
@@ -77,7 +77,7 @@ import { keepFolder } from "../application/kept-sandboxes.ts";
 import { hostBaselineWorkspace, hostFreshWorkspace, publishBranch } from "../adapters/git/clone.ts";
 import { at } from "../adapters/git/machine-repo.ts";
 import { repoPrivateOf } from "../application/design-publish.ts";
-import { HOST_GIT, changedPaths, changedSince, diffNameStatus, originSlugOf, dirtyFiles, gitIdentity, blobsAtRepo, branchBase, commitAll, currentBranch, headCommit, lockfilesAt, nestedLockfilesAt, restoreFiles, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
+import { HOST_GIT, changedPaths, changedSince, diffSince, fileAtRev, diffNameStatus, originSlugOf, dirtyFiles, gitIdentity, blobsAtRepo, branchBase, commitAll, currentBranch, headCommit, lockfilesAt, nestedLockfilesAt, restoreFiles, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
 import { checkpointPush } from "../application/stages/checkpoint.ts";
 import { judgeRedCheck } from "../application/stages/build-watch.ts";
 import { runSweep } from "../application/stages/sweep.ts";
@@ -683,6 +683,15 @@ export async function buildRealStages(
           },
         },
         run: (subContext, pack, review, workspace) => runAgent(deps, subContext, pack, { review, ...(workspace ? { workspace } : {}) }),
+        get decide() {
+          return verifyDecisions?.decide ?? null;
+        },
+        decisions: async (repoPath) => (repoPath ? (await policies.for(repoPath)).decisions : {}),
+      },
+      // A PR we reviewed before is reviewed again on the delta since, and our open threads are settled by thread_settle (bound late like finding_confirm).
+      rereview: {
+        git: { head: headCommit, diffSince: (worktree, since) => diffSince(worktree, since), fileAt: fileAtRev },
+        readNow: (worktree, path, line) => excerptOf(worktree, { path, line, severity: "nit", title: "", body: "", confidence: 1 }),
         get decide() {
           return verifyDecisions?.decide ?? null;
         },

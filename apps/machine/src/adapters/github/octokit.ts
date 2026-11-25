@@ -81,8 +81,8 @@ export const DIFF_TAIL_CHARS = 200_000;
 
 const THREADS_QUERY = `query($owner:String!,$name:String!,$number:Int!){
   repository(owner:$owner,name:$name){ pullRequest(number:$number){
-    reviewThreads(first:100){nodes{ id isResolved path line
-      comments(first:50){nodes{author{login} authorAssociation body createdAt}} }} } } }`;
+    reviewThreads(first:100){nodes{ id isResolved isOutdated path line originalLine
+      comments(first:50){nodes{databaseId author{login} authorAssociation body createdAt originalCommit{oid}}} }} } } }`;
 const REPLY_MUTATION = `mutation($threadId:ID!,$body:String!){
   addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$threadId,body:$body}){comment{id}} }`;
 const ENQUEUE_MUTATION = `mutation($id:ID!,$sha:GitObjectID){ enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$sha}){ mergeQueueEntry{id} } }`;
@@ -410,7 +410,7 @@ export class OctokitGitHub implements GitHub {
     return rows.map((c) => ({ path: c.path ?? null, line: c.line ?? null, author: c.user?.login ?? "ghost", body: c.body }));
   }
 
-  async prThreads(slug: string, number: number) {
+  async prThreads(slug: string, number: number, options: { includeResolved?: boolean } = {}) {
     const { owner, repo } = repoRef(slug);
     const data = await call(`reading the threads of ${slug}#${number}`, () =>
       this.octokit.graphql<{
@@ -420,9 +420,11 @@ export class OctokitGitHub implements GitHub {
               nodes: Array<{
                 id: string;
                 isResolved: boolean;
+                isOutdated?: boolean;
                 path: string | null;
                 line: number | null;
-                comments: { nodes: Array<{ author: { login: string } | null; authorAssociation?: string | null; body: string; createdAt: string }> };
+                originalLine?: number | null;
+                comments: { nodes: Array<{ databaseId?: number | null; author: { login: string } | null; authorAssociation?: string | null; body: string; createdAt: string; originalCommit?: { oid: string } | null }> };
               }>;
             };
           } | null;
@@ -431,12 +433,17 @@ export class OctokitGitHub implements GitHub {
     );
     const nodes = data.repository?.pullRequest?.reviewThreads.nodes ?? [];
     return nodes
-      .filter((t) => !t.isResolved)
+      .filter((t) => options.includeResolved || !t.isResolved)
       .map((t) => ({
         id: t.id,
         path: t.path ?? null,
         line: t.line ?? null,
-        comments: t.comments.nodes.map((c) => ({ author: c.author?.login ?? "ghost", body: c.body, at: c.createdAt, association: c.authorAssociation ?? null })),
+        resolved: t.isResolved,
+        outdated: t.isOutdated ?? false,
+        originalLine: t.originalLine ?? null,
+        // The commit the thread was opened on is its first comment's: GitHub keeps no originalCommit on the thread itself.
+        originalCommit: t.comments.nodes[0]?.originalCommit?.oid ?? null,
+        comments: t.comments.nodes.map((c) => ({ ...(typeof c.databaseId === "number" ? { id: c.databaseId } : {}), author: c.author?.login ?? "ghost", body: c.body, at: c.createdAt, association: c.authorAssociation ?? null })),
       }));
   }
 

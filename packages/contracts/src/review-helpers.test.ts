@@ -59,3 +59,19 @@ describe("the finding_confirm pack", () => {
     expect(applyPolicy(pack, { real: { value: true, p: 0.95 } }, undefined).overall).toBe("proceed");
   });
 });
+
+describe("the thread_settle pack", () => {
+  it("asks addressed and reply_holds as yes/no questions that call the thread's text data", () => {
+    const pack = PACKS.thread_settle;
+    expect(pack.kind).toBe("decision");
+    if (pack.kind !== "decision") return;
+    expect(Object.keys(pack.questions)).toEqual(["addressed", "reply_holds"]);
+    for (const q of Object.values(pack.questions)) {
+      expect(q).toMatchObject({ type: "yesno" });
+      expect(q.instructions).toMatch(/data/);
+    }
+    const sure = applyPolicy(pack, { addressed: { value: true, p: 0.97 }, reply_holds: { value: false, p: 0.05 } }, undefined);
+    expect(sure.verdicts).toEqual({ addressed: "proceed", reply_holds: "proceed" });
+    expect(applyPolicy(pack, { addressed: { value: true, p: 0.55 }, reply_holds: { value: false, p: 0.5 } }, undefined).overall).toBe("flag");
+  });
+});

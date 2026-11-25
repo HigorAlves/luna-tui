@@ -354,7 +354,8 @@ function prStageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stag
   if (task.route === "review") {
     switch (state) {
       case "reviewing":
-        if (outcome === "pass") return event.reason === "verdict" ? wait("awaiting_ship", retries) : done(retries);
+        // A run with nothing to post (a re-review with no new commit and no thread to answer) goes back to watching: the PR is still open.
+        if (outcome === "pass") return event.reason === "verdict" ? wait("awaiting_ship", retries) : move("pr_watch", retries);
         if (outcome === "fail") return escalate("review failed", "reviewing", retries);
         break;
       case "shipping":

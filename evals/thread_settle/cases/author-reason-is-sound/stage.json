@@ -1,0 +1,51 @@
+{
+  "schema": 3,
+  "stage": "thread_settle",
+  "pack": "thread_settle",
+  "attempt": 1,
+  "task": {
+    "id": "thread-settle",
+    "title": "Thread settle",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "thread",
+      "thread": {
+        "path": "src/cart/export.ts",
+        "line": 8,
+        "originalLine": 3,
+        "comments": [
+          {
+            "author": "luna",
+            "ours": true,
+            "body": "`user.name` may be null here."
+          },
+          {
+            "author": "bo",
+            "ours": false,
+            "body": "`load()` is the only caller and it throws on a missing user two lines up (see the guard in the delta), so name is always set."
+          }
+        ],
+        "original": "8    return user.name.trim();",
+        "current": "8    return user.name.trim();",
+        "delta": "@@ -5 +5,3 @@\n+  const user = await find(id);\n+  if (!user) throw new Error(\"no user\");"
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

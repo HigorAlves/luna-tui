@@ -32,6 +32,7 @@ export const CONTEXT_OF = {
   escalation_reason: { key: "check", schema: CheckContext },
   finding_classify: { key: "check", schema: CheckContext },
   finding_confirm: { key: "check", schema: CheckContext },
+  thread_settle: { key: "check", schema: CheckContext },
   e2e_failure_cause: { key: "check", schema: CheckContext },
   ci_failure_class: { key: "check", schema: CheckContext },
   frame_privacy: { key: "check", schema: CheckContext },

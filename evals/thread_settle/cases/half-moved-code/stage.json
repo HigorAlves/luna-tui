@@ -1,0 +1,46 @@
+{
+  "schema": 3,
+  "stage": "thread_settle",
+  "pack": "thread_settle",
+  "attempt": 1,
+  "task": {
+    "id": "thread-settle",
+    "title": "Thread settle",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "thread",
+      "thread": {
+        "path": "src/cart/export.ts",
+        "line": 20,
+        "originalLine": 3,
+        "comments": [
+          {
+            "author": "luna",
+            "ours": true,
+            "body": "Check `items` is non-empty before `items[0]`."
+          }
+        ],
+        "original": "5    return items[0].id;",
+        "current": "20    return items.length ? items[0].id : null;",
+        "delta": "@@ -18 +20 @@\n-  return items[0].id;\n+  return items.length ? items[0].id : null;\n(callers still read the result as a string)"
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}
