@@ -689,6 +689,12 @@ export async function buildRealStages(
           return verifyDecisions?.decide ?? null;
         },
         decisions: async (repoPath) => (repoPath ? (await policies.for(repoPath)).decisions : {}),
+        // The risk read never suggests over luna.yaml, and asks the Codex login before it plans a second opinion on it.
+        policy: async (repoPath) => {
+          const policy = repoPath ? await policies.for(repoPath) : null;
+          return { engines: policy?.engines ?? null, effort: policy?.effort ?? null };
+        },
+        engineReady: async (engine, repoPath) => (await deps.credentials.check(engine, { repo: repoPath })).available,
       },
       // A PR we reviewed before is reviewed again on the delta since, and our open threads are settled by thread_settle (bound late like finding_confirm).
       rereview: {

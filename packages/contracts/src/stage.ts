@@ -166,6 +166,8 @@ export const PackId = z.enum([
   "thread_settle",
   // Reads the activity on a PR since our review (new comments, the delta) and says whether it is worth a full re-review.
   "rereview_worth",
+  // Scores a PR (or one part of a big one) low, medium or high from its files and line counts.
+  "pr_risk",
   "e2e_failure_cause",
   // A decision on what kind of CI failure a red job is (a check context, run on demand): a real failure, a flake, an environment failure, a drift from the base.
   "ci_failure_class",
@@ -1133,7 +1135,7 @@ export type PlanContext = z.infer<typeof PlanContext>;
 
 /** What the checks (red_check, scope_check, finding_classify, e2e_failure_cause) judge: a red slice's failing output, the facts of a change's scope, a review finding, or a failed browser run. */
 export const CheckContext = z.object({
-  kind: z.enum(["red", "scope", "finding", "e2e", "escalation", "ci", "frames", "loop", "thread", "rereview"]),
+  kind: z.enum(["red", "scope", "finding", "e2e", "escalation", "ci", "frames", "loop", "thread", "rereview", "pr_risk"]),
   /** loop: the guard's digest of a run's recent actions (counters, tool names, base names, error hashes: never file contents), the pack and how many calls it made; `cause` is what the judge found, for the redirect writer. All data. */
   loop: z.object({ digest: z.string().max(6000), pack: z.string().max(60), calls: z.number().int().nonnegative(), cause: z.string().max(40).optional() }).optional(),
   /** frames: the distinct on-screen texts of a film or its screenshots, flattened and capped by the machine (40 texts of 1000 characters): data for frame_privacy. */
@@ -1193,6 +1195,17 @@ export const CheckContext = z.object({
       commits: z.number().int().nonnegative().nullable(),
       files: z.array(z.object({ path: z.string(), additions: z.number().int(), deletions: z.number().int() })),
       delta: z.string(),
+    })
+    .optional(),
+  /** pr_risk: a PR's title, its files with line counts (at most 200, the biggest first) and the totals; `scope` says which part is scored. All data. */
+  risk: z
+    .object({
+      title: z.string(),
+      scope: z.string(),
+      files: z.array(z.object({ path: z.string(), additions: z.number().int(), deletions: z.number().int() })),
+      filesTotal: z.number().int().nonnegative(),
+      additions: z.number().int().nonnegative(),
+      deletions: z.number().int().nonnegative(),
     })
     .optional(),
   /** finding: the finding to classify, and the file around its line as the machine read it. */

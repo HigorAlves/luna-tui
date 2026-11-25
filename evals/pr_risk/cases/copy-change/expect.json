@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "level.choice",
+      "value": "low"
+    }
+  ],
+  "rubric": "A button label and its snapshot: low risk.",
+  "label": {
+    "level": {
+      "choice": "low"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "level": "Docs, tests, copy, styling or a small change in one place with no data, auth, money or shared contract near it"
+    },
+    "why": "A button label and its snapshot: low risk.",
+    "ruledOut": [
+      {
+        "question": "level",
+        "label": "medium",
+        "why": "A button label and its snapshot: low risk. It is not medium: an ordinary feature or fix across a few files in one area."
+      },
+      {
+        "question": "level",
+        "label": "high",
+        "why": "A button label and its snapshot: low risk. It is not high: auth, payments, secrets, migrations, infrastructure, a public contract, or a large change across many areas."
+      }
+    ],
+    "second": {
+      "label": {
+        "level": {
+          "choice": "low"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

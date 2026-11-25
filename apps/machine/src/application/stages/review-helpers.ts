@@ -2,7 +2,7 @@
 // reviewer, each its own pack and engine, run on every PR whatever the files. They read the same diff as the main
 // reviewer. A pass that fails or answers badly is a note, never a failed review. What a pass found that the main
 // reviewer did not is checked once more (`finding_confirm`) before it joins the review.
-import { type DecisionOverrides, type Finding, type ReviewContext, REVIEW_HELPER_PACKS, type ReviewHelperPack, ReviewHelperAnswer, mergeDuplicateFindings } from "@hardness/contracts";
+import { type DecisionOverrides, type EngineId, type Finding, type StageEfforts, type StageEngines, type ReviewContext, REVIEW_HELPER_PACKS, type ReviewHelperPack, ReviewHelperAnswer, mergeDuplicateFindings } from "@hardness/contracts";
 
 import type { StageContext, StageResult } from "../ports.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
@@ -28,6 +28,10 @@ export interface HelperDeps {
   workspace?: { make: (context: StageContext, label: string) => Promise<PassWorkspace>; remove: (workspace: PassWorkspace) => void | Promise<void> };
   /** How many passes run at once: all four by default. */
   concurrency?: number;
+  /** The repo's luna.yaml engines and efforts, so the risk read never suggests over them. */
+  policy?: (repoPath: string | null) => Promise<{ engines?: StageEngines | null; effort?: StageEfforts | null }>;
+  /** Whether this machine can run an engine now (its login is present); the risk read uses it for a second opinion on Codex. */
+  engineReady?: (engine: EngineId, repoPath: string | null) => Promise<boolean>;
 }
 
 export interface HelperRun {
@@ -49,14 +53,14 @@ export interface HelpersOutcome {
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 /** Runs every review pass on `review`; never throws. The passes come back in the order of `REVIEW_HELPER_PACKS`. */
-export async function runHelpers(deps: HelperDeps, context: StageContext, review: ReviewContext, mounts?: readonly PassMount[]): Promise<HelpersOutcome> {
+export async function runHelpers(deps: HelperDeps, context: StageContext, review: ReviewContext, mounts?: readonly PassMount[], suggested?: Partial<Record<ReviewHelperPack, NonNullable<StageContext["suggested"]>>>): Promise<HelpersOutcome> {
   const limit = Math.max(1, deps.concurrency ?? REVIEW_HELPER_PACKS.length);
   const results: PromiseSettledResult<StageResult>[] = new Array(REVIEW_HELPER_PACKS.length);
   let next = 0;
   const worker = async (): Promise<void> => {
     for (let i = next++; i < REVIEW_HELPER_PACKS.length; i = next++) {
       const pack = REVIEW_HELPER_PACKS[i]!;
-      const sub: StageContext = { ...context, runId: `${context.runId}-${pack}`, started: undefined, resume: undefined, engine: undefined };
+      const sub: StageContext = { ...context, runId: `${context.runId}-${pack}`, started: undefined, resume: undefined, engine: undefined, suggested: suggested?.[pack] };
       let made: PassWorkspace | undefined;
       try {
         if (deps.workspace) made = await deps.workspace.make(sub, pack);

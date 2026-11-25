@@ -10,6 +10,7 @@ import { type ComplianceDeps, runCompliance } from "./compliance-review.ts";
 import { type DiffFile, type Shard, type Skipped, capShards, parseDiff, shardDiff, splitReviewable } from "./review-diff.ts";
 import { shardedSummary } from "./review-summary.ts";
 import { PR_DIFF_MOUNT } from "./review-diff-files.ts";
+import { type RiskRead, readRisk } from "./review-risk.ts";
 import { type RereviewDeps, type RereviewPlan, prepareRereview, settledReply } from "./rereview.ts";
 import { type HelperDeps, type HelpersOutcome, type PassMount, type PassWorkspace, confirmHelperFindings, runHelpers } from "./review-helpers.ts";
 import { followUp } from "./thread-followup.ts";
@@ -349,8 +350,26 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     }
     const fileReview: ReviewContext = { ...shared, diff: "", diffDir: PR_DIFF_MOUNT };
 
+    // How deep this review goes: pr_risk reads the files and line counts, and the risk suggests what the reviewer and the passes run on (luna.yaml wins).
+    let risk: RiskRead | null = null;
+    if (deps.helpers && !quiet && reviewerNeeded && readable.length > 0) {
+      const h = deps.helpers;
+      const repoPath = context.task.repoPath ?? null;
+      risk = await readRisk(
+        {
+          decide: h.decide,
+          decisions: (await h.decisions?.(repoPath).catch(() => ({}))) ?? {},
+          policy: (await h.policy?.(repoPath).catch(() => ({}))) ?? {},
+          ...(h.engineReady ? { engineReady: (engine) => h.engineReady!(engine, repoPath) } : {}),
+          log: (line) => console.warn(`review: ${line}`),
+        },
+        { title: review.pr.title, files: readable, repoPath },
+      ).catch((error) => (console.warn(`review: risk read failed: ${messageOf(error)}`), null));
+    }
+    const mainContext: StageContext = risk?.main ? { ...context, suggested: risk.main } : context;
+
     // The review passes start with the main review, each in a workspace of its own (they never share the reviewer's folder); runHelpers never throws.
-    const helpersRun = deps.helpers && !quiet && (!sharded || diffMount) ? runHelpers(deps.helpers, context, sharded ? fileReview : shared, diffMount ? [diffMount] : undefined) : null;
+    const helpersRun = deps.helpers && !quiet && (!sharded || diffMount) ? runHelpers(deps.helpers, context, sharded ? fileReview : shared, diffMount ? [diffMount] : undefined, risk?.passes) : null;
     let unreviewed: Array<{ path: string; lines: number }> = [];
     let shardStats: { count: number; reviewed: number; capped: number; failed: number } | null = null;
     let shardFailures: Array<{ shard: number; files: number; reason: string }> = [];
@@ -360,13 +379,13 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       ? (async () => {
           const shards = shardDiff(readable, limits.shardLines, SHARD_CHARS);
           const capped = capShards(shards, limits.maxShards);
-          const ran = await runShards(deps, context, review, capped.kept);
+          const ran = await runShards(deps, mainContext, review, capped.kept);
           unreviewed = mergeLines([...capped.unreviewed, ...ran.failed]);
           shardStats = { count: shards.length, reviewed: capped.kept.length - ran.failedShards, capped: shards.length - capped.kept.length, failed: ran.failedShards };
           shardFailures = ran.failures;
           return ran.result;
         })()
-      : deps.runPack(context, review);
+      : deps.runPack(mainContext, review);
     const [mainRun, helpersDone] = await Promise.allSettled([mainPromise, helpersRun]);
     if (mainRun.status === "rejected") throw mainRun.reason;
     const pack = mainRun.value;
@@ -488,6 +507,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
         : passNotes.length > 0
           ? { helperNotes: passNotes }
           : {}),
+      ...(risk ? { risk: { level: risk.level, by: risk.by, applied: risk.applied } } : {}),
       ...(shardStats ? { shards: shardStats } : {}),
       ...(shardFailures.length > 0 ? { shardFailures } : {}),
       ...(unreviewed.length > 0 ? { unreviewed } : {}),

@@ -1,0 +1,50 @@
+{
+  "schema": 3,
+  "stage": "pr_risk",
+  "pack": "pr_risk",
+  "attempt": 1,
+  "task": {
+    "id": "pr-risk",
+    "title": "Pr risk",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "pr_risk",
+      "risk": {
+        "title": "Rename the export button",
+        "scope": "the whole PR",
+        "files": [
+          {
+            "path": "src/ui/ExportButton.tsx",
+            "additions": 1,
+            "deletions": 1
+          },
+          {
+            "path": "src/ui/__snapshots__/ExportButton.snap",
+            "additions": 1,
+            "deletions": 1
+          }
+        ],
+        "filesTotal": 2,
+        "additions": 2,
+        "deletions": 2
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

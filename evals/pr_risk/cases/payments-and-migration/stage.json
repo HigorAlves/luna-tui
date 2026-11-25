@@ -1,0 +1,55 @@
+{
+  "schema": 3,
+  "stage": "pr_risk",
+  "pack": "pr_risk",
+  "attempt": 1,
+  "task": {
+    "id": "pr-risk",
+    "title": "Pr risk",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "pr_risk",
+      "risk": {
+        "title": "Retry failed charges",
+        "scope": "the whole PR",
+        "files": [
+          {
+            "path": "src/billing/charge.ts",
+            "additions": 60,
+            "deletions": 22
+          },
+          {
+            "path": "db/migrations/0042_charges.sql",
+            "additions": 14,
+            "deletions": 0
+          },
+          {
+            "path": "src/auth/session.ts",
+            "additions": 8,
+            "deletions": 3
+          }
+        ],
+        "filesTotal": 3,
+        "additions": 82,
+        "deletions": 25
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

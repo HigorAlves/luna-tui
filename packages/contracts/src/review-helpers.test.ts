@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { PACKS, ReviewHelperAnswer, REVIEW_HELPER_PACKS, helpersOn } from "./packs.ts";
+import { PACKS, ReviewHelperAnswer, REVIEW_DEPTH, REVIEW_HELPER_PACKS, helpersOn } from "./packs.ts";
 import { applyPolicy } from "./questions.ts";
 
 const finding = { path: "src/a.ts", line: 3, severity: "security", title: "IDOR", body: "no owner check", confidence: 0.9 };
@@ -28,7 +28,7 @@ describe("the review helper packs", () => {
     it(`${id} runs ${role} read-only on sonnet at medium, with no helpers`, () => {
       const pack = PACKS[id as keyof typeof roles];
       expect(pack).toMatchObject({ id, kind: "agent", agent: role, writable: false, effort: "medium", maxTurns: 25, timeoutMs: 10 * 60_000, template: "review_helper.md", helpers: [] });
-      expect(pack.engines).toEqual({ default: "claude:sonnet", allowed: ["claude:sonnet", "codex:luna", "claude:opus", "codex:sol"] });
+      expect(pack.engines).toEqual({ default: "claude:sonnet", allowed: ["claude:sonnet", "codex:luna", "claude:opus", "codex:sol", "claude:haiku"] });
       expect(pack.kind === "agent" && pack.access).toMatchObject({ read: true, write: false });
       expect(pack.kind === "agent" && pack.access.agent).not.toBe(true);
       expect(pack.kind === "agent" && pack.access.commands).toEqual(expect.arrayContaining(["git diff", "git log", "git merge-base"]));
@@ -89,5 +89,33 @@ describe("the rereview_worth pack", () => {
     expect(q.instructions).toMatch(/data/);
     expect(applyPolicy(pack, { activity: { choice: "noise", confidence: 0.95 } }, undefined).overall).toBe("proceed");
     expect(applyPolicy(pack, { activity: { choice: "noise", confidence: 0.55 } }, undefined).overall).toBe("flag");
+  });
+});
+
+describe("the pr_risk pack and the depth each risk gets", () => {
+  it("asks one choice, low, medium or high, and calls the paths and the title data", () => {
+    const pack = PACKS.pr_risk;
+    expect(pack.kind).toBe("decision");
+    if (pack.kind !== "decision") return;
+    expect(Object.keys(pack.questions)).toEqual(["level"]);
+    const q = pack.questions.level!;
+    expect(q.type).toBe("choice");
+    if (q.type !== "choice") return;
+    expect(Object.keys(q.criteria)).toEqual(["low", "medium", "high"]);
+    expect(q.instructions).toMatch(/data/);
+  });
+
+  it("reviews a low-risk PR lighter (Opus at medium, haiku passes at low), keeps medium as it is, and deepens high (Sonnet passes at high and a second opinion)", () => {
+    expect(REVIEW_DEPTH.low).toEqual({ main: { effort: "medium" }, passes: { engine: "claude:haiku", effort: "low" }, second: false });
+    expect(REVIEW_DEPTH.medium).toEqual({ main: {}, passes: {}, second: false });
+    expect(REVIEW_DEPTH.high).toEqual({ main: {}, passes: { engine: "claude:sonnet", effort: "high" }, second: true });
+  });
+
+  it("lets every review pass run on haiku, and every depth name an engine the passes allow", () => {
+    for (const id of ["review_security", "review_migration", "review_iac", "review_second"] as const) {
+      const pack = PACKS[id];
+      if (pack.kind !== "agent") throw new Error("agent pack");
+      for (const depth of Object.values(REVIEW_DEPTH)) if (depth.passes.engine) expect(pack.engines.allowed).toContain(depth.passes.engine);
+    }
   });
 });

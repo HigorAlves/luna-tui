@@ -28,7 +28,7 @@ function setup(opts: { answer?: unknown; helperFindings?: Partial<Record<string,
         return { outcome: "pass", usage, detail: { answer: { summary: `${pack} looked`, findings: opts.helperFindings?.[pack] ?? [] } } };
       },
       get decide() {
-        const confirming: Decide = async (pack, check) => (checks.push({ pack, check: check as never }), { real: { value: true, p: 0.95 } });
+        const confirming: Decide = async (pack, check) => (pack === "finding_confirm" && checks.push({ pack, check: check as never }), { real: { value: true, p: 0.95 } });
         return opts.decide === undefined ? confirming : opts.decide;
       },
     },

@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "level.choice",
+      "value": "high"
+    }
+  ],
+  "rubric": "A migration and the charge path: high risk.",
+  "label": {
+    "level": {
+      "choice": "high"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "level": "Auth, payments, secrets, migrations, infrastructure, a public contract, or a large change across many areas"
+    },
+    "why": "A migration and the charge path: high risk.",
+    "ruledOut": [
+      {
+        "question": "level",
+        "label": "low",
+        "why": "A migration and the charge path: high risk. It is not low: docs, tests, copy, styling or a small change in one place with no data, auth, money or shared contract near it."
+      },
+      {
+        "question": "level",
+        "label": "medium",
+        "why": "A migration and the charge path: high risk. It is not medium: an ordinary feature or fix across a few files in one area."
+      }
+    ],
+    "second": {
+      "label": {
+        "level": {
+          "choice": "high"
+        }
+      },
+      "agrees": true
+    }
+  }
+}
