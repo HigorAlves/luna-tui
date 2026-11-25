@@ -13129,6 +13129,13 @@
               "null"
             ],
             "description": "The Jira project or GitHub `owner/repo` a split's child tickets are created in; null for any other key"
+          },
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The repository checkout the ticket was taken in for (the luna.yaml whose `jira.intake` found it); null until it is linked"
           }
         },
         "required": [
@@ -13139,7 +13146,8 @@
           "drafts",
           "cardId",
           "clocks",
-          "splitTarget"
+          "splitTarget",
+          "repo"
         ]
       },
       "TicketDraftView": {

@@ -579,6 +579,8 @@ describe("a ticket's split (wave 15)", () => {
     const view = await x.machine.view("PAY-12");
     expect((view.drafts as any[]).find((d) => d.kind === "split").children[0]).toMatchObject({ title: "Part A", goal: expect.stringContaining("do Part A"), acceptance_criteria: ["Part A works"] });
     expect(view.splitTarget).toBe("PAY");
+    // The repository the ticket was taken in for (its luna.yaml's intake), so a client can say which project it is for.
+    expect(view.repo).toBe(ctx.repoPath);
     expect(splitTargetOf("acme/widgets#7")).toBe("acme/widgets");
     expect(splitTargetOf("PAY-12")).toBe("PAY");
     expect((await x.machine.view("PAY-12")).splitTarget).toBe("PAY");

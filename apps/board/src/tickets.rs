@@ -37,6 +37,9 @@ pub struct TicketEntry {
     /// The Jira project or GitHub repository a split's child tickets are created in; an older machine sends none.
     #[serde(default)]
     pub split_target: Option<String>,
+    /// The repository checkout the ticket was taken in for; none until it is linked, or from an older machine.
+    #[serde(default)]
+    pub repo: Option<String>,
 }
 
 /// The open Tickets view: where the cursor is.
@@ -126,16 +129,31 @@ impl TicketEntry {
             }
         );
         format!(
-            "{:<10} {:<12} {score}{marks}  {}",
+            "{:<10} {:<12} {:<12} {score}{marks}  {}",
             plain(&self.key),
+            self.repo_name(),
             status,
             text(&self.canonical, "title").replace('\n', " ")
         )
     }
 
+    /// The folder name of the ticket's repository (`Discover` for `/…/work/Discover`), or `-` when it is not linked yet.
+    pub fn repo_name(&self) -> String {
+        self.repo
+            .as_deref()
+            .map(|p| p.trim_end_matches('/'))
+            .and_then(|p| p.rsplit('/').next())
+            .filter(|n| !n.is_empty())
+            .map(plain)
+            .unwrap_or_else(|| "-".to_string())
+    }
+
     /// The detail pane: sub-scores with their confidence, the enrichment's links, and each waiting draft.
     pub fn detail_lines(&self) -> Vec<String> {
         let mut out = vec![text(&self.canonical, "title")];
+        if let Some(repo) = self.repo.as_deref() {
+            out.push(format!("repo: {} ({})", self.repo_name(), plain(repo)));
+        }
         if let Some(a) = self.scored() {
             if let Some(subs) = a.get("subScores").and_then(|s| s.as_object()) {
                 let mut names: Vec<&String> = subs.keys().collect();
@@ -270,6 +288,20 @@ mod tests {
         ] {
             assert!(row.contains(part), "{part} in {row}");
         }
+    }
+
+    #[test]
+    fn a_row_and_the_detail_say_which_repository_the_ticket_is_for() {
+        let mut json = serde_json::json!({"key":"DISC-54","canonical":{"title":"Export the report"},"repo":"/Users/me/Developer/work/Discover"});
+        let t = entry(json.clone());
+        assert!(t.row().contains("Discover"), "{}", t.row());
+        assert!(!t.row().contains("/Users/me"), "the row names the folder, not the whole path: {}", t.row());
+        assert!(t.detail_lines().iter().any(|l| l == "repo: Discover (/Users/me/Developer/work/Discover)"), "{:?}", t.detail_lines());
+        // Not linked yet (an older machine, or the ticket is still being read): a dash, and no repo line.
+        json.as_object_mut().unwrap().remove("repo");
+        let none = entry(json);
+        assert!(none.row().contains(" - "), "{}", none.row());
+        assert!(!none.detail_lines().iter().any(|l| l.starts_with("repo:")));
     }
 
     #[test]

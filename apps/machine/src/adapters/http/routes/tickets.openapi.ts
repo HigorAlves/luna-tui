@@ -38,6 +38,7 @@ export const TicketViewSchema = z
     cardId: z.string().nullable(),
     clocks: z.record(z.string(), z.unknown()),
     splitTarget: z.string().nullable().openapi({ description: "The Jira project or GitHub `owner/repo` a split's child tickets are created in; null for any other key" }),
+    repo: z.string().nullable().openapi({ description: "The repository checkout the ticket was taken in for (the luna.yaml whose `jira.intake` found it); null until it is linked" }),
   })
   .openapi("TicketView");
 expectSame<Same<z.infer<typeof TicketViewSchema>, TicketView>>();

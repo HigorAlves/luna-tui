@@ -64,6 +64,8 @@ export interface TicketView {
   clocks: Record<string, unknown>;
   /** Where approving a split draft creates the child tickets: the Jira project or the GitHub repository of this ticket's own key; null when the key is neither. */
   splitTarget: string | null;
+  /** The repository the ticket was taken in for (the luna.yaml whose intake found it); null until it is linked. */
+  repo: string | null;
 }
 
 export interface TicketMachineDeps {
@@ -672,6 +674,6 @@ export function splitTargetOf(key: string): string | null {
 }
 
 function viewOf(row: TicketRow): TicketView {
-  return { key: row.key, canonical: row.canonical, status: row.machineStatus, assessments: row.assessments, drafts: (row.drafts as unknown as Draft[]).map((d) => ({ ...d, hash: draftHash(d) })), cardId: row.cardId, clocks: row.clocks, splitTarget: splitTargetOf(row.key) };
+  return { key: row.key, canonical: row.canonical, status: row.machineStatus, assessments: row.assessments, drafts: (row.drafts as unknown as Draft[]).map((d) => ({ ...d, hash: draftHash(d) })), cardId: row.cardId, clocks: row.clocks, splitTarget: splitTargetOf(row.key), repo: row.machineLinks.find((l) => l.kind === "repo")?.target ?? null };
 }
 void (null as unknown as AssessAnswer);
