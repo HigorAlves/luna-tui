@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type EngineId, type Ledger, type Slice, stepsOfAnswer } from "@hardness/contracts";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { HELPER_START_LIMIT_MS, type HelperRunsDeps, helperRuns } from "./helper-runs.ts";
 import type { StageContext, StageResult } from "../ports.ts";
@@ -427,8 +427,8 @@ async function returned(over: Partial<HelperRunsDeps> = {}) {
   const t = setup(over);
   await ask(t.coordinator);
   t.c.settle({ outcome: "pass" });
-  await tick();
-  expect(await stateOf(2)).toMatchObject({ state: "returned" });
+  // The helper's work after a pass (taking its commits, writing its state) is not one timer tick under load: wait for the state, not for a fixed time.
+  await vi.waitFor(async () => expect(await stateOf(2)).toMatchObject({ state: "returned" }), { timeout: 5000, interval: 5 });
   return t;
 }
 const pickReq = (t: { coordinator: ReturnType<typeof helperRuns> }, head = BASE, n = 5) => t.coordinator.onPickRequest({ nonce: "ab12cd34", n, slice: 2, head });
