@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "activity.choice",
+      "value": "noise"
+    }
+  ],
+  "rubric": "The author only says thanks; there is nothing to review.",
+  "label": {
+    "activity": {
+      "choice": "noise"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "activity": "Thanks or an acknowledgement, a bot or agent restating what was said, or a change only to CI or configuration"
+    },
+    "why": "The author only says thanks and nothing changed: nothing needs a reviewer.",
+    "ruledOut": [
+      {
+        "question": "activity",
+        "label": "code",
+        "why": "The author only says thanks and nothing changed: nothing needs a reviewer. It is not code: a real code change: new or rewritten logic, a fix, a new file, or a change of behaviour."
+      },
+      {
+        "question": "activity",
+        "label": "discussion",
+        "why": "The author only says thanks and nothing changed: nothing needs a reviewer. It is not discussion: an argument, a question, a disagreement or a request that a reviewer should answer."
+      }
+    ],
+    "second": {
+      "label": {
+        "activity": {
+          "choice": "noise"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

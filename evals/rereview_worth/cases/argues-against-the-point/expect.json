@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "activity.choice",
+      "value": "discussion"
+    }
+  ],
+  "rubric": "The author disputes the point with a reason a reviewer must weigh.",
+  "label": {
+    "activity": {
+      "choice": "discussion"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "activity": "An argument, a question, a disagreement or a request that a reviewer should answer"
+    },
+    "why": "The author disputes the point with a reason a reviewer has to weigh.",
+    "ruledOut": [
+      {
+        "question": "activity",
+        "label": "code",
+        "why": "The author disputes the point with a reason a reviewer has to weigh. It is not code: a real code change: new or rewritten logic, a fix, a new file, or a change of behaviour."
+      },
+      {
+        "question": "activity",
+        "label": "noise",
+        "why": "The author disputes the point with a reason a reviewer has to weigh. It is not noise: thanks or an acknowledgement, a bot or agent restating what was said, or a change only to ci or configuration."
+      }
+    ],
+    "second": {
+      "label": {
+        "activity": {
+          "choice": "discussion"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

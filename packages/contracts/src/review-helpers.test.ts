@@ -75,3 +75,19 @@ describe("the thread_settle pack", () => {
     expect(applyPolicy(pack, { addressed: { value: true, p: 0.55 }, reply_holds: { value: false, p: 0.5 } }, undefined).overall).toBe("flag");
   });
 });
+
+describe("the rereview_worth pack", () => {
+  it("asks one choice, code, discussion or noise, and calls the activity's text data", () => {
+    const pack = PACKS.rereview_worth;
+    expect(pack.kind).toBe("decision");
+    if (pack.kind !== "decision") return;
+    expect(Object.keys(pack.questions)).toEqual(["activity"]);
+    const q = pack.questions.activity!;
+    expect(q.type).toBe("choice");
+    if (q.type !== "choice") return;
+    expect(Object.keys(q.criteria)).toEqual(["code", "discussion", "noise"]);
+    expect(q.instructions).toMatch(/data/);
+    expect(applyPolicy(pack, { activity: { choice: "noise", confidence: 0.95 } }, undefined).overall).toBe("proceed");
+    expect(applyPolicy(pack, { activity: { choice: "noise", confidence: 0.55 } }, undefined).overall).toBe("flag");
+  });
+});

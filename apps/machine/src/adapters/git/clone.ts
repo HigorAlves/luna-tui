@@ -231,6 +231,20 @@ export async function localPrDiff(repoPath: string, baseRef: string, path: strin
 }
 
 /**
+ * How many commits the PR gained since `since` that are neither merges nor in the base branch (as the user's repository last fetched it): 0 means everything
+ * new came from merging the base. Null when the base ref or the commit is not usable, or git cannot say (a base the card's repository does not hold yet).
+ */
+export async function ownCommitsSince(repoPath: string, baseRef: string, path: string, since: string): Promise<number | null> {
+  if (!isBranchName(baseRef) || !isClone(path) || !/^[0-9a-f]{7,40}$/i.test(since)) return null;
+  const base = await exec("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "--verify", "--quiet", `refs/remotes/origin/${baseRef}^{commit}`]);
+  const sha = base.stdout.trim();
+  if (base.code !== 0 || !/^[0-9a-f]{40,64}$/.test(sha)) return null;
+  const counted = await exec("git", [...HOST_GIT, ...inMachine(path), "rev-list", "--count", "--no-merges", `${since}..HEAD`, "--not", sha], { timeoutMs: CLONE_TIMEOUT_MS });
+  const n = Number(counted.stdout.trim());
+  return counted.code === 0 && Number.isInteger(n) ? n : null;
+}
+
+/**
  * Gives the agent a git repository of its own in `W/.git` before a run: the old one is deleted (plain file removal, no git
  * run in it), a shallow clone of the card's branch (depth 50, nothing shared) is made from the card's repository into a
  * folder the machine owns beside the work folder, its remote removed so no host path or setting is left in its config, and

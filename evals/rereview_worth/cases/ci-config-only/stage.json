@@ -1,0 +1,43 @@
+{
+  "schema": 3,
+  "stage": "rereview_worth",
+  "pack": "rereview_worth",
+  "attempt": 1,
+  "task": {
+    "id": "rereview-worth",
+    "title": "Rereview worth",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "rereview",
+      "activity": {
+        "comments": [],
+        "commits": 1,
+        "files": [
+          {
+            "path": ".github/workflows/ci.yml",
+            "additions": 2,
+            "deletions": 1
+          }
+        ],
+        "delta": "@@ -10 +10 @@\n-        node-version: 20\n+        node-version: 22"
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

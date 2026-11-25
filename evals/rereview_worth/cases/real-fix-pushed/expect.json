@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "activity.choice",
+      "value": "code"
+    }
+  ],
+  "rubric": "The loop bound and its tests changed.",
+  "label": {
+    "activity": {
+      "choice": "code"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "activity": "A real code change: new or rewritten logic, a fix, a new file, or a change of behaviour"
+    },
+    "why": "The loop bound and its test changed: a real code change.",
+    "ruledOut": [
+      {
+        "question": "activity",
+        "label": "discussion",
+        "why": "The loop bound and its test changed: a real code change. It is not discussion: an argument, a question, a disagreement or a request that a reviewer should answer."
+      },
+      {
+        "question": "activity",
+        "label": "noise",
+        "why": "The loop bound and its test changed: a real code change. It is not noise: thanks or an acknowledgement, a bot or agent restating what was said, or a change only to ci or configuration."
+      }
+    ],
+    "second": {
+      "label": {
+        "activity": {
+          "choice": "code"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

@@ -303,7 +303,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     const cardPath = context.task.worktreePath ?? null;
     if (deps.rereview && cardPath) {
       try {
-        plan = await prepareRereview(deps.rereview, github, { repo: pr.repo, number: pr.number, worktree: cardPath, repoPath: context.task.repoPath ?? null, fullDiff: review.diff, log: (line) => console.warn(`review: ${line}`) });
+        plan = await prepareRereview(deps.rereview, github, { repo: pr.repo, number: pr.number, worktree: cardPath, repoPath: context.task.repoPath ?? null, baseRef: review.pr.baseRef, fullDiff: review.diff, log: (line) => console.warn(`review: ${line}`) });
       } catch (error) {
         console.warn(`review: could not prepare a re-review of ${pr.url} (${messageOf(error)}); reviewing the whole diff`);
       }
@@ -323,7 +323,9 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     // No commit since the review we read: there is no new code, so no pass runs and no new finding is made; the reviewer runs only for a thread
     // that still needs a first answer at this head.
     const quiet = plan?.quiet === true;
-    const reviewerNeeded = !quiet || plan!.rereview.threads.some((t) => t.settle === "unsettled");
+    const noise = plan?.noise === true;
+    // Noise (a thanks, a merge of the base, a CI-only change) settles our threads and nothing more: no reviewer runs for an unsettled one.
+    const reviewerNeeded = !noise && (!quiet || plan!.rereview.threads.some((t) => t.settle === "unsettled"));
     const silent: StageResult = { outcome: "pass", detail: { answer: { verdict: "comment", summary: "", findings: [], comments: [] } } };
     // A diff too big for one reviewer is read in shards by module; the passes and the compliance lead read the whole PR once, as files.
     const limits = (await deps.limits?.(context.task.repoPath ?? null).catch(() => null)) ?? DEFAULT_LIMITS;
@@ -461,7 +463,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     // new commit and no reviewer run, the machine says it in one line.
     const settledCount = plan ? plan.rereview.threads.filter((t) => t.settle === "fixed" || t.settle === "reply_holds").length : 0;
     const body = quiet && !reviewerNeeded
-      ? `No new commits since our review at ${plan!.rereview.since.slice(0, 7)}. ${settledCount} of ${plan!.rereview.threads.length} of our threads settled; the rest stay open.`
+      ? `${noise ? "Nothing to review since" : "No new commits since"} our review at ${plan!.rereview.since.slice(0, 7)}. ${settledCount} of ${plan!.rereview.threads.length} of our threads settled; the rest stay open.`
       : [summary, !quiet && !stats && kept.length > 0 ? `The review passes found ${kept.length} more: ${severityCounts(kept)}.` : ""].filter(Boolean).join(" ");
     const detail = {
       ...pack.detail,
@@ -490,7 +492,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       ...(shardFailures.length > 0 ? { shardFailures } : {}),
       ...(unreviewed.length > 0 ? { unreviewed } : {}),
       ...(plan
-        ? { rereview: { since: plan.rereview.since, ...(plan.rereview.note ? { note: plan.rereview.note } : {}), settled: plan.rereview.threads.filter((t) => t.settle === "fixed" || t.settle === "reply_holds").length, open: stillOpen.length, threads: plan.rereview.threads.length } }
+        ? { rereview: { since: plan.rereview.since, ...(plan.rereview.note ? { note: plan.rereview.note } : {}), settled: plan.rereview.threads.filter((t) => t.settle === "fixed" || t.settle === "reply_holds").length, open: stillOpen.length, threads: plan.rereview.threads.length, ...(plan.worth ? { worth: plan.worth } : {}) } }
         : {}),
       ...(compliance ? { compliance: { regimesRun: compliance.regimesRun, findings: compliance.findings.length, notes: compliance.notes } } : {}),
       ...(parsed.data.verdict !== verdict ? { modelVerdict: parsed.data.verdict } : {}),
