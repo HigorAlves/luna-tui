@@ -1192,6 +1192,24 @@ describe("the engine a stage runs on", () => {
     });
   });
 
+  describe("the turns and time a run gets", () => {
+    const slices = [{ title: "s", est_loc: 5000, touchpoints: ["a.ts"], acceptance: ["ok"] }];
+    const plan = { record: null, brief: "b", criteria: ["c"], assumptions: [], slices, round: 1 };
+
+    it("grows with the card's size and says so in a limits event", async () => {
+      const result = await runAgent(deps(fakeSandbox(output({ answer: { kind: "done", summary: "s", cases: [] } }))), { ...context("test_design"), runId: "r1-tests-1" }, "test_design", { plan });
+      expect((seen!.input as unknown as StageInput).limits).toEqual({ maxTurns: 80, timeoutMs: 30 * 60_000 });
+      expect(result.events?.find((e) => e.kind === "limits")?.payload).toEqual({ pack: "test_design", maxTurns: 80, timeoutMs: 30 * 60_000, by: "size×2" });
+    });
+
+    it("takes the repo's luna.yaml limits over the size, and says so", async () => {
+      writeFileSync(join(repo, "luna.yaml"), "limits:\n  test_design:\n    max_turns: 99\n    minutes: 7\n");
+      const result = await runAgent(deps(fakeSandbox(output({ answer: { kind: "done", summary: "s", cases: [] } }))), { ...context("test_design"), runId: "r1-tests-1" }, "test_design", { plan });
+      expect((seen!.input as unknown as StageInput).limits).toEqual({ maxTurns: 99, timeoutMs: 7 * 60_000 });
+      expect(result.events?.find((e) => e.kind === "limits")?.payload).toMatchObject({ by: "luna.yaml" });
+    });
+  });
+
   describe("an effort the runner image may not honour", () => {
     const runInfo = (effort?: string) => ({ runtime: "claude", engine: "claude:opus", modelId: "m", ...(effort ? { effort } : {}), sdk: { name: "s", version: "1" }, fingerprint: "a".repeat(64) }) as StageOutput["run"];
     const asked = () => writeFileSync(join(repo, "luna.yaml"), "effort:\n  triage: low\n");

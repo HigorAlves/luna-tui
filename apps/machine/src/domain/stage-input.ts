@@ -263,7 +263,9 @@ export function buildStageInput(opts: {
   // The ui-designer reads the approved spec in its plan (`context.plan.designSpec`).
   const spec = pack === "ui_design" ? designSpecOf(approvals) : null;
   const plan = approved && spec ? { ...approved, designSpec: spec } : approved;
-  const scaled = limitsFor({ pack, ...(plan?.slices ? { slices: plan.slices } : {}), approvals, ...(opts.limitsConfig ? { repo: opts.limitsConfig } : {}) });
+  // The test designer is never shown the slices, but its budget still reads their size.
+  const sized = opts.plan?.slices ?? plan?.slices;
+  const scaled = limitsFor({ pack, ...(sized ? { slices: sized } : {}), approvals, ...(opts.limitsConfig ? { repo: opts.limitsConfig } : {}) });
   const { maxTurns } = scaled;
   // Build's budget: a run never outlives the minutes the card has left.
   const timeoutMs = opts.budgetMinutes !== undefined && (pack === "implementing" || pack === "build_tests" || pack === "ui_design") ? Math.floor(Math.min(scaled.timeoutMs, Math.max(1, opts.budgetMinutes) * MINUTE)) : scaled.timeoutMs;
