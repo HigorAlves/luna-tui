@@ -8,6 +8,9 @@ const MISSING_MODULE = /Cannot find (?:module|package) ['"]([^'"]+)['"](?:\s+imp
 // The package by its name (`@discover/ui`) or, as Node prints it, by its folder (`/work/node_modules/@discover/ui`).
 const MISSING_EXPORT = /["']([^"']+)["'] is not exported\b[^\n]*?\bfrom package\s+(?:\S*\/node_modules\/)?(@?[\w.-]+(?:\/[\w.-]+)?)/;
 
+const EXISTS_FALSE = /(\S+\.[\w]+)\s+exists:\s+expected false to be true/;
+// ENOENT on a file under the container's checkout (/work/...) or a repo-relative one.
+const ENOENT = /ENOENT[^\n]*?['"]((?:\/work\/)?[\w@.-][^'"\n]*)['"]/;
 const clean = (path: string): string => posix.normalize(path.replace(/\\/g, "/")).replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
 const noExt = (path: string): string => path.replace(/\.(?:m?[jt]sx?|c[jt]s)$/, "");
 
@@ -43,6 +46,12 @@ export function plannedMissingModule(output: string, touchpoints: readonly strin
     if (!spec.startsWith(".")) candidates.add(clean(spec.replace(/^\//, "")));
     for (const candidate of candidates) if (planned(candidate, touchpoints)) return candidate;
     return null;
+  }
+  // The writer's own guard: `expect(existsSync(path), "<path> exists").toBe(true)`, or a read of the file that is not there yet.
+  const absent = EXISTS_FALSE.exec(output) ?? ENOENT.exec(output);
+  if (absent) {
+    const path = clean(absent[1]!.replace(/^\/work\//, ""));
+    return planned(path, touchpoints) ? path : null;
   }
   const notExported = MISSING_EXPORT.exec(output);
   if (notExported) {

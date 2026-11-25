@@ -665,3 +665,18 @@ describe("a red that fails only because the code the plan creates is not there y
     expect(waived).toEqual([undefined]);
   });
 });
+
+describe("what the writer is told when a test is rejected", () => {
+  const withThen = gate({
+    plan: { goal: "g", steps: [{ title: "Search", est_loc: 80, touchpoints: ["web/search.ts"], acceptance: ["a"] }], acceptance_criteria: [{ id: "C1", text: "c1" }], out_of_scope: [], assumptions: [], rollback: "r", version: 3 },
+    cases: [{ id: "S1", title: "visible participants", criterion: "c1", criterion_ref: "C1", given: "a manager", when: "evaluations are searched", then: "only that manager's visible participants are returned", approach: "a" }],
+  });
+
+  it("names the scenario's outcome to assert, not only the judge's words (DISC-53: the writer kept every flagged test unchanged)", async () => {
+    let n = 0;
+    const tautological = "the test would still pass without the behaviour: it asserts its own setup (a scenario that already holds before the change goes in holdsToday, with its reason, and gets no test)";
+    const f = fakes([tagged("S1")], { judgeRed: async () => (n++ < 2 ? { verdict: "flag", problems: [tautological] } : { verdict: "proceed", problems: [] }) }, [{ S1: "AssertionError: expected 0 to be 3" }]);
+    await buildTestsStep(f.deps)(context([withThen]));
+    expect(f.reviews[1]!.join("\n")).toContain(`assert this outcome itself: "only that manager's visible participants are returned"`);
+  });
+});

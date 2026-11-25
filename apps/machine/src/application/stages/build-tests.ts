@@ -5,6 +5,7 @@ import { type CheckContext, Plan, type PlanContext } from "@hardness/contracts";
 import { approvedScenarios } from "../../domain/stage-input.ts";
 import { isCommandCheck } from "../../domain/command-check.ts";
 import { plannedMissingModule } from "../../domain/planned-module.ts";
+import { redReviewLine } from "../../domain/red-review.ts";
 import { isDocsOnly } from "../../domain/docs-only.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { isPlainRepoPath } from "@hardness/contracts";
@@ -251,7 +252,8 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
           if (vote.verdict === "proceed") accepted.add(same);
           // The task's events say what each scenario's judge said, so an escalation is never only a sentence.
           await context.emit?.("scenario.red_check", { scenario: id, verdict: vote.verdict, asked: vote.askings.length, flagged: vote.askings.filter((a) => a.flagged).length, testRead: test !== null, ...(planned !== null ? { planned } : {}), ...(vote.problems.length ? { problems: vote.problems.map((p) => safe(p).slice(0, 200)) } : {}) });
-          return { id, verdict: vote.verdict, problems: vote.problems.map((p) => `${id}: ${safe(p).slice(0, 200)}`) };
+          // The writer is told what to change: the outcome to assert, or the fixture to write, not only the judge's words.
+          return { id, verdict: vote.verdict, problems: vote.problems.map((p) => redReviewLine({ id, title: s.title, then: s.then ?? null }, safe(p).slice(0, 400), output)) };
         },
       );
       const problems = judged.flatMap((j) => j.problems);

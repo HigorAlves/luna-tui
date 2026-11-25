@@ -23,6 +23,13 @@ describe("plannedMissingModule: a red that fails only because the code the plan 
     expect(plannedMissingModule('Error: "./evaluation" is not exported from package /work/node_modules/@discover/application', touchpoints)).toBeNull();
   });
 
+  it("takes an existence check or an ENOENT on a planned file: the writer's guard for code the plan creates (DISC-53's third round)", () => {
+    expect(plannedMissingModule("AssertionError: apps/lambdas/evaluation/src/app.ts exists: expected false to be true", touchpoints)).toBe("apps/lambdas/evaluation/src/app.ts");
+    expect(plannedMissingModule("Error: ENOENT: no such file or directory, open '/work/apps/lambdas/evaluation/src/routes/forms.routes.ts'", touchpoints)).toBe("apps/lambdas/evaluation/src/routes/forms.routes.ts");
+    expect(plannedMissingModule("AssertionError: apps/api/src/app.ts exists: expected false to be true", touchpoints)).toBeNull();
+    expect(plannedMissingModule("AssertionError: apps/lambdas/evaluation/src/app.ts exists: expected true to be false", touchpoints)).toBeNull();
+  });
+
   it("leaves everything else to the judge: an assertion, a third-party package, a typo outside the plan, an export of a package the plan does not touch", () => {
     expect(plannedMissingModule("AssertionError: expected 404 to be 200", touchpoints)).toBeNull();
     expect(plannedMissingModule("Error: Cannot find module 'lodash-es'", touchpoints)).toBeNull();

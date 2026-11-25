@@ -5,6 +5,7 @@ import { type CheckContext, type DecisionOverrides, type LedgerSlice, Ledger, PA
 import { constants, opendirSync } from "node:fs";
 import { copyFile, lstat, mkdir, open, opendir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { join, sep } from "node:path";
+import { NOT_TAUTOLOGICAL_PROBLEM, RIGHT_REASON_PROBLEM } from "../../domain/red-review.ts";
 
 import { type TruthSink, redCheckTruth, scopeFactsTruth } from "../decision-truth.ts";
 import { scopeFacts as diffFacts } from "../../domain/scope-facts.ts";
@@ -677,8 +678,8 @@ function problemsOf(pack: "red_check" | "scope_check", answer: Record<string, un
   const no = (question: string, problem: string) => (flag(answer, question) === false ? [problem] : []);
   if (pack === "red_check") {
     return [
-      ...no("right_reason", "the test fails for a reason other than the missing behaviour (a typo, an import, a path or a fixture)"),
-      ...no("not_tautological", "the test would still pass without the behaviour: it asserts its own setup (a scenario that already holds before the change goes in holdsToday, with its reason, and gets no test)"),
+      ...no("right_reason", RIGHT_REASON_PROBLEM),
+      ...no("not_tautological", NOT_TAUTOLOGICAL_PROBLEM),
     ];
   }
   return [

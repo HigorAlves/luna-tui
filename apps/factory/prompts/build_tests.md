@@ -29,6 +29,8 @@ Step files (slices):
 {{plan.slices}}
 </data>
 
+## Tests the last round rejected
+Rewrite each test named here as its line says: a test you leave unchanged is rejected again.
 {{context.plan.review}}
 
 ## Project context
