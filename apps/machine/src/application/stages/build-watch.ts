@@ -691,12 +691,19 @@ function problemsOf(pack: "red_check" | "scope_check", answer: Record<string, un
   ];
 }
 
-/** red_check over one check context (a slice's red, or a scenario's in Build's tests step): the verdict, and what a no says is wrong whatever the confidence. */
-export async function judgeRedCheck(decide: Decide | null, check: CheckContext, repoPath: string | null, overrides: Record<string, DecisionOverrides>, log: (line: string) => void = () => {}): Promise<CheckAnswer & { recordId?: string }> {
-  const { verdict, answer, recordId } = await judgeCheck(decide, "red_check", check, repoPath, overrides, log);
+const VERDICT_ORDER = ["proceed", "flag", "ask"] as const;
+
+/** red_check over one check context (a slice's red, or a scenario's in Build's tests step): the verdict, and what a no says is wrong whatever the confidence.
+ *  A waived question (`right_reason` when the red is a module the plan creates and is not there yet) counts toward neither; the others are judged as ever. */
+export async function judgeRedCheck(decide: Decide | null, check: CheckContext, repoPath: string | null, overrides: Record<string, DecisionOverrides>, log: (line: string) => void = () => {}, waive: readonly string[] = []): Promise<CheckAnswer & { recordId?: string }> {
+  const { verdict, answer, recordId, verdicts } = await judgeCheck(decide, "red_check", check, repoPath, overrides, log);
   if (!answer) return { verdict: "skipped", problems: [] };
-  const problems = problemsOf("red_check", answer);
-  return { verdict: verdict === "proceed" && problems.length > 0 ? "flag" : verdict, problems, ...(recordId ? { recordId } : {}) };
+  const kept = Object.fromEntries(Object.entries(answer).filter(([question]) => !waive.includes(question)));
+  const problems = problemsOf("red_check", kept);
+  const overall = waive.length > 0 && verdicts
+    ? Object.entries(verdicts).filter(([question]) => !waive.includes(question)).reduce<(typeof VERDICT_ORDER)[number]>((worst, [, v]) => (VERDICT_ORDER.indexOf(v) > VERDICT_ORDER.indexOf(worst) ? v : worst), "proceed")
+    : verdict;
+  return { verdict: overall === "proceed" && problems.length > 0 ? "flag" : overall, problems, ...(recordId ? { recordId } : {}) };
 }
 
 /** The machine's side of the mailbox: judges a red slice and a scope request, answers in files the

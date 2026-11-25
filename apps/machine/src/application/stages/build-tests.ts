@@ -4,6 +4,7 @@ import { type CheckContext, Plan, type PlanContext } from "@hardness/contracts";
 
 import { approvedScenarios } from "../../domain/stage-input.ts";
 import { isCommandCheck } from "../../domain/command-check.ts";
+import { plannedMissingModule } from "../../domain/planned-module.ts";
 import { isDocsOnly } from "../../domain/docs-only.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { isPlainRepoPath } from "@hardness/contracts";
@@ -31,7 +32,7 @@ export interface BuildTestsDeps {
   /** The test writer, as a sub-run; a second round carries what the first left out as `plan.review`. */
   runWriter: (context: StageContext, extra: { plan?: PlanContext }) => Promise<StageResult>;
   /** The red_check decision for one scenario's test; `skipped` when it did not answer in time (it never blocks). `problems` are what a confident no said is wrong. */
-  judgeRed: (check: CheckContext, repoPath: string | null) => Promise<{ verdict: string; problems: string[] }>;
+  judgeRed: (check: CheckContext, repoPath: string | null, waive?: readonly string[]) => Promise<{ verdict: string; problems: string[] }>;
   /** The source of the scenario's tagged test, read from the worktree, capped; null when it cannot be read. The judge reads it beside the writer's report. */
   readTest?: (worktree: string, file: string, scenario: string) => Promise<string | null>;
   /** Pushes the tests commit to the checkpoint ref before the implementer runs (a push that fails is a note, never a failure). */
@@ -242,10 +243,14 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
             await context.emit?.("scenario.red_check", { scenario: id, verdict: "proceed", asked: 0, flagged: 0, testRead: test !== null, kept: true });
             return { id, verdict: "proceed", problems: [] };
           }
-          const vote = await voteRed(deps.judgeRed, check, task.repoPath);
+          // New code's test cannot import what the plan creates yet: a missing module the plan names is the right reason, so that question is
+          // waived (red_check reads an import error as a wrong reason, and a card that adds a lambda failed every scenario on it). Whether the
+          // test would pass without the behaviour is still asked.
+          const planned = plannedMissingModule(output, touchpoints);
+          const vote = await voteRed(deps.judgeRed, check, task.repoPath, planned !== null ? ["right_reason"] : undefined);
           if (vote.verdict === "proceed") accepted.add(same);
           // The task's events say what each scenario's judge said, so an escalation is never only a sentence.
-          await context.emit?.("scenario.red_check", { scenario: id, verdict: vote.verdict, asked: vote.askings.length, flagged: vote.askings.filter((a) => a.flagged).length, testRead: test !== null, ...(vote.problems.length ? { problems: vote.problems.map((p) => safe(p).slice(0, 200)) } : {}) });
+          await context.emit?.("scenario.red_check", { scenario: id, verdict: vote.verdict, asked: vote.askings.length, flagged: vote.askings.filter((a) => a.flagged).length, testRead: test !== null, ...(planned !== null ? { planned } : {}), ...(vote.problems.length ? { problems: vote.problems.map((p) => safe(p).slice(0, 200)) } : {}) });
           return { id, verdict: vote.verdict, problems: vote.problems.map((p) => `${id}: ${safe(p).slice(0, 200)}`) };
         },
       );

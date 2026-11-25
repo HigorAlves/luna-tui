@@ -632,3 +632,36 @@ describe("Build's budget across the tests step", () => {
     expect(f.calls).toEqual([]);
   });
 });
+
+describe("a red that fails only because the code the plan creates is not there yet", () => {
+  const newModule = gate({
+    plan: { goal: "g", steps: [{ title: "The cart module", est_loc: 80, touchpoints: ["web/cart.ts"], acceptance: ["a"] }], acceptance_criteria: [{ id: "C1", text: "c1" }], out_of_scope: [], assumptions: [], rollback: "r", version: 3 },
+    cases: [{ id: "S1", title: "one", criterion: "c1", criterion_ref: "C1", approach: "a" }],
+  });
+
+  it("waives the wrong-reason question for a missing module the plan creates, and still asks whether the test is tautological (DISC-53: a new lambda's tests cannot import it yet)", async () => {
+    const waived: Array<readonly string[] | undefined> = [];
+    const rows: Array<[string, Record<string, unknown>]> = [];
+    // The judge says "wrong reason" unless that question is waived.
+    const f = fakes([tagged("S1")], { judgeRed: async (_c, _r, waive) => (waived.push(waive), waive?.includes("right_reason") ? { verdict: "proceed", problems: [] } : { verdict: "flag", problems: ["the test fails on an import"] }) }, [{ S1: "Error: Cannot find module 'web/cart.ts' imported from web/cart.test.ts" }]);
+    await buildTestsStep(f.deps)(context([newModule], { emit: async (kind: string, payload: Record<string, unknown>) => void rows.push([kind, payload]) }));
+    expect(waived).toEqual([["right_reason"]]);
+    expect(f.calls).toEqual(["writer", "commit", "checkpoint:red", "implement", "sweep"]);
+    expect(rows).toContainEqual(["scenario.red_check", expect.objectContaining({ scenario: "S1", verdict: "proceed", planned: "web/cart.ts" })]);
+  });
+
+  it("still escalates a tautological test whose module the plan creates", async () => {
+    const f = fakes([tagged("S1")], { judgeRed: async () => ({ verdict: "flag", problems: ["the test would still pass without the behaviour"] }) }, [{ S1: "Error: Cannot find module 'web/cart.ts'" }]);
+    const result = await buildTestsStep(f.deps)(context([newModule]));
+    expect(result).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringMatching(/S1: the test would still pass/) } });
+  });
+
+  it("still asks the judge about a missing module the plan does not create (a typo)", async () => {
+    const asked: string[] = [];
+    const waived: Array<readonly string[] | undefined> = [];
+    const f = fakes([tagged("S1")], { judgeRed: async (c, _r, waive) => (asked.push(c.scenario!.id), waived.push(waive), { verdict: "proceed", problems: [] }) }, [{ S1: "Error: Cannot find module 'web/crat.ts' imported from web/cart.test.ts" }]);
+    await buildTestsStep(f.deps)(context([newModule]));
+    expect(asked).toEqual(["S1"]);
+    expect(waived).toEqual([undefined]);
+  });
+});

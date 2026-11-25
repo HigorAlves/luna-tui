@@ -19,9 +19,12 @@ describe("judgeCheck", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining("finding_classify skipped: no jev"));
   });
 
-  it("is the pack's policy verdict over the answer", async () => {
+  it("is the pack's policy verdict over the answer, with each question's own verdict", async () => {
     const decide: Decide = async () => answer;
-    expect(await judgeCheck(decide, "finding_classify", check, "/repo", {})).toEqual({ verdict: "proceed", answer });
+    const result = await judgeCheck(decide, "finding_classify", check, "/repo", {});
+    expect(result).toMatchObject({ verdict: "proceed", answer });
+    expect(Object.values(result.verdicts ?? {}).length).toBeGreaterThan(0);
+    expect(Object.values(result.verdicts ?? {}).every((v) => v === "proceed")).toBe(true);
   });
 
   it("applies the repo's override for the pack", async () => {

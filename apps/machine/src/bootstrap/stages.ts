@@ -426,9 +426,9 @@ export async function buildRealStages(
     implementing: buildTestsStep({
       implement: (context, extra) => runAgent(deps, context, "implementing", extra),
       runWriter: (context, extra) => runAgent(deps, context, "build_tests", extra.plan ? { plan: extra.plan } : {}),
-      judgeRed: async (check, repoPath) => {
+      judgeRed: async (check, repoPath, waive) => {
         const policy = repoPath ? await policies.for(repoPath) : null;
-        return judgeRedCheck(buildDecisions?.decide ?? null, check, repoPath, policy?.decisions ?? {});
+        return judgeRedCheck(buildDecisions?.decide ?? null, check, repoPath, policy?.decisions ?? {}, undefined, waive);
       },
       // The user's checkout is the source, never the card's folder: a card cannot turn its own scenario into a check.
       repoCommands: async (repoPath) => readRepoCommands(repoPath, ((await policies.for(repoPath)).checks ?? []).map((c) => c.run)),
