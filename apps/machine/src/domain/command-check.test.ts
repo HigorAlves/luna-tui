@@ -30,3 +30,23 @@ describe("isCommandCheck: a workspace package's scripts", () => {
     expect(isCommandCheck({ when: "pnpm --filter site deploy runs", then: "it exits 0" }, commands)).toBe(false);
   });
 });
+
+describe("isCommandCheck: a big monorepo's scenarios (DISC-53's S30, S34, S36)", () => {
+  const commands = repoCommandsOf(["lint", "check-types", "test:unit"], ["yarn lint"], [{ name: "@discover/domain", dir: "packages/domain", scripts: ["test:unit", "check-types"] }], ["scripts/cycle-inventory.mts", "scripts/deploy/release.sh"]);
+  it("takes a script file of the repo run through tsx, node or a shell, when it only has to pass (S36)", () => {
+    expect(isCommandCheck({ when: "yarn tsx scripts/cycle-inventory.mts --check is run", then: "it exits 0" }, commands)).toBe(true);
+    expect(isCommandCheck({ when: "bash scripts/deploy/release.sh runs", then: "it succeeds" }, commands)).toBe(true);
+  });
+  it("takes a script named bare in the sentence when its name is one only a script has (S30)", () => {
+    expect(isCommandCheck({ when: "unsharded test:unit runs in @discover/domain and @discover/application", then: "it exits 0 with at least 85% on all four metrics for the three globs" }, commands)).toBe(true);
+  });
+  it("still asks for a test when a command must report a failure (S34), and never takes a file the repo does not have", () => {
+    expect(isCommandCheck({ when: "lint runs", then: "lambdaBoundary reports an error" }, commands)).toBe(false);
+    expect(isCommandCheck({ when: "yarn tsx scripts/not-here.mts runs", then: "it exits 0" }, commands)).toBe(false);
+    // A plain word is not taken bare: "the test runs" is prose, not the `test` script.
+    expect(isCommandCheck({ when: "the lint runs", then: "it passes" }, repoCommandsOf(["lint"], []))).toBe(false);
+  });
+  it("knows a workspace two folders down by its name", () => {
+    expect(isCommandCheck({ when: "yarn workspace @discover/domain check-types runs", then: "it exits 0" }, commands)).toBe(true);
+  });
+});
