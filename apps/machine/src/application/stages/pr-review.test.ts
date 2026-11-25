@@ -26,10 +26,10 @@ const node = {
   commits: { nodes: [] },
 };
 
-function setup(answer: Record<string, unknown> | null, opts: { postFails?: boolean; title?: string; jira?: Jira; projects?: () => Promise<string[]>; links?: PrReviewDeps["links"] } = {}) {
+function setup(answer: Record<string, unknown> | null, opts: { postFails?: boolean; title?: string; jira?: Jira; projects?: () => Promise<string[]>; links?: PrReviewDeps["links"]; localDiff?: PrReviewDeps["localDiff"]; githubDiff?: () => Promise<string> } = {}) {
   const github = fakeGitHub({
     prFacts: async () => (opts.title ? { ...node, title: opts.title } : node) as never,
-    prDiff: async () => "diff --git a/a.ts b/a.ts\n+export const x = 1;\n",
+    prDiff: opts.githubDiff ?? (async () => "diff --git a/a.ts b/a.ts\n+export const x = 1;\n"),
     prFiles: async () => [{ path: "a.ts", additions: 1, deletions: 0 }],
     prComments: async () => [{ path: "a.ts", line: 1, author: "x", body: "old" }],
     postReview: async () => {
@@ -56,7 +56,7 @@ function setup(answer: Record<string, unknown> | null, opts: { postFails?: boole
     approvals: [],
     signal: new AbortController().signal,
   } as StageContext;
-  return { run: prReviewRunner({ github, runPack, ...(opts.jira ? { jira: opts.jira } : {}), ...(opts.projects ? { projects: opts.projects } : {}), ...(opts.links ? { links: opts.links } : {}) }), context, github, review: () => seen };
+  return { run: prReviewRunner({ github, runPack, ...(opts.localDiff ? { localDiff: opts.localDiff } : {}), ...(opts.jira ? { jira: opts.jira } : {}), ...(opts.projects ? { projects: opts.projects } : {}), ...(opts.links ? { links: opts.links } : {}) }), context, github, review: () => seen };
 }
 
 const posted = (github: ReturnType<typeof fakeGitHub>) => github.postReview.mock.calls;
@@ -368,5 +368,70 @@ describe("the comment cap", () => {
     expect(kept.slice(0, 2)).toEqual([20, 19]);
     expect(kept.slice(2)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
     expect(capComments(comments.slice(0, 3), findings)).toHaveLength(3);
+  });
+});
+
+describe("reading the PR's diff", () => {
+  const bigGithubError = () => Promise.reject(new Error("reading the diff of o/a#12 failed (406): Sorry, the diff exceeded the maximum number of lines (20000)"));
+  const answer = { verdict: "approve", summary: "Fine.", findings: [], comments: [] };
+
+  it("reads it with host git in the card's workspace, never asking GitHub, and says where it came from", async () => {
+    const githubDiff = vi.fn(bigGithubError);
+    const localDiff = vi.fn(async () => "diff --git a/a.ts b/a.ts\n+local\n");
+    const { run, context, review } = setup(answer, { githubDiff, localDiff });
+    const result = await run(context);
+    expect(localDiff).toHaveBeenCalledWith({ repoPath: "/r/a", baseRef: "main", worktree: "/wt" });
+    expect(githubDiff).not.toHaveBeenCalled();
+    expect(String((review() as { diff: string }).diff)).toContain("+local");
+    expect(result).toMatchObject({ outcome: "pass", detail: { diffSource: "local" } });
+  });
+
+  it("falls back to GitHub's diff when host git cannot make one, and says so", async () => {
+    const localDiff = vi.fn(async () => {
+      throw new Error("git fetch origin main failed: offline");
+    });
+    const { run, context, review } = setup(answer, { localDiff });
+    const result = await run(context);
+    expect(String((review() as { diff: string }).diff)).toContain("+export const x = 1;");
+    expect(result.detail).toMatchObject({ diffSource: "github", diffNote: expect.stringContaining("offline") });
+  });
+
+  it("fails with both reasons when neither can read the diff", async () => {
+    const localDiff = async () => {
+      throw new Error("no merge base");
+    };
+    const { run, context } = setup(answer, { githubDiff: bigGithubError, localDiff });
+    const result = await run(context);
+    expect(result.outcome).toBe("fail");
+    expect(String((result.detail as { error: string }).error)).toMatch(/406.*no merge base|no merge base.*406/s);
+  });
+});
+
+describe("leaving out what nobody reviews", () => {
+  const answer = { verdict: "approve", summary: "Fine.", findings: [], comments: [] };
+  const sec = (path: string, n: number) => `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1,${n} @@\n` + Array.from({ length: n }, (_, i) => `+line ${i}`).join("\n") + "\n";
+
+  it("reads the files of the PR from its diff, hands the reviewers none of the lockfile or generated files, and lists them with their line counts", async () => {
+    const githubDiff = async () => sec("src/a.ts", 2) + sec("pnpm-lock.yaml", 500) + sec("dist/app.min.js", 3);
+    const { run, context, review } = setup(answer, { githubDiff });
+    const result = await run(context);
+    const seen = review() as { diff: string; files: Array<{ path: string; additions: number }>; skipped: unknown };
+    expect(seen.diff).toContain("src/a.ts");
+    expect(seen.diff).not.toContain("pnpm-lock.yaml");
+    expect(seen.diff).not.toContain("app.min.js");
+    expect(seen.files).toEqual([{ path: "src/a.ts", additions: 2, deletions: 0 }]);
+    const skipped = [
+      { path: "pnpm-lock.yaml", lines: 504, reason: "lockfile" },
+      { path: "dist/app.min.js", lines: 7, reason: "generated" },
+    ];
+    expect(seen.skipped).toEqual(skipped);
+    expect(result.detail).toMatchObject({ skipped });
+  });
+
+  it("omits the skipped list when every file is read", async () => {
+    const { run, context, review } = setup(answer);
+    const result = await run(context);
+    expect(review()).not.toHaveProperty("skipped");
+    expect(result.detail).not.toHaveProperty("skipped");
   });
 });

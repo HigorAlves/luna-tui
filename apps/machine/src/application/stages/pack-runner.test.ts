@@ -2183,6 +2183,20 @@ describe("the ui-designer's own run (RFC 0013, phase 5)", () => {
     expect(refused.outcome).toBe("fail");
     expect(JSON.stringify(refused.detail)).toContain("refusing to run implementing in a workspace the caller made");
   });
+
+  it("names the container of each run in a workspace of its own apart, so the shards of one pack never collide on one name", async () => {
+    const { cardPath } = await made();
+    const review = { pr: { repo: "o/a", number: 1, url: "u", title: "t", body: null, author: "a", baseRef: "main", headRef: "h" }, diff: "d", files: [], existingComments: [] } as never;
+    const names: string[] = [];
+    for (const n of [1, 2]) {
+      const ws = { path: `${cardPath}-shard-${n}.review`, branch: `luna-review/shard-${n}` };
+      await ensureClone(repo, ws);
+      await runAgent(deps(box()), { ...context("reviewing"), runId: `r1-shard-${n}` }, "reviewing", { workspace: ws, review });
+      names.push(seen!.name);
+    }
+    expect(names[0]).not.toBe(names[1]);
+    for (const name of names) expect(name).toMatch(/^hardness-[0-9a-f]{8}-reviewing-1-[0-9a-f]{6}$/);
+  });
 });
 
 describe("the implementer's side of the ui-designer (RFC 0013, phase 5)", () => {

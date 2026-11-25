@@ -14,11 +14,18 @@ export interface PassWorkspace {
   branch: string;
 }
 
+/** A host folder a pass reads read-only in its container (the big PR's diff, one file per changed file). */
+export interface PassMount {
+  host: string;
+  container: string;
+  readOnly: true;
+}
+
 export interface HelperDeps {
   /** Runs one pass's pack as a sub-run beside the stage's own pack, in the workspace made for it when `workspace` is given. */
-  run: (context: StageContext, pack: ReviewHelperPack, review: ReviewContext, workspace?: PassWorkspace) => Promise<StageResult>;
+  run: (context: StageContext, pack: ReviewHelperPack, review: ReviewContext, workspace?: PassWorkspace, mounts?: readonly PassMount[]) => Promise<StageResult>;
   /** Makes and removes each pass's own workspace. A pass whose workspace cannot be made becomes a note; the others go on. Absent, passes run without one (and must not run at once). */
-  workspace?: { make: (context: StageContext, pack: ReviewHelperPack) => Promise<PassWorkspace>; remove: (workspace: PassWorkspace) => void | Promise<void> };
+  workspace?: { make: (context: StageContext, label: string) => Promise<PassWorkspace>; remove: (workspace: PassWorkspace) => void | Promise<void> };
   /** How many passes run at once: all four by default. */
   concurrency?: number;
 }
@@ -42,7 +49,7 @@ export interface HelpersOutcome {
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 /** Runs every review pass on `review`; never throws. The passes come back in the order of `REVIEW_HELPER_PACKS`. */
-export async function runHelpers(deps: HelperDeps, context: StageContext, review: ReviewContext): Promise<HelpersOutcome> {
+export async function runHelpers(deps: HelperDeps, context: StageContext, review: ReviewContext, mounts?: readonly PassMount[]): Promise<HelpersOutcome> {
   const limit = Math.max(1, deps.concurrency ?? REVIEW_HELPER_PACKS.length);
   const results: PromiseSettledResult<StageResult>[] = new Array(REVIEW_HELPER_PACKS.length);
   let next = 0;
@@ -53,7 +60,7 @@ export async function runHelpers(deps: HelperDeps, context: StageContext, review
       let made: PassWorkspace | undefined;
       try {
         if (deps.workspace) made = await deps.workspace.make(sub, pack);
-        results[i] = { status: "fulfilled", value: await deps.run(sub, pack, review, made) };
+        results[i] = { status: "fulfilled", value: await deps.run(sub, pack, review, made, mounts) };
       } catch (error) {
         results[i] = { status: "rejected", reason: error };
       } finally {

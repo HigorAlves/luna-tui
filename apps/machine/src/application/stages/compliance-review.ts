@@ -6,6 +6,7 @@ import { COMPLIANCE_CONTROL_CHARS, COMPLIANCE_CONTROL_PAGES, ComplianceReviewAns
 
 import type { StageContext, StageResult } from "../ports.ts";
 import type { Wiki } from "../wiki.ts";
+import type { PassMount } from "./review-helpers.ts";
 
 export interface ComplianceDeps {
   /** The regimes the repo declares in luna.yaml; none skips the review. */
@@ -13,7 +14,7 @@ export interface ComplianceDeps {
   /** Where the control pages are read from. */
   wiki: Wiki;
   /** Runs the compliance_review pack, as a sub-run beside the stage's own pack. */
-  run: (context: StageContext, review: ReviewContext | null, compliance: ComplianceReviewContext) => Promise<StageResult>;
+  run: (context: StageContext, review: ReviewContext | null, compliance: ComplianceReviewContext, mounts?: readonly PassMount[]) => Promise<StageResult>;
 }
 
 export interface ComplianceOutcome {
@@ -34,7 +35,7 @@ export const citation = (f: { clause: string; control: string | null }): string 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 /** Runs the compliance review of `review` for the repo `slug`; null when the repo declares no regime. */
-export async function runCompliance(deps: ComplianceDeps, context: StageContext, slug: string, review: ReviewContext | null): Promise<ComplianceOutcome | null> {
+export async function runCompliance(deps: ComplianceDeps, context: StageContext, slug: string, review: ReviewContext | null, mounts?: readonly PassMount[]): Promise<ComplianceOutcome | null> {
   const regimes = [...(await deps.regimes(context.task.repoPath ?? null).catch(() => []))];
   if (regimes.length === 0) return null;
   const notes: string[] = [];
@@ -65,7 +66,7 @@ export async function runCompliance(deps: ComplianceDeps, context: StageContext,
   const skipped = (why: string): ComplianceOutcome => ({ findings: [], comments: [], summary: "", regimesRun: [], notes: [...notes, `the compliance review did not run: ${why}`], ...(usage ? { usage } : {}) });
   let pack: StageResult;
   try {
-    pack = await deps.run({ ...context, runId: `${context.runId}-compliance`, started: undefined, resume: undefined, engine: undefined }, review, { repo: slug, regimes, controls });
+    pack = await deps.run({ ...context, runId: `${context.runId}-compliance`, started: undefined, resume: undefined, engine: undefined }, review, { repo: slug, regimes, controls }, mounts);
   } catch (error) {
     return skipped(messageOf(error));
   }
