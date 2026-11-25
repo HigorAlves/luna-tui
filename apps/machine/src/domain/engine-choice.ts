@@ -2,7 +2,7 @@
 // luna.yaml, else the pack's default. An engine the pack does not allow is never run, and one
 // whose credential this machine lacks gives way to the default; either way the reason says so,
 // for the task's log. Pure: the caller says which credentials are missing. See RFC 0002.
-import { type CredentialOwner, type Effort, type EngineId, PACKS, type Pack, type PackId, type StageEfforts, type StageEngines, credentialOwner, effortProblem, visionProblem } from "@hardness/contracts";
+import { type CredentialOwner, type Effort, type EngineId, PACKS, type Pack, type PackId, type StageEfforts, type StageEngines, credentialOwner, effortProblem, isReviewHelper, visionProblem } from "@hardness/contracts";
 
 import { packStates } from "./packs.ts";
 
@@ -133,8 +133,8 @@ export function chooseEffort(opts: {
 export function effortsProblem(efforts: StageEfforts): string | null {
   for (const pack of Object.keys(efforts) as PackId[]) {
     if (PACKS[pack].kind === "decision") return `${pack}: ${pack} is a decision pack and takes no effort`;
-    // An on-demand pack never runs in a task, so nothing would apply the entry.
-    if (packStates(pack).length === 0) return `${pack}: runs on its own, not in a task`;
+    // An on-demand pack never runs in a task, so nothing would apply the entry. A review pass runs inside the review stage, so its entry applies.
+    if (packStates(pack).length === 0 && !isReviewHelper(pack)) return `${pack}: runs on its own, not in a task`;
   }
   return null;
 }

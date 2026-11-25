@@ -55,7 +55,7 @@ import { PACKAGE_MANAGER_CONFIG, configFilesChanged } from "../application/insta
 import { InstallFailedError, type InstallInput, type InstallOutcome, ensureInstalled } from "../application/install.ts";
 import { checkGit } from "../adapters/git/helper.ts";
 import { removeNestedRepositories } from "../adapters/git/machine-repo.ts";
-import { ensureClone, isClone, removeClone } from "../adapters/git/clone.ts";
+import { ensureClone, inUseClones, isClone, removeClone, reviewClone } from "../adapters/git/clone.ts";
 import { type ProofRig, proofAppDeps } from "../application/config-proof.ts";
 import type { DesignBudget } from "../domain/design-budget.ts";
 import type { Waiver } from "../domain/design-parity.ts";
@@ -657,6 +657,37 @@ export async function buildRealStages(
     reviewing: prReviewRunner({
       github,
       compliance,
+      // The security, migration, infrastructure and second-opinion passes: sub-runs of their own packs, all at once beside the main review. Each reads a read-only clone of its own, cloned from the card's repository at the PR's head (what the main reviewer reads), so the card's folder is never touched; finding_confirm is bound late like Verify's decisions.
+      helpers: {
+        workspace: {
+          make: async (subContext, pack) => {
+            const repoPath = subContext.task.repoPath;
+            const cardPath = subContext.task.worktreePath;
+            if (!repoPath || !cardPath) throw new Error("the task has no PR workspace to review");
+            const path = join(config.worktreesDir, basename(repoPath), `${subContext.runId}.review`);
+            const branch = `luna-review/${pack}`;
+            removeClone(path);
+            inUseClones.add(path);
+            try {
+              await reviewClone(cardPath, path, branch);
+            } catch (error) {
+              inUseClones.delete(path);
+              removeClone(path);
+              throw error;
+            }
+            return { path, branch };
+          },
+          remove: (workspace) => {
+            removeClone(workspace.path);
+            inUseClones.delete(workspace.path);
+          },
+        },
+        run: (subContext, pack, review, workspace) => runAgent(deps, subContext, pack, { review, ...(workspace ? { workspace } : {}) }),
+        get decide() {
+          return verifyDecisions?.decide ?? null;
+        },
+        decisions: async (repoPath) => (repoPath ? (await policies.for(repoPath)).decisions : {}),
+      },
       runPack: (context, review) => runAgent(deps, context, "reviewing", { review }),
       ...(reviewLinks ? { links: reviewLinks } : {}),
       ...(jira

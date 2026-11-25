@@ -1,0 +1,40 @@
+{
+  "schema": 3,
+  "stage": "finding_confirm",
+  "pack": "finding_confirm",
+  "attempt": 1,
+  "task": {
+    "id": "finding-confirm",
+    "title": "Finding confirm",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "finding",
+      "finding": {
+        "path": "src/cart/export.ts",
+        "line": 4,
+        "severity": "bug",
+        "title": "Loop skips the last row",
+        "body": "`i < rows.length - 1` never reaches the last row, so the export drops it.",
+        "confidence": 0.85
+      },
+      "excerpt": "1  export function toCsv(rows) {\n2    const out = [];\n3    for (let i = 0; i < rows.length - 1; i++) {\n4      out.push(rows[i].join(\",\"));\n5    }\n6    return out.join(\"\\n\");\n7  }"
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

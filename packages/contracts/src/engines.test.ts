@@ -131,7 +131,7 @@ describe("the engines each pack may run on", () => {
   });
 
   it("keeps today's subagents on their engines, and gives the verifier a second opinion on Codex", () => {
-    expect(helpersOn(PACKS.reviewing, "claude")).toEqual([{ role: "security-reviewer", engine: "claude:opus" }, { role: "migration-reviewer", engine: "claude:sonnet" }, { role: "iac-reviewer", engine: "claude:sonnet" }]);
+    expect(helpersOn(PACKS.reviewing, "claude")).toEqual([]);
     expect(helpersOn(PACKS.addressing, "claude")).toEqual([{ role: "reply-drafter", engine: "claude:haiku" }]);
     expect(helpersOn(PACKS.triage, "claude")).toEqual([{ role: "reply-drafter", engine: "claude:haiku" }]);
     expect(helpersOn(PACKS.verifying, "claude")).toEqual([{ role: "second-opinion", engine: "codex:sol" }, { role: "migration-reviewer", engine: "claude:sonnet" }, { role: "iac-reviewer", engine: "claude:sonnet" }]);
@@ -141,7 +141,7 @@ describe("the engines each pack may run on", () => {
   it("puts a helper on the stage's own subscription when it runs on eve, and keeps a second opinion in another family", () => {
     expect(helpersOn(PACKS.triage, "eve")).toEqual([{ role: "reply-drafter", engine: "codex:luna" }]);
     expect(helpersOn(PACKS.verifying, "eve")).toEqual([{ role: "second-opinion", engine: "claude:opus" }, { role: "migration-reviewer", engine: "claude:sonnet" }, { role: "iac-reviewer", engine: "claude:sonnet" }]);
-    expect(helpersOn(PACKS.reviewing, "eve")).toEqual([{ role: "security-reviewer", engine: "claude:opus" }, { role: "migration-reviewer", engine: "claude:sonnet" }, { role: "iac-reviewer", engine: "claude:sonnet" }]);
+    expect(helpersOn(PACKS.reviewing, "eve")).toEqual([]);
     expect(helpersOn(PACKS.triage_signals, "eve")).toEqual([]);
   });
 

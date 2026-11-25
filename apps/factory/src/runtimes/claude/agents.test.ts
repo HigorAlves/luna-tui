@@ -18,17 +18,16 @@ describe("agent definitions", () => {
     }
   });
 
-  it("gives reviewing a security reviewer it can dispatch, read-only, and addressing a reply drafter", () => {
+  it("gives reviewing no subagents, review_security its own read-only role, and addressing a reply drafter", () => {
     const review = agentDefinitions(PACKS.reviewing, ROLES, "claude-opus-5-5");
-    expect(Object.keys(review)).toEqual(["pr-reviewer", "security-reviewer", "migration-reviewer", "iac-reviewer"]);
+    expect(Object.keys(review)).toEqual(["pr-reviewer"]);
     expect(review["pr-reviewer"]!.tools).toBeUndefined();
     expect(review["pr-reviewer"]!.model).toBe("claude-opus-5-5");
     expect(review["pr-reviewer"]!.description).toMatch(/pull request/);
-    const security = review["security-reviewer"]!;
-    expect(security.model).toBe("claude-opus-5-5");
-    expect(security.tools).toEqual(expect.arrayContaining(["Read", "Grep", "Glob"]));
-    expect(security.tools).not.toEqual(expect.arrayContaining(["Write"]));
-    expect(security.skills).toEqual(["luna-factory:review-contract"]);
+    const pass = agentDefinitions(PACKS.review_security, ROLES, "claude-sonnet-5-5");
+    expect(Object.keys(pass)).toEqual(["security-reviewer"]);
+    const security = pass["security-reviewer"]!;
+    expect(security.model).toBe("claude-sonnet-5-5");
     expect(security.prompt).toMatch(/exploit/i);
 
     const address = agentDefinitions(PACKS.addressing, ROLES, "claude-sonnet-5-5");
@@ -39,18 +38,19 @@ describe("agent definitions", () => {
     expect(drafter.prompt).toMatch(/ACTION/);
   });
 
-  it("gives reviewing and verifying a read-only migration and infrastructure reviewer, and names both with their globs in the prompts", () => {
-    for (const [pack, prompt, role] of [["reviewing", "reviewing.md", "pr-reviewer"], ["verifying", "verifying.md", "verifier"]] as const) {
-      const defs = agentDefinitions(PACKS[pack], ROLES, "claude-opus-5-5");
-      for (const helper of ["migration-reviewer", "iac-reviewer"]) {
-        expect(defs[helper]!.model, `${pack}: ${helper}`).toBe("claude-sonnet-5-5");
-        expect(defs[helper]!.tools).toEqual(["Read", "Glob", "Grep"]);
-      }
-      for (const file of [join(ROOT, "prompts", prompt), join(ROLES, role, "role.md")].filter((f) => pack === "verifying" || f.endsWith(prompt))) {
-        const text = readFileSync(file, "utf8");
-        for (const needle of ["`migration-reviewer`", "`iac-reviewer`", "`**/migrations/**`", "`*.sql`", "`**/prisma/schema.prisma`", "`*.tf`", "`**/k8s/**`", "`Dockerfile*`", "`docker-compose*.y*ml`", "AWSTemplateFormatVersion"]) expect(text, `${file}: ${needle}`).toContain(needle);
-      }
+  it("gives verifying a read-only migration and infrastructure reviewer, and names both with their globs in its prompts; reviewing no longer dispatches them", () => {
+    const defs = agentDefinitions(PACKS.verifying, ROLES, "claude-opus-5-5");
+    for (const helper of ["migration-reviewer", "iac-reviewer"]) {
+      expect(defs[helper]!.model, helper).toBe("claude-sonnet-5-5");
+      expect(defs[helper]!.tools).toEqual(["Read", "Glob", "Grep"]);
     }
+    for (const file of [join(ROOT, "prompts", "verifying.md"), join(ROLES, "verifier", "role.md")]) {
+      const text = readFileSync(file, "utf8");
+      for (const needle of ["`migration-reviewer`", "`iac-reviewer`", "`**/migrations/**`", "`*.sql`", "`**/prisma/schema.prisma`", "`*.tf`", "`**/k8s/**`", "`Dockerfile*`", "`docker-compose*.y*ml`", "AWSTemplateFormatVersion"]) expect(text, `${file}: ${needle}`).toContain(needle);
+    }
+    const reviewing = readFileSync(join(ROOT, "prompts", "reviewing.md"), "utf8");
+    expect(reviewing).not.toContain("Agent tool");
+    expect(reviewing).toContain("on every review");
     expect(defsFor("migration-reviewer")).toMatch(/CONCURRENTLY[\s\S]*GDPR Art\. 5\(1\)\(e\)/);
     expect(defsFor("iac-reviewer")).toMatch(/0\.0\.0\.0\/0[\s\S]*SOC2 CC6\.6/);
   });

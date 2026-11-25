@@ -168,7 +168,7 @@ const answerOf = (detail: Record<string, unknown> | undefined): Record<string, u
 };
 
 /** The file around a finding's line, as it is in the worktree; empty when the path is not under it or has no line. */
-async function excerptOf(worktree: string, finding: Finding): Promise<string> {
+export async function excerptOf(worktree: string, finding: Finding): Promise<string> {
   if (!finding.path || finding.line < 1) return "";
   const path = await pathUnder(worktree, finding.path);
   const text = path ? await readBounded(path, EXCERPT_FILE_CAP) : null;

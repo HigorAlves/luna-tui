@@ -160,6 +160,8 @@ export const PackId = z.enum([
   "escalation_reason",
   // Decisions on Verify's own work (a check context, run on demand): how severe a review finding is, why a browser run failed.
   "finding_classify",
+  // Confirms a finding a review helper made that the main reviewer did not.
+  "finding_confirm",
   "e2e_failure_cause",
   // A decision on what kind of CI failure a red job is (a check context, run on demand): a real failure, a flake, an environment failure, a drift from the base.
   "ci_failure_class",
@@ -236,6 +238,11 @@ export const PackId = z.enum([
   "change_exceptions",
   // Reviews a PR's diff against the regimes the repo declares (luna.yaml `compliance`): a lead that dispatches one reviewer per regime; runs beside reviewing and verifying, never as their helper.
   "compliance_review",
+  // The dedicated passes of a PR review (security, migration, infrastructure, a second opinion): each a sub-run beside `reviewing`, never a stage of its own.
+  "review_security",
+  "review_migration",
+  "review_iac",
+  "review_second",
   // Suggests, for each flag of a GitHub org's quarterly access review, whether to keep, remove, reduce or investigate the access; no tools, no worktree, on demand.
   "access_review",
   // A decision at the incident job (RFC 0008, wave 5): did an incident expose personal data or health information, whose, and how many people.

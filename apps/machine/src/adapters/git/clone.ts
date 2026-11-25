@@ -285,6 +285,16 @@ export async function freshClone(cardPath: string, sha: string, branch: string, 
 }
 
 /**
+ * A read-only workspace of its own for one review pass, at the card's head as it is now: a fresh clone of the card's repository (the
+ * PR's head, as `ensurePrClone` seeded it), on `branch`, at `path`. The card's own folder and repository are only read. Passes run at
+ * once beside the main reviewer, and each run rebuilds its folder's scratch git, so they cannot share the card's. The caller removes it.
+ */
+export async function reviewClone(cardPath: string, path: string, branch: string): Promise<void> {
+  if (!isClone(cardPath)) throw new Error(`the card has no workspace at ${cardPath} yet`);
+  await freshClone(cardPath, await headCommit(cardPath), branch, path);
+}
+
+/**
  * Brings the commits made in a fresh workspace back into the card's: only as a fast-forward of the card's branch from `from`
  * (the commit the fresh workspace was made at). The card's branch must still be at `from` and the fresh branch must descend
  * from it; anything else is refused and nothing of the card changes. Both repositories are the machine's.
@@ -342,11 +352,11 @@ export const hostBaselineWorkspace = {
 
 /**
  * What a crash can leave and nothing else removes, cleared at boot: the scratch folders beside the work folders (`<folder>.scratch`, where an
- * agent's repository is made), a ui-designer helper's clones (`<folder>.helper-<slice>-<attempt>`) and the copies of bundles the host was reading (`<state>/repos/in`). Answers what it removed.
+ * agent's repository is made), a ui-designer helper's clones (`<folder>.helper-<slice>-<attempt>`), a review pass's (`<run>.review`) and the copies of bundles the host was reading (`<state>/repos/in`). Answers what it removed.
  */
 export async function removeLeftovers(workspacesDir: string): Promise<string[]> {
   const removed: string[] = [];
-  const HELPER_CLONE = /\.helper-\d+-\d+$/;
+  const HELPER_CLONE = /\.(helper-\d+-\d+|review)$/;
   const drop = (path: string) => {
     rmSync(path, { recursive: true, force: true });
     removed.push(path);
