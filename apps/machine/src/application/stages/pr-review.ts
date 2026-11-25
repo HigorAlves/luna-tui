@@ -322,7 +322,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     // No commit since the review we read: there is no new code, so no pass runs and no new finding is made; the reviewer runs only for a thread
     // that still needs a first answer at this head.
     const quiet = plan?.quiet === true;
-    const reviewerNeeded = !quiet || plan!.rereview.threads.some((t) => t.settle === "unsettled");
+    const reviewerNeeded = !quiet || plan!.rereview.threads.some((t) => t.settle === "unsettled" || t.settle === "question");
     const silent: StageResult = { outcome: "pass", detail: { answer: { verdict: "comment", summary: "", findings: [], comments: [] } } };
     // A diff too big for one reviewer is read in shards by module; the passes and the compliance lead read the whole PR once, as files.
     const limits = (await deps.limits?.(context.task.repoPath ?? null).catch(() => null)) ?? DEFAULT_LIMITS;
@@ -432,6 +432,23 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
         // Answered since the review we read and no new commit: left as it is, still open.
         if (t.settle === "answered") {
           stillOpen.push({ severity: "question" });
+          continue;
+        }
+        // An acknowledgement ("will fix") gets no reply: the thread stays open until a later commit addresses it.
+        if (t.settle === "acknowledged") {
+          stillOpen.push({ severity: "question" });
+          continue;
+        }
+        // A question is answered directly by the reviewer and the thread stays open: only a defect the question exposed counts above question level.
+        if (t.settle === "question") {
+          const q = answered.get(t.id);
+          if (!q) {
+            stillOpen.push({ severity: "question" });
+            continue;
+          }
+          const severity = ["bug", "security", "api-surface", "test"].includes(q.severity) ? q.severity : "question";
+          threadReplies.push({ threadId: t.id, body: q.body.trim() || "See the code above.", resolve: false, by: "reviewer", severity, ...where });
+          stillOpen.push({ severity });
           continue;
         }
         if (t.settle !== "unsettled") {

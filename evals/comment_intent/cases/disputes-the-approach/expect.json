@@ -34,6 +34,11 @@
         "question": "intent",
         "label": "change_request",
         "why": "It disputes the approach. It is not: asks for a change in behaviour or code."
+      },
+      {
+        "question": "intent",
+        "label": "acknowledgement",
+        "why": "The comment asks or disputes something. It is not: agrees or thanks, with nothing to answer and nothing to change yet."
       }
     ],
     "second": {

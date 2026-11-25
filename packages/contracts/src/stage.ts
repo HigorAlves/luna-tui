@@ -380,8 +380,10 @@ export const ReviewContext = z.object({
           line: z.number().int().nullable(),
           comments: z.array(z.object({ author: z.string(), ours: z.boolean(), body: z.string() })),
           /** fixed and reply_holds are settled by the decision; unsettled is the reviewer's to answer; answered is one we already replied to since a review that read
-           *  the PR's head, so with no new commit it is not answered again (the review and the author, or the author's agent, would answer each other forever). */
-          settle: z.enum(["fixed", "reply_holds", "unsettled", "answered"]),
+           *  the PR's head, so with no new commit it is not answered again (the review and the author, or the author's agent, would answer each other forever).
+           *  question is an author reply `comment_intent` read as a question: the reviewer answers it directly and the thread stays open. acknowledged is a reply
+           *  that only agrees ("will fix"): no reply from us, and the thread resolves only when a later commit addresses it. */
+          settle: z.enum(["fixed", "reply_holds", "unsettled", "answered", "question", "acknowledged"]),
         }),
       ),
     })

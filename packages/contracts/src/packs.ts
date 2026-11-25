@@ -893,6 +893,7 @@ const COMMENT_INTENT_QUESTIONS: QuestionSet = {
       nit: "a small change nobody would block on",
       change_request: "asks for a change in behaviour or code",
       disagreement: "disputes the approach or the plan",
+      acknowledgement: "agrees or thanks, with nothing to answer and nothing to change yet: 'will fix', 'good catch', 'ok', 'done'",
     },
   },
 };

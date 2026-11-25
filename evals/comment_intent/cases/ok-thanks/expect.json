@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "intent.choice",
+      "value": "acknowledgement"
+    }
+  ],
+  "rubric": "\"ok, thanks!\" is a thank-you with nothing to answer or change.",
+  "label": {
+    "intent": {
+      "choice": "acknowledgement"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "intent": "agrees or thanks, with nothing to answer and nothing to change yet: 'will fix', 'good catch', 'ok', 'done'"
+    },
+    "why": "\"ok, thanks!\" is a thank-you with nothing to answer or change.",
+    "ruledOut": [
+      {
+        "question": "intent",
+        "label": "question",
+        "why": "It only agrees. It is not: asks something the pack or the diff can answer."
+      },
+      {
+        "question": "intent",
+        "label": "nit",
+        "why": "It only agrees. It is not: a small change nobody would block on."
+      },
+      {
+        "question": "intent",
+        "label": "change_request",
+        "why": "It only agrees. It is not: asks for a change in behaviour or code."
+      },
+      {
+        "question": "intent",
+        "label": "disagreement",
+        "why": "It only agrees. It is not: disputes the approach or the plan."
+      },
+      {
+        "question": "intent",
+        "label": "acknowledgement",
+        "why": "The comment asks or disputes something. It is not: agrees or thanks, with nothing to answer and nothing to change yet."
+      }
+    ],
+    "second": {
+      "label": {
+        "intent": {
+          "choice": "acknowledgement"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

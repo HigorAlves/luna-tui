@@ -183,7 +183,7 @@ describe("the plan stage's decision packs", () => {
     const packs = PACKS as Record<string, unknown>;
     const choices: Record<string, [string, string[]]> = {
       event_class: ["event", ["ci_flaky", "ci_real", "conflict", "base_moved", "review_comment", "freeze", "blocked_by_other_pr", "parent_merged", "parent_changed", "noise"]],
-      comment_intent: ["intent", ["question", "nit", "change_request", "disagreement"]],
+      comment_intent: ["intent", ["question", "nit", "change_request", "disagreement", "acknowledgement"]],
       fix_scope: ["scope", ["in_place", "re_verify_partial", "re_plan"]],
       evidence_valid: ["validity", ["valid", "refresh_text", "refresh_media"]],
     };

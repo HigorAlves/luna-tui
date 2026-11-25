@@ -472,6 +472,9 @@ describe("renderPrompt", () => {
     expect(text).toContain("[1] ours: off by one");
     expect(text).toContain("[2] @them: I disagree");
     expect(text).toContain("Thread T2 at b.ts (settled by the decision: fixed)");
+    const routed = renderPrompt({ pack: PACKS.reviewing, input: { ...input, pack: "reviewing", stage: "reviewing", context: { projectContext: null, review: { ...review, rereview: { ...rereview, threads: [{ ...rereview.threads[0]!, settle: "question" as const }, { ...rereview.threads[0]!, id: "T9", settle: "acknowledged" as const }] } } } }, template: "{{context.review}}" });
+    expect(routed).toContain("Thread T1 at a.ts:3 (the author asked a question: answer it directly");
+    expect(routed).toContain("Thread T9 at a.ts:3 (the author acknowledged it and nothing changed yet: do not answer it)");
     const whole = renderPrompt({ pack: PACKS.reviewing, input: { ...input, pack: "reviewing", stage: "reviewing", context: { projectContext: null, review: { ...review, rereview: { ...rereview, note: "the old commit is gone" } } } }, template: "{{context.review}}" });
     expect(whole).toContain("the old commit is gone");
     expect(whole).toContain("Diff:\n```diff");
