@@ -130,8 +130,8 @@ export const FactoryConfigInput = {
     sla: Sla.optional(),
     poll_minutes: minutes(1440).optional(),
   }).optional(),
-  /** The watch on a PR card (it waits in Ship until the PR is merged or closed): `auto_rereview` lets a review card loop back by itself, `quiet_minutes` is how long a PR stays quiet before any route loops back. */
-  review: section({ auto_rereview: z.enum(["on", "off"]).optional(), quiet_minutes: minutes(1440).optional() }).optional(),
+  /** The watch on a PR card (it waits in Ship until the PR is merged or closed): `auto_rereview` lets a review card loop back by itself, `quiet_minutes` is how long a PR stays quiet before any route loops back. A review reads at most `shard_lines` lines of diff per reviewer (a bigger PR is cut into shards by module) and at most `max_shards` shards; the rest is listed as not reviewed. */
+  review: section({ auto_rereview: z.enum(["on", "off"]).optional(), quiet_minutes: minutes(1440).optional(), shard_lines: z.number().int().min(500).max(100_000).optional(), max_shards: z.number().int().min(1).max(200).optional() }).optional(),
 };
 
 /** The evidence keys the diagram adds; `retention_days` is the existing key and keeps its meaning. Unknown keys here stay ignored, as they always were in this older section. */
@@ -181,7 +181,7 @@ export interface FactoryConfig {
   evidence: { video_budget_s: number; regenerate: number; tts: { voice: string | null; language: string | null }; storage: "release_asset" | "local"; retention_days: number };
   economy: EconomyConfig;
   ship: { preview: "off" | "on"; auto_merge: "off" | "low" | "medium_when_review_required" | "medium"; merge: { method: "squash" | "merge" | "rebase"; queue: boolean; delete_branch: boolean; commit_template: string | null }; release_owners: string[]; stale_days: number; sla: { reminder_days: number; escalate_days: number }; poll_minutes: number };
-  review: { auto_rereview: "on" | "off"; quiet_minutes: number };
+  review: { auto_rereview: "on" | "off"; quiet_minutes: number; shard_lines: number; max_shards: number };
 }
 
 /** The diagram's numbers. A `luna.yaml` section is merged over these. */
@@ -203,7 +203,7 @@ export const FACTORY_DEFAULTS: FactoryConfig = {
   evidence: { video_budget_s: 240, regenerate: 1, tts: { voice: null, language: null }, storage: "release_asset", retention_days: 180 },
   economy: { loop_guard: "on", facts: "on", tool_prune: "propose", propose_every: 3, promote_cards: 5, guard: { judge_confidence: 0.7, redirects: 1, backstop_mult: 2.5, envelope_min_samples: 5 }, prune: { runs: 10, min_cards: 2, cards: 5 } },
   ship: { preview: "off", auto_merge: "medium_when_review_required", merge: { method: "squash", queue: true, delete_branch: true, commit_template: null }, release_owners: [], stale_days: 14, sla: { reminder_days: 2, escalate_days: 5 }, poll_minutes: 5 },
-  review: { auto_rereview: "on", quiet_minutes: 15 },
+  review: { auto_rereview: "on", quiet_minutes: 15, shard_lines: 4000, max_shards: 25 },
 };
 
 /** Every key of the config, and the wave that reads it: `8` means code in this wave does. A key nothing reads is dead config. */
@@ -235,7 +235,7 @@ export const CONSUMED_FROM: Readonly<Record<string, number>> = {
   "economy.guard.judge_confidence": 19, "economy.guard.redirects": 19, "economy.guard.backstop_mult": 19, "economy.guard.envelope_min_samples": 19,
   "economy.prune.runs": 19, "economy.prune.min_cards": 19, "economy.prune.cards": 19,
   "ship.release_owners": 13, "ship.stale_days": 8, "ship.sla.reminder_days": 13, "ship.sla.escalate_days": 13, "ship.poll_minutes": 13,
-  "review.auto_rereview": 13, "review.quiet_minutes": 13,
+  "review.auto_rereview": 13, "review.quiet_minutes": 13, "review.shard_lines": 13, "review.max_shards": 13,
 };
 
 /** The leaf keys of the defaults as dotted paths (arrays and the weights/bands maps count as one key). */

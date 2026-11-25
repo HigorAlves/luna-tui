@@ -701,6 +701,10 @@ export async function buildRealStages(
       },
       runPack: (context, review, workspace) => runAgent(deps, context, "reviewing", { review, ...(workspace ? { workspace } : {}) }),
       // A big PR's diff as files in a folder of the machine's, mounted read-only for the passes and the compliance lead.
+      limits: async (repoPath) => {
+        const review = (await policies.for(repoPath)).factory.review;
+        return { shardLines: review.shard_lines, maxShards: review.max_shards };
+      },
       diffFiles: { write: (runId, files, whole) => writeDiffFiles(config.stateDir, runId, files, whole), remove: removeDiffFiles },
       ...(reviewLinks ? { links: reviewLinks } : {}),
       ...(jira

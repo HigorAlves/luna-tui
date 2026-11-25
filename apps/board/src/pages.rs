@@ -1276,6 +1276,47 @@ fn reviewed_against(r: &Value, width: usize) -> Vec<Line<'static>> {
     out
 }
 
+/// What a big PR's review did not read (a cap on its shards) and the generated or lock files it left out before reading, so the
+/// person sees both before posting. Nothing for a review that read everything.
+fn review_coverage(r: &Value, width: usize) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    let unread: Vec<&Value> = r["unreviewed"]
+        .as_array()
+        .map(|a| a.iter().filter(|u| u["path"].is_string()).collect())
+        .unwrap_or_default();
+    if !unread.is_empty() {
+        let lines: i64 = unread.iter().filter_map(|u| u["lines"].as_i64()).sum();
+        let names: Vec<String> = unread
+            .iter()
+            .take(12)
+            .filter_map(|u| u["path"].as_str().map(plain))
+            .collect();
+        let more = unread.len().saturating_sub(12);
+        let list = if more > 0 {
+            format!("{}, and {more} more", names.join(", "))
+        } else {
+            names.join(", ")
+        };
+        out.push(Line::default());
+        out.extend(hanging(
+            vec![Span::styled(
+                format!("  Not reviewed: {} files, {lines} lines  ", unread.len()),
+                theme::flag(),
+            )],
+            &list,
+            width,
+        ));
+    }
+    let skipped = r["skipped"].as_array().map(|a| a.len()).unwrap_or(0);
+    if skipped > 0 {
+        if unread.is_empty() {
+            out.push(Line::default());
+        }
+        out.push(muted(format!("  Skipped: {skipped} generated/lock files")));
+    }
+    out
+}
+
 /// A card at or past shipping: the release question first when there is one, then what changed and why, what review found by
 /// level, the PR, the evidence and the ship checklist.
 /// A review of someone else's PR, waiting for "post the verdict?": what goes to GitHub if you say yes. The verdict, the
@@ -1307,6 +1348,7 @@ fn review_to_post(a: &Approval, width: usize) -> Vec<Line<'static>> {
             ),
         ]),
     ];
+    out.extend(review_coverage(r, width));
     out.extend(reviewed_against(r, width));
     // The body is the one the machine will send: the review action's own payload when it is there, else the summary.
     let post = r["actions"]
@@ -1819,6 +1861,31 @@ mod tests {
         let mut bare = review_verdict_app("comment");
         let screen = render(&mut bare, 180, 60);
         assert!(!main_pane(&screen).contains("Thread replies"));
+    }
+
+    #[test]
+    fn a_review_says_what_it_did_not_read_and_how_many_files_it_left_out() {
+        let mut app = review_verdict_app("comment");
+        if let Some(d) = app.detail.as_mut() {
+            d.approvals[0].requested["unreviewed"] = serde_json::json!([
+                {"path": "docs/guide.md", "lines": 504},
+                {"path": "test/a.test.ts", "lines": 30}
+            ]);
+            d.approvals[0].requested["skipped"] = serde_json::json!([
+                {"path": "pnpm-lock.yaml", "lines": 4200, "reason": "lockfile"},
+                {"path": "dist/app.min.js", "lines": 12, "reason": "generated"}
+            ]);
+        }
+        let screen = render(&mut app, 180, 60);
+        let main = main_pane(&screen);
+        for needle in ["Not reviewed: 2 files, 534 lines", "docs/guide.md", "test/a.test.ts", "Skipped: 2 generated/lock files"] {
+            assert!(main.contains(needle), "no {needle:?} in\n{main}");
+        }
+        // A review that read everything says nothing of the kind.
+        let mut bare = review_verdict_app("comment");
+        let screen = render(&mut bare, 180, 60);
+        let main = main_pane(&screen);
+        assert!(!main.contains("Not reviewed") && !main.contains("Skipped:"));
     }
 
     #[test]
