@@ -20,6 +20,11 @@ What coverage found wrong with the last scenarios (a criterion with no scenario,
 If this lists criteria, an earlier round of scenarios missed them: write scenarios for each, keeping the ones that already hold. These were the earlier scenarios:
 (none)
 
+## A re-plan
+(none)
+
+When this gives a reason, the earlier scenarios above were approved and each has a written test the machine keeps. Keep every scenario the reason does not touch word for word, the same `when` and `then`: it keeps its id and its test. Change, drop or add only the scenarios the reason needs, and make them agree with each other: two scenarios must never ask for opposite results from the same request.
+
 ## The design's frames
 (none)
 

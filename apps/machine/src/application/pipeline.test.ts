@@ -2439,9 +2439,36 @@ describe("a test change a person approves", () => {
     expect(next.unlockedTests).toEqual(["site/src/components/landing/static-sections.test.tsx"]);
   });
 
+  it("unlocks a test the request names without its folder, from the files the tests step recorded (DISC-53: approving the plan unlocked nothing)", async () => {
+    const seen: Array<{ stage: string; ctx: StageContext }> = [];
+    const runnerFor = (stage: TaskState): StageRunner => async (ctx) => (seen.push({ stage, ctx }), stubs.runnerFor(stage)(ctx));
+    pipeline = new Pipeline(db, runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, revertCommit: async () => {} });
+    const request = "S8 and S9 (app.test.ts) contradict S15 (behaviour.integration.test.ts): change S8 in app.test.ts.";
+    const testsStep = { status: "committed", commit: "t1", scenarioTests: [{ scenario: "S8", file: "apps/lambdas/evaluation/src/app.test.ts" }, { scenario: "S15", file: "apps/lambdas/evaluation/src/behaviour.integration.test.ts" }] };
+    stubs.plan(
+      "implementing",
+      { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/wt/x" } },
+      { outcome: "test_change", detail: { request, testsStep, summary: "two locked tests contradict", reason: "the implementer asks to change a locked test: two locked tests contradict" } },
+    );
+    stubs.plan("verifying", { outcome: "fail", run: { inputCommit: "aaa", outputCommit: "bbb" }, detail: { findings: [] } });
+    const task = await newTask();
+    expect((await startAndApprove(task.id)).state).toBe("awaiting_approval");
+    await pipeline.decide(task.id, "approved");
+    const next = seen.filter((s) => s.stage === "implementing").at(-1)!.ctx;
+    expect([...(next.unlockedTests ?? [])].sort()).toEqual(["apps/lambdas/evaluation/src/app.test.ts", "apps/lambdas/evaluation/src/behaviour.integration.test.ts"]);
+  });
+
   it("unlocks nothing before a plan is approved after the request", async () => {
     expect(testPathsIn("no test is named here")).toEqual([]);
     expect(testPathsIn("change web/cart.test.ts and docs/api.md; not ../x.test.ts or /abs/y.test.ts")).toEqual(["web/cart.test.ts"]);
+  });
+
+  it("resolves a test named without its folder against the locked test files, when exactly one has that name (DISC-53: approving the plan unlocked nothing)", () => {
+    const locked = ["apps/lambdas/evaluation/src/app.test.ts", "apps/lambdas/evaluation/src/behaviour.integration.test.ts", "apps/api/src/app.test.ts", "apps/lambdas/evaluation/src/legacyContract.integration.test.ts"];
+    const request = "S8 and S9 (app.test.ts) against S15 (behaviour.integration.test.ts); and legacyContract.integration.test.ts S5. Not other.test.ts.";
+    // app.test.ts names two locked files: neither is guessed.
+    expect(testPathsIn(request, locked).sort()).toEqual(["apps/lambdas/evaluation/src/behaviour.integration.test.ts", "apps/lambdas/evaluation/src/legacyContract.integration.test.ts"]);
+    expect(testPathsIn("app.test.ts", ["apps/lambdas/evaluation/src/app.test.ts"])).toEqual(["apps/lambdas/evaluation/src/app.test.ts"]);
   });
 });
 
