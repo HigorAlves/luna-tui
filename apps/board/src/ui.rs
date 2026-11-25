@@ -51,7 +51,7 @@ pub(crate) fn look_style(look: Look) -> Style {
         Look::NeedsYou | Look::Stale => theme::needs_you(),
         Look::Working => theme::working(),
         Look::Paused => theme::paused(),
-        Look::Queued | Look::Draft => theme::label(),
+        Look::Queued | Look::Draft | Look::Watching => theme::label(),
         Look::Done => theme::done(),
         Look::Archived => theme::dim(),
     }
@@ -69,6 +69,7 @@ pub(crate) fn look_glyph(look: Look) -> &'static str {
         Look::Working => spinner(),
         Look::Queued => "…",
         Look::Paused => "⏳",
+        Look::Watching => "◌",
         Look::Draft => "○",
         Look::Done => "✓",
         Look::Archived => "–",
@@ -3441,6 +3442,8 @@ fn pr_row(
     // A task at work reads as a spinner and what it is doing, bold yellow, so a row that is busy
     // stands out from the list; ⌂ marks a repo with no clone.
     let (tag, tag_color) = match (&pr.task, pr.local_path.is_some()) {
+        // A card only watching the PR runs nothing: no spinner, and a plain colour.
+        (Some(task), _) if task.state == "pr_watch" => ("◌ watching".to_string(), SUBTEXT0),
         (Some(task), _) => (
             format!("{} {}", spinner(), pr_work_label(&task.route)),
             YELLOW,

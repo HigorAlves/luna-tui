@@ -25,6 +25,13 @@ describe("parseDuration", () => {
   });
 });
 
+describe("a PR card watching its PR (pr_watch)", () => {
+  it("has no gate, stage or cycle clock: it waits for the PR, not for a person or a run", () => {
+    const targets = { gate: 60, cycle: 60, stage: { pr_watch: 60 } };
+    expect(computeSla({ task: task({ state: "pr_watch", route: "review" }), stateSince: new Date("2026-10-27T12:00:00Z"), stageStartedAt: null, targets, defaults }, NOW)).toBeNull();
+  });
+});
+
 describe("computeSla at a state that holds a stage or a gate", () => {
   const since = new Date("2026-10-28T11:30:00Z");
   it("has a gate clock for awaiting_ship only with an open gate", () => {

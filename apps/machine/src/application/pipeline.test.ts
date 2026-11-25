@@ -4511,6 +4511,40 @@ describe("a PR review's links", () => {
   });
 });
 
+describe("a PR card at pr_watch", () => {
+  const watching = async (route: "review" | "ci_fix" | "address") => {
+    const task = await pipeline.createTask({ title: "PR #12", route, source: { kind: "github_pr", repo: "o/a", number: 12, url: "https://github.com/o/a/pull/12", headRef: "feat/x", baseRef: "main" } });
+    await db.query("update tasks set state = 'pr_watch' where id = $1", [task.id]);
+    return task.id;
+  };
+
+  it("is listed as watching, and a merge or a close ends it as closed", async () => {
+    const merged = await watching("review");
+    const closed = await watching("ci_fix");
+    expect((await pipeline.watching()).map((t) => t.id).sort()).toEqual([merged, closed].sort());
+    expect((await pipeline.prWatch(merged, "merged")).state).toBe("closed");
+    expect((await pipeline.prWatch(closed, "closed")).state).toBe("closed");
+    expect(await pipeline.watching()).toEqual([]);
+  });
+
+  it("responded runs the route's first stage again and keeps the key; a card that moved on refuses the word", async () => {
+    const quiet = new Pipeline(db, () => async () => ({ outcome: "pass" as const }), { inline: false, hasConfig: () => true });
+    const id = await watching("address");
+    const looped = await quiet.prWatch(id, "responded", "sha1:t");
+    expect(looped.state).toBe("addressing");
+    expect(looped.retries.watchKey).toBe("sha1:t");
+    await quiet.shutdown();
+    await expect(pipeline.prWatch(id, "merged")).rejects.toThrow(TaskMovedError);
+  });
+
+  it("is found with the route's other cards by findOpenBySource, never once ended", async () => {
+    const id = await watching("review");
+    expect((await pipeline.findOpenBySource("o/a", 12, "github_pr")).map((t) => t.id)).toEqual([id]);
+    await pipeline.prWatch(id, "merged");
+    expect(await pipeline.findOpenBySource("o/a", 12, "github_pr")).toEqual([]);
+  });
+});
+
 describe("the address of a card's PR", () => {
   it("is known as soon as the PR exists (the stage that opened it finished), not only after a merge", async () => {
     const task = await pipeline.createTask({ title: "Login page" });

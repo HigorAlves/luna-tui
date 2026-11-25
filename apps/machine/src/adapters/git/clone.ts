@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 
 import { exec, execOrThrow } from "../process/exec.ts";
 import { at, machineGitDir, machineRepoRoot } from "./machine-repo.ts";
-import { BASE_REF, HOST_GIT, type Workspace, repoAddsGitlink, branchExists, clearStaleLock, headCommit, isBranchName, stackOf, startPoint } from "./worktree.ts";
+import { BASE_REF, HOST_GIT, type Workspace, repoAddsGitlink, branchExists, clearStaleLock, headCommit, isBranchName, resetWorktree, stackOf, startPoint } from "./worktree.ts";
 
 const CLONE_TIMEOUT_MS = 300_000;
 /** Set in the repository of a fresh workspace, which nothing else sets. */
@@ -172,6 +172,39 @@ export async function ensurePrClone(repoPath: string, headRef: string, path: str
   await execOrThrow("git", [...HOST_GIT, ...inMachine(path), "update-ref", `refs/remotes/origin/${headRef}`, sha]);
   await execOrThrow("git", [...HOST_GIT, ...inMachine(path), "branch", "--set-upstream-to", `origin/${headRef}`, headRef]);
   await checkoutWork(path, headRef);
+}
+
+/**
+ * Brings a PR task's workspace to the PR's head as it is now, before a watching card loops back. The head is fetched exactly as
+ * `ensurePrClone` fetches it, into the user's repository; the card's repository (the machine's) gets any objects it lacks, then its
+ * branch and `refs/remotes/origin/<headRef>` move to that commit, and the work folder is reset to it, which also follows a force-push.
+ * Host git runs only against the card's repository, with the folder as work tree. Commits the machine has not pushed are never reset:
+ * the workspace is left as it is and the call throws, so the caller escalates instead of losing work. A workspace that does not exist yet is left to `ensurePrClone`.
+ */
+export async function syncPrHead(repoPath: string, headRef: string, path: string): Promise<void> {
+  if (!isBranchName(headRef)) throw new Error(`not a usable branch name: ${JSON.stringify(headRef)}`);
+  if (!isClone(path)) return;
+  const fetched = await exec("git", [...HOST_GIT, "-C", repoPath, "fetch", "--quiet", "--end-of-options", "origin", `+refs/heads/${headRef}:refs/remotes/origin/${headRef}`], { timeoutMs: CLONE_TIMEOUT_MS });
+  if (fetched.code !== 0) throw new Error(`git fetch origin ${headRef} failed: ${(fetched.stderr || fetched.stdout).trim()}`);
+  const sha = await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "--verify", `refs/remotes/origin/${headRef}^{commit}`]);
+  const git = (...args: string[]) => execOrThrow("git", [...HOST_GIT, ...inMachine(path), ...args]);
+  const current = await exec("git", [...HOST_GIT, ...inMachine(path), "rev-parse", "--verify", "--quiet", `refs/heads/${headRef}^{commit}`]);
+  if (current.code === 0 && current.stdout.trim() === sha) return;
+  const unpushed = await unpushedCommits(path);
+  if (unpushed.length > 0) throw new Error(`the workspace has ${unpushed.length} commit(s) not pushed (${unpushed[0]!.slice(0, 7)}...); it was not moved to the PR's new head ${sha.slice(0, 7)}`);
+  // The commit is in the user's repository, whose objects the card's repository borrows; fetch it only when it does not see it.
+  const seen = await exec("git", [...HOST_GIT, ...inMachine(path), "cat-file", "-e", `${sha}^{commit}`]);
+  if (seen.code !== 0) {
+    const brought = await exec("git", [...HOST_GIT, ...inMachine(path), "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--end-of-options", repoPath, `+refs/remotes/origin/${headRef}:refs/luna/synced`], { timeoutMs: CLONE_TIMEOUT_MS });
+    if (brought.code !== 0) throw new Error(`could not bring the PR's head ${sha.slice(0, 7)} into the workspace: ${(brought.stderr || brought.stdout).trim()}`);
+    await exec("git", [...HOST_GIT, ...inMachine(path), "update-ref", "-d", "refs/luna/synced"]);
+  }
+  await git("update-ref", `refs/heads/${headRef}`, sha);
+  await git("update-ref", `refs/remotes/origin/${headRef}`, sha);
+  // The PR's own commits are on the remote: they are pushed, not the card's to lose.
+  await git("update-ref", `refs/luna/pushed/${headRef}`, sha);
+  await git("symbolic-ref", "HEAD", `refs/heads/${headRef}`);
+  await resetWorktree(path, sha);
 }
 
 /**

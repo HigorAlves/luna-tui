@@ -1049,7 +1049,8 @@
                 "closed",
                 "archived",
                 "reviewing",
-                "addressing"
+                "addressing",
+                "pr_watch"
               ]
             }
           }
@@ -4581,7 +4582,8 @@
               "closed",
               "archived",
               "reviewing",
-              "addressing"
+              "addressing",
+              "pr_watch"
             ]
           },
           "column": {
@@ -4665,6 +4667,7 @@
               "archived",
               "reviewing",
               "addressing",
+              "pr_watch",
               null
             ]
           },
@@ -6709,7 +6712,8 @@
                   "closed",
                   "archived",
                   "reviewing",
-                  "addressing"
+                  "addressing",
+                  "pr_watch"
                 ]
               },
               "engine": {
@@ -6788,7 +6792,8 @@
                   "closed",
                   "archived",
                   "reviewing",
-                  "addressing"
+                  "addressing",
+                  "pr_watch"
                 ]
               },
               "requested": {
@@ -6999,7 +7004,8 @@
                   "closed",
                   "archived",
                   "reviewing",
-                  "addressing"
+                  "addressing",
+                  "pr_watch"
                 ]
               }
             },
@@ -7052,7 +7058,8 @@
                   "closed",
                   "archived",
                   "reviewing",
-                  "addressing"
+                  "addressing",
+                  "pr_watch"
                 ]
               },
               "warn": {
@@ -11003,7 +11010,8 @@
               "closed",
               "archived",
               "reviewing",
-              "addressing"
+              "addressing",
+              "pr_watch"
             ]
           },
           "attempt": {
@@ -11159,7 +11167,8 @@
               "closed",
               "archived",
               "reviewing",
-              "addressing"
+              "addressing",
+              "pr_watch"
             ]
           },
           "requested": {

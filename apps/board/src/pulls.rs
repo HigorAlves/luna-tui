@@ -201,18 +201,23 @@ fn merge_blocker(pr: &PullRequest) -> &'static str {
     }
 }
 
+/// Whether the PR's task is only watching it (`pr_watch`), running nothing.
+fn watching(pr: &PullRequest) -> bool {
+    pr.task.as_ref().is_some_and(|t| t.state == "pr_watch")
+}
+
 /// Why a key is off for this PR, or None when it works. Mirrors the machine's refusals, so a
 /// greyed key never has to round-trip to learn it would be a 409.
 pub fn blocker(pr: &PullRequest, key: PrKey) -> Option<&'static str> {
     match key {
         PrKey::Merge => (pr.split_enum() != Some(PrSplit::ReadyToMerge)).then(|| merge_blocker(pr)),
         PrKey::Close if !pr.mine => Some("closing is for your own PRs"),
-        PrKey::Close => pr
-            .task
-            .is_some()
+        PrKey::Close => (pr.task.is_some() && !watching(pr))
             .then_some("a task is already running for it"),
         PrKey::CiFix | PrKey::Review | PrKey::Address => {
-            if pr.task.is_some() {
+            // A card only watching the PR does not block: the same route loops it back at once,
+            // another route starts its own task.
+            if pr.task.is_some() && !watching(pr) {
                 return Some("a task is already running for it");
             }
             if pr.local_path.is_none() {
@@ -461,5 +466,25 @@ mod tests {
             Some("a task is already running for it")
         );
         assert_eq!(blocker(&pr(8, "mine", "t"), PrKey::Close), None);
+    }
+
+    #[test]
+    fn a_card_only_watching_the_pr_does_not_block_the_task_keys() {
+        let watching = PullRequest {
+            task: Some(crate::model::PrTask {
+                id: "t1".into(),
+                state: "pr_watch".into(),
+                route: "ci_fix".into(),
+            }),
+            ..pr(9, "ci_failed", "t")
+        };
+        for key in [PrKey::CiFix, PrKey::Close] {
+            assert_eq!(blocker(&watching, key), None, "{key:?}");
+        }
+        // The other task keys follow their own rules (this PR is mine, so a review is refused for that, not for the card).
+        assert_ne!(
+            blocker(&watching, PrKey::Review),
+            Some("a task is already running for it")
+        );
     }
 }

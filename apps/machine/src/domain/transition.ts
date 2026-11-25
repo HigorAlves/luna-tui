@@ -38,6 +38,8 @@ export interface Retries {
   failures?: Partial<Record<Loop, Failure[]>>;
   /** The set of blocker findings Build was last sent from Verify, and the rounds it has had on it. */
   findingSet?: FindingSetRounds;
+  /** The watch's last fire (head sha plus the last activity it saw): the same key is never acted on twice. Kept across loop-backs. */
+  watchKey?: string;
 }
 
 export const NO_RETRIES: Retries = { verify: 0, e2e: 0, ci: 0, total: 0, stronger: 0 };
@@ -76,6 +78,8 @@ export type PipelineEvent =
   | { type: "rate_limited" }
   | { type: "window_reset" }
   | { type: "abort" }
+  /** The PR watch saw the PR of a card at `pr_watch`: merged or closed ends the card, `responded` sends it back to the stage its route started with. */
+  | { type: "pr_watch"; what: "merged" | "closed" | "responded"; /** For `responded`: the head and activity the watch acted on, kept so the same key never fires twice; a person's key press has none. */ key?: string }
   /** A Luna Notch Stop while the task waits at a gate: it escalates as "stopped" (the pipeline sends it for notch tasks only). */
   | { type: "stop" }
   /** The stage loop threw outside any stage (a DB hiccup, a pool timeout): the task must not stay "running". */
@@ -249,8 +253,8 @@ function next(task: Snapshot, event: PipelineEvent): Move {
       return approved(task, event);
     case "sent_back":
       if (state === "awaiting_setup" && task.route !== "config") return run("setup", retries);
-      // A review verdict sent back is dropped: the comment review already went out.
-      if (task.route === "review" && state === "awaiting_ship") return done(retries);
+      // A review verdict sent back is dropped (the comment review already went out); the card still watches the PR.
+      if (task.route === "review" && state === "awaiting_ship") return move("pr_watch", retries);
       if (task.route !== "feature") break;
       // The ship gate is a preview: a note sends it back to Evidence, which makes the pack again.
       if (state === "awaiting_ship") return event.gate === "ship_approval" ? run("awaiting_ship", retries) : run("evidence", retries);
@@ -262,10 +266,24 @@ function next(task: Snapshot, event: PipelineEvent): Move {
       // only approved, which reruns the stage that stopped on the same plan.
       if (state === "escalated") return run("test_design", NO_RETRIES);
       break;
+    case "pr_watch":
+      if (state === "pr_watch") return event.what === "responded" ? watchAgain(task, event.key) : { ...done(retries), reason: event.what === "merged" ? "the PR was merged" : "the PR was closed" };
+      break;
     case "stage_done":
       return stageDone(task, event);
   }
   throw new TransitionError(task, event);
+}
+
+/**
+ * The PR answered (new commits, a reply, a red check) while the card watched it: the card runs its route's first stage again. The counters of the
+ * rounds before start from zero, or a card that once used its CI failures or implementer runs would escalate on the first miss of the next round; only
+ * the watch key stays, so the same activity does not fire again.
+ */
+function watchAgain(task: Snapshot, key: string | undefined): Move {
+  const watchKey = key ?? task.retries.watchKey;
+  const retries: Retries = { ...NO_RETRIES, ...(watchKey ? { watchKey } : {}) };
+  return run(task.route === "review" ? "reviewing" : task.route === "address" ? "addressing" : "ci_watch", retries);
 }
 
 /** The stage that opened the gate a task waits at, which a stopped task re-runs when retried; null when it is not at an `awaiting_*` gate. */
@@ -340,7 +358,7 @@ function prStageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stag
         if (outcome === "fail") return escalate("review failed", "reviewing", retries);
         break;
       case "shipping":
-        if (outcome === "pass") return done(retries);
+        if (outcome === "pass") return move("pr_watch", retries);
         if (outcome === "fail") return escalate("posting the verdict failed", "shipping", retries);
         break;
     }
@@ -352,7 +370,8 @@ function prStageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stag
       if (outcome === "fail") return escalate("addressing the threads failed", "addressing", retries);
       break;
     case "ci_watch":
-      if (outcome === "pass") return done(retries);
+      // Green is not the end: the card waits in Ship until the PR is merged or closed.
+      if (outcome === "pass") return move("pr_watch", retries);
       if (outcome === "fail") return loopFailed(task, "ci", undefined, event.loopCap, event.failure);
       break;
     case "implementing":

@@ -51,7 +51,7 @@ function legacyEgress(raw: unknown, warn: Warn): unknown {
 /** The file text for a config, sections in the order people read them, empty ones left out. */
 export function renderLunaConfig(config: LunaConfig): string {
   const ordered: Record<string, unknown> = {};
-  for (const key of ["checks", "services", "toolchains", "policy", "qa_targets", "jira", "sla", "engines", "effort", "compliance", "design", "budget", "evidence", "freeze", "dedup", "backlog", "tickets", "conversation", "triage", "scoring", "fast_lane", "plan", "size", "build", "sandbox", "verify", "ship"] as const) {
+  for (const key of ["checks", "services", "toolchains", "policy", "qa_targets", "jira", "sla", "engines", "effort", "compliance", "design", "budget", "evidence", "freeze", "dedup", "backlog", "tickets", "conversation", "triage", "scoring", "fast_lane", "plan", "size", "build", "sandbox", "verify", "ship", "review"] as const) {
     const value = config[key];
     if (value === undefined) continue;
     if (Array.isArray(value) ? value.length === 0 : typeof value === "object" && Object.keys(value as object).length === 0) continue;
@@ -250,6 +250,6 @@ export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
     decisions: (policy.decisions ?? {}) as Policy["decisions"],
     evidenceRetentionDays: evidence?.retention_days ?? null,
     freeze: freeze.map((f) => ({ ...f })),
-    factory: lowerAllow(factoryConfigOf({ backlog: config.backlog, tickets: config.tickets, conversation: conversationOf(config.conversation, warn), dedup: config.dedup, triage: config.triage, scoring: config.scoring, graph: config.graph, fast_lane: config.fast_lane, plan: config.plan, size: config.size, build: config.build, sandbox: config.sandbox, verify: config.verify, evidence: config.evidence, learning: config.learning, economy: config.economy, ship: shipOf(config, warn) })),
+    factory: lowerAllow(factoryConfigOf({ backlog: config.backlog, tickets: config.tickets, conversation: conversationOf(config.conversation, warn), dedup: config.dedup, triage: config.triage, scoring: config.scoring, graph: config.graph, fast_lane: config.fast_lane, plan: config.plan, size: config.size, build: config.build, sandbox: config.sandbox, verify: config.verify, evidence: config.evidence, learning: config.learning, economy: config.economy, ship: shipOf(config, warn), review: config.review })),
   };
 }
