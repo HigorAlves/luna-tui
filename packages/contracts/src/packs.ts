@@ -1187,8 +1187,8 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     skills: ["writing-plans", "code-discovery"],
     access: access(READ_ONLY, { web: true, commands: ["gh issue view"], luna: ["decision_get"] }),
     writable: false,
-    maxTurns: 30,
-    timeoutMs: 10 * MINUTE,
+    maxTurns: 60,
+    timeoutMs: 20 * MINUTE,
     engines: { default: "claude:opus", allowed: ["claude:opus", "codex:sol"], fallback: ["codex:sol", "claude:opus"] },
     effort: "high",
     answer: PlanAnswer,
@@ -2270,4 +2270,13 @@ function withoutTuples(node: unknown): unknown {
 export function answerJsonSchema(pack: Pack): Record<string, unknown> {
   const { $schema: _schema, ...schema } = z.toJSONSchema(pack.answer, { target: "draft-2020-12" }) as Record<string, unknown>;
   return withoutTuples(schema) as Record<string, unknown>;
+}
+
+/** The agent stages of a feature card whose turns and time grow with the card's size. The fast lane is for small tickets and stays as it is. */
+export const SIZE_SCALED_PACKS: ReadonlySet<PackId> = new Set<PackId>(["plan", "test_design", "build_tests", "implementing", "verifying", "e2e"]);
+
+/** The factor a card's size puts on its stages' turns and time: 1 up to 2,000 lines, 2 up to 8,000, 3 above; 1 with no estimate. */
+export function sizeScale(estLoc: number | null | undefined): 1 | 2 | 3 {
+  if (typeof estLoc !== "number" || !Number.isFinite(estLoc) || estLoc <= 2000) return 1;
+  return estLoc <= 8000 ? 2 : 3;
 }

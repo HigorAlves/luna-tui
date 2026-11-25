@@ -527,7 +527,7 @@ describe("agent stages through packs", () => {
     const result = await runAgent(deps(fakeSandbox(output({ answer }))), { ...context("test_design"), runId: "r1-plan" }, "plan", { plan });
     const input = seen!.input as unknown as StageInput;
     expect(input).toMatchObject({ stage: "test_design", pack: "plan", context: { plan }, plan: { brief: "b" } });
-    expect(input.limits.maxTurns).toBe(30);
+    expect(input.limits.maxTurns).toBe(60);
     expect(seen!.name).toMatch(/-plan-1$/);
     expect(seen!.runDir).toMatch(/runs\/r1-plan$/);
     expect(result.detail).toMatchObject({ brief: "the brief", criteria: ["c1"], assumptions: ["a1"], rollback: "revert", slices: [{ title: "s1" }] });

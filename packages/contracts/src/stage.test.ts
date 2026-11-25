@@ -274,9 +274,9 @@ describe("the build_tests pack", () => {
 });
 
 describe("the plan pack", () => {
-  it("is the planner on opus, read-only with the web and the decision tool, 30 turns, answering a plan", () => {
+  it("is the planner on opus, read-only with the web and the decision tool, 60 turns, answering a plan", () => {
     expect(PACKS.plan).toMatchObject({
-      kind: "agent", agent: "planner", helpers: [], skills: ["writing-plans", "code-discovery"], writable: false, maxTurns: 30, effort: "high", template: "plan.md",
+      kind: "agent", agent: "planner", helpers: [], skills: ["writing-plans", "code-discovery"], writable: false, maxTurns: 60, timeoutMs: 20 * 60_000, effort: "high", template: "plan.md",
       engines: { default: "claude:opus", allowed: ["claude:opus", "codex:sol"], fallback: ["codex:sol", "claude:opus"] },
     });
     expect(PACKS.plan.kind === "agent" && PACKS.plan.access).toMatchObject({ read: true, web: true, write: false, luna: expect.arrayContaining(["decision_get"]) });
