@@ -5,7 +5,8 @@
 import { posix } from "node:path";
 
 const MISSING_MODULE = /Cannot find (?:module|package) ['"]([^'"]+)['"](?:\s+imported from\s+(\S+))?/;
-const MISSING_EXPORT = /["']([^"']+)["'] is not exported\b[^\n]*?\bfrom package\s+(@?[\w.-]+(?:\/[\w.-]+)?)/;
+// The package by its name (`@discover/ui`) or, as Node prints it, by its folder (`/work/node_modules/@discover/ui`).
+const MISSING_EXPORT = /["']([^"']+)["'] is not exported\b[^\n]*?\bfrom package\s+(?:\S*\/node_modules\/)?(@?[\w.-]+(?:\/[\w.-]+)?)/;
 
 const clean = (path: string): string => posix.normalize(path.replace(/\\/g, "/")).replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
 const noExt = (path: string): string => path.replace(/\.(?:m?[jt]sx?|c[jt]s)$/, "");

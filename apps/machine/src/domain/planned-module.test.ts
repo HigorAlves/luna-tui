@@ -18,6 +18,9 @@ describe("plannedMissingModule: a red that fails only because the code the plan 
   it("takes an export the plan adds to a package whose package.json it touches", () => {
     expect(plannedMissingModule('Error: "./evaluation" is not exported under the conditions ["node","development","import"] from package @discover/ui', touchpoints)).toBe("packages/ui/package.json");
     expect(plannedMissingModule('Error: "./evaluation" is not exported from package @discover/ui (ui.contract.test.ts: 0 tests)', touchpoints)).toBe("packages/ui/package.json");
+    // Node names the package by its folder in node_modules (DISC-53's S26, S27).
+    expect(plannedMissingModule('Error: "./evaluation" is not exported under the conditions ["node","development","import"] from package /work/node_modules/@discover/ui', touchpoints)).toBe("packages/ui/package.json");
+    expect(plannedMissingModule('Error: "./evaluation" is not exported from package /work/node_modules/@discover/application', touchpoints)).toBeNull();
   });
 
   it("leaves everything else to the judge: an assertion, a third-party package, a typo outside the plan, an export of a package the plan does not touch", () => {
