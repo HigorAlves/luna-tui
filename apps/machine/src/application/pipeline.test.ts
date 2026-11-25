@@ -20,7 +20,7 @@ import { withTriageSignals } from "./stages/triage-signals.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import { ApprovalEntity } from "../adapters/persistence/schemas.ts";
-import { ApproverRequiredError, FindingNotFoundError, type BudgetAlert, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, Pipeline, PlanApprovedError, testPathsIn, RejectNotAllowedError, QuestionsCarrySecretError, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "./pipeline.ts";
+import { ApproverRequiredError, FindingNotFoundError, type BudgetAlert, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, Pipeline, PlanApprovedError, testPathsIn, RejectNotAllowedError, QuestionsCarrySecretError, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError, NotWatchingError, WorktreeUnpushedError } from "./pipeline.ts";
 import { DEFAULT_POLICY } from "../domain/policy.ts";
 import { waiverHash } from "../domain/design-parity.ts";
 import { approvedPlan, buildStageInput } from "../domain/stage-input.ts";
@@ -4613,6 +4613,22 @@ describe("a PR card at pr_watch", () => {
     expect(looped.retries.watchKey).toBe("sha1:t");
     await quiet.shutdown();
     await expect(pipeline.prWatch(id, "merged")).rejects.toThrow(TaskMovedError);
+  });
+
+  it("loops back at a person's word on the card itself (the board's r), on the PR's head as it is now; a card that is not watching refuses, and a head that cannot be moved keeps it watching", async () => {
+    const synced: string[][] = [];
+    let refuse: Error | null = null;
+    const quiet = new Pipeline(db, () => async () => ({ outcome: "pass" as const }), { inline: false, hasConfig: () => true, syncPrHead: async (...a: string[]) => { if (refuse) throw refuse; synced.push(a); } });
+    const id = await watching("review");
+    await db.query("update tasks set repo_path = '/r/a', worktree_path = '/wt/a/pr-12' where id = $1", [id]);
+    refuse = new Error("the workspace has 1 commit(s) not pushed");
+    await expect(quiet.rewatchNow(id)).rejects.toThrow(/not pushed/);
+    expect((await quiet.get(id)).state).toBe("pr_watch");
+    refuse = null;
+    expect((await quiet.rewatchNow(id)).state).toBe("reviewing");
+    expect(synced).toEqual([["/r/a", "feat/x", "/wt/a/pr-12"]]);
+    await expect(quiet.rewatchNow(id)).rejects.toThrow(NotWatchingError);
+    await quiet.shutdown();
   });
 
   it("is found with the route's other cards by findOpenBySource, never once ended", async () => {

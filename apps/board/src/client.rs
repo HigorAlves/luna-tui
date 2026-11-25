@@ -646,6 +646,11 @@ impl Machine {
         self.post(&format!("/tasks/{id}/resume"), json!({}))
     }
 
+    /// A card watching its PR runs its route's first stage again now (a re-review, a CI watch, addressing the threads), on the PR's head as it is now.
+    pub fn rewatch(&self, id: &str) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/rewatch"), json!({}))
+    }
+
     /// Removes the task's worktree from disk; the task and its branch stay.
     pub fn remove_worktree(&self, id: &str) -> Result<Task, String> {
         self.post(&format!("/tasks/{id}/worktree/remove"), json!({}))

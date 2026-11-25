@@ -30104,6 +30104,111 @@
         }
       }
     },
+    "/tasks/{id}/rewatch": {
+      "post": {
+        "operationId": "rewatchTask",
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Look at the PR again now",
+        "description": "A card watching its PR (`pr_watch`) runs its route's first stage again at once (a re-review, a CI watch, addressing the threads), on the PR's head as it is now. 409 `not_watching` for a card that is not watching; 409 `task_busy` or 500 when its workspace cannot be moved to the head (commits never pushed).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "example": "b933eac0-7593-4564-ac9b-906df1577792",
+              "description": "The task's id (a UUID)"
+            },
+            "required": true,
+            "description": "The task's id (a UUID)",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The task, running its first stage again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid (`invalid_request` and the route's own codes)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is missing or wrong (`unauthorized`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A foreign `Host` or `Origin` (`forbidden_host`, `forbidden_origin`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Nothing by that id (`not_found` and the route's own codes)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The card or item is not in a state that allows this",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "A body that is not `application/json` (`unsupported_media_type`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The machine failed (`internal`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/tasks/{id}/worktree/remove": {
       "post": {
         "operationId": "removeTaskWorktree",
