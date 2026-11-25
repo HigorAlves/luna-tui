@@ -78,7 +78,11 @@ function criteriaLine(results: readonly CriterionResult[] | undefined): string {
   if (checked.length === 0) return "";
   const count = (v: CriterionResult["verdict"]) => checked.filter((r) => r.verdict === v).length;
   const parts = [`${count("met")} of ${checked.length} met`, ...(count("unmet") > 0 ? [`${count("unmet")} not met`] : []), ...(count("unsure") > 0 ? [`${count("unsure")} unclear`] : [])];
-  return `Acceptance criteria: ${parts.join(", ")}.`;
+  // The criteria that are not met, or unclear, are named here: their findings carry no line comment, since no line of the diff is theirs.
+  const named = (v: CriterionResult["verdict"]) => checked.filter((r) => r.verdict === v).map((r) => `"${r.criterion.replace(/\s+/g, " ").slice(0, 160)}" (${r.source})`).join(", ");
+  const unmet = count("unmet") > 0 ? ` Not met: ${named("unmet")}.` : "";
+  const unclear = count("unsure") > 0 ? ` Unclear: ${named("unsure")}.` : "";
+  return `Acceptance criteria: ${parts.join(", ")}.${unmet}${unclear}`;
 }
 
 const EVENT_OF = { approve: "APPROVE", request_changes: "REQUEST_CHANGES", comment: "COMMENT" } as const;
@@ -465,7 +469,8 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     }
     // With no new code, whatever the reviewer found is about code already reviewed: only its thread answers count.
     const criteria = (await criteriaRun) ?? null;
-    const withCriteria = criteria ? { ...reviewed, findings: [...reviewed.findings, ...criteria.findings], comments: [...reviewed.comments, ...criteria.comments] } : reviewed;
+    // An unmet criterion is a finding (it counts toward the verdict) but no line comment: the body names it.
+    const withCriteria = criteria ? { ...reviewed, findings: [...reviewed.findings, ...criteria.findings] } : reviewed;
     const answer = quiet ? { ...withCriteria, findings: [], comments: [] } : withCriteria;
     // Our threads: what the decision settled, what the reviewer resolved, and what stays open. An open thread counts at its severity, and one the reviewer
     // did not answer stays open as a question, so a review never approves past a thread nobody looked at.
