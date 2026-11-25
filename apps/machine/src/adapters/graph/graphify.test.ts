@@ -398,3 +398,14 @@ describe("graphifyGraph.locate and impact", () => {
     expect(await graph.locate(repo, "applyCoupon")).toBeNull();
   });
 });
+
+describe("graphifyGraph.build after a machine restart", () => {
+  it("removes a container of the build's name left by the machine before it, then builds (DISC-53: a rebuild left one running, and the card's graph build failed twice on the name)", async () => {
+    const order: string[] = [];
+    const s = setup(0, { removeStale: async (name) => void order.push(`rm ${name}`) });
+    const sandbox = s.graph.build.bind(s.graph);
+    await sandbox(s.repo);
+    expect(order).toEqual([`rm ${s.seen[0]!.name}`]);
+    expect(s.seen[0]!.name).toMatch(/^luna-graph-/);
+  });
+});

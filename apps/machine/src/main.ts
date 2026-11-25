@@ -96,7 +96,7 @@ import { sharedWiki } from "./adapters/git/wiki.ts";
 import { questionnaireWriters } from "./application/compliance-writers.ts";
 import { Questionnaires } from "./application/questionnaires.ts";
 import { graphifyGraph } from "./adapters/graph/graphify.ts";
-import { imageExists, imageId, imageLabel, runSandbox } from "./adapters/docker/docker.ts";
+import { imageExists, imageId, imageLabel, removeContainer, runSandbox } from "./adapters/docker/docker.ts";
 import { repoSecrets } from "./adapters/credentials/repo-secrets.ts";
 import { homedir } from "node:os";
 import { removeRunNetwork } from "./adapters/docker/egress.ts";
@@ -280,7 +280,7 @@ let graphImage: (repoPath: string, signal?: AbortSignal) => Promise<string> = as
 /** The fact proposer: the `fact_propose` pack, run through PackRuns once it exists (bound below). */
 const factProposer: { run: Propose | null } = { run: null };
 const economy = config.economy ? economyOver(economyStore(config.stateDir), (line) => console.warn(line), (repoPath) => finishedRunsOf(db, repoPath, config.stateDir), (repoPath) => defaultBranchFile(repoPath, [CONTEXT_FILE])) : noEconomy();
-const graph = graphifyGraph({ stateDir: config.stateDir, image: (repoPath, signal) => graphImage(repoPath, signal), imageId, graphifyVersion: () => imageLabel(config.runnerImage, "dev.hardness.graphify"), worktreesDir: config.worktreesDir, sandbox: runSandbox, limitsOf: async (repoPath) => sandboxSizeOf(await policies.for(repoPath), "trusted") });
+const graph = graphifyGraph({ stateDir: config.stateDir, image: (repoPath, signal) => graphImage(repoPath, signal), imageId, graphifyVersion: () => imageLabel(config.runnerImage, "dev.hardness.graphify"), worktreesDir: config.worktreesDir, sandbox: runSandbox, removeStale: removeContainer, limitsOf: async (repoPath) => sandboxSizeOf(await policies.for(repoPath), "trusted") });
 /** The graph watch, built below once the pipeline and the repo map exist; a stage with no graph asks it for a first build. */
 let graphWatch: GraphWatch | null = null;
 /** Each engine's credential as every part of the machine sees it: an engine on a runtime
