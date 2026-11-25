@@ -40,6 +40,8 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   rereview_worth: [],
   // A decision on a PR's risk, run on demand by a PR review.
   pr_risk: [],
+  // A decision on one acceptance criterion against a PR's diff, run on demand by a PR review.
+  criteria_met: [],
   e2e_failure_cause: [],
   ci_failure_class: [],
   frame_privacy: [],

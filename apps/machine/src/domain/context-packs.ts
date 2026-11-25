@@ -35,6 +35,7 @@ export const CONTEXT_OF = {
   thread_settle: { key: "check", schema: CheckContext },
   rereview_worth: { key: "check", schema: CheckContext },
   pr_risk: { key: "check", schema: CheckContext },
+  criteria_met: { key: "check", schema: CheckContext },
   e2e_failure_cause: { key: "check", schema: CheckContext },
   ci_failure_class: { key: "check", schema: CheckContext },
   frame_privacy: { key: "check", schema: CheckContext },

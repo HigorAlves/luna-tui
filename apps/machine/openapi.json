@@ -822,6 +822,7 @@
               "thread_settle",
               "rereview_worth",
               "pr_risk",
+              "criteria_met",
               "e2e_failure_cause",
               "ci_failure_class",
               "frame_privacy",
@@ -1478,6 +1479,7 @@
                             "thread_settle",
                             "rereview_worth",
                             "pr_risk",
+                            "criteria_met",
                             "e2e_failure_cause",
                             "ci_failure_class",
                             "frame_privacy",
@@ -1865,6 +1867,7 @@
                       "thread_settle",
                       "rereview_worth",
                       "pr_risk",
+                      "criteria_met",
                       "e2e_failure_cause",
                       "ci_failure_class",
                       "frame_privacy",
@@ -5125,6 +5128,19 @@
                 ]
               },
               "pr_risk": {
+                "type": "string",
+                "enum": [
+                  "claude:opus",
+                  "claude:sonnet",
+                  "claude:haiku",
+                  "codex:sol",
+                  "codex:luna",
+                  "openai:sol",
+                  "openai:luna",
+                  "jev"
+                ]
+              },
+              "criteria_met": {
                 "type": "string",
                 "enum": [
                   "claude:opus",
@@ -8795,6 +8811,7 @@
                     "thread_settle",
                     "rereview_worth",
                     "pr_risk",
+                    "criteria_met",
                     "e2e_failure_cause",
                     "ci_failure_class",
                     "frame_privacy",
@@ -8905,6 +8922,7 @@
               "thread_settle",
               "rereview_worth",
               "pr_risk",
+              "criteria_met",
               "e2e_failure_cause",
               "ci_failure_class",
               "frame_privacy",
@@ -14974,6 +14992,7 @@
                       "thread_settle",
                       "rereview_worth",
                       "pr_risk",
+                      "criteria_met",
                       "e2e_failure_cause",
                       "ci_failure_class",
                       "frame_privacy",
@@ -18329,6 +18348,71 @@
                         }
                       },
                       "pr_risk": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "engine": {
+                              "type": "string",
+                              "enum": [
+                                "claude:opus",
+                                "claude:sonnet",
+                                "claude:haiku",
+                                "codex:sol",
+                                "codex:luna",
+                                "openai:sol",
+                                "openai:luna",
+                                "jev"
+                              ]
+                            },
+                            "effort": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "enum": [
+                                "low",
+                                "medium",
+                                "high",
+                                null
+                              ]
+                            },
+                            "n": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "quality": {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 1
+                            },
+                            "costPerCase": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "at": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "model": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "engine",
+                            "effort",
+                            "n",
+                            "quality",
+                            "costPerCase",
+                            "at"
+                          ]
+                        }
+                      },
+                      "criteria_met": {
                         "type": "array",
                         "items": {
                           "type": "object",
@@ -22661,6 +22745,7 @@
                       "thread_settle",
                       "rereview_worth",
                       "pr_risk",
+                      "criteria_met",
                       "e2e_failure_cause",
                       "ci_failure_class",
                       "frame_privacy",
@@ -22851,6 +22936,7 @@
                       "thread_settle",
                       "rereview_worth",
                       "pr_risk",
+                      "criteria_met",
                       "e2e_failure_cause",
                       "ci_failure_class",
                       "frame_privacy",
@@ -23794,6 +23880,19 @@
                         ]
                       },
                       "pr_risk": {
+                        "type": "string",
+                        "enum": [
+                          "claude:opus",
+                          "claude:sonnet",
+                          "claude:haiku",
+                          "codex:sol",
+                          "codex:luna",
+                          "openai:sol",
+                          "openai:luna",
+                          "jev"
+                        ]
+                      },
+                      "criteria_met": {
                         "type": "string",
                         "enum": [
                           "claude:opus",
@@ -26791,6 +26890,23 @@
                         ]
                       },
                       "pr_risk": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "enum": [
+                          "claude:opus",
+                          "claude:sonnet",
+                          "claude:haiku",
+                          "codex:sol",
+                          "codex:luna",
+                          "openai:sol",
+                          "openai:luna",
+                          "jev",
+                          null
+                        ]
+                      },
+                      "criteria_met": {
                         "type": [
                           "string",
                           "null"

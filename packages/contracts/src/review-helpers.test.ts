@@ -119,3 +119,16 @@ describe("the pr_risk pack and the depth each risk gets", () => {
     }
   });
 });
+
+describe("the criteria_met pack", () => {
+  it("asks one yes/no, met by the diff, and calls the criterion and the diff data", () => {
+    const pack = PACKS.criteria_met;
+    expect(pack.kind).toBe("decision");
+    if (pack.kind !== "decision") return;
+    expect(Object.keys(pack.questions)).toEqual(["met"]);
+    expect(pack.questions.met).toMatchObject({ type: "yesno" });
+    expect(pack.questions.met!.instructions).toMatch(/data/);
+    expect(applyPolicy(pack, { met: { value: false, p: 0.05 } }, undefined).overall).toBe("proceed");
+    expect(applyPolicy(pack, { met: { value: true, p: 0.6 } }, undefined).overall).toBe("flag");
+  });
+});

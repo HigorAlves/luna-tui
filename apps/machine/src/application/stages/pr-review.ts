@@ -10,6 +10,7 @@ import { type ComplianceDeps, runCompliance } from "./compliance-review.ts";
 import { type DiffFile, type Shard, type Skipped, capShards, parseDiff, shardDiff, splitReviewable } from "./review-diff.ts";
 import { shardedSummary } from "./review-summary.ts";
 import { PR_DIFF_MOUNT } from "./review-diff-files.ts";
+import { type CriterionResult, checkCriteria } from "./criteria-check.ts";
 import { type RiskRead, readRisk } from "./review-risk.ts";
 import { type RereviewDeps, type RereviewPlan, prepareRereview, settledReply } from "./rereview.ts";
 import { type HelperDeps, type HelpersOutcome, type PassMount, type PassWorkspace, confirmHelperFindings, runHelpers } from "./review-helpers.ts";
@@ -67,6 +68,15 @@ export interface ThreadReply {
   severity?: string;
   path: string | null;
   line: number | null;
+}
+
+/** "Acceptance criteria: 3 of 4 met, 1 not met.": what the checklist says in the review's body; empty when none was checked. */
+function criteriaLine(results: readonly CriterionResult[] | undefined): string {
+  const checked = (results ?? []).filter((r) => r.verdict !== "unchecked");
+  if (checked.length === 0) return "";
+  const count = (v: CriterionResult["verdict"]) => checked.filter((r) => r.verdict === v).length;
+  const parts = [`${count("met")} of ${checked.length} met`, ...(count("unmet") > 0 ? [`${count("unmet")} not met`] : []), ...(count("unsure") > 0 ? [`${count("unsure")} unclear`] : [])];
+  return `Acceptance criteria: ${parts.join(", ")}.`;
 }
 
 const EVENT_OF = { approve: "APPROVE", request_changes: "REQUEST_CHANGES", comment: "COMMENT" } as const;
@@ -366,6 +376,14 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
         { title: review.pr.title, files: readable, repoPath },
       ).catch((error) => (console.warn(`review: risk read failed: ${messageOf(error)}`), null));
     }
+    // The acceptance criteria of the linked tickets and cards are checked against the whole diff, beside the reviewers; a re-review leaves them to the first review.
+    const criteriaRun = deps.helpers && !plan && ((review.tickets?.length ?? 0) > 0 || (review.cards?.length ?? 0) > 0)
+      ? (async () => {
+          const h = deps.helpers!;
+          const repoPath = context.task.repoPath ?? null;
+          return checkCriteria({ decide: h.decide, decisions: (await h.decisions?.(repoPath).catch(() => ({}))) ?? {}, log: (line) => console.warn(`review: ${line}`) }, { tickets: review.tickets ?? [], cards: review.cards ?? [], files: readable, repoPath });
+        })().catch((error) => (console.warn(`review: the criteria check failed: ${messageOf(error)}`), null))
+      : null;
     const mainContext: StageContext = risk?.main ? { ...context, suggested: risk.main } : context;
 
     // The review passes start with the main review, each in a workspace of its own (they never share the reviewer's folder); runHelpers never throws.
@@ -415,7 +433,9 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     };
     const reviewed = helpers || compliance ? { ...joined, findings: mergeDuplicateFindings([...joined.findings, ...(confirmed?.agreed ?? []), ...kept]), comments: [...joined.comments, ...helperComments] } : parsed.data;
     // With no new code, whatever the reviewer found is about code already reviewed: only its thread answers count.
-    const answer = quiet ? { ...reviewed, findings: [], comments: [] } : reviewed;
+    const criteria = (await criteriaRun) ?? null;
+    const withCriteria = criteria ? { ...reviewed, findings: [...reviewed.findings, ...criteria.findings], comments: [...reviewed.comments, ...criteria.comments] } : reviewed;
+    const answer = quiet ? { ...withCriteria, findings: [], comments: [] } : withCriteria;
     // Our threads: what the decision settled, what the reviewer resolved, and what stays open. An open thread counts at its severity, and one the reviewer
     // did not answer stays open as a question, so a review never approves past a thread nobody looked at.
     const threadReplies: ThreadReply[] = [];
@@ -483,7 +503,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     const settledCount = plan ? plan.rereview.threads.filter((t) => t.settle === "fixed" || t.settle === "reply_holds").length : 0;
     const body = quiet && !reviewerNeeded
       ? `${noise ? "Nothing to review since" : "No new commits since"} our review at ${plan!.rereview.since.slice(0, 7)}. ${settledCount} of ${plan!.rereview.threads.length} of our threads settled; the rest stay open.`
-      : [summary, !quiet && !stats && kept.length > 0 ? `The review passes found ${kept.length} more: ${severityCounts(kept)}.` : ""].filter(Boolean).join(" ");
+      : [summary, criteriaLine(criteria?.results), !quiet && !stats && kept.length > 0 ? `The review passes found ${kept.length} more: ${severityCounts(kept)}.` : ""].filter(Boolean).join(" ");
     const detail = {
       ...pack.detail,
       summary: body,
@@ -507,6 +527,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
         : passNotes.length > 0
           ? { helperNotes: passNotes }
           : {}),
+      ...(criteria?.results.length ? { criteria: criteria.results } : {}),
       ...(risk ? { risk: { level: risk.level, by: risk.by, applied: risk.applied } } : {}),
       ...(shardStats ? { shards: shardStats } : {}),
       ...(shardFailures.length > 0 ? { shardFailures } : {}),
