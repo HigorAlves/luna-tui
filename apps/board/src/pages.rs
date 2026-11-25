@@ -1449,11 +1449,63 @@ fn review_to_post(a: &Approval, width: usize) -> Vec<Line<'static>> {
                 plain(f["path"].as_str().unwrap_or("?")),
                 f["line"].as_i64().unwrap_or(0)
             );
+            let mut prefix = vec![Span::styled(lead, theme::flag())];
+            // Shown at the gate only: the confirmation doubted this finding, and the posted comment carries no mark.
+            if f["unsure"].as_bool().unwrap_or(false) {
+                prefix.push(Span::styled("unsure  ", theme::dim()));
+            }
+            out.extend(hanging(prefix, f["title"].as_str().unwrap_or(""), width));
+        }
+    }
+    // What the filters did before the gate: findings dropped as already raised, and severities moved.
+    let raised: Vec<&Value> = r["alreadyRaised"]
+        .as_array()
+        .map(|a| a.iter().collect())
+        .unwrap_or_default();
+    if !raised.is_empty() {
+        out.push(Line::default());
+        out.push(Line::from(Span::styled(
+            format!("  Already raised ({})", raised.len()),
+            theme::label(),
+        )));
+        for d in raised {
+            let lead = format!(
+                "    {}:{}  by {}  ",
+                plain(d["path"].as_str().unwrap_or("?")),
+                d["line"].as_i64().unwrap_or(0),
+                plain(d["by"].as_str().unwrap_or("someone"))
+            );
             out.extend(hanging(
-                vec![Span::styled(lead, theme::flag())],
-                f["title"].as_str().unwrap_or(""),
+                vec![Span::styled(lead, theme::dim())],
+                d["title"].as_str().unwrap_or(""),
                 width,
             ));
+        }
+    }
+    let moved: Vec<&Value> = r["recalibrated"]
+        .as_array()
+        .map(|a| a.iter().collect())
+        .unwrap_or_default();
+    if !moved.is_empty() {
+        out.push(Line::default());
+        out.push(Line::from(Span::styled(
+            format!("  Severity changed ({})", moved.len()),
+            theme::label(),
+        )));
+        for m in moved {
+            let title = r["findings"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|f| f["id"].as_str().is_some() && f["id"] == m["id"])
+                .and_then(|f| f["title"].as_str())
+                .unwrap_or("");
+            let lead = format!(
+                "    {} → {}  ",
+                m["from"].as_str().unwrap_or("?").replace('_', " "),
+                m["to"].as_str().unwrap_or("?").replace('_', " ")
+            );
+            out.extend(hanging(vec![Span::styled(lead, theme::flag())], title, width));
         }
     }
     out
@@ -1826,6 +1878,38 @@ mod tests {
         ] {
             assert!(main.contains(needle), "no {needle:?} in\n{main}");
         }
+    }
+
+    #[test]
+    fn a_review_marks_unsure_findings_and_lists_what_it_dropped_or_recalibrated() {
+        let mut app = review_verdict_app("request_changes");
+        if let Some(d) = app.detail.as_mut() {
+            let r = &mut d.approvals[0].requested;
+            r["findings"][0]["unsure"] = serde_json::json!(true);
+            r["findings"][0]["id"] = serde_json::json!("F1");
+            r["alreadyRaised"] = serde_json::json!([
+                {"id": "F9", "title": "Missing owner check", "path": "src/a.ts", "line": 4, "by": "coderabbit"}
+            ]);
+            r["recalibrated"] = serde_json::json!([{"id": "F1", "from": "should_fix", "to": "bug"}]);
+        }
+        let screen = render(&mut app, 180, 60);
+        let main = main_pane(&screen);
+        for needle in [
+            "unsure",
+            "Audit copy taken too late",
+            "Already raised (1)",
+            "Missing owner check",
+            "coderabbit",
+            "Severity changed (1)",
+            "should fix",
+            "bug",
+        ] {
+            assert!(main.contains(needle), "no {needle:?} in\n{main}");
+        }
+        let mut bare = review_verdict_app("comment");
+        let screen = render(&mut bare, 180, 60);
+        let main = main_pane(&screen);
+        assert!(!main.contains("Already raised") && !main.contains("Severity changed") && !main.contains("unsure"));
     }
 
     #[test]

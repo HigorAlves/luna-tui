@@ -118,6 +118,8 @@ export const Finding = z.object({
   resolution: z.object({ status: z.enum(["fixed", "kept", "dismissed", "waived"]), by: z.string(), commit: z.string().optional(), /** True when the machine worked the resolution out (a finding that stopped being raised), rather than a person or a stage saying so. */ inferred: z.boolean().optional() }).optional(),
   /** A design finding (RFC 0013): where in the frame and where in the build. */
   design: z.object({ source: z.enum(["parity", "a11y"]), frame: z.string().optional(), node: z.string().optional(), element: z.string(), viewport: z.string().optional(), state: z.string().optional(), kind: z.string(), expected: z.string().optional(), actual: z.string().optional() }).optional(),
+  /** A review's confirmation was not sure of this finding: the gate shows it marked; the posted comment carries no mark. */
+  unsure: z.boolean().optional(),
   /** Ids of the duplicates folded into this finding by `mergeDuplicateFindings`. */
   merged: z.array(z.string()).optional(),
 });

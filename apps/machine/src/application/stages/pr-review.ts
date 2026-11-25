@@ -106,9 +106,6 @@ export function capComments<T extends { path: string; line: number }>(comments: 
 
 export { diffExcerptOf };
 
-/** Marks a finding the confirmation was not sure of; the person reads the mark before posting. */
-const UNSURE = "Unsure: ";
-
 /** The PR a task came from, or null when the task is not a PR task. */
 export function prOf(context: StageContext): { repo: string; number: number; url: string } | null {
   const source = context.task.source;
@@ -383,8 +380,14 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       const excerpt = async (finding: Finding): Promise<string> => (worktree ? await excerptOf(worktree, finding).catch(() => "") : "") || diffExcerptOf(review.diff, finding);
       confirmed = await confirmHelperFindings({ decide: deps.helpers.decide, repoPath: context.task.repoPath ?? null, decisions: overrides, excerpt, log: (line) => console.warn(`review: ${line}`) }, helpers.helpers, parsed.data.findings);
     }
-    const kept = (confirmed?.kept ?? []).map(({ finding, unsure }) => (unsure ? { ...finding, title: `${UNSURE}${finding.title}` } : finding));
+    // An unsure finding is marked (`unsure`) for the gate only: the posted title and comment stay clean.
+    const kept = (confirmed?.kept ?? []).map(({ finding, unsure }) => (unsure ? { ...finding, unsure: true } : finding));
     const helperComments = kept.map((f) => ({ path: f.path, line: f.line, side: f.side === "LEFT" ? ("LEFT" as const) : ("RIGHT" as const), body: `${f.title}: ${f.body}` }));
+    // The main reviewer's findings are marked the same way when the check doubts them; they are never dropped.
+    const mainUnsure = new Set((confirmed?.main ?? []).filter((m) => m.unsure).map((m) => `${m.finding.path}:${m.finding.line}:${m.finding.title}`));
+    if (mainUnsure.size > 0) {
+      parsed.data.findings = parsed.data.findings.map((f) => (mainUnsure.has(`${f.path}:${f.line}:${f.title}`) ? { ...f, unsure: true } : f));
+    }
     // The compliance lead reads the same diff beside the reviewer; its findings join before the verdict, so a high one blocks. It never fails the review.
     const compliance = deps.compliance && !quiet ? await runCompliance(deps.compliance, context, pr.repo, sharded ? (diffMount ? fileReview : null) : shared, diffMount ? [diffMount] : undefined) : null;
     const joined = {
@@ -463,8 +466,9 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
 
     // Nothing is posted here: the review goes out under the person's name, so every verdict, its body and its line
     // comments wait at "post the verdict?" until the person says yes (or edits or drops it).
+    const unsureAt = new Set(answer.findings.filter((f) => f.unsure).map((f) => `${f.path}:${f.line}`));
     const comments = capComments(
-      answer.comments.map((c) => ({ path: c.path, line: c.line, side: c.side, body: c.body })),
+      answer.comments.map((c) => ({ path: c.path, line: c.line, side: c.side, body: c.body, ...(unsureAt.has(`${c.path}:${c.line}`) ? { unsure: true } : {}) })),
       answer.findings,
     );
     // The sub-runs' cost joins the review's, so the budget and the engine's counters see all of it.
@@ -507,6 +511,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
         ? { rereview: { since: plan.rereview.since, ...(plan.rereview.note ? { note: plan.rereview.note } : {}), settled: plan.rereview.threads.filter((t) => t.settle === "fixed" || t.settle === "reply_holds").length, open: stillOpen.length, threads: plan.rereview.threads.length } }
         : {}),
       ...(alreadyRaised.length > 0 ? { alreadyRaised } : {}),
+      ...(confirmed && confirmed.main.length > 0 ? { mainConfirm: confirmed.mainVerdicts } : {}),
       ...(compliance ? { compliance: { regimesRun: compliance.regimesRun, findings: compliance.findings.length, notes: compliance.notes } } : {}),
       ...(parsed.data.verdict !== verdict ? { modelVerdict: parsed.data.verdict } : {}),
       posted: false,
@@ -543,7 +548,8 @@ export function postVerdictRunner(deps: { github: GitHub }): StageRunner {
     }
     const body = typeof post.payload.body === "string" ? post.payload.body : "";
     // The line comments ride on the gate since every review waits for the person; a gate stored before that has none.
-    const comments = Array.isArray(post.payload.comments) ? (post.payload.comments as ReviewPost["comments"]) : [];
+    // `unsure` is the gate's mark only; GitHub gets the clean comment.
+    const comments = Array.isArray(post.payload.comments) ? (post.payload.comments as Array<ReviewPost["comments"][number] & { unsure?: boolean }>).map(({ unsure: _unsure, ...c }) => c) : [];
     try {
       await deps.github.postReview(pr.repo, pr.number, { event, body, comments });
     } catch (error) {

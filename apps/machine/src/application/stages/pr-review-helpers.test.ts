@@ -68,22 +68,36 @@ describe("reviewing with the review passes", () => {
     expect(posted(result).comments).toEqual([]);
   });
 
-  it("marks a flagged finding unsure in its title and comment, and keeps a finding when no decision can be asked", async () => {
+  it("marks a flagged finding unsure at the gate only: the title and the comment body stay clean, and keeps a finding when no decision can be asked", async () => {
     const flagged = setup({ helperFindings: { review_iac: [idor] }, decide: async () => ({ real: { value: true, p: 0.6 } }) });
     const a = await flagged.run(context);
-    expect(a.findings![0]!.title).toBe("Unsure: IDOR on export");
-    expect(posted(a).comments[0]!.body).toBe("Unsure: IDOR on export: No owner check on the export route.");
+    expect(a.findings![0]).toEqual({ ...idor, unsure: true });
+    expect(posted(a).comments).toEqual([{ path: "a.ts", line: 1, side: "RIGHT", body: "IDOR on export: No owner check on the export route.", unsure: true }]);
     const none = setup({ helperFindings: { review_iac: [idor] }, decide: null });
     const b = await none.run(context);
     expect(b.findings).toEqual([idor]);
     expect(b.detail).toMatchObject({ helpers: expect.arrayContaining([{ pack: "review_iac", outcome: "ok", findings: 1, confirm: { skipped: 1 } }]) });
   });
 
-  it("merges a pass's finding the reviewer also made, with no question asked", async () => {
+  it("checks the main reviewer's findings too: a confident no never drops one, it marks it and its line comment unsure", async () => {
+    const main = { verdict: "request_changes", summary: "One bug.", findings: [{ ...idor, severity: "bug", title: "Wrong total" }], comments: [{ path: "a.ts", line: 1, side: "RIGHT", body: "Wrong total: sums twice." }] };
+    const { run } = setup({ mainAnswer: main, decide: async () => ({ real: { value: false, p: 0.03 } }) });
+    const result = await run(context);
+    expect(result.findings).toMatchObject([{ title: "Wrong total", unsure: true }]);
+    expect(result.detail).toMatchObject({ verdict: "request_changes", mainConfirm: { proceed: 1 } });
+    expect(posted(result).comments).toEqual([{ path: "a.ts", line: 1, side: "RIGHT", body: "Wrong total: sums twice.", unsure: true }]);
+    const sure = setup({ mainAnswer: main });
+    const kept = await sure.run(context);
+    expect(sure.checks).toHaveLength(1);
+    expect(kept.findings).toEqual(main.findings);
+    expect(posted(kept).comments[0]).not.toHaveProperty("unsure");
+  });
+
+  it("merges a pass's finding the reviewer also made, asking about it once (as the reviewer's own)", async () => {
     const main = { verdict: "request_changes", summary: "One.", findings: [{ ...idor, title: "idor on export", severity: "bug" }], comments: [{ path: "a.ts", line: 1, side: "RIGHT", body: "idor on export" }] };
     const { run, checks } = setup({ mainAnswer: main, helperFindings: { review_security: [idor] } });
     const result = await run(context);
-    expect(checks).toHaveLength(0);
+    expect(checks).toHaveLength(1);
     expect(result.findings).toHaveLength(1);
     expect(result.findings![0]!.severity).toBe("bug");
     expect(posted(result).comments).toHaveLength(1);

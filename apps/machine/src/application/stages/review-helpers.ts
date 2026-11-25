@@ -2,7 +2,7 @@
 // reviewer, each its own pack and engine, run on every PR whatever the files. They read the same diff as the main
 // reviewer. A pass that fails or answers badly is a note, never a failed review. What a pass found that the main
 // reviewer did not is checked once more (`finding_confirm`) before it joins the review.
-import { type DecisionOverrides, type Finding, type ReviewContext, REVIEW_HELPER_PACKS, type ReviewHelperPack, ReviewHelperAnswer, mergeDuplicateFindings } from "@hardness/contracts";
+import { type DecisionOverrides, type Finding, type ReviewContext, type Verdict, REVIEW_HELPER_PACKS, type ReviewHelperPack, ReviewHelperAnswer, mergeDuplicateFindings } from "@hardness/contracts";
 
 import type { StageContext, StageResult } from "../ports.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
@@ -114,14 +114,18 @@ export interface Confirmed {
   verdicts: Partial<Record<ReviewHelperPack, Record<string, number>>>;
   /** Per pass, how many findings the main reviewer had made too. */
   duplicates: Partial<Record<ReviewHelperPack, number>>;
+  /** The main reviewer's own findings, each with whether the judge was unsure of it. A confident "not real" marks one unsure and never drops it. */
+  main: Array<{ finding: Finding; unsure: boolean }>;
+  /** How many of the main reviewer's findings landed on each verdict. */
+  mainVerdicts: Record<string, number>;
 }
 
 /** A finding the main reviewer made too: adding it to the main's findings folds into one of them. */
 const madeToo = (main: readonly Finding[], f: Finding): boolean => mergeDuplicateFindings([...main, f]).length === mergeDuplicateFindings(main).length;
 
-/** Checks the helpers' own findings once more against the code. proceed on a yes keeps it, proceed on a no drops it, flag keeps it marked unsure, ask drops it, and a check that did not run keeps it. */
+/** Checks the findings once more against the code: the helpers' own (what the main reviewer did not make too) and the main reviewer's. For a helper's: proceed on a yes keeps it, proceed on a no drops it, flag keeps it marked unsure, ask drops it, and a check that did not run keeps it. */
 export async function confirmHelperFindings(deps: ConfirmDeps, helpers: readonly Pick<HelperRun, "pack" | "findings">[], main: readonly Finding[]): Promise<Confirmed> {
-  const out: Confirmed = { kept: [], agreed: [], verdicts: {}, duplicates: {} };
+  const out: Confirmed = { kept: [], agreed: [], verdicts: {}, duplicates: {}, main: [], mainVerdicts: {} };
   const asked: Array<{ pack: ReviewHelperPack; finding: Finding }> = [];
   for (const helper of helpers) {
     for (const finding of helper.findings) {
@@ -131,16 +135,32 @@ export async function confirmHelperFindings(deps: ConfirmDeps, helpers: readonly
       } else asked.push({ pack: helper.pack, finding });
     }
   }
-  const judged = await Promise.all(
-    asked.map(async ({ pack, finding }) => {
-      const excerpt = await deps.excerpt(finding).catch(() => "");
-      const { verdict, answer } = await judgeCheck(deps.decide, "finding_confirm", { kind: "finding", finding, excerpt }, deps.repoPath, deps.decisions, deps.log);
-      const real = (answer?.real as { value?: unknown } | undefined)?.value;
-      // A confident no is a "proceed" on the question's own terms: the finding is not real.
-      const keep = verdict === "skipped" || verdict === "flag" || (verdict === "proceed" && real !== false);
-      return { pack, finding, verdict, keep, unsure: verdict === "flag" };
-    }),
-  );
+  const judge = async (finding: Finding): Promise<{ verdict: Verdict | "skipped"; real: unknown }> => {
+    const excerpt = await deps.excerpt(finding).catch(() => "");
+    const { verdict, answer } = await judgeCheck(deps.decide, "finding_confirm", { kind: "finding", finding, excerpt }, deps.repoPath, deps.decisions, deps.log);
+    return { verdict, real: (answer?.real as { value?: unknown } | undefined)?.value };
+  };
+  const [judged, judgedMain] = await Promise.all([
+    Promise.all(
+      asked.map(async ({ pack, finding }) => {
+        const { verdict, real } = await judge(finding);
+        // A confident no is a "proceed" on the question's own terms: the finding is not real.
+        const keep = verdict === "skipped" || verdict === "flag" || (verdict === "proceed" && real !== false);
+        return { pack, finding, verdict, keep, unsure: verdict === "flag" };
+      }),
+    ),
+    // The main reviewer's findings are asked too, but never dropped: a "not real" or an unsure answer only marks them.
+    Promise.all(
+      main.map(async (finding) => {
+        const { verdict, real } = await judge(finding);
+        return { finding, verdict, unsure: verdict === "flag" || (verdict === "proceed" && real === false) };
+      }),
+    ),
+  ]);
+  for (const j of judgedMain) {
+    out.mainVerdicts[j.verdict] = (out.mainVerdicts[j.verdict] ?? 0) + 1;
+    out.main.push({ finding: j.finding, unsure: j.unsure });
+  }
   for (const j of judged) {
     const counts = (out.verdicts[j.pack] ??= {});
     counts[j.verdict] = (counts[j.verdict] ?? 0) + 1;

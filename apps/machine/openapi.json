@@ -675,6 +675,9 @@
                     "kind"
                   ]
                 },
+                "unsure": {
+                  "type": "boolean"
+                },
                 "merged": {
                   "type": "array",
                   "items": {
@@ -10282,6 +10285,9 @@
                             "kind"
                           ]
                         },
+                        "unsure": {
+                          "type": "boolean"
+                        },
                         "merged": {
                           "type": "array",
                           "items": {
@@ -10911,6 +10917,9 @@
                                 "element",
                                 "kind"
                               ]
+                            },
+                            "unsure": {
+                              "type": "boolean"
                             },
                             "merged": {
                               "type": "array",
