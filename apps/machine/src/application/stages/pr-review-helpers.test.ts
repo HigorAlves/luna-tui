@@ -14,8 +14,8 @@ const clean = { verdict: "approve", summary: "Fine.", findings: [], comments: []
 const idor: Finding = { path: "a.ts", line: 1, severity: "security", title: "IDOR on export", body: "No owner check on the export route.", confidence: 0.9 };
 const usage = { turns: 1, costUsd: 0.25, tokens: null };
 
-function setup(opts: { answer?: unknown; helperFindings?: Partial<Record<string, Finding[]>>; helperRun?: (pack: string) => Promise<StageResult>; decide?: Decide | null; mainAnswer?: unknown } = {}) {
-  const github = fakeGitHub({ prFacts: async () => node as never, prDiff: async () => "diff --git a/a.ts b/a.ts\n+route(export)\n", prFiles: async () => [{ path: "a.ts", additions: 1, deletions: 0 }], prComments: async () => [] });
+function setup(opts: { answer?: unknown; helperFindings?: Partial<Record<string, Finding[]>>; helperRun?: (pack: string) => Promise<StageResult>; decide?: Decide | null; mainAnswer?: unknown; existing?: Array<{ path: string | null; line: number | null; author: string; body: string }> } = {}) {
+  const github = fakeGitHub({ prFacts: async () => node as never, prDiff: async () => "diff --git a/a.ts b/a.ts\n+route(export)\n", prFiles: async () => [{ path: "a.ts", additions: 1, deletions: 0 }], prComments: async () => opts.existing ?? [], viewer: async () => ({ login: "luna" }) as never });
   const ran: string[] = [];
   const checks: Array<{ pack: string; check: { finding: Finding; excerpt: string } }> = [];
   const run = prReviewRunner({
@@ -28,7 +28,7 @@ function setup(opts: { answer?: unknown; helperFindings?: Partial<Record<string,
         return { outcome: "pass", usage, detail: { answer: { summary: `${pack} looked`, findings: opts.helperFindings?.[pack] ?? [] } } };
       },
       get decide() {
-        const confirming: Decide = async (pack, check) => (checks.push({ pack, check: check as never }), { real: { value: true, p: 0.95 } });
+        const confirming: Decide = async (pack, check) => pack === "already_raised" ? ({ same: { value: true, p: 0.95 } }) : (checks.push({ pack, check: check as never }), { real: { value: true, p: 0.95 } });
         return opts.decide === undefined ? confirming : opts.decide;
       },
     },
@@ -125,5 +125,26 @@ describe("reviewing with the review passes", () => {
     const out = await result;
     expect(out.outcome).toBe("fail");
     expect(events.filter((e) => e.endsWith("done")).length).toBe(5);
+  });
+});
+
+describe("reviewing against the comments already on the PR", () => {
+  const theirs = { path: "a.ts", line: 2, author: "coderabbit", body: "Anyone can export another user's data: add an owner check." };
+
+  it("drops a finding another reviewer already raised, with its comment, and says who raised it first", async () => {
+    const { run } = setup({ helperFindings: { review_security: [idor] }, existing: [theirs] });
+    const result = await run(context);
+    expect(result.findings).toEqual([]);
+    expect(result.detail).toMatchObject({ verdict: "approve", alreadyRaised: [{ title: "IDOR on export", path: "a.ts", line: 1, by: "coderabbit" }] });
+    expect(posted(result).comments).toEqual([]);
+  });
+
+  it("keeps the finding when the comment is ours or the decision says it is another point", async () => {
+    const ours = setup({ helperFindings: { review_security: [idor] }, existing: [{ ...theirs, author: "luna" }] });
+    expect((await ours.run(context)).findings).toEqual([idor]);
+    const other = setup({ helperFindings: { review_security: [idor] }, existing: [theirs], decide: async (pack) => (pack === "already_raised" ? { same: { value: false, p: 0.02 } } : { real: { value: true, p: 0.95 } }) });
+    const result = await other.run(context);
+    expect(result.findings).toEqual([idor]);
+    expect(result.detail).not.toHaveProperty("alreadyRaised");
   });
 });

@@ -6,6 +6,7 @@ import { type DecisionOverrides, type Finding, PrReviewAnswer, type RequestedAct
 
 import { type Decide } from "./check-decide.ts";
 import { diffExcerptOf } from "./diff-section.ts";
+import { dropAlreadyRaised } from "./already-raised.ts";
 import { type ComplianceDeps, runCompliance } from "./compliance-review.ts";
 import { type DiffFile, type Shard, type Skipped, capShards, parseDiff, shardDiff, splitReviewable } from "./review-diff.ts";
 import { shardedSummary } from "./review-summary.ts";
@@ -392,7 +393,20 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       findings: [...parsed.data.findings, ...(compliance?.findings ?? [])],
       comments: [...parsed.data.comments, ...(compliance?.comments ?? [])],
     };
-    const reviewed = helpers || compliance ? { ...joined, findings: mergeDuplicateFindings([...joined.findings, ...(confirmed?.agreed ?? []), ...kept]), comments: [...joined.comments, ...helperComments] } : parsed.data;
+    const merged = helpers || compliance ? { ...joined, findings: mergeDuplicateFindings([...joined.findings, ...(confirmed?.agreed ?? []), ...kept]), comments: [...joined.comments, ...helperComments] } : parsed.data;
+    // A finding that repeats a comment someone else already left on the PR is dropped, with its line comment.
+    let alreadyRaised: Awaited<ReturnType<typeof dropAlreadyRaised>>["dropped"] = [];
+    let reviewed = merged;
+    if (deps.helpers && merged.findings.length > 0 && review.existingComments.length > 0) {
+      const overrides = (await deps.helpers.decisions?.(context.task.repoPath ?? null).catch(() => ({}))) ?? {};
+      const me = (await github.viewer().catch(() => null))?.login ?? null;
+      const raised = await dropAlreadyRaised({ decide: deps.helpers.decide, repoPath: context.task.repoPath ?? null, decisions: overrides, me, log: (line) => console.warn(`review: ${line}`) }, merged.findings, review.existingComments);
+      alreadyRaised = raised.dropped;
+      if (alreadyRaised.length > 0) {
+        const gone = new Set(alreadyRaised.map((d) => `${d.path}:${d.line}`));
+        reviewed = { ...merged, findings: raised.kept, comments: merged.comments.filter((c) => !gone.has(`${c.path}:${c.line}`)) };
+      }
+    }
     // With no new code, whatever the reviewer found is about code already reviewed: only its thread answers count.
     const answer = quiet ? { ...reviewed, findings: [], comments: [] } : reviewed;
     // Our threads: what the decision settled, what the reviewer resolved, and what stays open. An open thread counts at its severity, and one the reviewer
@@ -492,6 +506,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       ...(plan
         ? { rereview: { since: plan.rereview.since, ...(plan.rereview.note ? { note: plan.rereview.note } : {}), settled: plan.rereview.threads.filter((t) => t.settle === "fixed" || t.settle === "reply_holds").length, open: stillOpen.length, threads: plan.rereview.threads.length } }
         : {}),
+      ...(alreadyRaised.length > 0 ? { alreadyRaised } : {}),
       ...(compliance ? { compliance: { regimesRun: compliance.regimesRun, findings: compliance.findings.length, notes: compliance.notes } } : {}),
       ...(parsed.data.verdict !== verdict ? { modelVerdict: parsed.data.verdict } : {}),
       posted: false,

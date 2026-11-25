@@ -1,0 +1,45 @@
+{
+  "schema": 3,
+  "stage": "already_raised",
+  "pack": "already_raised",
+  "attempt": 1,
+  "task": {
+    "id": "already-raised",
+    "title": "Already raised",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "finding",
+      "finding": {
+        "path": "src/cart/total.ts",
+        "line": 8,
+        "severity": "bug",
+        "title": "Missing null check",
+        "body": "`cart.discount` may be undefined here.",
+        "confidence": 0.85
+      },
+      "existing": {
+        "author": "alice",
+        "path": "src/cart/total.ts",
+        "line": 9,
+        "body": "Missing null check on `cart.discount`: it is optional in the type."
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

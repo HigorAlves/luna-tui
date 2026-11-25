@@ -164,6 +164,8 @@ export const PackId = z.enum([
   "finding_confirm",
   // Settles one of our own review threads on a re-review: did the new code fix it, does the author's reply hold.
   "thread_settle",
+  // Is a review finding the same point as a comment someone else already left on the PR.
+  "already_raised",
   "e2e_failure_cause",
   // A decision on what kind of CI failure a red job is (a check context, run on demand): a real failure, a flake, an environment failure, a drift from the base.
   "ci_failure_class",
@@ -1187,6 +1189,8 @@ export const CheckContext = z.object({
   /** finding: the finding to classify, and the file around its line as the machine read it. */
   finding: Finding.optional(),
   excerpt: z.string().optional(),
+  /** finding, for already_raised: a comment someone else left on the PR (data: people and bots wrote it). */
+  existing: z.object({ author: z.string(), path: z.string().nullable(), line: z.number().int().nullable(), body: z.string() }).optional(),
   /** e2e: the failed run, with the rows that did not pass. */
   e2e: z
     .object({
