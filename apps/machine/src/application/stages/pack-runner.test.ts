@@ -2244,6 +2244,7 @@ describe("the implementer's side of the ui-designer (RFC 0013, phase 5)", () => 
       onPickAck: async () => ({ ok: false, reason: "no" }),
       afterRun: async (outcome) => (calls.push(`afterRun ${outcome}`), null),
       cancel: async () => void calls.push("cancel"),
+      idle: async () => {},
       picked: () => new Set<string>(),
       delegatedLocks: () => [],
       delegatedLockSets: () => [],

@@ -107,6 +107,8 @@ export interface HelperRuns extends HelperCoordinator {
   afterRun(outcome: StageOutcome): Promise<HelperEscalation | null>;
   /** Aborts the helper, waits for it (at most `cancelWaitMs`), records `cancelled` and removes its workspace. */
   cancel(): Promise<void>;
+  /** Resolves once every helper whose run returned has been settled (recorded, its commits taken, its files freed). A helper still running, or a request still starting one, is not waited for. */
+  idle(): Promise<void>;
   /** The shas the machine picked onto the card's branch: earlier runs' and this one's. Read when asked. */
   picked(): ReadonlySet<string>;
   /** The files of every slice the helper holds or has had picked in this run: the implementer must not touch them. */
@@ -284,9 +286,18 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
       } catch (error) {
         result = { outcome: "fail", detail: { error: error instanceof Error ? error.message : String(error) } };
       }
-      await settle(h, result, (now() - t0) / 60_000).catch((error) => deps.log?.(`helper not settled: ${error instanceof Error ? error.message : String(error)}`));
+      const settling = settle(h, result, (now() - t0) / 60_000).catch((error) => deps.log?.(`helper not settled: ${error instanceof Error ? error.message : String(error)}`));
+      ending.add(settling);
+      try {
+        await settling;
+      } finally {
+        ending.delete(settling);
+      }
     })();
   }
+
+  /** The settles under way: a run that returned and is being recorded, taken and freed. */
+  const ending = new Set<Promise<unknown>>();
 
   /** Set the moment the run ends (`afterRun`, `cancel`): no helper starts after it. */
   let closed = false;
@@ -590,6 +601,9 @@ export function helperRuns(deps: HelperRunsDeps): HelperRuns {
       return escalation;
     },
     cancel,
+    async idle() {
+      while (ending.size > 0) await Promise.allSettled([...ending]);
+    },
     picked: () => pickedShas,
     // A slice the helper has (live) or had picked onto the branch (committed) is its for the whole run; one handed back to the implementer is not.
     delegatedLocks: () => [...new Set([...helpers.values()].filter((h) => LIVE.has(h.state) || h.state === "committed").flatMap((h) => h.locks.helper))],

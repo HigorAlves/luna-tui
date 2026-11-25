@@ -24,6 +24,7 @@ beforeEach(async () => {
   await writeFile(join(out, "ledger.json"), JSON.stringify(ledger));
 });
 afterEach(async () => {
+  coordinators.clear();
   await rm(out, { recursive: true, force: true });
 });
 
@@ -92,12 +93,21 @@ function setup(over: Partial<HelperRunsDeps> = {}) {
     setDescends: (d: boolean) => (descends = d),
     setHead: (h: string) => (head = h), setPick: (p: typeof pick) => (pick = p), setAdvance: (a: typeof advance) => (advance = a), setLand: (l: typeof land) => (land = l),
     holdAdvance: () => { let release!: () => void; hold = new Promise<void>((r) => (release = r)); return () => { release(); hold = Promise.resolve(); }; },
-    coordinator: helperRuns(deps),
+    coordinator: live(helperRuns(deps)),
   };
 }
 
+/** Every coordinator a test made, so `tick` can wait for the work each one is finishing. */
+const coordinators = new Set<ReturnType<typeof helperRuns>>();
+const live = (c: ReturnType<typeof helperRuns>) => (coordinators.add(c), c);
+
 const ask = (coordinator: ReturnType<typeof helperRuns>, slice = 2) => coordinator.onHelperRequest({ nonce: "ab12cd34", n: 1, slice, message: "make it match the frame" });
-const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+/** Lets the coordinators finish what they are finishing: a timer turn, then every settle under way. A fixed sleep alone lost the race under CI
+ *  load (the state file still said `running` after the run had returned). */
+const tick = async () => {
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await Promise.all([...coordinators].map((c) => c.idle()));
+};
 
 describe("helperRuns: starting a helper", () => {
   it("refuses with the rule's one line and a row, and makes no workspace and starts no run", async () => {
