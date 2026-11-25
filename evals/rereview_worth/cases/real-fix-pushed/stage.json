@@ -1,0 +1,48 @@
+{
+  "schema": 3,
+  "stage": "rereview_worth",
+  "pack": "rereview_worth",
+  "attempt": 1,
+  "task": {
+    "id": "rereview-worth",
+    "title": "Rereview worth",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "rereview",
+      "activity": {
+        "comments": [],
+        "commits": 2,
+        "files": [
+          {
+            "path": "src/cart/export.ts",
+            "additions": 4,
+            "deletions": 2
+          },
+          {
+            "path": "src/cart/export.test.ts",
+            "additions": 12,
+            "deletions": 0
+          }
+        ],
+        "delta": "@@ -3 +3 @@\n-  for (let i = 0; i < rows.length - 1; i++) {\n+  for (let i = 0; i < rows.length; i++) {"
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

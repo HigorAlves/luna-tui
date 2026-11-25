@@ -10,6 +10,8 @@ import { type ComplianceDeps, runCompliance } from "./compliance-review.ts";
 import { type DiffFile, type Shard, type Skipped, capShards, parseDiff, shardDiff, splitReviewable } from "./review-diff.ts";
 import { shardedSummary } from "./review-summary.ts";
 import { PR_DIFF_MOUNT } from "./review-diff-files.ts";
+import { type CriterionResult, checkCriteria } from "./criteria-check.ts";
+import { type RiskRead, rankShards, readRisk } from "./review-risk.ts";
 import { type RereviewDeps, type RereviewPlan, prepareRereview, settledReply } from "./rereview.ts";
 import { type HelperDeps, type HelpersOutcome, type PassMount, type PassWorkspace, confirmHelperFindings, runHelpers } from "./review-helpers.ts";
 import { followUp } from "./thread-followup.ts";
@@ -66,6 +68,15 @@ export interface ThreadReply {
   severity?: string;
   path: string | null;
   line: number | null;
+}
+
+/** "Acceptance criteria: 3 of 4 met, 1 not met.": what the checklist says in the review's body; empty when none was checked. */
+function criteriaLine(results: readonly CriterionResult[] | undefined): string {
+  const checked = (results ?? []).filter((r) => r.verdict !== "unchecked");
+  if (checked.length === 0) return "";
+  const count = (v: CriterionResult["verdict"]) => checked.filter((r) => r.verdict === v).length;
+  const parts = [`${count("met")} of ${checked.length} met`, ...(count("unmet") > 0 ? [`${count("unmet")} not met`] : []), ...(count("unsure") > 0 ? [`${count("unsure")} unclear`] : [])];
+  return `Acceptance criteria: ${parts.join(", ")}.`;
 }
 
 const EVENT_OF = { approve: "APPROVE", request_changes: "REQUEST_CHANGES", comment: "COMMENT" } as const;
@@ -303,7 +314,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     const cardPath = context.task.worktreePath ?? null;
     if (deps.rereview && cardPath) {
       try {
-        plan = await prepareRereview(deps.rereview, github, { repo: pr.repo, number: pr.number, worktree: cardPath, repoPath: context.task.repoPath ?? null, fullDiff: review.diff, log: (line) => console.warn(`review: ${line}`) });
+        plan = await prepareRereview(deps.rereview, github, { repo: pr.repo, number: pr.number, worktree: cardPath, repoPath: context.task.repoPath ?? null, baseRef: review.pr.baseRef, fullDiff: review.diff, log: (line) => console.warn(`review: ${line}`) });
       } catch (error) {
         console.warn(`review: could not prepare a re-review of ${pr.url} (${messageOf(error)}); reviewing the whole diff`);
       }
@@ -323,7 +334,9 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     // No commit since the review we read: there is no new code, so no pass runs and no new finding is made; the reviewer runs only for a thread
     // that still needs a first answer at this head.
     const quiet = plan?.quiet === true;
-    const reviewerNeeded = !quiet || plan!.rereview.threads.some((t) => t.settle === "unsettled");
+    const noise = plan?.noise === true;
+    // Noise (a thanks, a merge of the base, a CI-only change) settles our threads and nothing more: no reviewer runs for an unsettled one.
+    const reviewerNeeded = !noise && (!quiet || plan!.rereview.threads.some((t) => t.settle === "unsettled"));
     const silent: StageResult = { outcome: "pass", detail: { answer: { verdict: "comment", summary: "", findings: [], comments: [] } } };
     // A diff too big for one reviewer is read in shards by module; the passes and the compliance lead read the whole PR once, as files.
     const limits = (await deps.limits?.(context.task.repoPath ?? null).catch(() => null)) ?? DEFAULT_LIMITS;
@@ -347,24 +360,55 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     }
     const fileReview: ReviewContext = { ...shared, diff: "", diffDir: PR_DIFF_MOUNT };
 
+    // How deep this review goes: pr_risk reads the files and line counts, and the risk suggests what the reviewer and the passes run on (luna.yaml wins).
+    let risk: RiskRead | null = null;
+    if (deps.helpers && !quiet && reviewerNeeded && readable.length > 0) {
+      const h = deps.helpers;
+      const repoPath = context.task.repoPath ?? null;
+      risk = await readRisk(
+        {
+          decide: h.decide,
+          decisions: (await h.decisions?.(repoPath).catch(() => ({}))) ?? {},
+          policy: (await h.policy?.(repoPath).catch(() => ({}))) ?? {},
+          ...(h.engineReady ? { engineReady: (engine) => h.engineReady!(engine, repoPath) } : {}),
+          log: (line) => console.warn(`review: ${line}`),
+        },
+        { title: review.pr.title, files: readable, repoPath },
+      ).catch((error) => (console.warn(`review: risk read failed: ${messageOf(error)}`), null));
+    }
+    // The acceptance criteria of the linked tickets and cards are checked against the whole diff, beside the reviewers; a re-review leaves them to the first review.
+    const criteriaRun = deps.helpers && !plan && ((review.tickets?.length ?? 0) > 0 || (review.cards?.length ?? 0) > 0)
+      ? (async () => {
+          const h = deps.helpers!;
+          const repoPath = context.task.repoPath ?? null;
+          return checkCriteria({ decide: h.decide, decisions: (await h.decisions?.(repoPath).catch(() => ({}))) ?? {}, log: (line) => console.warn(`review: ${line}`) }, { tickets: review.tickets ?? [], cards: review.cards ?? [], files: readable, repoPath });
+        })().catch((error) => (console.warn(`review: the criteria check failed: ${messageOf(error)}`), null))
+      : null;
+    const mainContext: StageContext = risk?.main ? { ...context, suggested: risk.main } : context;
+
     // The review passes start with the main review, each in a workspace of its own (they never share the reviewer's folder); runHelpers never throws.
-    const helpersRun = deps.helpers && !quiet && (!sharded || diffMount) ? runHelpers(deps.helpers, context, sharded ? fileReview : shared, diffMount ? [diffMount] : undefined) : null;
+    const helpersRun = deps.helpers && !quiet && (!sharded || diffMount) ? runHelpers(deps.helpers, context, sharded ? fileReview : shared, diffMount ? [diffMount] : undefined, risk?.passes) : null;
     let unreviewed: Array<{ path: string; lines: number }> = [];
-    let shardStats: { count: number; reviewed: number; capped: number; failed: number } | null = null;
+    let shardStats: { count: number; reviewed: number; capped: number; failed: number; rankedBy?: string } | null = null;
     let shardFailures: Array<{ shard: number; files: number; reason: string }> = [];
     const mainPromise: Promise<StageResult> = !reviewerNeeded
       ? Promise.resolve(silent)
       : sharded
       ? (async () => {
           const shards = shardDiff(readable, limits.shardLines, SHARD_CHARS);
-          const capped = capShards(shards, limits.maxShards);
-          const ran = await runShards(deps, context, review, capped.kept);
+          // Over the cap, pr_risk scores each part from its paths and line counts; a part it cannot score keeps the path heuristic.
+          const h = deps.helpers;
+          const scores = h && shards.length > limits.maxShards
+            ? await rankShards({ decide: h.decide, decisions: (await h.decisions?.(context.task.repoPath ?? null).catch(() => ({}))) ?? {}, log: (line) => console.warn(`review: ${line}`) }, { title: review.pr.title, shards, repoPath: context.task.repoPath ?? null }).catch(() => new Map<number, number>())
+            : new Map<number, number>();
+          const capped = capShards(shards, limits.maxShards, scores);
+          const ran = await runShards(deps, mainContext, review, capped.kept);
           unreviewed = mergeLines([...capped.unreviewed, ...ran.failed]);
-          shardStats = { count: shards.length, reviewed: capped.kept.length - ran.failedShards, capped: shards.length - capped.kept.length, failed: ran.failedShards };
+          shardStats = { count: shards.length, reviewed: capped.kept.length - ran.failedShards, capped: shards.length - capped.kept.length, failed: ran.failedShards, ...(scores.size > 0 ? { rankedBy: "jev" } : {}) };
           shardFailures = ran.failures;
           return ran.result;
         })()
-      : deps.runPack(context, review);
+      : deps.runPack(mainContext, review);
     const [mainRun, helpersDone] = await Promise.allSettled([mainPromise, helpersRun]);
     if (mainRun.status === "rejected") throw mainRun.reason;
     const pack = mainRun.value;
@@ -394,7 +438,9 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     };
     const reviewed = helpers || compliance ? { ...joined, findings: mergeDuplicateFindings([...joined.findings, ...(confirmed?.agreed ?? []), ...kept]), comments: [...joined.comments, ...helperComments] } : parsed.data;
     // With no new code, whatever the reviewer found is about code already reviewed: only its thread answers count.
-    const answer = quiet ? { ...reviewed, findings: [], comments: [] } : reviewed;
+    const criteria = (await criteriaRun) ?? null;
+    const withCriteria = criteria ? { ...reviewed, findings: [...reviewed.findings, ...criteria.findings], comments: [...reviewed.comments, ...criteria.comments] } : reviewed;
+    const answer = quiet ? { ...withCriteria, findings: [], comments: [] } : withCriteria;
     // Our threads: what the decision settled, what the reviewer resolved, and what stays open. An open thread counts at its severity, and one the reviewer
     // did not answer stays open as a question, so a review never approves past a thread nobody looked at.
     const threadReplies: ThreadReply[] = [];
@@ -425,7 +471,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     // The verdict is the findings' (and the open threads'), never the model's (orc review-contract): any finding keeps a review from approving.
     // What no shard read is said in the summary, and a review never approves past it.
     // A review read in parts gets one body written by the machine for the whole PR: the parts' own summaries each describe a slice.
-    const stats = shardStats as { count: number; reviewed: number; capped: number; failed: number } | null;
+    const stats = shardStats as { count: number; reviewed: number; capped: number; failed: number; rankedBy?: string } | null;
     const summary = stats
       ? [
           shardedSummary({
@@ -461,8 +507,8 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     // new commit and no reviewer run, the machine says it in one line.
     const settledCount = plan ? plan.rereview.threads.filter((t) => t.settle === "fixed" || t.settle === "reply_holds").length : 0;
     const body = quiet && !reviewerNeeded
-      ? `No new commits since our review at ${plan!.rereview.since.slice(0, 7)}. ${settledCount} of ${plan!.rereview.threads.length} of our threads settled; the rest stay open.`
-      : [summary, !quiet && !stats && kept.length > 0 ? `The review passes found ${kept.length} more: ${severityCounts(kept)}.` : ""].filter(Boolean).join(" ");
+      ? `${noise ? "Nothing to review since" : "No new commits since"} our review at ${plan!.rereview.since.slice(0, 7)}. ${settledCount} of ${plan!.rereview.threads.length} of our threads settled; the rest stay open.`
+      : [summary, criteriaLine(criteria?.results), !quiet && !stats && kept.length > 0 ? `The review passes found ${kept.length} more: ${severityCounts(kept)}.` : ""].filter(Boolean).join(" ");
     const detail = {
       ...pack.detail,
       summary: body,
@@ -486,11 +532,13 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
         : passNotes.length > 0
           ? { helperNotes: passNotes }
           : {}),
+      ...(criteria?.results.length ? { criteria: criteria.results } : {}),
+      ...(risk ? { risk: { level: risk.level, by: risk.by, applied: risk.applied } } : {}),
       ...(shardStats ? { shards: shardStats } : {}),
       ...(shardFailures.length > 0 ? { shardFailures } : {}),
       ...(unreviewed.length > 0 ? { unreviewed } : {}),
       ...(plan
-        ? { rereview: { since: plan.rereview.since, ...(plan.rereview.note ? { note: plan.rereview.note } : {}), settled: plan.rereview.threads.filter((t) => t.settle === "fixed" || t.settle === "reply_holds").length, open: stillOpen.length, threads: plan.rereview.threads.length } }
+        ? { rereview: { since: plan.rereview.since, ...(plan.rereview.note ? { note: plan.rereview.note } : {}), settled: plan.rereview.threads.filter((t) => t.settle === "fixed" || t.settle === "reply_holds").length, open: stillOpen.length, threads: plan.rereview.threads.length, ...(plan.worth ? { worth: plan.worth } : {}) } }
         : {}),
       ...(compliance ? { compliance: { regimesRun: compliance.regimesRun, findings: compliance.findings.length, notes: compliance.notes } } : {}),
       ...(parsed.data.verdict !== verdict ? { modelVerdict: parsed.data.verdict } : {}),

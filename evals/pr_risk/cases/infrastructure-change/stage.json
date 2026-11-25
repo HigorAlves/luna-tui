@@ -1,0 +1,50 @@
+{
+  "schema": 3,
+  "stage": "pr_risk",
+  "pack": "pr_risk",
+  "attempt": 1,
+  "task": {
+    "id": "pr-risk",
+    "title": "Pr risk",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "pr_risk",
+      "risk": {
+        "title": "Move the database to a new subnet",
+        "scope": "the whole PR",
+        "files": [
+          {
+            "path": "infra/main.tf",
+            "additions": 44,
+            "deletions": 30
+          },
+          {
+            "path": ".github/workflows/deploy.yml",
+            "additions": 12,
+            "deletions": 5
+          }
+        ],
+        "filesTotal": 2,
+        "additions": 56,
+        "deletions": 35
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

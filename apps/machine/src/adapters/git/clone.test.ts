@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { bringBack, copiedSettings, hostBaselineWorkspace, inUseClones, removeLeftovers, ensureClone, ensurePrClone, syncPrHead, freshClone, isClone, isFreshWorkspace, moveToClone, publishBranch, readCopy, removeClone, reviewClone, localPrDiff, unpushedCommits } from "./clone.ts";
+import { bringBack, copiedSettings, hostBaselineWorkspace, inUseClones, removeLeftovers, ensureClone, ensurePrClone, syncPrHead, freshClone, isClone, isFreshWorkspace, moveToClone, publishBranch, readCopy, removeClone, reviewClone, localPrDiff, ownCommitsSince, unpushedCommits } from "./clone.ts";
 import { configureMachineRepos, machineGitDir, machineRepoRoot } from "./machine-repo.ts";
 import { branchBase, changedPaths, commitAll, ensureWorktree, nestedLockfilesAt, removeWorktree, scopeStartOf, workspaceFor } from "./worktree.ts";
 
@@ -738,5 +738,41 @@ describe("a PR's diff from host git", () => {
     const card = join(dir, "pr-clone");
     await ensurePrClone(repo, "feat/pr", card);
     await expect(localPrDiff(repo, "--upload-pack=x", card)).rejects.toThrow(/branch/);
+  });
+});
+
+describe("the commits a PR gained of its own", () => {
+  it("counts none for a merge of the base branch, and one for a commit of the PR's own", async () => {
+    const { repo, dir } = withRemote("pr-own-");
+    git(repo, "checkout", "-q", "-b", "feat/pr");
+    writeFileSync(join(repo, "src.ts"), "export const x = 1;\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "pr");
+    git(repo, "push", "-q", "origin", "feat/pr");
+    git(repo, "checkout", "-q", "main");
+    writeFileSync(join(repo, "later.txt"), "later\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "main moves on");
+    git(repo, "push", "-q", "origin", "main");
+    const card = join(dir, "pr-clone");
+    await ensurePrClone(repo, "feat/pr", card);
+    const since = wgit(card, "rev-parse", "HEAD");
+    await localPrDiff(repo, "main", card);
+    expect(await ownCommitsSince(repo, "main", card, since)).toBe(0);
+    wgit(card, "merge", "-q", "--no-ff", "-m", "merge main", git(repo, "rev-parse", "origin/main"));
+    expect(await ownCommitsSince(repo, "main", card, since)).toBe(0);
+    writeFileSync(join(card, "own.ts"), "export const y = 2;\n");
+    wgit(card, "add", "-A");
+    wgit(card, "commit", "-q", "-m", "own");
+    expect(await ownCommitsSince(repo, "main", card, since)).toBe(1);
+  });
+
+  it("is null for a hostile base or commit name, or a commit git does not know", async () => {
+    const { repo, dir } = withRemote("pr-own-");
+    const card = join(dir, "pr-clone");
+    await ensureClone(repo, workspaceFor(task, repo, dir));
+    expect(await ownCommitsSince(repo, "--upload-pack=x", card, "a".repeat(40))).toBeNull();
+    expect(await ownCommitsSince(repo, "main", card, "--output=x")).toBeNull();
+    expect(await ownCommitsSince(repo, "main", card, "c".repeat(40))).toBeNull();
   });
 });

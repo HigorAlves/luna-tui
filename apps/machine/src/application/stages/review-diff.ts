@@ -214,10 +214,11 @@ export function riskOf(path: string): 0 | 1 | 2 | 3 {
 
 const shardRisk = (s: Shard): number => Math.max(...s.parts.map((p) => riskOf(p.path)));
 
-/** Keeps the `max` shards that matter most (risk, then size, then the diff's order) in the diff's order and renumbered; every file of the others is returned as unreviewed, a cut file once with its pieces' lines added. */
-export function capShards(shards: readonly Shard[], max: number): { kept: Shard[]; unreviewed: Array<{ path: string; lines: number }> } {
+/** Keeps the `max` shards that matter most (risk, then size, then the diff's order) in the diff's order and renumbered; every file of the others is returned as unreviewed, a cut file once with its pieces' lines added. `scores` (a shard's index to its risk, 1 low to 3 high) takes the place of the path heuristic for the shards it names. */
+export function capShards(shards: readonly Shard[], max: number, scores?: ReadonlyMap<number, number>): { kept: Shard[]; unreviewed: Array<{ path: string; lines: number }> } {
   if (shards.length <= max) return { kept: [...shards], unreviewed: [] };
-  const ranked = [...shards].sort((a, b) => shardRisk(b) - shardRisk(a) || b.lines - a.lines || a.index - b.index);
+  const risk = (s: Shard): number => scores?.get(s.index) ?? shardRisk(s);
+  const ranked = [...shards].sort((a, b) => risk(b) - risk(a) || b.lines - a.lines || a.index - b.index);
   const keep = new Set(ranked.slice(0, max));
   const lines = new Map<string, number>();
   for (const s of ranked.slice(max)) for (const p of s.parts) lines.set(p.path, (lines.get(p.path) ?? 0) + p.lines);

@@ -483,13 +483,15 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   // the machine handed it (which logs why). An engine passed over is logged with why.
   // The ui-designer runs on the implementer's engine when the pack allows it, else on its own default (the implementer may be on a login only one run can hold).
   const helperEngine: EngineId | null = helperRun ? (context.engine && PACKS.ui_design.engines.allowed.includes(context.engine) ? context.engine : PACKS.ui_design.engines.default) : null;
+  // What the review's risk read suggests stands only where neither the task nor luna.yaml names an engine for the pack.
+  const suggestedEngines = context.suggested?.engine && !task.stages?.[pack] && !policy.engines?.[pack] ? { ...policy.engines, [pack]: context.suggested.engine } : policy.engines;
   let choice: { engine: EngineId; reason: string | null; note?: string } = resume?.engine
     ? { engine: resume.engine, reason: null }
     : helperEngine
       ? { engine: helperEngine, reason: null }
       : context.engine
       ? { engine: context.engine, reason: null }
-      : await pickEngine(deps.credentials, PACKS[pack], task.stages ?? null, policy.engines, task.repoPath);
+      : await pickEngine(deps.credentials, PACKS[pack], task.stages ?? null, suggestedEngines, task.repoPath);
   // The reviewer is another model family than the implementer when that family's credential is on the machine and nobody named an engine for it.
   if (pack === "verifying" && !resume?.engine && !context.engine && "source" in choice && choice.source === "default") {
     const implementer = task.stages?.implementing ?? policy.engines?.implementing ?? PACKS.implementing.engines.default;
@@ -504,7 +506,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   // The repo's effort for the pack, when the engine that runs can serve it; else the pack's own, with why.
   // The ui-designer takes the effort the repo asks for the implementer (a helper has no entry of its own: `effortsProblem` refuses one).
   const effortConfig = helperRun && policy.effort?.implementing ? { ...policy.effort, ui_design: policy.effort.implementing } : policy.effort;
-  const effortChoice = chooseEffort({ pack: PACKS[pack], engine: choice.engine, config: effortConfig });
+  const suggestedEffort = context.suggested?.effort && !effortConfig?.[pack] ? { ...effortConfig, [pack]: context.suggested.effort } : effortConfig;
+  const effortChoice = chooseEffort({ pack: PACKS[pack], engine: choice.engine, config: suggestedEffort });
   const engineEvents = [
     ...(choice.reason ? [{ at: new Date().toISOString(), kind: "engine", payload: { pack, engine: choice.engine, reason: choice.reason } }] : []),
     ...(effortChoice.reason ? [{ at: new Date().toISOString(), kind: "engine", payload: { pack, engine: choice.engine, reason: effortChoice.reason } }] : []),

@@ -10,12 +10,27 @@ import type { DecisionLog } from "./decision-log.ts";
 import type { FieldVerdict, TriageField } from "../domain/triage-policy.ts";
 
 const RECORD_ID = Symbol("decision.recordId");
+const ENGINE = Symbol("decision.engine");
 
-/** An answer carrying the id of the record the call left, when it left one. */
-export function tagged(result: { answer: Record<string, unknown>; recordId?: string }): Record<string, unknown> {
+/** An answer carrying the id of the record the call left, when it left one, and the engine that answered. */
+export function tagged(result: { answer: Record<string, unknown>; recordId?: string; usage?: { engine?: string } }): Record<string, unknown> {
   const answer = { ...result.answer };
   if (result.recordId !== undefined) Object.defineProperty(answer, RECORD_ID, { value: result.recordId, enumerable: true });
+  if (result.usage?.engine) Object.defineProperty(answer, ENGINE, { value: result.usage.engine, enumerable: true });
   return answer;
+}
+
+/** The engine that gave an answer, when it was tagged. */
+export function engineOf(answer: unknown): string | undefined {
+  const engine = answer !== null && typeof answer === "object" ? (answer as Record<symbol, unknown>)[ENGINE] : undefined;
+  return typeof engine === "string" ? engine : undefined;
+}
+
+/** Who answered a decision: Jev, the pack's fallback engine, or nobody (no answer). An untagged answer reads as Jev's, the default. */
+export function decidedBy(answer: unknown): "jev" | "fallback" | "skipped" {
+  if (answer === null || answer === undefined) return "skipped";
+  const engine = engineOf(answer);
+  return engine === undefined || engine === "jev" ? "jev" : "fallback";
 }
 
 export function recordIdOf(answer: unknown): string | undefined {
