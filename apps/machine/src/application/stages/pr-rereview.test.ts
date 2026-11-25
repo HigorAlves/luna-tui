@@ -1,8 +1,13 @@
 import type { ReviewContext } from "@hardness/contracts";
-import { describe, expect, it } from "vitest";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
 
 import type { TaskRow } from "../../domain/task.ts";
 import { fakeGitHub } from "../../test/github.ts";
+import { type TruthSink, tagged } from "../decision-truth.ts";
+import { keepThreadDecisions } from "../review-truth.ts";
 import type { StageContext } from "../ports.ts";
 import type { Decide } from "./check-decide.ts";
 import type { ShipDecide } from "./ship-fixes.ts";
@@ -29,7 +34,7 @@ const thread = (id: string, over: Record<string, unknown> = {}) => ({
 const yes = { value: true, p: 0.97 };
 const no = { value: false, p: 0.03 };
 
-function setup(opts: { reviews?: unknown[]; threads?: unknown[]; mainAnswer?: unknown; decide?: Decide | null; delta?: string | null; intent?: ShipDecide | null; intentSeen?: unknown[]; ownCommits?: number | null } = {}) {
+function setup(opts: { reviews?: unknown[]; threads?: unknown[]; mainAnswer?: unknown; decide?: Decide | null; delta?: string | null; intent?: ShipDecide | null; intentSeen?: unknown[]; ownCommits?: number | null; truth?: TruthSink; stateDir?: string } = {}) {
   const github = fakeGitHub({
     viewer: async () => ({ login: "Luna", teams: [] }),
     prFacts: async () => node as never,
@@ -56,6 +61,7 @@ function setup(opts: { reviews?: unknown[]; threads?: unknown[]; mainAnswer?: un
         return opts.decide === undefined ? d : opts.decide;
       },
       readNow: async (_w, path, line) => `now ${path}:${line}`,
+      ...(opts.truth && opts.stateDir ? { truth: opts.truth, stateDir: opts.stateDir } : {}),
       get intent() {
         const i = opts.intent;
         return i ? (async (pack, ship, repo) => (opts.intentSeen?.push({ pack, ship }), i(pack, ship, repo))) as ShipDecide : null;
@@ -363,5 +369,41 @@ describe("a re-review asks whether the activity since our review is worth it", (
     const { run, seen } = setup({ ownCommits: null, threads: [thread("T1")] });
     await run(context);
     expect(seen.packs).toBe(1);
+  });
+});
+
+describe("what a re-review keeps for the truth of its thread decisions", () => {
+  const dir = () => mkdtemp(join(tmpdir(), "rereview-truth-"));
+  const settling = (recordId: string): Decide => async () => tagged({ answer: { addressed: yes, reply_holds: no }, recordId });
+
+  it("names the thread_settle record on a thread the decision resolved", async () => {
+    const { run } = setup({ threads: [thread("T1")], decide: settling("rec-settle") });
+    const result = await run(context);
+    expect(payload(result).threadReplies).toEqual([expect.objectContaining({ threadId: "T1", resolve: true, settled: "fixed", settleRecord: "rec-settle" })]);
+  });
+
+  it("names the comment_intent record on a thread left open as an acknowledgement", async () => {
+    const intent: ShipDecide = async () => tagged({ answer: { intent: { choice: "acknowledgement", confidence: 0.97 } }, recordId: "rec-ack" });
+    const { run } = setup({ threads: [thread("T1")], intent });
+    const result = await run(context);
+    expect((result.requested?.[0] as unknown as { payload: { acknowledged?: unknown } }).payload.acknowledged).toEqual([{ threadId: "T1", recordId: "rec-ack" }]);
+  });
+
+  it("labels a thread we resolved that is open again as settled wrongly", async () => {
+    const stateDir = await dir();
+    await keepThreadDecisions(stateDir, "t1", { resolved: [{ threadId: "T1", recordId: "rec-old", settle: "fixed" }] });
+    const truth = { learned: vi.fn(async () => true) } satisfies TruthSink;
+    const { run } = setup({ threads: [thread("T1")], truth, stateDir });
+    await run(context);
+    expect(truth.learned).toHaveBeenCalledWith(expect.objectContaining({ pack: "thread_settle", recordId: "rec-old", label: { addressed: { value: false } }, source: "thread_reopened", taskId: "t1" }));
+  });
+
+  it("labels an acknowledgement the later commit addressed as read rightly", async () => {
+    const stateDir = await dir();
+    await keepThreadDecisions(stateDir, "t1", { acknowledged: [{ threadId: "T1", recordId: "rec-ack" }] });
+    const truth = { learned: vi.fn(async () => true) } satisfies TruthSink;
+    const { run } = setup({ threads: [thread("T1")], truth, stateDir, decide: async () => ({ addressed: yes, reply_holds: no }) });
+    await run(context);
+    expect(truth.learned).toHaveBeenCalledWith(expect.objectContaining({ pack: "comment_intent", recordId: "rec-ack", label: { intent: { choice: "acknowledgement" } }, source: "thread_fixed_after_ack" }));
   });
 });

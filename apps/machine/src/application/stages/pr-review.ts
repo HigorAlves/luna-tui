@@ -25,6 +25,7 @@ import type { ApprovalRow } from "../../domain/task.ts";
 import type { Jira } from "../jira.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { type LinkableCard, type PrLinkDeps, type PrLinks, linkReview } from "../pr-link.ts";
+import { type ThreadMemory, keepThreadDecisions } from "../review-truth.ts";
 import { readTickets } from "../review-tickets.ts";
 
 export interface PrReviewDeps {
@@ -69,6 +70,8 @@ export interface ThreadReply {
   resolve: boolean;
   by: "decision" | "reviewer";
   settled?: "fixed" | "reply_holds";
+  /** The thread_settle record that resolved the thread, for what happens to it later. */
+  settleRecord?: string;
   severity?: string;
   path: string | null;
   line: number | null;
@@ -319,7 +322,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     const cardPath = context.task.worktreePath ?? null;
     if (deps.rereview && cardPath) {
       try {
-        plan = await prepareRereview(deps.rereview, github, { repo: pr.repo, number: pr.number, worktree: cardPath, repoPath: context.task.repoPath ?? null, baseRef: review.pr.baseRef, fullDiff: review.diff, log: (line) => console.warn(`review: ${line}`) });
+        plan = await prepareRereview(deps.rereview, github, { taskId: context.task.id, repo: pr.repo, number: pr.number, worktree: cardPath, repoPath: context.task.repoPath ?? null, baseRef: review.pr.baseRef, fullDiff: review.diff, log: (line) => console.warn(`review: ${line}`) });
       } catch (error) {
         console.warn(`review: could not prepare a re-review of ${pr.url} (${messageOf(error)}); reviewing the whole diff`);
       }
@@ -477,6 +480,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     // Our threads: what the decision settled, what the reviewer resolved, and what stays open. An open thread counts at its severity, and one the reviewer
     // did not answer stays open as a question, so a review never approves past a thread nobody looked at.
     const threadReplies: ThreadReply[] = [];
+    const acknowledged: Array<{ threadId: string; recordId: string }> = [];
     const stillOpen: Array<{ severity: string }> = [];
     if (plan) {
       const answered = new Map((parsed.data.threads ?? []).map((t) => [t.threadId, t]));
@@ -489,6 +493,8 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
         }
         // An acknowledgement ("will fix") gets no reply: the thread stays open until a later commit addresses it.
         if (t.settle === "acknowledged") {
+          const intent = plan.records[t.id]?.intent;
+          if (intent) acknowledged.push({ threadId: t.id, recordId: intent });
           stillOpen.push({ severity: "question" });
           continue;
         }
@@ -505,7 +511,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
           continue;
         }
         if (t.settle !== "unsettled") {
-          threadReplies.push({ threadId: t.id, body: settledReply(t.settle, plan.head), resolve: true, by: "decision", settled: t.settle, ...where });
+          threadReplies.push({ threadId: t.id, body: settledReply(t.settle, plan.head), resolve: true, by: "decision", settled: t.settle, ...(plan.records[t.id]?.settle ? { settleRecord: plan.records[t.id]!.settle! } : {}), ...where });
           continue;
         }
         const a = answered.get(t.id);
@@ -614,10 +620,19 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       }
     }
     const requested: RequestedAction[] = [
-      { kind: "pr_review_post", target: pr.url, payload: { event: EVENT_OF[verdict], body, comments, ...(plan ? { threadReplies } : {}) } },
+      { kind: "pr_review_post", target: pr.url, payload: { event: EVENT_OF[verdict], body, comments, ...(plan ? { threadReplies, ...(acknowledged.length > 0 ? { acknowledged } : {}) } : {}) } },
     ];
     return { ...base, detail, requested };
   }
+}
+
+/** The thread decisions a gate carried that the card keeps: the threads it resolved on a decision's word, and the acknowledgements it left open. */
+function memoryOf(payload: Record<string, unknown>): Partial<ThreadMemory> {
+  const rows = (key: string): Array<Record<string, unknown>> => (Array.isArray(payload[key]) ? (payload[key] as Array<Record<string, unknown>>) : []);
+  return {
+    resolved: rows("threadReplies").flatMap((r) => (r.resolve === true && r.by === "decision" && typeof r.threadId === "string" && typeof r.settleRecord === "string" && (r.settled === "fixed" || r.settled === "reply_holds") ? [{ threadId: r.threadId, recordId: r.settleRecord, settle: r.settled }] : [])),
+    acknowledged: rows("acknowledged").flatMap((r) => (typeof r.threadId === "string" && typeof r.recordId === "string" ? [{ threadId: r.threadId, recordId: r.recordId }] : [])),
+  };
 }
 
 /** A comment the person left in the review is a finding they judged real; one that was proposed and is gone from what was posted, one they judged not. Only an approval tells it (a dropped review says nothing of each finding). Never throws. */
@@ -633,7 +648,7 @@ async function learnFromPostedComments(truth: TruthSink | undefined, gate: Appro
 }
 
 /** The review route's `shipping`: posts the review the gate carried (APPROVE, REQUEST_CHANGES or COMMENT) with its line comments. */
-export function postVerdictRunner(deps: { github: GitHub; truth?: TruthSink }): StageRunner {
+export function postVerdictRunner(deps: { github: GitHub; truth?: TruthSink; /** Where the card keeps which threads it resolved or left as acknowledged, for the truth later facts give them. */ stateDir?: string }): StageRunner {
   return async (context) => {
     const pr = prOf(context);
     if (!pr) return { outcome: "fail", detail: { error: "not a PR task" } };
@@ -660,6 +675,8 @@ export function postVerdictRunner(deps: { github: GitHub; truth?: TruthSink }): 
       : [];
     if (replies.length === 0) return { outcome: "pass", detail: { posted: event, prUrl: pr.url } };
     const followed = await followUp(deps.github, replies);
+    // What was decided about the threads is kept only when every answer reached GitHub: a stopped follow-up leaves no certain resolve to judge.
+    if (followed.ok && deps.stateDir) await keepThreadDecisions(deps.stateDir, context.task.id, memoryOf(post.payload));
     const threads = { replied: followed.replied, resolved: followed.resolved, skipped: followed.skipped };
     if (!followed.ok) {
       // The review is out: failing the stage would escalate it, and a retry posts the whole review again. The card watches the PR next, and

@@ -64,6 +64,7 @@ import { createPrTask } from "./application/pr-tasks.ts";
 import { PrWatch } from "./application/pr-watch.ts";
 import { prFollowUpRunner } from "./application/stages/pr-address.ts";
 import { postVerdictRunner } from "./application/stages/pr-review.ts";
+import { learnAtMerge } from "./application/review-truth.ts";
 import { RepoMap } from "./application/repo-map.ts";
 import { ThreadReplies } from "./application/threads.ts";
 import { noTokenJira } from "./application/jira.ts";
@@ -457,7 +458,7 @@ const runnerFor = buildRunnerFor({
       exec,
       latestAnswer: async (taskId) => (await pipeline.latestStageFinish(taskId, "addressing"))?.detail?.answer,
     }),
-    postVerdictRunner: postVerdictRunner({ github, truth: decisionTruth }),
+    postVerdictRunner: postVerdictRunner({ github, truth: decisionTruth, stateDir: config.stateDir }),
   },
 });
 
@@ -644,6 +645,8 @@ const prWatch = new PrWatch({
     if (task.repoPath && task.worktreePath && task.source?.kind === "github_pr") await syncPrHead(task.repoPath, task.source.headRef, task.worktreePath);
   },
   send: (id, what, key) => pipeline.prWatch(id, what, key),
+  // A review's resolved threads still resolved at the merge confirm the decisions that resolved them.
+  onMerged: (card, source) => (card.route === "review" ? learnAtMerge({ stateDir: config.stateDir, truth: decisionTruth, github }, card.id, source.repo, source.number) : Promise.resolve()),
   policy: async (repoPath) => (repoPath ? (await policies.for(repoPath)).factory.review : FACTORY_DEFAULTS.review),
 });
 const prTasks = {

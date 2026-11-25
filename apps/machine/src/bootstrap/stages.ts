@@ -707,6 +707,7 @@ export async function buildRealStages(
           return shipDecisions.decide;
         },
         decisions: async (repoPath) => (repoPath ? (await policies.for(repoPath)).decisions : {}),
+        ...(truth ? { truth, stateDir: config.stateDir } : {}),
       },
       runPack: (context, review, workspace) => runAgent(deps, context, "reviewing", { review, ...(workspace ? { workspace } : {}) }),
       // A big PR's diff as files in a folder of the machine's, mounted read-only for the passes and the compliance lead.

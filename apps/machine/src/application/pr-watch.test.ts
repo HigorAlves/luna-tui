@@ -25,7 +25,7 @@ interface World {
 
 const review = (over: Partial<PrReview> = {}): PrReview => ({ author: ME, state: "COMMENTED", commitId: "sha1", at: at(0), association: null, ...over });
 
-function setup(world: World = {}, options: { cards?: WatchedCard[]; policy?: { auto_rereview: "on" | "off"; quiet_minutes: number }; minutes?: number; sync?: (card: WatchedCard) => Promise<void> } = {}) {
+function setup(world: World = {}, options: { cards?: WatchedCard[]; policy?: { auto_rereview: "on" | "off"; quiet_minutes: number }; minutes?: number; sync?: (card: WatchedCard) => Promise<void>; merged?: (card: WatchedCard) => Promise<void> } = {}) {
   const sent: Array<{ id: string; what: string; key?: string }> = [];
   const github = fakeGitHub({
     viewer: async () => ({ login: ME, teams: [] }),
@@ -46,11 +46,25 @@ function setup(world: World = {}, options: { cards?: WatchedCard[]; policy?: { a
     now: nowAt(options.minutes ?? 60),
     warn: () => {},
     ...(options.sync ? { sync: options.sync } : {}),
+    ...(options.merged ? { onMerged: options.merged } : {}),
   });
   return { watch, sent, github };
 }
 
 describe("the PR watch", () => {
+  it("tells the merge hook of a merged review card before it ends the card, and never for a closed one", async () => {
+    const told: string[] = [];
+    const merged = setup({ state: "closed", merged: true }, { cards: [card()], merged: async (c) => void told.push(c.id) });
+    await merged.watch.tick();
+    expect(told).toEqual(["t1"]);
+    const closed = setup({ state: "closed", merged: false }, { cards: [card()], merged: async (c) => void told.push(c.id) });
+    await closed.watch.tick();
+    expect(told).toEqual(["t1"]);
+    const failing = setup({ state: "closed", merged: true }, { cards: [card()], merged: async () => { throw new Error("x"); } });
+    await failing.watch.tick();
+    expect(failing.sent).toEqual([{ id: "t1", what: "merged" }]);
+  });
+
   it.each(["review", "ci_fix", "address"] as const)("%s: a merged PR ends the card, and a closed one too", async (route) => {
     const merged = setup({ state: "closed", merged: true }, { cards: [card({ route })] });
     await merged.watch.tick();

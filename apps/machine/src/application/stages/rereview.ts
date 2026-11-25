@@ -5,8 +5,9 @@ import { type DecisionOverrides, type ReviewContext, type ShipContext, type Thre
 import { type Decide, judgeCheck } from "./check-decide.ts";
 import { diffExcerptOf } from "./diff-section.ts";
 import { parseDiff } from "./review-diff.ts";
-import { decidedBy } from "../decision-truth.ts";
+import { type TruthSink, decidedBy, recordIdOf } from "../decision-truth.ts";
 import type { GitHub } from "../github.ts";
+import { learnFromRereview } from "../review-truth.ts";
 import type { ShipDecide } from "./ship-fixes.ts";
 
 export interface RereviewDeps {
@@ -28,6 +29,9 @@ export interface RereviewDeps {
   intent?: ShipDecide | null;
   /** The repo's decision overrides (luna.yaml `policy.decisions`). */
   decisions?: (repoPath: string | null) => Promise<Record<string, DecisionOverrides>>;
+  /** Where a later fact about a thread we answered is written as truth, and the folder the card's thread decisions are kept in; absent, none is learned. */
+  truth?: TruthSink;
+  stateDir?: string;
 }
 
 type Thread = ThreadsContext["threads"][number];
@@ -54,6 +58,8 @@ export interface RereviewPlan {
   noise: boolean;
   /** What was read of the activity; absent when nothing new happened since our review. */
   worth?: Worth;
+  /** The decision records behind each thread's settle, by thread id: thread_settle's for a fixed or holding thread, comment_intent's for an acknowledgement. */
+  records: Record<string, { settle?: string; intent?: string }>;
 }
 
 /** Threads settled in one go; the rest go to the reviewer. */
@@ -92,6 +98,7 @@ async function replyIntent(
   repoPath: string | null,
   overrides: Record<string, DecisionOverrides>,
   log?: (line: string) => void,
+  recorded?: (recordId: string) => void,
 ): Promise<"question" | "acknowledged" | null> {
   const last = thread.comments.at(-1);
   if (!intent || !last || same(last.author, me)) return null;
@@ -104,6 +111,8 @@ async function replyIntent(
     const answer = await intent("comment_intent", ship, repoPath);
     if (applyPolicy(PACKS.comment_intent, answer, overrides.comment_intent ?? {}).overall !== "proceed") return null;
     const choice = (answer.intent as { choice?: unknown } | undefined)?.choice;
+    const id = recordIdOf(answer);
+    if (id) recorded?.(id);
     return choice === "question" ? "question" : choice === "acknowledgement" ? "acknowledged" : null;
   } catch (error) {
     log?.(`check decision: comment_intent skipped: ${error instanceof Error ? error.message : String(error)}`);
@@ -125,7 +134,7 @@ const ACTIVITY_DELTA_CAP = 6000;
 export async function prepareRereview(
   deps: RereviewDeps,
   github: Pick<GitHub, "viewer" | "prReviews" | "prThreads">,
-  opts: { repo: string; number: number; worktree: string; repoPath: string | null; baseRef?: string; fullDiff: string; log?: (line: string) => void },
+  opts: { taskId?: string; repo: string; number: number; worktree: string; repoPath: string | null; baseRef?: string; fullDiff: string; log?: (line: string) => void },
 ): Promise<RereviewPlan | null> {
   const me = (await github.viewer()).login;
   const ours = (await github.prReviews(opts.repo, opts.number)).filter((r) => same(r.author, me)).sort((a, b) => ms(a.at) - ms(b.at)).at(-1);
@@ -159,6 +168,7 @@ export async function prepareRereview(
   }
   // With nothing new to read, or nothing worth reading, only our threads can have moved.
   const quiet = (delta !== null && delta.trim() === "") || noise || baseMerge;
+  const records: RereviewPlan["records"] = {};
   const settled = await Promise.all(
     mine.map(async (thread, i): Promise<Settle> => {
       if (i >= MAX_SETTLE || !deps.decide) return quiet && thread.comments.some((c, j) => j > 0 && same(c.author, me) && ms(c.at) >= reviewedAt) ? "answered" : "unsettled";
@@ -166,14 +176,14 @@ export async function prepareRereview(
       const original = thread.originalCommit && thread.path && thread.originalLine ? around((await deps.git.fileAt(opts.worktree, thread.originalCommit, thread.path).catch(() => null)) ?? "", thread.originalLine) : "";
       const current = thread.path && thread.line ? await deps.readNow(opts.worktree, thread.path, thread.line).catch(() => "") : "";
       const check = { kind: "thread" as const, thread: { path: thread.path, line: thread.line, originalLine: thread.originalLine ?? null, comments, original, current, delta: thread.path && !baseMerge ? diffExcerptOf(diff, { path: thread.path }) : "" } };
-      const { answer } = await judgeCheck(deps.decide, "thread_settle", check, opts.repoPath, overrides, opts.log);
-      if (confidentYes(answer, "addressed", overrides.thread_settle)) return "fixed";
+      const { answer, recordId } = await judgeCheck(deps.decide, "thread_settle", check, opts.repoPath, overrides, opts.log);
+      if (confidentYes(answer, "addressed", overrides.thread_settle)) return (recordId && (records[thread.id] = { settle: recordId }), "fixed");
       // A reply nobody wrote cannot hold.
-      if (thread.comments.some((c) => !same(c.author, me)) && confidentYes(answer, "reply_holds", overrides.thread_settle)) return "reply_holds";
+      if (thread.comments.some((c) => !same(c.author, me)) && confidentYes(answer, "reply_holds", overrides.thread_settle)) return (recordId && (records[thread.id] = { settle: recordId }), "reply_holds");
       // With no new commit, a thread we already answered after the review we read is not answered again.
       if (quiet && thread.comments.some((c, j) => j > 0 && same(c.author, me) && ms(c.at) >= reviewedAt)) return "answered";
       // The reply's intent routes the rest: a question is answered directly, an acknowledgement is left alone.
-      return (await replyIntent(deps.intent ?? null, thread, me, opts.repoPath, overrides, opts.log)) ?? "unsettled";
+      return (await replyIntent(deps.intent ?? null, thread, me, opts.repoPath, overrides, opts.log, (id) => void (records[thread.id] = { intent: id }))) ?? "unsettled";
     }),
   );
   const threads = mine.map((t, i) => ({
@@ -183,7 +193,11 @@ export async function prepareRereview(
     comments: t.comments.slice(-KEEP_COMMENTS).map((c) => ({ author: c.author, ours: same(c.author, me), body: c.body.slice(0, COMMENT_CAP) })),
     settle: settled[i]!,
   }));
-  return { diff: baseMerge || noise ? "" : diff, head, threads: mine, quiet, noise, ...(worth ? { worth } : {}), rereview: { since, ...(note ? { note } : {}), threads } };
+  // What became of the threads we answered before: one we resolved that is open again, an acknowledgement a commit has now addressed.
+  if (deps.truth && deps.stateDir && opts.taskId) {
+    await learnFromRereview({ stateDir: deps.stateDir, truth: deps.truth }, opts.taskId, { open: new Set(mine.map((t) => t.id)), fixed: new Set(threads.filter((t) => t.settle === "fixed").map((t) => t.id)) });
+  }
+  return { diff: baseMerge || noise ? "" : diff, head, records, threads: mine, quiet, noise, ...(worth ? { worth } : {}), rereview: { since, ...(note ? { note } : {}), threads } };
 }
 
 /** The templated reply of a thread the decision settled. */
