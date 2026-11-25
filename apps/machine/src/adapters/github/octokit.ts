@@ -81,8 +81,8 @@ export const DIFF_TAIL_CHARS = 200_000;
 
 const THREADS_QUERY = `query($owner:String!,$name:String!,$number:Int!){
   repository(owner:$owner,name:$name){ pullRequest(number:$number){
-    reviewThreads(first:100){nodes{ id isResolved isOutdated path line originalLine originalCommit{oid}
-      comments(first:50){nodes{databaseId author{login} authorAssociation body createdAt}} }} } } }`;
+    reviewThreads(first:100){nodes{ id isResolved isOutdated path line originalLine
+      comments(first:50){nodes{databaseId author{login} authorAssociation body createdAt originalCommit{oid}}} }} } } }`;
 const REPLY_MUTATION = `mutation($threadId:ID!,$body:String!){
   addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$threadId,body:$body}){comment{id}} }`;
 const ENQUEUE_MUTATION = `mutation($id:ID!,$sha:GitObjectID){ enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$sha}){ mergeQueueEntry{id} } }`;
@@ -424,8 +424,7 @@ export class OctokitGitHub implements GitHub {
                 path: string | null;
                 line: number | null;
                 originalLine?: number | null;
-                originalCommit?: { oid: string } | null;
-                comments: { nodes: Array<{ databaseId?: number | null; author: { login: string } | null; authorAssociation?: string | null; body: string; createdAt: string }> };
+                comments: { nodes: Array<{ databaseId?: number | null; author: { login: string } | null; authorAssociation?: string | null; body: string; createdAt: string; originalCommit?: { oid: string } | null }> };
               }>;
             };
           } | null;
@@ -442,7 +441,8 @@ export class OctokitGitHub implements GitHub {
         resolved: t.isResolved,
         outdated: t.isOutdated ?? false,
         originalLine: t.originalLine ?? null,
-        originalCommit: t.originalCommit?.oid ?? null,
+        // The commit the thread was opened on is its first comment's: GitHub keeps no originalCommit on the thread itself.
+        originalCommit: t.comments.nodes[0]?.originalCommit?.oid ?? null,
         comments: t.comments.nodes.map((c) => ({ ...(typeof c.databaseId === "number" ? { id: c.databaseId } : {}), author: c.author?.login ?? "ghost", body: c.body, at: c.createdAt, association: c.authorAssociation ?? null })),
       }));
   }

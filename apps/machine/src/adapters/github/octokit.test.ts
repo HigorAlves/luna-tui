@@ -598,7 +598,8 @@ describe("OctokitGitHub: shipping", () => {
   });
 
   it("keeps resolved threads only when asked, with the original line, commit and comment ids", async () => {
-    const node = (id: string, isResolved: boolean) => ({ id, isResolved, isOutdated: true, path: "a.ts", line: null, originalLine: 7, originalCommit: { oid: "abc" }, comments: { nodes: [{ databaseId: 9, author: { login: "bo" }, body: "x", createdAt: "t" }] } });
+    // GitHub keeps the commit a thread was opened on on its comments, not on the thread (PullRequestReviewThread has no originalCommit).
+    const node = (id: string, isResolved: boolean) => ({ id, isResolved, isOutdated: true, path: "a.ts", line: null, originalLine: 7, comments: { nodes: [{ databaseId: 9, author: { login: "bo" }, body: "x", createdAt: "t", originalCommit: { oid: "abc" } }] } });
     const { github, calls } = stub({ graphql: { repository: { pullRequest: { reviewThreads: { nodes: [node("T1", false), node("T2", true)] } } } } });
     expect((await github.prThreads("o/a", 3)).map((t) => t.id)).toEqual(["T1"]);
     const all = await github.prThreads("o/a", 3, { includeResolved: true });
@@ -606,7 +607,10 @@ describe("OctokitGitHub: shipping", () => {
     expect(all[0]).toMatchObject({ outdated: true, originalLine: 7, originalCommit: "abc", resolved: false });
     expect(all[1]).toMatchObject({ resolved: true });
     expect(all[0]!.comments[0]).toMatchObject({ id: 9 });
-    expect(String((calls[0]![1] as { query: string }).query)).toContain("originalCommit");
+    const query = String((calls[0]![1] as { query: string }).query);
+    const threadFields = query.slice(query.indexOf("nodes{ id"), query.indexOf("comments("));
+    expect(threadFields).not.toContain("originalCommit");
+    expect(query.slice(query.indexOf("comments("))).toContain("originalCommit{oid}");
   });
 
   it("lists the files of a PR with the previous name of a renamed one", async () => {
