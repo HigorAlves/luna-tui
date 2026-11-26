@@ -226,6 +226,14 @@ describe("tailOf: a long check output keeps its failures", () => {
     expect(tail).not.toContain("Error: db down");
   });
 
+  it("does not take a log line that counts failures of its own (DISC-53: 'Auth0 provisioning completed: 1 succeeded, 1 failed', 'job-1 failed')", () => {
+    const out = [...noise.slice(0, 100), "@discover/api:test:unit: Auth0 provisioning completed: 1 succeeded, 1 failed", "@discover/api:test:unit: [Worker] Aggregated PDF job job-1 failed: Error: nope", "@discover/api:test:unit: ❯ src/a.test.ts (25 tests | 2 failed) 460ms", ...noise.slice(100)].join("\n");
+    const tail = tailOf(out);
+    expect(tail).toContain("(25 tests | 2 failed)");
+    expect(tail).not.toContain("Auth0 provisioning");
+    expect(tail).not.toContain("job-1 failed");
+  });
+
   it("is the last lines as before for a short output, or one with no failing line", () => {
     expect(tailOf("a\nb\nc")).toBe("a\nb\nc");
     const quiet = noise.join("\n");

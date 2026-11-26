@@ -16,7 +16,7 @@ const TAIL_LINES = 60;
 const GATE_NAME = /lint|type-?check|tsc|format|fmt|prettier|eslint|biome/i;
 
 /** A line that says what failed, in the common runners (vitest, jest, mocha, pytest, cargo, go, turbo, biome/eslint, tsc). */
-export const FAILING_LINE = /\bFAIL\b|\bFAILED\b|✗|×|✖|AssertionError|error TS\d+|\bpanicked\b|--- FAIL|exited \(\d+\)|\bFailed: \S+#|Tests? +\d+ failed|Test Files +\d+ failed|\d+ (?:tests? )?failed\b|❯ \S+:\d+:\d+/;
+export const FAILING_LINE = /\bFAIL\b|\bFAILED\b|✗|×|✖|AssertionError|error TS\d+|\bpanicked\b|--- FAIL|exited \(\d+\)|\bFailed: \S+#|Tests? +\d+ failed|Test Files +\d+ failed|\(\d+ tests? \| \d+ failed\)|❯ \S+:\d+:\d+/;
 /** A line a passing test logs on purpose (vitest's `stderr |` header, a caught error it prints): not a failure, however it reads. */
 export const LOGGED_LINE = /\bstderr \|/;
 /** A file and a line: `src/a.ts:8:1`, `packages/x/y.tsx:12`. */
