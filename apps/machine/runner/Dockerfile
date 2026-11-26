@@ -139,6 +139,16 @@ RUN for bin in /usr/local/bin/node /usr/bin/rg; do ldd "$bin" | awk '/=> \//{pri
 # /cache lets that user keep package-manager caches there. The image's own user is `node`,
 # never root: Claude Code refuses some modes as root, and the stage should not own the image.
 RUN mkdir -p /cache && chmod 0777 /cache
+# The host user the machine runs stages as has a name here: a tool that looks up the current user (`ssh-keygen`, `whoami`, git's and
+# npm's fallbacks) fails with "No user exists for uid 501" without one (DISC-53's sshKeyUtils tests). build.sh passes the host's ids;
+# an image built without them, or for a uid the image already names, adds nothing.
+ARG HOST_UID=
+ARG HOST_GID=
+RUN if [ -n "$HOST_UID" ] && ! getent passwd "$HOST_UID" >/dev/null; then \
+      gid="${HOST_GID:-$HOST_UID}"; \
+      getent group "$gid" >/dev/null || echo "luna:x:${gid}:" >> /etc/group; \
+      echo "luna:x:${HOST_UID}:${gid}:luna:/tmp:/bin/sh" >> /etc/passwd; \
+    fi
 USER node
 WORKDIR /work
 ENV PATH="/opt/luna/bin:${PATH}"

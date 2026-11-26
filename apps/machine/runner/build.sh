@@ -33,11 +33,13 @@ tree_files() { (cd "$root" && find "$@" -type f -not -path '*/node_modules/*' -n
 ref="$(git -C "$root" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
 inputs=()
 while IFS= read -r f; do inputs+=("$f"); done < <(tree_files apps/factory packages/contracts/src packages/contracts/package.json apps/machine/runner/graph apps/machine/runner/egress; echo "$root/package.json"; echo "$root/pnpm-lock.yaml"; echo "$root/pnpm-workspace.yaml"; echo "$root/.pnpmfile.cjs"; echo "$here/Dockerfile"; echo "$here/luna-stage"; echo "$here/luna-env"; echo "$here/layer-wrapper")
-key="$(key_of "${inputs[@]}")"
+# The host's ids name the stage user inside the image (the Dockerfile's HOST_UID/HOST_GID): another user's build is another image.
+host_ids="$(id -u):$(id -g)"
+key="$(key_of "${inputs[@]}" <(echo "$host_ids"))"
 if [ "${REBUILD:-}" != 1 ] && [ "$(current_key "$runner:dev")" = "$key" ]; then
   echo "$runner:dev is up to date (factory $key)"
 else
-  docker build --build-arg "FACTORY_REF=$ref" --build-arg "LAYER_REV=$key" --label "dev.hardness.build=$key" \
+  docker build --build-arg "FACTORY_REF=$ref" --build-arg "LAYER_REV=$key" --build-arg "HOST_UID=$(id -u)" --build-arg "HOST_GID=$(id -g)" --label "dev.hardness.build=$key" \
     -t "$runner:dev" -t "$runner:$key" -f "$here/Dockerfile" "$root"
   echo "built $runner:dev and $runner:$key (factory $key, commit $ref)"
 fi
