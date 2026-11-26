@@ -19,12 +19,13 @@ export async function judgeCheck(
   repoPath: string | null,
   overrides: Record<string, DecisionOverrides>,
   log: (line: string) => void = () => {},
-): Promise<{ verdict: Verdict | "skipped"; answer: Record<string, unknown> | null; recordId?: string }> {
+): Promise<{ verdict: Verdict | "skipped"; answer: Record<string, unknown> | null; recordId?: string; verdicts?: Record<string, Verdict> }> {
   if (!decide) return { verdict: "skipped", answer: null };
   try {
     const answer = await decide(pack, check, repoPath);
     const recordId = recordIdOf(answer);
-    return { verdict: applyPolicy(PACKS[pack], answer, overrides[pack]).overall, answer, ...(recordId ? { recordId } : {}) };
+    const { overall, verdicts } = applyPolicy(PACKS[pack], answer, overrides[pack]);
+    return { verdict: overall, answer, verdicts, ...(recordId ? { recordId } : {}) };
   } catch (error) {
     log(`check decision: ${pack} skipped: ${error instanceof Error ? error.message : String(error)}`);
     return { verdict: "skipped", answer: null };

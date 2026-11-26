@@ -84,6 +84,15 @@ describe("a scenario's red check", () => {
     expect(answer.problems).toEqual([expect.stringContaining("reason other than the missing behaviour")]);
   });
 
+  it("leaves a waived question out of the verdict and the problems, and still judges the others (a missing module the plan creates)", async () => {
+    const wrongReasonOnly: Decide = async () => ({ right_reason: no(), not_tautological: yes() });
+    expect(await judgeRedCheck(wrongReasonOnly, scenarioCheck, "/repo", {}, undefined, ["right_reason"])).toMatchObject({ verdict: "proceed", problems: [] });
+    const tautological: Decide = async () => ({ right_reason: no(), not_tautological: no() });
+    const answer = await judgeRedCheck(tautological, scenarioCheck, "/repo", {}, undefined, ["right_reason"]);
+    expect(answer.verdict).not.toBe("proceed");
+    expect(answer.problems).toEqual([expect.stringContaining("would still pass without the behaviour")]);
+  });
+
   it("is skipped, with no problem, when no decision can run or it throws", async () => {
     expect(await judgeRedCheck(null, scenarioCheck, "/repo", {})).toEqual({ verdict: "skipped", problems: [] });
     expect(await judgeRedCheck((async () => { throw new Error("down"); }) as Decide, scenarioCheck, "/repo", {})).toEqual({ verdict: "skipped", problems: [] });

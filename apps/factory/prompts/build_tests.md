@@ -12,6 +12,7 @@ Brief: {{plan.brief}}
 ## Scenarios (each needs a test tagged with its id)
 Tag each test `@scenario:<id>` in its name or in a comment on the line directly above it.
 A scenario that only runs one of the repo's commands and expects it to pass (a test suite, a lint, a build: "when `pnpm board:test` runs, then it exits 0") needs no test: the machine runs the command once the code exists. Write no tag for it and report no red.
+A scenario where one of the repo's commands must report an error (a lint rule rejects a file that breaks it, a script refuses bad input) is a behaviour and needs a test: write the offending file as a fixture beside the test (or in a temp folder the test makes), run the command on it from the test (`child_process`), and assert that it fails with the rule's message. It is red until the rule exists.
 A browser scenario (layer `e2e`: a page renders, no console error) gets no test here either: the e2e stage runs it in a real browser once the code exists.
 A scenario that already holds before the change (an invariant: "no dependency is added", "the existing sections stay") cannot have a red test: list it in `holdsToday` with the reason, and write no test for it. Verify checks it once the code exists.
 In a language that keeps unit tests in the source file (Rust's `#[cfg(test)] mod tests`), put the tests inside that module: a line you add or change outside it is production code, and the machine refuses it here.
@@ -28,6 +29,8 @@ Step files (slices):
 {{plan.slices}}
 </data>
 
+## Tests the last round rejected
+Rewrite each test named here as its line says: a test you leave unchanged is rejected again.
 {{context.plan.review}}
 
 ## Project context

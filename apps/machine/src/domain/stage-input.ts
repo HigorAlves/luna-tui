@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type A11yContext, type CapturePlan, type ParityCapture, DesignSpec, type DesignContext, type AccessReviewContext, ReleaseNotesContext, type PostmortemContext, type BreachAssessContext, type BridgedTool, type CapacityContext, type StatusReportContext, QuestionnaireContext, VulnTriageContext, type ChangeExceptionsContext, type ComplianceReviewContext, type DocsDriftContext, type ChatTriageContext, type ForemanContext, type TicketChatContext, type QuestionsContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type Effort, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type PrLinkContext, type ProposeContext, PACK_LIMITS, type PackId, isReviewHelper, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
+import { type A11yContext, type CapturePlan, type ParityCapture, DesignSpec, type DesignContext, type AccessReviewContext, ReleaseNotesContext, type PostmortemContext, type BreachAssessContext, type BridgedTool, type CapacityContext, type StatusReportContext, QuestionnaireContext, VulnTriageContext, type ChangeExceptionsContext, type ComplianceReviewContext, type DocsDriftContext, type ChatTriageContext, type ForemanContext, type TicketChatContext, type QuestionsContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type Effort, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type PrLinkContext, type ProposeContext, PACK_LIMITS, SIZE_SCALED_PACKS, sizeScale, type PackId, isReviewHelper, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
 import { isDocsOnly } from "./docs-only.ts";
 
 export { PACK_LIMITS };
@@ -43,6 +43,45 @@ export function budgetFor(pack: PackId, slices: number): { maxTurns: number; tim
   if (pack !== "implementing") return { maxTurns, timeoutMs };
   const factor = Math.min(BUDGET_SCALE_MAX, Math.max(1, slices));
   return { maxTurns: maxTurns * factor, timeoutMs: timeoutMs * factor };
+}
+
+/** A repo's `limits:` entry for one pack (luna.yaml), in the machine's own units. */
+export type RepoLimit = { maxTurns?: number; minutes?: number };
+
+/** What a stage's turns and time came to, and why: `size×2` for a card scaled by its size, `luna.yaml` for a repo's own, else `default`. */
+export type AppliedLimits = { maxTurns: number; timeoutMs: number; by: string };
+
+/** The lines a card is sized at: the plan's own slices once there is a plan, else the last size record's plan sum, else its estimate when the decision was sure; null with none. */
+export function sizeLinesOf(slices: readonly unknown[] | undefined, approvals: readonly ApprovalRow[]): number | null {
+  const planned = (slices ?? []).reduce<number>((sum, slice) => {
+    const loc = (slice as { est_loc?: unknown } | null)?.est_loc;
+    return sum + (typeof loc === "number" && Number.isFinite(loc) ? loc : 0);
+  }, 0);
+  if (planned > 0) return planned;
+  for (const approval of [...approvals].reverse()) {
+    if (approval.kind !== "awaiting_approval") continue;
+    const size = (approval.requested as { size?: { estLoc?: unknown; planned?: unknown; sure?: unknown } } | null)?.size;
+    if (!size || typeof size !== "object") continue;
+    if (typeof size.planned === "number" && size.planned > 0) return size.planned;
+    if (size.sure === true && typeof size.estLoc === "number") return size.estLoc;
+  }
+  return null;
+}
+
+/** The turns and time a stage runs with. A repo's `limits:` entry wins; else the pack's default, grown by the card's size (and, for implementing, by the plan's slice count: the larger factor of the two). */
+export function limitsFor(opts: { pack: PackId; slices?: readonly unknown[]; approvals: readonly ApprovalRow[]; repo?: Partial<Record<PackId, RepoLimit>> }): AppliedLimits {
+  const { pack } = opts;
+  const base = PACK_LIMITS[pack];
+  const own = opts.repo?.[pack];
+  if (own && (own.maxTurns !== undefined || own.minutes !== undefined)) {
+    return { maxTurns: own.maxTurns ?? base.maxTurns, timeoutMs: own.minutes !== undefined ? own.minutes * MINUTE : base.timeoutMs, by: "luna.yaml" };
+  }
+  const sliceBudget = budgetFor(pack, opts.slices?.length ?? 0);
+  const sizeFactor = SIZE_SCALED_PACKS.has(pack) ? sizeScale(sizeLinesOf(opts.slices, opts.approvals)) : 1;
+  const sizeBudget = { maxTurns: base.maxTurns * sizeFactor, timeoutMs: base.timeoutMs * sizeFactor };
+  const bySize = sizeBudget.maxTurns > sliceBudget.maxTurns;
+  const chosen = bySize ? sizeBudget : sliceBudget;
+  return { ...chosen, by: bySize ? `size×${sizeFactor}` : "default" };
 }
 
 /** A failed sweep reaches the implementer as at most this many checks, each output cut to this many characters from the end. */
@@ -145,6 +184,8 @@ export function buildStageInput(opts: {
   engine?: EngineId;
   /** The effort a repo's luna.yaml set for the pack; absent, the factory runs the pack's own. */
   effort?: Effort;
+  /** The repo's luna.yaml `limits:` by pack; an entry wins over the size scaling. */
+  limitsConfig?: Partial<Record<PackId, RepoLimit>>;
   attempt: number;
   approvals: ApprovalRow[];
   priorFindings: Finding[];
@@ -222,7 +263,9 @@ export function buildStageInput(opts: {
   // The ui-designer reads the approved spec in its plan (`context.plan.designSpec`).
   const spec = pack === "ui_design" ? designSpecOf(approvals) : null;
   const plan = approved && spec ? { ...approved, designSpec: spec } : approved;
-  const scaled = budgetFor(pack, plan?.slices?.length ?? 0);
+  // The test designer is never shown the slices, but its budget still reads their size.
+  const sized = opts.plan?.slices ?? plan?.slices;
+  const scaled = limitsFor({ pack, ...(sized ? { slices: sized } : {}), approvals, ...(opts.limitsConfig ? { repo: opts.limitsConfig } : {}) });
   const { maxTurns } = scaled;
   // Build's budget: a run never outlives the minutes the card has left.
   const timeoutMs = opts.budgetMinutes !== undefined && (pack === "implementing" || pack === "build_tests" || pack === "ui_design") ? Math.floor(Math.min(scaled.timeoutMs, Math.max(1, opts.budgetMinutes) * MINUTE)) : scaled.timeoutMs;

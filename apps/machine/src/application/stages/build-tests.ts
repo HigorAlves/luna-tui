@@ -4,6 +4,8 @@ import { type CheckContext, Plan, type PlanContext } from "@hardness/contracts";
 
 import { approvedScenarios } from "../../domain/stage-input.ts";
 import { isCommandCheck } from "../../domain/command-check.ts";
+import { plannedMissingModule } from "../../domain/planned-module.ts";
+import { redReviewLine } from "../../domain/red-review.ts";
 import { isDocsOnly } from "../../domain/docs-only.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { isPlainRepoPath } from "@hardness/contracts";
@@ -31,7 +33,7 @@ export interface BuildTestsDeps {
   /** The test writer, as a sub-run; a second round carries what the first left out as `plan.review`. */
   runWriter: (context: StageContext, extra: { plan?: PlanContext }) => Promise<StageResult>;
   /** The red_check decision for one scenario's test; `skipped` when it did not answer in time (it never blocks). `problems` are what a confident no said is wrong. */
-  judgeRed: (check: CheckContext, repoPath: string | null) => Promise<{ verdict: string; problems: string[] }>;
+  judgeRed: (check: CheckContext, repoPath: string | null, waive?: readonly string[]) => Promise<{ verdict: string; problems: string[] }>;
   /** The source of the scenario's tagged test, read from the worktree, capped; null when it cannot be read. The judge reads it beside the writer's report. */
   readTest?: (worktree: string, file: string, scenario: string) => Promise<string | null>;
   /** Pushes the tests commit to the checkpoint ref before the implementer runs (a push that fails is a note, never a failure). */
@@ -189,6 +191,8 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
     // A missing tag is sent back once; a red that is missing or wrong, twice.
     let tagMisses = 0;
     let redMisses = 0;
+    /** Scenarios the last round flagged: a round that flags fewer earns another, up to RED_ROUNDS_MAX. */
+    let lastFlagged = Number.POSITIVE_INFINITY;
     let review: string[] | undefined;
     let holdsToday: { scenario: string; reason: string }[] = [];
     // A red judged right once keeps its verdict while its test and its output are the same: a round sends the writer back as a whole, and
@@ -234,6 +238,8 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
           const id = s.id!;
           const output = reds[id];
           if (output === undefined) return { id, verdict: "missing", problems: [`${id}: no red reported; run its test and report the failing output with scenario_red`] };
+          // A summary of the failure ("./testing/harness missing (lambda not built)") is no output: neither the machine nor the judge can read it.
+          if (!RUNNER_LINE.test(output)) return { id, verdict: "summary", problems: [`${id}: the reported red is a summary, not the runner's own lines; run the test and paste the runner's own error lines with their file paths`] };
           const file = facts.tagged[id];
           const test = file && deps.readTest ? await deps.readTest(where, file, id).catch(() => null) : null;
           const check: CheckContext = { kind: "red", scenario: { id, title: s.title, given: s.given ?? null, when: s.when ?? null, then: s.then ?? null, approach: s.approach }, exists: id in facts.tagged, output, ...(test ? { test } : {}) };
@@ -242,17 +248,26 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
             await context.emit?.("scenario.red_check", { scenario: id, verdict: "proceed", asked: 0, flagged: 0, testRead: test !== null, kept: true });
             return { id, verdict: "proceed", problems: [] };
           }
-          const vote = await voteRed(deps.judgeRed, check, task.repoPath);
+          // New code's test cannot import what the plan creates yet: a missing module the plan names is the right reason, so that question is
+          // waived (red_check reads an import error as a wrong reason, and a card that adds a lambda failed every scenario on it). Whether the
+          // test would pass without the behaviour is still asked.
+          const planned = plannedMissingModule(output, touchpoints, file);
+          const vote = await voteRed(deps.judgeRed, check, task.repoPath, planned !== null ? ["right_reason"] : undefined);
           if (vote.verdict === "proceed") accepted.add(same);
           // The task's events say what each scenario's judge said, so an escalation is never only a sentence.
-          await context.emit?.("scenario.red_check", { scenario: id, verdict: vote.verdict, asked: vote.askings.length, flagged: vote.askings.filter((a) => a.flagged).length, testRead: test !== null, ...(vote.problems.length ? { problems: vote.problems.map((p) => safe(p).slice(0, 200)) } : {}) });
-          return { id, verdict: vote.verdict, problems: vote.problems.map((p) => `${id}: ${safe(p).slice(0, 200)}`) };
+          await context.emit?.("scenario.red_check", { scenario: id, verdict: vote.verdict, asked: vote.askings.length, flagged: vote.askings.filter((a) => a.flagged).length, testRead: test !== null, ...(planned !== null ? { planned } : {}), ...(vote.problems.length ? { problems: vote.problems.map((p) => safe(p).slice(0, 200)) } : {}) });
+          // The writer is told what to change: the outcome to assert, or the fixture to write, not only the judge's words.
+          return { id, verdict: vote.verdict, problems: vote.problems.map((p) => redReviewLine({ id, title: s.title, then: s.then ?? null }, safe(p).slice(0, 400), output)) };
         },
       );
       const problems = judged.flatMap((j) => j.problems);
       if (problems.length > 0) {
         review = problems;
-        if (redMisses >= 2) return escalate(where, base, problems, judged.map((j) => ({ scenario: j.id, verdict: j.verdict })));
+        // Three rounds, and more while each flags fewer scenarios than the one before (a 30-scenario card fixes a few each round).
+        const flaggedNow = judged.filter((j) => j.problems.length > 0).length;
+        const progressing = flaggedNow < lastFlagged;
+        lastFlagged = flaggedNow;
+        if (redMisses >= RED_ROUNDS_MAX - 1 || (redMisses >= 2 && !progressing)) return escalate(where, base, problems, judged.map((j) => ({ scenario: j.id, verdict: j.verdict })));
         redMisses += 1;
         continue;
       }
@@ -268,6 +283,10 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
 
 /** How many scenarios' red_check run at once: the machine's pack calls run two at a time. */
 const RED_JUDGES_AT_ONCE = 2;
+/** Writer rounds when every round flags fewer scenarios than the last; three when one does not. */
+const RED_ROUNDS_MAX = 5;
+/** What a runner's failure prints, in any common runner: a summary the writer wrote has none of it. */
+const RUNNER_LINE = /error|fail|expected|assert|panic|traceback|exception|cannot|not found|no such|undefined|exit(?:ed)? (?:with )?(?:code|status)|✗|×|✕|thrown|timed? ?out|!==|===|!=|does not match|does not (?:equal|contain|include)|to (?:be|equal|match|contain|have)|received|actual|deepStrictEqual|not ok/i;
 
 /** `work` over `items`, at most `width` at a time, results in the items' order. */
 async function inTurns<T, R>(items: readonly T[], width: number, work: (item: T) => Promise<R>): Promise<R[]> {

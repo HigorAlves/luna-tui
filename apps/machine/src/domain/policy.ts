@@ -1,7 +1,7 @@
 // A repo's own say over the pipeline. The policy shape is shared by `luna.yaml`
 // (luna-config.ts, the current file) and `PIPELINE.md` (parsed here, deprecated: its front
 // matter only ever set the knobs below). Pure: parsing only.
-import { type CheckSpec, type DecisionOverrides, type EngineBudgets, FACTORY_DEFAULTS, type FactoryConfig, type ComplianceRegime, type DesignConfig, type ServiceSpec, type StageEfforts, type StageEngines } from "@hardness/contracts";
+import { type CheckSpec, type DecisionOverrides, type EngineBudgets, FACTORY_DEFAULTS, type FactoryConfig, type ComplianceRegime, type DesignConfig, type ServiceSpec, type PackId, type StageEfforts, type StageEngines } from "@hardness/contracts";
 
 import type { SandboxBounds } from "./sandbox-bounds.ts";
 import type { SlaTargets } from "./sla.ts";
@@ -53,6 +53,8 @@ export interface Policy {
   engines: StageEngines;
   /** The effort a pack runs at in this repo, over its default (luna.yaml `effort`); absent, every pack's own. */
   effort?: StageEfforts;
+  /** The turns and minutes a pack gets in this repo (luna.yaml `limits`), over its default and the size scaling; absent, none. */
+  limits?: Partial<Record<PackId, { maxTurns?: number; minutes?: number }>>;
   /** The regimes this repo answers to (luna.yaml `compliance`); absent, none, and the compliance review does not run. */
   compliance?: ComplianceRegime[];
   /** The designer agents here (luna.yaml `design`, RFC 0013): `off`, or the machine's MCP servers narrowed by name. */

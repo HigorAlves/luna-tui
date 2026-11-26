@@ -3,7 +3,7 @@
 import { FACTORY_DEFAULTS, type JiraConfig, LunaConfig, RUNNING, type SlaConfig, TaskState, factoryConfigOf, hostPatternProblem, normalizeHostPattern } from "@hardness/contracts";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 
-import { effortsProblem, stagesProblem } from "./engine-choice.ts";
+import { effortsProblem, limitsProblem, stagesProblem } from "./engine-choice.ts";
 import { branchPatternProblem } from "./jira-link.ts";
 import { DEFAULT_JIRA_BRANCH, DEFAULT_JIRA_COMMENTS, DEFAULT_POLICY, type JiraPolicy, type Policy, PolicyParseError } from "./policy.ts";
 import { type SlaTargets, parseDuration } from "./sla.ts";
@@ -29,6 +29,8 @@ export function validateLunaConfig(raw: unknown, warn: Warn = quiet): LunaConfig
   if (engines) throw new PolicyParseError(`engines.${engines}`);
   const effort = effortsProblem(parsed.data.effort ?? {});
   if (effort) throw new PolicyParseError(`effort.${effort}`);
+  const limits = limitsProblem(parsed.data.limits ?? {});
+  if (limits) throw new PolicyParseError(`limits.${limits}`);
   return parsed.data;
 }
 
@@ -51,7 +53,7 @@ function legacyEgress(raw: unknown, warn: Warn): unknown {
 /** The file text for a config, sections in the order people read them, empty ones left out. */
 export function renderLunaConfig(config: LunaConfig): string {
   const ordered: Record<string, unknown> = {};
-  for (const key of ["checks", "services", "toolchains", "policy", "qa_targets", "jira", "sla", "engines", "effort", "compliance", "design", "budget", "evidence", "freeze", "dedup", "backlog", "tickets", "conversation", "triage", "scoring", "fast_lane", "plan", "size", "build", "sandbox", "verify", "ship", "review"] as const) {
+  for (const key of ["checks", "services", "toolchains", "policy", "qa_targets", "jira", "sla", "engines", "effort", "limits", "compliance", "design", "budget", "evidence", "freeze", "dedup", "backlog", "tickets", "conversation", "triage", "scoring", "fast_lane", "plan", "size", "build", "sandbox", "verify", "ship", "review"] as const) {
     const value = config[key];
     if (value === undefined) continue;
     if (Array.isArray(value) ? value.length === 0 : typeof value === "object" && Object.keys(value as object).length === 0) continue;
@@ -228,7 +230,7 @@ function lowerAllow(factory: Policy["factory"]): Policy["factory"] {
 
 /** The policy a validated config means. */
 export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
-  const { policy = {}, qa_targets = [], checks, services = {}, toolchains = {}, jira, sla, engines = {}, effort, compliance, design, budget, evidence, freeze = [] } = config;
+  const { policy = {}, qa_targets = [], checks, services = {}, toolchains = {}, jira, sla, engines = {}, effort, limits, compliance, design, budget, evidence, freeze = [] } = config;
   return {
     qa: policy.qa ?? DEFAULT_POLICY.qa,
     monthlyBudgetUsd: policy.monthly_budget_usd ?? null,
@@ -244,6 +246,7 @@ export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
     sla: sla ? slaTargetsOf(sla, warn) : {},
     engines,
     ...(effort ? { effort } : {}),
+    ...(limits && Object.keys(limits).length > 0 ? { limits: Object.fromEntries(Object.entries(limits).map(([pack, l]) => [pack, { ...(l.max_turns !== undefined ? { maxTurns: l.max_turns } : {}), ...(l.minutes !== undefined ? { minutes: l.minutes } : {}) }])) as NonNullable<Policy["limits"]> } : {}),
     ...(compliance && compliance.length > 0 ? { compliance } : {}),
     ...(design ? { design } : {}),
     engineBudgets: budget?.engines ?? {},

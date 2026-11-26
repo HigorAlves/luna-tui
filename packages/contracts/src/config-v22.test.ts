@@ -202,7 +202,8 @@ describe("the sections in a luna.yaml", () => {
     expect(bad({ ship: { stale_days: 60 } }).success).toBe(true);
     expect(bad({ build: { max_iterations: 51 } }).success).toBe(false);
     expect(bad({ build: { max_tokens: 20_000_001 } }).success).toBe(false);
-    expect(bad({ size: { hard_limit_loc: 20_001 } }).success).toBe(false);
+    expect(bad({ size: { hard_limit_loc: 100_001 } }).success).toBe(false);
+    expect(bad({ size: { hard_limit_loc: 100_000 } }).success).toBe(true);
     expect(bad({ size: { max_children: 21 } }).success).toBe(false);
     expect(bad({ size: { depth: 4 } }).success).toBe(false);
     for (const sla of ["triage", "plan", "ship"] as const) expect(bad({ [sla]: { sla: { reminder_days: 366 } } }).success).toBe(false);

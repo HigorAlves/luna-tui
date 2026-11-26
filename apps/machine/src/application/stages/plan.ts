@@ -55,6 +55,7 @@ import type { GraphLocation } from "../graph.ts";
 import { type GraphReadiness, graphEscalation, graphSkipped } from "../graph-ready.ts";
 import { type OwnersState, approvalRule, ownersStateOf, ruleFiles, splitApprovalRule } from "../../domain/approvers.ts";
 import { controlPlaneFiles } from "../../domain/control-plane.ts";
+import { approvedScenarios } from "../../domain/stage-input.ts";
 import { triageVerdicts } from "../../domain/triage-policy.ts";
 import { recordIdOf } from "../decision-truth.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
@@ -534,12 +535,16 @@ export function planStage(deps: PlanDeps): StageRunner {
       coverage = { verdict: "skipped", problems: [], answer: null };
       const criteria = criteriaOf(plan.criteria);
       const textOf = (ids: string[]) => ids.map((id) => criteria.find((c) => c.id === id)?.text ?? id);
+      // A re-plan starts from the approved scenarios: each one the reason does not touch is kept word for word, so it keeps its id and its
+      // written test (an id carries over only on the same when and then; DISC-53's replan reworded every scenario and lost every test).
+      const approvedBefore = context.replan ? approvedScenarios(context.approvals) : [];
+      if (approvedBefore.length > 0) cases = approvedBefore;
       for (;;) {
         roundsOnThisPlan += 1;
         testRuns += 1;
         const designed = await deps.runPack(lane === "fast" ? "test_design_fast" : "test_design", sub(`tests-${testRuns}`), {
           // The designer reads the criteria and the goal only: no steps, brief, assumptions, map or risk.
-          plan: { ...(isDocsOnly(plan.slices.flatMap((s) => s.touchpoints ?? [])) ? { docsOnly: true } : {}), record: task.record ?? null, brief: "", criteria: plan.criteria, assumptions: [], slices: [], ...(cases.length ? { cases } : {}), ...(gaps.length ? { gaps } : {}), ...(notes.length ? { coverage_notes: notes } : {}), round: roundsOnThisPlan, ...framesPart },
+          plan: { ...(isDocsOnly(plan.slices.flatMap((s) => s.touchpoints ?? [])) ? { docsOnly: true } : {}), record: task.record ?? null, brief: "", criteria: plan.criteria, assumptions: [], slices: [], ...(cases.length ? { cases } : {}), ...(gaps.length ? { gaps } : {}), ...(notes.length ? { coverage_notes: notes } : {}), ...(approvedBefore.length && context.replan ? { replan: context.replan } : {}), round: roundsOnThisPlan, ...framesPart },
         });
         if (designed.outcome !== "pass") return ended(designed);
         results.push(designed);

@@ -46,6 +46,8 @@ export type SizeDetail = {
   reviewable: boolean | null;
   confidence: number | null;
   planned: number | null;
+  /** Whether the decision's `est_loc` was sure enough to act on; later stages size their turns and time from it. */
+  sure: boolean;
   limit: { target: [number, number]; hard: number };
   verdict: "over" | "over_target" | "within";
   by: "decision" | "plan";
@@ -63,6 +65,7 @@ export function sizeAssessment(input: { decision: SizeDecision | null; planned: 
     reviewable: decision ? !decision.reviewableNo : null,
     confidence: decision?.confidence ?? null,
     planned: byPlan ? planned : null,
+    sure: decision?.sure ?? false,
     limit: { target: limits.target, hard: limits.hard },
     verdict,
     by: byPlan ? "plan" : "decision",

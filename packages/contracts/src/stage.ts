@@ -286,6 +286,15 @@ export type StageEngines = z.infer<typeof StageEngines>;
 export const StageEfforts = z.partialRecord(PackId, EffortId);
 export type StageEfforts = z.infer<typeof StageEfforts>;
 
+/** A repo's own turns and time for one pack: luna.yaml `limits`, over the pack's default and over the size scaling. */
+export const StageLimit = z.object({
+  max_turns: z.number().int().min(1).max(500).optional(),
+  minutes: z.number().int().min(1).max(240).optional(),
+}).strict();
+export type StageLimit = z.infer<typeof StageLimit>;
+export const StageLimits = z.partialRecord(PackId, StageLimit);
+export type StageLimits = z.infer<typeof StageLimits>;
+
 /** The ordered slices the planner proposes; `touchpoints` are repo-relative paths. */
 export const Slice = z.object({
   title: z.string(),
@@ -923,6 +932,8 @@ export const LunaConfig = z.object({
   engines: StageEngines.optional(),
   /** The effort a pack runs at in this repo, over its default. */
   effort: StageEfforts.optional(),
+  /** The turns and minutes a pack gets in this repo, over its default and over the size scaling (`limits: { implementing: { max_turns: 200, minutes: 60 } }`). */
+  limits: StageLimits.optional(),
   /** The regimes this repo answers to; each makes the compliance review run that regime's reviewer. */
   compliance: z.array(ComplianceRegime).refine((regimes) => new Set(regimes).size === regimes.length, "each regime once").optional(),
   /** Monthly caps in USD on this repo's stage runs, by engine or credential (`openai:sol: 10`). */

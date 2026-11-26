@@ -527,7 +527,7 @@ describe("agent stages through packs", () => {
     const result = await runAgent(deps(fakeSandbox(output({ answer }))), { ...context("test_design"), runId: "r1-plan" }, "plan", { plan });
     const input = seen!.input as unknown as StageInput;
     expect(input).toMatchObject({ stage: "test_design", pack: "plan", context: { plan }, plan: { brief: "b" } });
-    expect(input.limits.maxTurns).toBe(30);
+    expect(input.limits.maxTurns).toBe(60);
     expect(seen!.name).toMatch(/-plan-1$/);
     expect(seen!.runDir).toMatch(/runs\/r1-plan$/);
     expect(result.detail).toMatchObject({ brief: "the brief", criteria: ["c1"], assumptions: ["a1"], rollback: "revert", slices: [{ title: "s1" }] });
@@ -1189,6 +1189,24 @@ describe("the engine a stage runs on", () => {
       pack: "triage",
       engine: "claude:opus",
       reason: expect.stringMatching(/^the task's openai:sol is not allowed for triage/),
+    });
+  });
+
+  describe("the turns and time a run gets", () => {
+    const slices = [{ title: "s", est_loc: 5000, touchpoints: ["a.ts"], acceptance: ["ok"] }];
+    const plan = { record: null, brief: "b", criteria: ["c"], assumptions: [], slices, round: 1 };
+
+    it("grows with the card's size and says so in a limits event", async () => {
+      const result = await runAgent(deps(fakeSandbox(output({ answer: { kind: "done", summary: "s", cases: [] } }))), { ...context("test_design"), runId: "r1-tests-1" }, "test_design", { plan });
+      expect((seen!.input as unknown as StageInput).limits).toEqual({ maxTurns: 80, timeoutMs: 30 * 60_000 });
+      expect(result.events?.find((e) => e.kind === "limits")?.payload).toEqual({ pack: "test_design", maxTurns: 80, timeoutMs: 30 * 60_000, by: "size×2" });
+    });
+
+    it("takes the repo's luna.yaml limits over the size, and says so", async () => {
+      writeFileSync(join(repo, "luna.yaml"), "limits:\n  test_design:\n    max_turns: 99\n    minutes: 7\n");
+      const result = await runAgent(deps(fakeSandbox(output({ answer: { kind: "done", summary: "s", cases: [] } }))), { ...context("test_design"), runId: "r1-tests-1" }, "test_design", { plan });
+      expect((seen!.input as unknown as StageInput).limits).toEqual({ maxTurns: 99, timeoutMs: 7 * 60_000 });
+      expect(result.events?.find((e) => e.kind === "limits")?.payload).toMatchObject({ by: "luna.yaml" });
     });
   });
 

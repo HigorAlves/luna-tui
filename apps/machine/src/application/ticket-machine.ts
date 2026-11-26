@@ -108,7 +108,8 @@ export interface TicketMachineDeps {
 /** Fixed words and two numbers: why a ticket is split before it is planned; null when the estimate rules nothing. */
 function splitReason(decision: SizeDecision, limits: ReturnType<typeof sizeLimits>): string | null {
   if (decision.sure && sizeVerdict(decision.estLoc, limits) === "over") return `estimated at about ${decision.estLoc} lines, over the limit of ${limits.hard}`;
-  if (decision.reviewableNo) return "a reviewer could not read it as one change";
+  // "Not reviewable" alone never splits a ticket that is within the repo's target: the plan's gate carries it as a flag.
+  if (decision.reviewableNo && decision.estLoc > limits.target[1]) return "a reviewer could not read it as one change";
   return null;
 }
 

@@ -74,7 +74,7 @@ export const FactoryConfigInput = {
   }).optional(),
   size: section({
     target_loc: z.tuple([count(100_000), count(100_000)]).optional(),
-    hard_limit_loc: count(20_000).optional(),
+    hard_limit_loc: count(100_000).optional(),
     max_children: count(20).optional(),
     max_rounds: count(10).optional(),
     depth: count(3).optional(),

@@ -72,6 +72,9 @@ export interface GraphifyDeps {
   sandbox: (run: SandboxRun) => Promise<SandboxResult>;
   /** The size of the build container from the repo's bounded sandbox policy (runtime, process limit, seccomp, cpu, memory); absent, docker's defaults. */
   limitsOf?: (repoPath: string) => Promise<SandboxSize>;
+  /** Removes a container of that name, gone or not. A build is one per repository in this process, so one of its name is a machine's
+   *  before a restart: its output folder is about to be made again, and its name would make this build fail. Absent, nothing is removed. */
+  removeStale?: (name: string) => Promise<void>;
   git?: GraphGit;
 }
 
@@ -157,11 +160,13 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
     await rm(building, { recursive: true, force: true });
     await mkdir(building, { recursive: true });
     let result: SandboxResult;
+    const name = `luna-graph-${repoSlug(repoPath)}`;
     try {
       const limits = await deps.limitsOf?.(repoPath);
+      await deps.removeStale?.(name);
       result = await deps.sandbox({
         ...(limits ? { limits } : {}),
-        name: `luna-graph-${repoSlug(repoPath)}`,
+        name,
         image,
         runDir: join(repoDir, "run"),
         worktree: checkout,

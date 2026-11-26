@@ -697,8 +697,8 @@ const PLAN_CHECK_QUESTIONS: QuestionSet = {
 
 /** What red_check asks of a slice's failing test. */
 const RED_CHECK_QUESTIONS: QuestionSet = {
-  right_reason: { type: "yesno", instructions: "The failing output is the test writer's own report; when the test's source is given, read it too, and judge the test, not the report's wording. Does the output show the test failing because the behaviour it tests is missing? The test is written before the code: a function, module or route under test that does not exist yet is the behaviour missing, and is a yes; so is a page element the change adds and the test looks for (a section, a heading, a button, a text) not being there yet. In a compiled language (Rust, Go, Java) one missing function stops the whole test build: a test that fails because the build fails on code the change has not written yet (a function, an argument, a field the scenarios' tests call) is a yes, whichever test in the build calls it. A no is a failure that has nothing to do with the behaviour: a syntax error or a typo in the test itself, a test helper or dependency that cannot be loaded, a wrong path to something that exists, or a broken fixture." },
-  not_tautological: { type: "yesno", instructions: "Would this test still fail if the behaviour were absent: it asserts the behaviour, not its own setup?" },
+  right_reason: { type: "yesno", instructions: "The failing output is the test writer's own report; when the test's source is given, read it too, and judge the test, not the report's wording. Does the output show the test failing because the behaviour it tests is missing? The test is written before the code: a function, module or route under test that does not exist yet is the behaviour missing, and is a yes; so is a page element the change adds and the test looks for (a section, a heading, a button, a text) not being there yet. In a compiled language (Rust, Go, Java) one missing function stops the whole test build: a test that fails because the build fails on code the change has not written yet (a function, an argument, a field the scenarios' tests call) is a yes, whichever test in the build calls it. A change that removes or retires something is missing until it is done: a test asserting the old thing is gone (a guard that still finds references the change retires, an old route that still answers) fails for the right reason, a yes. So is a test that checks a file the change creates exists. A no is a failure that has nothing to do with the behaviour: a syntax error or a typo in the test itself, a test helper or dependency that cannot be loaded, a wrong path to something that exists, or a broken fixture." },
+  not_tautological: { type: "yesno", instructions: "Would this test still fail if the behaviour were absent: it asserts the behaviour, not its own setup? A scenario that something stays unchanged is tested by acting on something else and checking it did not move: that asserts the behaviour (an isolation, a scope), not the setup. A no is a test whose assertions would hold with the behaviour absent: it checks only a status code, a type or a count against itself while the scenario names which rows, keys or values." },
 };
 
 /** What scope_check asks of the facts the machine computed over a change. */
@@ -1187,8 +1187,8 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     skills: ["writing-plans", "code-discovery"],
     access: access(READ_ONLY, { web: true, commands: ["gh issue view"], luna: ["decision_get"] }),
     writable: false,
-    maxTurns: 30,
-    timeoutMs: 10 * MINUTE,
+    maxTurns: 60,
+    timeoutMs: 20 * MINUTE,
     engines: { default: "claude:opus", allowed: ["claude:opus", "codex:sol"], fallback: ["codex:sol", "claude:opus"] },
     effort: "high",
     answer: PlanAnswer,
@@ -2270,4 +2270,13 @@ function withoutTuples(node: unknown): unknown {
 export function answerJsonSchema(pack: Pack): Record<string, unknown> {
   const { $schema: _schema, ...schema } = z.toJSONSchema(pack.answer, { target: "draft-2020-12" }) as Record<string, unknown>;
   return withoutTuples(schema) as Record<string, unknown>;
+}
+
+/** The agent stages of a feature card whose turns and time grow with the card's size. The fast lane is for small tickets and stays as it is. */
+export const SIZE_SCALED_PACKS: ReadonlySet<PackId> = new Set<PackId>(["plan", "test_design", "build_tests", "implementing", "verifying", "e2e"]);
+
+/** The factor a card's size puts on its stages' turns and time: 1 up to 2,000 lines, 2 up to 8,000, 3 above; 1 with no estimate. */
+export function sizeScale(estLoc: number | null | undefined): 1 | 2 | 3 {
+  if (typeof estLoc !== "number" || !Number.isFinite(estLoc) || estLoc <= 2000) return 1;
+  return estLoc <= 8000 ? 2 : 3;
 }

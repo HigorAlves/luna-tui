@@ -3605,8 +3605,16 @@ export class Pipeline {
     if (at === -1) return [];
     const approvedAfter = events.slice(at + 1).some((e) => e.kind === "transition" && e.payload.from === "awaiting_approval" && e.payload.event === "approved");
     if (!approvedAfter) return [];
-    const finished = (await this.store.findFinishedEvents(id)).find((e) => e.payload.stage === "implementing" && typeof objectOf(e.payload.detail)?.request === "string");
-    return testPathsIn(String(objectOf(finished?.payload.detail)?.request ?? ""));
+    const rows = (await this.store.findFinishedEvents(id)).filter((e) => e.payload.stage === "implementing");
+    const finished = rows.find((e) => typeof objectOf(e.payload.detail)?.request === "string");
+    const detail = objectOf(finished?.payload.detail);
+    // The tests commit's files, which a test named without its folder resolves against: from every Build finish, since a resumed run
+    // whose plan was renumbered maps no scenario to a file, and only the run that wrote the tests recorded them all.
+    const locked = rows.flatMap((row) => {
+      const testsStep = objectOf(objectOf(row.payload.detail)?.testsStep);
+      return Array.isArray(testsStep?.scenarioTests) ? testsStep.scenarioTests.map((t) => String(objectOf(t)?.file ?? "")) : [];
+    }).filter(Boolean);
+    return testPathsIn(String(detail?.request ?? ""), [...new Set(locked)]);
   }
 
   /** The scenarios the tests step recorded as already holding, from the newest implementing finish row that kept a tests commit. */
@@ -3690,7 +3698,8 @@ export class Pipeline {
   /** When the plan stage runs because a plan was found wrong (the last move into it was a `plan_wrong`): who raised it, why, and what the raising
    *  stage's last run said, flattened and capped (`replanOf`). Null for any other run of the plan stage. */
   private async replanEvidence(id: string): Promise<ReturnType<typeof replanOf> | null> {
-    const entry = (await this.events(id)).findLast((e) => e.kind === "transition" && e.payload.to === "test_design");
+    // A person retrying an escalated plan stage moves it in from `escalated`: the move that brought the replan in is the one before.
+    const entry = (await this.events(id)).findLast((e) => e.kind === "transition" && e.payload.to === "test_design" && e.payload.from !== "escalated");
     // A test change the implementer asked for is evidence too: the planner and the person at the plan gate read the request.
     if (entry && entry.payload.outcome === "test_change") {
       const finished = (await this.store.findFinishedEvents(id)).find((e) => e.payload.stage === "implementing");
@@ -3910,9 +3919,16 @@ function budgetWasSpent(requested: Record<string, unknown>): boolean {
 }
 
 /** The test files a test-change request names (repo-relative paths that look like tests), each once. */
-export function testPathsIn(request: string): string[] {
+/** The test files a request names. `locked`: the tests commit's files. A file named without its folder (`app.test.ts`) is the locked file of
+ *  that name when exactly one has it: an implementer names tests the way it reads them, and an unresolved name unlocked nothing. */
+export function testPathsIn(request: string, locked: readonly string[] = []): string[] {
   // A path starts where no path character is before it: `/abs/y.test.ts` is not `abs/y.test.ts`, and `../x` is refused below.
   const paths = request.match(/(?<![A-Za-z0-9_@.\/-])[A-Za-z0-9_@.\-]+(?:\/[A-Za-z0-9_@.\-]+)+\.[A-Za-z0-9]+/g) ?? [];
-  return [...new Set(paths.filter((p) => !p.startsWith("/") && !p.includes("..") && looksLikeTestPath(p)))];
+  const bare = request.match(/(?<![A-Za-z0-9_@.\/-])[A-Za-z0-9_@\-][A-Za-z0-9_@.\-]*\.[A-Za-z0-9]+(?![A-Za-z0-9_@\/-])/g) ?? [];
+  const byName = bare.flatMap((name) => {
+    const matches = locked.filter((path) => path.split("/").at(-1) === name);
+    return matches.length === 1 ? matches : [];
+  });
+  return [...new Set([...paths, ...byName].filter((p) => !p.startsWith("/") && !p.includes("..") && looksLikeTestPath(p)))];
 }
 

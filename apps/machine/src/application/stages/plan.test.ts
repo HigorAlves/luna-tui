@@ -1316,3 +1316,27 @@ describe("planStage's design spec", () => {
     expect((result.detail as { flagged: string[] }).flagged).toContain("design.frame_ref: S2 cites 9:9, which the spec does not name");
   });
 });
+
+describe("a re-plan's test design keeps the approved scenarios", () => {
+  const approvedGate = {
+    id: "a", taskId: "t", kind: "awaiting_approval", decision: "approved", reason: null, response: null, createdAt: new Date(0), decidedAt: new Date(0),
+    requested: { criteria: ["no panic", "stays selected"], cases: [{ id: "S1", title: "no panic", criterion: "no panic", criterion_ref: null, given: "an empty list", when: "it is opened", then: "nothing panics", approach: "a" }] },
+  } as never;
+  const replan = { raised_by: "implementing (a test change)", reason: "The implementer asks to change a locked test: S8 contradicts S15" };
+
+  it("hands the first round the replan's reason and the approved scenarios, so the ones it does not touch keep their wording, ids and tests (DISC-53: a replan renumbered every scenario)", async () => {
+    const { run, calls } = setup();
+    await run(context({ approvals: [approvedGate], replan } as never));
+    const first = calls.find((c) => c.pack === "test_design")!;
+    expect(first.plan?.replan).toEqual(replan);
+    expect(first.plan?.cases).toEqual([expect.objectContaining({ id: "S1", when: "it is opened", then: "nothing panics" })]);
+  });
+
+  it("hands a first plan's test design neither", async () => {
+    const { run, calls } = setup();
+    await run(context());
+    const first = calls.find((c) => c.pack === "test_design")!;
+    expect(first.plan?.replan).toBeUndefined();
+    expect(first.plan?.cases).toBeUndefined();
+  });
+});

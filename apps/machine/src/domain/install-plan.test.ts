@@ -84,9 +84,9 @@ describe("nestedPlansOf: lockfiles below the root", () => {
     expect(plan.skipped.map((s) => s.lockfile)).toEqual(["svc/poetry.lock"]);
   });
 
-  it("runs a folder's step through sh with the folder as an argument; a root step as it is", () => {
+  it("runs every step through sh that first makes its temp folder, a folder's step with the folder as an argument", () => {
     const [step] = nestedPlansOf(["a b/$(x)/Cargo.lock"], () => ({ scripts: false, yarnBerry: false })).steps;
-    expect(argvIn(step!)).toEqual(["sh", "-c", 'cd -- "$1" && shift && exec "$@"', "install-in", "a b/$(x)", "cargo", "fetch", "--locked"]);
-    expect(argvIn({ lockfile: "Cargo.lock", tool: "cargo", argv: ["cargo", "fetch"], env: {}, node: false })).toEqual(["cargo", "fetch"]);
+    expect(argvIn(step!)).toEqual(["sh", "-c", 'mkdir -p -- "$TMPDIR" && cd -- "$1" && shift && exec "$@"', "install-in", "a b/$(x)", "cargo", "fetch", "--locked"]);
+    expect(argvIn({ lockfile: "Cargo.lock", tool: "cargo", argv: ["cargo", "fetch"], env: {}, node: false })).toEqual(["sh", "-c", 'mkdir -p -- "$TMPDIR" && exec "$@"', "install", "cargo", "fetch"]);
   });
 });

@@ -54,6 +54,11 @@ describe("registryHostsOf", () => {
     expect(registryHostsOf([lock("package-lock.json", text)])).toEqual(["ok.example.com", "registry.npmjs.org"]);
   });
 
+  it("reads a Yarn 4 lockfile's resolution line: a package fetched from its own URL (xlsx from cdn.sheetjs.com) opens that host", () => {
+    const berry = ['"xlsx@https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz":', "  version: 0.20.3", '  resolution: "xlsx@https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"', "  languageName: node"].join("\n");
+    expect(registryHostsOf([lock("yarn.lock", berry)])).toContain("cdn.sheetjs.com");
+  });
+
   it("caps the list at twenty, keeping every ecosystem host, and sorts it", () => {
     const urls = Array.from({ length: 40 }, (_, i) => `"resolved": "https://h${String(i).padStart(2, "0")}.example.com/a.tgz"`).join("\n");
     const hosts = registryHostsOf([lock("yarn.lock", urls)]);

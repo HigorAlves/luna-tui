@@ -10,7 +10,8 @@ export interface RedAnswer {
   problems: string[];
 }
 
-export type RedJudge = (check: CheckContext, repoPath: string | null) => Promise<RedAnswer>;
+/** `waive`: questions the machine already settled (see judgeRedCheck); absent, every question is asked. */
+export type RedJudge = (check: CheckContext, repoPath: string | null, waive?: readonly string[]) => Promise<RedAnswer>;
 
 /** One asking's outcome: a flag is a verdict other than proceed or skipped, or any problem a confident no named. */
 export const flagged = (answer: RedAnswer): boolean => answer.problems.length > 0 || (answer.verdict !== "proceed" && answer.verdict !== "skipped");
@@ -25,10 +26,10 @@ export interface RedVote {
 }
 
 /** Asks until the majority is settled: a first answer that is not a flag stands; a flag is asked again, and a second flag stands; a split asks a third time. */
-export async function voteRed(judge: RedJudge, check: CheckContext, repoPath: string | null): Promise<RedVote> {
+export async function voteRed(judge: RedJudge, check: CheckContext, repoPath: string | null, waive?: readonly string[]): Promise<RedVote> {
   const askings: RedVote["askings"] = [];
   for (let n = 0; n < RED_ASKINGS; n++) {
-    const answer = await judge(check, repoPath);
+    const answer = await (waive ? judge(check, repoPath, waive) : judge(check, repoPath));
     askings.push({ flagged: flagged(answer), verdict: answer.verdict, problems: answer.problems });
     const flags = askings.filter((a) => a.flagged).length;
     const clear = askings.length - flags;

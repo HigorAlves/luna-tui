@@ -19,7 +19,8 @@ const OWN_HOSTS: Readonly<Record<string, readonly string[]>> = {
   "composer.lock": ["repo.packagist.org", "packagist.org"],
 };
 const BINARY = new Set(["bun.lockb"]);
-const KEYED = /\b(resolved|url|tarball|remote|source)\b/;
+// `resolution` is Yarn 2+'s key for where a package comes from (`resolution: "xlsx@https://cdn.sheetjs.com/…"`); the rest are npm's, pnpm's and Yarn 1's.
+const KEYED = /\b(resolved|resolution|url|tarball|remote|source)\b/;
 const HTTPS_URL = /https:\/\/[^\s"'<>)\]}\\,]+/g;
 export const MAX_REGISTRY_HOSTS = 20;
 
@@ -42,7 +43,7 @@ function hostOfUrl(candidate: string): string | null {
   return hostPatternProblem(host) === null ? host : null;
 }
 
-/** Each ecosystem's own hosts for a lockfile that is present (at the root, or by name in `nested`), plus the hosts of the `https://` URLs its text names on a line with `resolved`, `url`, `tarball`, `remote` or `source`; at most 20, sorted. */
+/** Each ecosystem's own hosts for a lockfile that is present (at the root, or by name in `nested`), plus the hosts of the `https://` URLs its text names on a line with `resolved`, `resolution`, `url`, `tarball`, `remote` or `source`; at most 20, sorted. */
 export function registryHostsOf(lockfiles: readonly LockfileText[], nested: readonly string[] = []): string[] {
   const { own, named } = registryHostsSplit(lockfiles, nested);
   return [...own, ...named].sort();

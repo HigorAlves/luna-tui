@@ -97,7 +97,9 @@ export function nestedPlansOf(paths: readonly string[], choicesOf: (dir: string)
 
 /** The argv that runs `step` in its folder: the folder is an argument, never part of a shell string. */
 export function argvIn(step: InstallStep): string[] {
-  return step.dir ? ["sh", "-c", 'cd -- "$1" && shift && exec "$@"', "install-in", step.dir, ...step.argv] : step.argv;
+  // The temp folder is made first: the install's TMPDIR is on the cache volume (see install.ts), where it may not exist yet.
+  const tmp = 'mkdir -p -- "$TMPDIR" && ';
+  return step.dir ? ["sh", "-c", `${tmp}cd -- "$1" && shift && exec "$@"`, "install-in", step.dir, ...step.argv] : ["sh", "-c", `${tmp}exec "$@"`, "install", ...step.argv];
 }
 
 /** sha256 over the environment hash's own lines for the image id and each lockfile's blob id, and a `scripts:<mode>` line; no commit. */

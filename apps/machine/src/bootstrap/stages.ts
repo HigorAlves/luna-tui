@@ -85,10 +85,9 @@ import { runSweep } from "../application/stages/sweep.ts";
 import { noIdentityDetail } from "../application/env-broken.ts";
 import { rmSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
-import { readdir } from "node:fs/promises";
 import { readRegularFile } from "../adapters/fs/bounded.ts";
 import { testExcerpt } from "../domain/test-excerpt.ts";
-import { repoCommandsOf } from "../domain/command-check.ts";
+import { readRepoCommands } from "../application/repo-commands.ts";
 import { buildTestsStep } from "../application/stages/build-tests.ts";
 import { exec } from "../adapters/process/exec.ts";
 import { type GitHub, noTokenGitHub } from "../application/github.ts";
@@ -427,35 +426,12 @@ export async function buildRealStages(
     implementing: buildTestsStep({
       implement: (context, extra) => runAgent(deps, context, "implementing", extra),
       runWriter: (context, extra) => runAgent(deps, context, "build_tests", extra.plan ? { plan: extra.plan } : {}),
-      judgeRed: async (check, repoPath) => {
+      judgeRed: async (check, repoPath, waive) => {
         const policy = repoPath ? await policies.for(repoPath) : null;
-        return judgeRedCheck(buildDecisions?.decide ?? null, check, repoPath, policy?.decisions ?? {});
+        return judgeRedCheck(buildDecisions?.decide ?? null, check, repoPath, policy?.decisions ?? {}, undefined, waive);
       },
-      repoCommands: async (repoPath) => {
-        // The user's checkout is the source, never the card's folder: a card cannot turn its own scenario into a check.
-        const pkg = await readRegularFile(resolve(repoPath, "package.json"), 1024 * 1024).catch(() => "");
-        let scripts: string[] = [];
-        try {
-          const parsed = JSON.parse(pkg) as { scripts?: Record<string, unknown> };
-          scripts = Object.keys(parsed.scripts ?? {});
-        } catch {
-          // no package.json, or not JSON: no scripts
-        }
-        // Each workspace package one folder down (a package.json with a name), with its scripts.
-        const workspaces: { name: string; dir: string; scripts: string[] }[] = [];
-        for (const entry of await readdir(repoPath, { withFileTypes: true }).catch(() => [])) {
-          if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name === "node_modules") continue;
-          const text = await readRegularFile(resolve(repoPath, entry.name, "package.json"), 1024 * 1024).catch(() => "");
-          try {
-            const parsed = JSON.parse(text) as { name?: unknown; scripts?: Record<string, unknown> };
-            if (typeof parsed.name === "string" && parsed.name) workspaces.push({ name: parsed.name, dir: entry.name, scripts: Object.keys(parsed.scripts ?? {}) });
-          } catch {
-            // no package.json there
-          }
-        }
-        const policy = await policies.for(repoPath);
-        return repoCommandsOf(scripts, (policy.checks ?? []).map((c) => c.run), workspaces);
-      },
+      // The user's checkout is the source, never the card's folder: a card cannot turn its own scenario into a check.
+      repoCommands: async (repoPath) => readRepoCommands(repoPath, ((await policies.for(repoPath)).checks ?? []).map((c) => c.run)),
       readTest: async (worktree, file, scenario) => {
         // The path is a tagged file git named in the diff: it stays inside the worktree, and a link or a big file is never read.
         const path = resolve(worktree, file);

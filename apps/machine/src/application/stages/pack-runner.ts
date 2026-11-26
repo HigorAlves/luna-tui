@@ -72,7 +72,7 @@ import { type Decide, buildChecks, buildWatch, cardSearchAnswers, loopAnswers } 
 import { type CardHit, sourceKindOf } from "../../domain/card-search.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { prepareStageCredentials } from "./stage-credentials.ts";
-import { PACK_LIMITS, approvedScenarios, buildStageInput } from "../../domain/stage-input.ts";
+import { PACK_LIMITS, approvedScenarios, buildStageInput, limitsFor } from "../../domain/stage-input.ts";
 import { chooseEffort, reviewerEngine } from "../../domain/engine-choice.ts";
 import { pickEngine } from "../engine.ts";
 import type { Economy } from "../economy.ts";
@@ -508,7 +508,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const effortConfig = helperRun && policy.effort?.implementing ? { ...policy.effort, ui_design: policy.effort.implementing } : policy.effort;
   const suggestedEffort = context.suggested?.effort && !effortConfig?.[pack] ? { ...effortConfig, [pack]: context.suggested.effort } : effortConfig;
   const effortChoice = chooseEffort({ pack: PACKS[pack], engine: choice.engine, config: suggestedEffort });
-  const engineEvents = [
+  const engineEvents: { at: string; kind: string; payload: Record<string, unknown> }[] = [
     ...(choice.reason ? [{ at: new Date().toISOString(), kind: "engine", payload: { pack, engine: choice.engine, reason: choice.reason } }] : []),
     ...(effortChoice.reason ? [{ at: new Date().toISOString(), kind: "engine", payload: { pack, engine: choice.engine, reason: effortChoice.reason } }] : []),
   ];
@@ -550,6 +550,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     ...(extra.parity ? { parity: extra.parity } : {}),
     engine: choice.engine,
     ...(effortChoice.source === "config" ? { effort: effortChoice.effort } : {}),
+    ...(policy.limits ? { limitsConfig: policy.limits } : {}),
     attempt: context.attempt,
     approvals: context.approvals,
     priorFindings: pack === "implementing" ? (context.priorFindings ?? []) : [],
@@ -577,6 +578,10 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     ...(extra.factCandidates?.length ? { factCandidates: extra.factCandidates } : {}),
     history: extra.history ?? ((pack === "implementing" || pack === "reviewing_memory") && deps.history ? await deps.history(task.id) : null),
   });
+
+  // What the run's turns and time came to and why (the card's size, the repo's luna.yaml, or the pack's default), said as an event so the board can show it.
+  const applied = limitsFor({ pack, ...((extra.plan?.slices ?? input.plan?.slices) ? { slices: (extra.plan?.slices ?? input.plan?.slices)! } : {}), approvals: context.approvals, ...(policy.limits ? { repo: policy.limits } : {}) });
+  if (applied.by !== "default") engineEvents.push({ at: new Date().toISOString(), kind: "limits", payload: { pack, maxTurns: input.limits.maxTurns, timeoutMs: input.limits.timeoutMs, by: applied.by } });
 
   // The implementer's helper (RFC 0013, phase 5): whether it may hand a UI slice to the ui-designer, from the machine's own facts.
   const delegating = pack === "implementing" && !extra.checkout && writableHelper(PACKS.implementing) !== null;

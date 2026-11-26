@@ -174,6 +174,24 @@ describe("parseLunaConfig", () => {
     expect(renderLunaConfig(config)).toContain("effort:\n  triage: low");
   });
 
+  it("reads limits per pack into the policy (turns, minutes) and keeps them through a render", () => {
+    const config = validateLunaConfig({ limits: { implementing: { max_turns: 200, minutes: 60 }, plan: { minutes: 30 } } });
+    expect(policyOf(config).limits).toEqual({ implementing: { maxTurns: 200, minutes: 60 }, plan: { minutes: 30 } });
+    expect(renderLunaConfig(config)).toContain("limits:\n  implementing:\n    max_turns: 200");
+    expect(policyOf(validateLunaConfig({})).limits).toBeUndefined();
+  });
+
+  it("refuses limits for an unknown pack, a decision pack, a pack outside a task, an out-of-range or unknown key", () => {
+    expect(() => parseLunaConfig("limits:\n  nope:\n    minutes: 5\n")).toThrow(/limits/);
+    expect(() => parseLunaConfig("limits:\n  risk_score:\n    minutes: 5\n")).toThrow(/^limits\.risk_score: risk_score is a decision pack/);
+    expect(() => parseLunaConfig("limits:\n  foreman:\n    minutes: 5\n")).toThrow(/^limits\.foreman: runs on its own/);
+    expect(() => parseLunaConfig("limits:\n  plan:\n    max_turns: 0\n")).toThrow(/limits\.plan\.max_turns/);
+    expect(() => parseLunaConfig("limits:\n  plan:\n    max_turns: 501\n")).toThrow(/limits\.plan\.max_turns/);
+    expect(() => parseLunaConfig("limits:\n  plan:\n    minutes: 241\n")).toThrow(/limits\.plan\.minutes/);
+    expect(() => parseLunaConfig("limits:\n  plan:\n    minutes: 1.5\n")).toThrow(/limits\.plan\.minutes/);
+    expect(() => parseLunaConfig("limits:\n  plan:\n    turns: 5\n")).toThrow(/limits\.plan/);
+  });
+
   it("accepts an engine and an effort for each review pass, which runs inside the review stage, and refuses an engine the pass does not allow", () => {
     const config = validateLunaConfig({ engines: { review_security: "claude:opus", review_second: "codex:luna" }, effort: { review_security: "high", review_iac: "low" } });
     expect(policyOf(config).engines).toEqual({ review_security: "claude:opus", review_second: "codex:luna" });
