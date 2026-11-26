@@ -252,9 +252,10 @@ export function buildStageInput(opts: {
 }): StageInput {
   const { task, stage, attempt, approvals } = opts;
   const pack = opts.pack ?? (stage as PackId);
-  // The test designer designs from the criteria and the goal: it is never shown the plan's steps, brief or assumptions.
+  // The test designer designs from the criteria and the goal: it is never shown the plan's steps, brief or assumptions. A re-plan's reason
+  // reaches it, so it keeps the approved scenarios the reason does not touch.
   const designer = pack === "test_design" || pack === "test_design_fast";
-  const designed: PlanContext | null = designer && opts.plan ? { ...(opts.plan.docsOnly ? { docsOnly: true } : {}), record: opts.plan.record, brief: "", criteria: opts.plan.criteria, assumptions: [], slices: [], ...(opts.plan.cases ? { cases: opts.plan.cases } : {}), ...(opts.plan.gaps ? { gaps: opts.plan.gaps } : {}), ...(opts.plan.coverage_notes ? { coverage_notes: opts.plan.coverage_notes } : {}), ...(opts.plan.round !== undefined ? { round: opts.plan.round } : {}), ...(opts.plan.frames ? { frames: opts.plan.frames } : {}) } : null;
+  const designed: PlanContext | null = designer && opts.plan ? { ...(opts.plan.docsOnly ? { docsOnly: true } : {}), record: opts.plan.record, brief: "", criteria: opts.plan.criteria, assumptions: [], slices: [], ...(opts.plan.cases ? { cases: opts.plan.cases } : {}), ...(opts.plan.gaps ? { gaps: opts.plan.gaps } : {}), ...(opts.plan.coverage_notes ? { coverage_notes: opts.plan.coverage_notes } : {}), ...(opts.plan.round !== undefined ? { round: opts.plan.round } : {}), ...(opts.plan.frames ? { frames: opts.plan.frames } : {}), ...(opts.plan.replan ? { replan: opts.plan.replan } : {}) } : null;
   const reviewed = designed ?? opts.plan;
   const underReview = reviewed
     ? { brief: reviewed.brief, criteria: reviewed.criteria, assumptions: reviewed.assumptions, ...(designer ? {} : { slices: reviewed.slices }), ...(reviewed.rollback !== undefined ? { rollback: reviewed.rollback } : {}) }

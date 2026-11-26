@@ -113,6 +113,14 @@ describe("buildStageInput's pack and plan", () => {
     expect(buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [], questions }).context.questions).toBeUndefined();
   });
 
+  it("keeps a re-plan's reason in the designer's filtered context, so it keeps the approved scenarios the reason does not touch (DISC-53: the filter dropped it and every scenario was renumbered)", () => {
+    const replan = { raised_by: "implementing (a test change)", reason: "The implementer asks to change a locked test: unlock apps/x/src/a.test.ts" };
+    for (const pack of ["test_design", "test_design_fast"] as const) {
+      const input = buildStageInput({ task, stage: "test_design", pack, attempt: 1, approvals: [], priorFindings: [], plan: { ...planContext, replan } });
+      expect(input.context.plan).toMatchObject({ brief: "", slices: [], replan });
+    }
+  });
+
   it("hands the test designer the criteria and the goal and no step, brief or assumption, in context.plan and in the plan it reads", () => {
     const withPlan = { ...planContext, risk: { level: "high" as const }, map: { components: [], files: [], entry_points: [], owners: [], confidence: 0.5 } };
     for (const pack of ["test_design", "test_design_fast"] as const) {
