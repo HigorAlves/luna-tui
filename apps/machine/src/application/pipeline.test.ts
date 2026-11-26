@@ -539,6 +539,29 @@ describe("a scope problem gets one fix pass, then a person", () => {
 describe("Build's budget", () => {
   const events = (n: number) => Array.from({ length: n }, (_, i) => ({ at: new Date(i).toISOString(), kind: i % 2 ? "slice.green" : "slice.red", payload: { id: 1 } }));
 
+  it("lets a test change through to the re-plan when the budget is spent: the plan gate is a person's decision, and approving resets the budget (DISC-53)", async () => {
+    const p = new Pipeline(db, (stage) => (stage === "implementing" ? async () => ({ outcome: "test_change" as const, events: events(16), detail: { request: "unlock apps/admin/src/x.test.ts", summary: "a locked test mocks a retired procedure", reason: "the implementer asks to change a locked test" } }) : stubs.runnerFor(stage)), { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    const moved = (await p.events(task.id)).find((e) => e.kind === "transition" && e.payload.from === "implementing" && e.payload.to === "test_design");
+    expect(moved?.payload.outcome).toBe("test_change");
+    expect((await p.events(task.id)).some((e) => e.kind === "transition" && e.payload.from === "implementing" && e.payload.to === "escalated")).toBe(false);
+  });
+
+  it("scales the budget with the approved plan's slices, so a big plan is not cut at 15 iterations", async () => {
+    const ran: string[] = [];
+    const slices = Array.from({ length: 13 }, (_, i) => ({ title: `slice ${i + 1}`, touchpoints: [`src/s${i}.ts`] }));
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], slices, risk: { level: "low", scores: {} } } });
+    const p = new Pipeline(db, (stage) => (stage === "implementing" ? async () => (ran.push(stage), ran.length === 1 ? { outcome: "fail" as const, events: events(16) } : { outcome: "pass" as const }) : stubs.runnerFor(stage)), { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    // 16 iterations is under 13 slices x 3: the implementer runs again.
+    expect(ran.length).toBeGreaterThan(1);
+    expect((await p.events(task.id)).some((e) => e.kind === "build.budget")).toBe(false);
+  });
+
   it("escalates a card whose iterations are spent instead of running the implementer again, with the numbers", async () => {
     const ran: string[] = [];
     const p = new Pipeline(db, (stage) => (stage === "implementing" ? async () => (ran.push(stage), { outcome: "fail" as const, events: events(16) }) : stubs.runnerFor(stage)), { inline: true, policies: previewOn, hasConfig: () => true });

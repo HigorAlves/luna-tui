@@ -56,7 +56,7 @@ import { CONFIG_FILE, POLICY_FILE, PolicyStore } from "./policy.ts";
 
 import { type CommitFact, type PriorityTruthEntry, truthName } from "./ground-truth.ts";
 import { safe } from "../domain/evidence-markdown.ts";
-import { budgetRowsOf, buildBudget, rateLimitWaitMs } from "../domain/build-budget.ts";
+import { type BuildLimits, budgetRowsOf, buildBudget, rateLimitWaitMs, scaledBuildLimits } from "../domain/build-budget.ts";
 import { type DesignBudget, designBudget } from "../domain/design-budget.ts";
 import { DECIDED_REASONS, type DecidedEscalation, decideEscalation } from "./stages/escalation.ts";
 import { type Economy, type Propose, noEconomy } from "./economy.ts";
@@ -3108,8 +3108,9 @@ export class Pipeline {
           } finally {
             this.offPool.delete(id);
           }
-          // ... and when one ends: a run that would be followed by another does not get one when the budget is spent.
-          if (stage === "implementing" && (result.outcome === "fail" || result.outcome === "test_change") && !result.rateLimited) {
+          // ... and when one ends: a run that would be followed by another does not get one when the budget is spent. A test change is not
+          // one: it goes to the re-plan and the plan gate, where a person decides and an approval resets the budget (DISC-53's was swallowed).
+          if (stage === "implementing" && result.outcome === "fail" && !result.rateLimited) {
             result = (await this.spentBuildBudget(id)) ?? result;
           }
           // A provider's rate limit waits for its reset, clamped to the repo's `build.backoff_minutes`.
@@ -3569,7 +3570,7 @@ export class Pipeline {
     const last = (await this.store.findFinishedEvents(id)).find((e) => e.payload.stage === "implementing");
     const lastDetail = objectOf(last?.payload.detail);
     const agentReason = EscalationReason.safeParse(detail.escalation);
-    const limits = (await this.policyFor(task.repoPath)).factory.build;
+    const limits = await this.buildLimitsOf(id, task.repoPath);
     const decision = await withTask(id, async () => decideEscalation({
       stage: "implementing",
       summary: text(detail.summary) || reasonText,
@@ -3660,7 +3661,7 @@ export class Pipeline {
   async buildBudgetState(id: string): Promise<{ spent: boolean; minutesLeft: number }> {
     const task = await this.get(id);
     const { runs, events } = await this.budgetRows(id);
-    const budget = buildBudget(runs, events, (await this.policyFor(task.repoPath)).factory.build);
+    const budget = buildBudget(runs, events, await this.buildLimitsOf(id, task.repoPath));
     return { spent: budget.spent !== null, minutesLeft: budget.minutesLeft };
   }
 
@@ -3686,9 +3687,17 @@ export class Pipeline {
     return (await this.events(id)).some((e) => e.kind === "design.card_off");
   }
 
+  /** Build's limits for this card: the repo's, scaled up by the approved plan's slices (scaledBuildLimits), so a big plan's budget fits it. */
+  private async buildLimitsOf(id: string, repoPath: string | null): Promise<BuildLimits> {
+    const limits = (await this.policyFor(repoPath)).factory.build;
+    const approved = (await this.store.listApprovals(id)).findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
+    const slices = Array.isArray(approved?.requested.slices) ? approved.requested.slices.length : Array.isArray(objectOf(approved?.requested.plan)?.steps) ? (objectOf(approved?.requested.plan)!.steps as unknown[]).length : 0;
+    return scaledBuildLimits(limits, slices);
+  }
+
   /** The minutes of Build's budget the card has left. */
   private async buildMinutesLeft(id: string, repoPath: string | null): Promise<number> {
-    const limits = (await this.policyFor(repoPath)).factory.build;
+    const limits = await this.buildLimitsOf(id, repoPath);
     const { runs, events } = await this.budgetRows(id);
     return buildBudget(runs, events, limits).minutesLeft;
   }
@@ -3703,7 +3712,7 @@ export class Pipeline {
   private async spentBuildBudget(id: string): Promise<StageResult | null> {
     const task = await this.get(id);
     if (task.route !== "feature") return null;
-    const limits = (await this.policyFor(task.repoPath)).factory.build;
+    const limits = await this.buildLimitsOf(id, task.repoPath);
     const { runs, events } = await this.budgetRows(id);
     const budget = buildBudget(runs, events, limits);
     if (!budget.spent) return null;
@@ -3895,7 +3904,7 @@ export class Pipeline {
     const [task, runs, events] = await Promise.all([this.get(id), this.store.listStageRuns(id), this.store.listEvents(id)]);
     // This run's finish is not logged yet: it is the newest row.
     const current: EventRow = { id: "0", taskId: id, stageRunId: null, kind: "stage.finished", payload: finishing, at: new Date() };
-    return stage === "implementing" ? buildReportOf(task, runs, [...events, current], (await this.policyFor(task.repoPath)).factory.build) : verifyReportOf(task, runs, [...events, current], await this.store.listApprovals(id));
+    return stage === "implementing" ? buildReportOf(task, runs, [...events, current], await this.buildLimitsOf(id, task.repoPath)) : verifyReportOf(task, runs, [...events, current], await this.store.listApprovals(id));
   }
 
   /** Build's progress while it runs (for the board's detail): null for a card that has not begun to build. Counts from the last fresh budget. */
@@ -3903,13 +3912,13 @@ export class Pipeline {
     const task = await this.get(id);
     if (task.route !== "feature") return null;
     const [runs, events] = await Promise.all([this.stageRuns(id), this.events(id)]);
-    return buildProgressOf(runs, events, (await this.policyFor(task.repoPath)).factory.build);
+    return buildProgressOf(runs, events, await this.buildLimitsOf(id, task.repoPath));
   }
 
   /** The task's Build and Verify Reports, each null until its stage has passed; `GET /tasks/:id` shows them. */
   async reports(id: string): Promise<TaskReports> {
     const [task, runs, events] = await Promise.all([this.get(id), this.store.listStageRuns(id), this.store.listEvents(id)]);
-    const build = buildReportOf(task, runs, events, (await this.policyFor(task.repoPath)).factory.build);
+    const build = buildReportOf(task, runs, events, await this.buildLimitsOf(id, task.repoPath));
     const ciPassed = runs.some((r) => r.stage === "ci_watch" && r.status === "passed");
     return { build, verify: ciPassed ? verifyReportOf(task, runs, events, await this.store.listApprovals(id)) : null };
   }

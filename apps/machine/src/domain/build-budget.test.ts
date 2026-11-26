@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { type BuildLimits, buildBudget, rateLimitWaitMs } from "./build-budget.ts";
+import { type BuildLimits, buildBudget, rateLimitWaitMs, scaledBuildLimits } from "./build-budget.ts";
 
 const limits: BuildLimits = { max_iterations: 15, max_tokens: 2_000_000, max_minutes: 90, backoff_minutes: [1, 30], regression_full_suite_minutes: 10 };
 const at = (minute: number) => new Date(Date.UTC(2026, 10, 5, 12, minute));
@@ -110,5 +110,22 @@ describe("rateLimitWaitMs", () => {
   });
   it("takes the lower bound when the provider gave no reset time", () => {
     expect(rateLimitWaitMs(null, limits, now)).toBe(60_000);
+  });
+});
+
+describe("scaledBuildLimits: Build's budget grows with the plan's slices", () => {
+  const defaults = limits;
+  it("gives each slice three iterations, twenty minutes and 400k tokens, above the repo's limits (DISC-53: 13 slices against 15 iterations)", () => {
+    const scaled = scaledBuildLimits(defaults, 13);
+    expect(scaled.max_iterations).toBe(39);
+    expect(scaled.max_minutes).toBe(260);
+    expect(scaled.max_tokens).toBe(5_200_000);
+    expect(scaled.backoff_minutes).toEqual(defaults.backoff_minutes);
+  });
+  it("never lowers a limit: a small plan, or a repo that set more, keeps its own", () => {
+    expect(scaledBuildLimits(defaults, 2)).toEqual(defaults);
+    expect(scaledBuildLimits(defaults, 0)).toEqual(defaults);
+    const generous = { ...defaults, max_iterations: 100, max_minutes: 600, max_tokens: 9_000_000 };
+    expect(scaledBuildLimits(generous, 13)).toEqual(generous);
   });
 });

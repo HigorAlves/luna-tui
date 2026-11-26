@@ -30,6 +30,20 @@ interface RunFacts {
 const objectOf = (value: unknown): Record<string, unknown> | undefined => (value && typeof value === "object" ? (value as Record<string, unknown>) : undefined);
 const round1 =(n: number): number => Math.round(n * 10) / 10;
 
+/** Build's budget per slice of the approved plan: every slice is at least a red and a green, so a fixed cap cannot hold a big plan (DISC-53's
+ *  13 slices against 15 iterations). The budget is the repo's limits or this many per slice, whichever is more: it never lowers a limit. */
+export const PER_SLICE = { iterations: 3, minutes: 20, tokens: 400_000 } as const;
+
+export function scaledBuildLimits(limits: BuildLimits, slices: number): BuildLimits {
+  const n = Number.isFinite(slices) && slices > 0 ? Math.floor(slices) : 0;
+  return {
+    ...limits,
+    max_iterations: Math.max(limits.max_iterations, n * PER_SLICE.iterations),
+    max_minutes: Math.max(limits.max_minutes, n * PER_SLICE.minutes),
+    max_tokens: Math.max(limits.max_tokens, n * PER_SLICE.tokens),
+  };
+}
+
 export function buildBudget(runs: readonly RunFacts[], events: readonly { kind: string; payload: Record<string, unknown> }[], limits: BuildLimits, now: Date = new Date()): BuildBudget {
   const mine = runs.filter((r) => r.stage === "implementing");
   const minutes = round1(mine.reduce((sum, r) => sum + ((r.endedAt ?? now).getTime() - r.startedAt.getTime()) / 60_000, 0));
