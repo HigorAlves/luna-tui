@@ -4,6 +4,7 @@
 import { FACTORY_DEFAULTS, type CheckSpec, type FactoryConfig, type CoverageSummary, type DecisionOverrides, type Finding, type ServiceSpec, mergeDuplicateFindings, normaliseFinding, severityOf } from "@hardness/contracts";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
+import { alsoOnBase } from "./sweep-baseline.ts";
 
 import { branchBase, branchDiffStat, changedPaths as hostChangedPaths, diffText, gitIdentity as hostGitIdentity } from "../../adapters/git/worktree.ts";
 import { RepoImageError } from "../repo-images.ts";
@@ -19,7 +20,6 @@ import { type GraphJson, blastRadius } from "../../domain/blast-radius.ts";
 import { failingTestFiles, narrowedArgv } from "../../domain/base-rerun.ts";
 import { checkCommand, selectChecks, skippedReason } from "../../domain/checks.ts";
 import { type Trust, trustOf } from "../../domain/trust.ts";
-import { failureGist } from "../../domain/failure-gist.ts";
 import { addedLineNumbers, coverageFinding, mutationFinding, parseLcov, parseMutationScore, patchCoverage } from "../../domain/coverage.ts";
 import { type EnvRecord, compareEnv } from "../../domain/env-hash.ts";
 import { type ComplianceDeps, runCompliance } from "./compliance-review.ts";
@@ -455,7 +455,10 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
               // A run that timed out or could not start says nothing. A run that fails must name every file the change failed on: a file the card added is not on the base.
               if (ran.code === 127 || (ran.code !== 0 && Date.now() - started >= BASE_CHECK_TIMEOUT_MS)) continue;
               const named = failingTestFiles(`${ran.stdout}\n${ran.stderr}`);
-              answer = { red: ran.code !== 0 && files.every((f) => named.includes(f)), at: Date.now() };
+              // With no test file to name (a lint, a typecheck), every failing line the change shows must be in the base's output too: a lint error
+              // only the change has never hides behind a base whose lint is red (DISC-53's develop had 24 lint errors of its own).
+              const sameLines = files.length > 0 || alsoOnBase(attempt.text, `${ran.stdout}\n${ran.stderr}`);
+              answer = { red: ran.code !== 0 && files.every((f) => named.includes(f)) && sameLines, at: Date.now() };
               remember(cache, key, answer);
             }
             if (answer.red) redOnBase.push({ name: r.name ?? "", tests: files });
@@ -466,28 +469,9 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
         failed = failed.filter((r) => !redOnBase.some((red) => red.name === r.name));
       }
     }
-    if (redOnBase.length > 0 && failed.length === 0) {
-      const names = redOnBase.map((r) => r.name).join(", ");
-      const tests = [...new Set(redOnBase.flatMap((r) => r.tests))];
-      const gist = failureGist(attempts.get(redOnBase[0]!.name)?.text ?? "", 200);
-      const one = redOnBase.length === 1;
-      return {
-        outcome: "escalated",
-        detail: {
-          escalation: "env_broken",
-          envBroken: true,
-          step: "checks",
-          red_on_base: true,
-          base: baseSha,
-          tests,
-          reason: `${names} ${one ? "fails" : "fail"} on the base commit ${baseSha!.slice(0, 7)} too, so this change did not cause ${one ? "it" : "them"} (${tests.slice(0, 5).join(", ") || gist})`,
-          failed: redOnBase,
-          checks: reports,
-          options: ["fix the environment (a service, a tool, the user the checks run as) or the base, then resume"],
-        },
-        run: { transcriptPath },
-      };
-    }
+    // What fails on the base the same way is the repository's own: Verify goes on to its review and says so (the user's call, DISC-53), as the
+    // regression sweep does. Only a failure the change alone has goes back to Build.
+    const baseNote = redOnBase.length > 0 ? { redOnBase, base: baseSha } : {};
     if (failed.length > 0) {
       const checkFindings: Finding[] = failed.map((r) => ({
         path: "",
@@ -569,9 +553,9 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     // The review already ran (when agents are on) and no blocker stands: the report is its result with the suite's.
     const noTestsNote = noTests ? { note: "no test command detected; verifying proves the scenarios by direct check" } : {};
     if (!pack) {
-      return { outcome: "pass", detail: { step: "checks", note: "review: skipped (agents off)", checks: reports, ...coverageDetail }, ...(coverageFindings.length > 0 ? { findings: coverageFindings } : {}), run: { transcriptPath } };
+      return { outcome: "pass", detail: { step: "checks", note: "review: skipped (agents off)", checks: reports, ...coverageDetail, ...baseNote }, ...(coverageFindings.length > 0 ? { findings: coverageFindings } : {}), run: { transcriptPath } };
     }
-    return assemble(pack, [...reviewed, ...coverageFindings], { checks: reports, ...coverageDetail, ...classification, ...noTestsNote });
+    return assemble(pack, [...reviewed, ...coverageFindings], { checks: reports, ...coverageDetail, ...classification, ...noTestsNote, ...baseNote });
   };
   /** One should_fix finding when the counted diff is over `size.hard_limit_loc`, unless an approved plan gate carries `keepWhole` (a person's recorded override). */
   const sizeFinding = async (context: StageContext, worktreePath: string | null | undefined, repoPath: string | null): Promise<Finding | null> => {

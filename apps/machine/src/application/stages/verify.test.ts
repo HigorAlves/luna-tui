@@ -1042,12 +1042,12 @@ describe("a failing check asked again on the base", () => {
     return { runner, context, ran, clone, remove, pack };
   }
 
-  it("escalates as env_broken with red_on_base, naming the tests, when the failing test file fails on the base too, and runs only that file there in the same image, services and identity", async () => {
+  it("goes on, noting the check as the base's, when the failing test file fails on the base too, and runs only that file there in the same image, services and identity", async () => {
     const { runner, context, ran, clone, remove } = rig({ head: () => fail(RED), base: () => fail(RED) });
     const result = await runner(context);
-    expect(result.outcome).toBe("escalated");
-    expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true, step: "checks", red_on_base: true, base: BASE, tests: ["src/clone.test.ts"] });
-    expect(String(result.detail?.reason)).toMatch(/machine tests fails on the base commit bbbbbbb too, so this change did not cause it \(src\/clone\.test\.ts\)/);
+    expect(result.outcome).not.toBe("escalated");
+    expect(result.outcome).not.toBe("fail");
+    expect(result.detail).toMatchObject({ redOnBase: [{ name: "machine tests", tests: ["src/clone.test.ts"] }], base: BASE });
     const onBase = ran.filter((r) => r.where === "base");
     expect(onBase).toHaveLength(1);
     expect(onBase[0]).toMatchObject({ script: "pnpm --filter @hardness/machine test 'src/clone.test.ts'", image: "sha256:image", services: { db: { image: "postgres" } }, identity: "Ada L" });
@@ -1071,10 +1071,20 @@ describe("a failing check asked again on the base", () => {
   it("runs the whole check on the base when no failing test file can be named, and a red there is the base's", async () => {
     const lint = { name: "lint", run: "pnpm run lint" };
     const red = rig({ head: () => fail("error: something is wrong"), base: () => fail("error: something is wrong"), checks: [lint] });
-    expect((await red.runner(red.context)).detail).toMatchObject({ escalation: "env_broken", red_on_base: true });
+    expect((await red.runner(red.context)).detail).toMatchObject({ redOnBase: [{ name: "lint" }] });
     expect(red.ran.filter((r) => r.where === "base").map((r) => r.script)).toEqual(["pnpm run lint"]);
     const green = rig({ head: () => fail("error: something is wrong"), base: () => ok, checks: [lint] });
     expect((await green.runner(green.context)).outcome).toBe("fail");
+  });
+
+  it("keeps a lint check the card's when it fails on a line the base does not, though the base's lint is red too (DISC-53: develop's lint has 24 errors)", async () => {
+    const lint = { name: "lint", run: "pnpm run lint" };
+    const baseLint = "packages/domain/src/Task/index.ts:8:1 organizeImports\n  × The imports and exports are not sorted.";
+    const cardLint = `${baseLint}\napps/lambdas/evaluation/src/app.ts:1:1 format\n  × Formatter would have printed the following content:`;
+    const { runner, context } = rig({ head: () => fail(cardLint), base: () => fail(baseLint), checks: [lint] });
+    const result = await runner(context);
+    expect(result.outcome).toBe("fail");
+    expect(result.findings).toMatchObject([{ title: "lint failed" }]);
   });
 
   it("sends back only the checks the change broke when others fail on the base too, and says which were the base's", async () => {
@@ -1095,7 +1105,7 @@ describe("a failing check asked again on the base", () => {
     await first.runner(first.context);
     const second = rig({ head: () => fail(RED), base: () => fail(RED), cache });
     const result = await second.runner(second.context);
-    expect(result.detail).toMatchObject({ red_on_base: true });
+    expect(result.detail).toMatchObject({ redOnBase: [{ name: "machine tests" }] });
     expect(second.ran.filter((r) => r.where === "base")).toHaveLength(0);
     expect(second.clone).not.toHaveBeenCalled();
   });

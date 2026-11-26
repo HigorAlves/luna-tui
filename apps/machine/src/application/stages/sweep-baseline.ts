@@ -31,8 +31,12 @@ export function alsoOnBase(cardOutput: string, baseOutput: string): boolean {
   if (!baseOutput.trim()) return false;
   const base = new Set(failingLinesOf(baseOutput));
   const card = failingLinesOf(cardOutput);
-  // Nothing on the card to compare: the check stays the card's.
-  if (base.size === 0 || card.length === 0) return false;
+  // No failing line to compare on the card: only an output the same as the base's, timings aside, is the base's.
+  if (card.length === 0) {
+    const whole = (text: string) => text.split("\n").map(comparable).filter(Boolean).join("\n");
+    return whole(cardOutput) !== "" && whole(cardOutput) === whole(baseOutput);
+  }
+  if (base.size === 0) return false;
   return card.every((line) => base.has(line));
 }
 
