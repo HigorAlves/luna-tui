@@ -14,6 +14,7 @@ export const RetriesSchema = z.object({
   total: z.number().int(),
   stronger: z.number().int().optional(),
   strongerNext: z.boolean().optional(),
+  continued: z.number().int().optional(),
 });
 
 export const JiraLinkSchema = z

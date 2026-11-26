@@ -8,6 +8,8 @@ import { type ArchiveReason, type EscalationReason, FACTORY_DEFAULTS, PACKS, RUN
 export const LOOP_CAP = 3;
 /** Implementer runs allowed per task, counting test change requests. */
 export const IMPLEMENTER_CAP = 6;
+/** Build runs a too_complex escalation that committed slices may take: each one commits at least a slice, so a plan's slice count bounds them too. */
+export const CONTINUE_CAP = 20;
 
 export type Loop = "verify" | "e2e" | "ci";
 
@@ -28,6 +30,8 @@ export interface Retries {
   total: number;
   /** Implementer runs taken on a stronger engine after a too_complex escalation: one is all a task gets. */
   stronger: number;
+  /** Build runs taken after a too_complex escalation that committed slices: a big plan done a few slices a run (CONTINUE_CAP). */
+  continued?: number;
   /** The next implementing run is that one shot; the pipeline reads it as the run starts and the run's own end clears it. */
   strongerNext?: boolean;
   /** Times a plan found wrong in Build, Verify or review went back to the planner: the second goes to a person. */
@@ -65,7 +69,7 @@ export type PipelineEvent =
   /** The card is a report of another card (or of a backlog item): it closes, with nothing left to run. */
   | { type: "merged" }
   /** `triage` is the outcome triage picked; absent means `plan`. */
-  | { type: "stage_done"; outcome: StageOutcome; /** Verify itself failed without an answer (the run errored, nothing was found in the code): it runs again, and Build is not asked to fix what nobody found. */ unanswered?: boolean; /** What this failed run was, kept for the escalation that names the loop's failures. */ failure?: Failure; /** For delivering and ci_watch: the card's own PR is already merged, so the card shipped. */ merged?: boolean; /** Verify's blocker set (`blockerSetKey`) and `verify.build_rounds`: the same set back after that many rounds escalates. */ findingSet?: string; buildRounds?: number; /** For e2e: the design parity review leaves something for a person (open findings, or it was not sure), so the card waits at the design sign-off; `design` marks a failure that is a design blocker set. */ designGate?: boolean; design?: boolean; /** The failures the loop of this stage may have before a person is asked (`verify.e2e_rounds`, `verify.ci_rounds`); `LOOP_CAP` when absent. */ loopCap?: number; /** For evidence: the repository keeps the preview gate (`ship.preview: on`). */ preview?: boolean; /** For shipping: the merge did not happen because the PR is not ready; the watch runs again. */ notReady?: boolean; /** For reviewing_memory: the retro has proposals a person is asked about. */ proposals?: boolean; /** For a head_moved escalation: the media are made again from a new browser run. */ refresh?: "media" | "verify"; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
+  | { type: "stage_done"; outcome: StageOutcome; /** Verify itself failed without an answer (the run errored, nothing was found in the code): it runs again, and Build is not asked to fix what nobody found. */ unanswered?: boolean; /** What this failed run was, kept for the escalation that names the loop's failures. */ failure?: Failure; /** For delivering and ci_watch: the card's own PR is already merged, so the card shipped. */ merged?: boolean; /** Verify's blocker set (`blockerSetKey`) and `verify.build_rounds`: the same set back after that many rounds escalates. */ findingSet?: string; buildRounds?: number; /** For e2e: the design parity review leaves something for a person (open findings, or it was not sure), so the card waits at the design sign-off; `design` marks a failure that is a design blocker set. */ designGate?: boolean; design?: boolean; /** The failures the loop of this stage may have before a person is asked (`verify.e2e_rounds`, `verify.ci_rounds`); `LOOP_CAP` when absent. */ loopCap?: number; /** For evidence: the repository keeps the preview gate (`ship.preview: on`). */ preview?: boolean; /** For shipping: the merge did not happen because the PR is not ready; the watch runs again. */ notReady?: boolean; /** For reviewing_memory: the retro has proposals a person is asked about. */ proposals?: boolean; /** For a head_moved escalation: the media are made again from a new browser run. */ refresh?: "media" | "verify"; reason?: string; escalation?: EscalationReason; /** For an implementing escalation: the run committed at least one slice the run before it had not. */ progressed?: boolean; triage?: TriageOutcome }
   /** Ends the task without shipping or closing it: from any state that has not ended. */
   | { type: "archive"; reason: ArchiveReason }
   | { type: "answered" }
@@ -411,6 +415,11 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
     // From the watch or the merge; a fix that changed what a scenario shows asks for a new browser run first, and Evidence re-makes the media from it.
     if (event.escalation === "head_moved" && task.route === "feature" && (state === "shipping" || state === "awaiting_ship")) {
       return { ...run(event.refresh === "verify" ? "verifying" : event.refresh === "media" ? "e2e" : "evidence", retries), reason: event.reason };
+    }
+    // Too complex, but the run committed slices: a big plan that needs more than one run. It goes on, on the same engine, while each run
+    // commits something; a run that commits nothing falls through to the stronger engine's one shot and then to a person.
+    if (event.escalation === "too_complex" && state === "implementing" && event.progressed === true && (retries.continued ?? 0) < CONTINUE_CAP) {
+      return { ...run("implementing", { ...retries, continued: (retries.continued ?? 0) + 1 }), reason: event.reason };
     }
     // Too complex for the default engine: one more run on the pack's stronger one before a person is asked.
     if (event.escalation === "too_complex" && state === "implementing" && (retries.stronger ?? 0) < 1 && retries.total < IMPLEMENTER_CAP && stronger(PACKS.implementing)) {

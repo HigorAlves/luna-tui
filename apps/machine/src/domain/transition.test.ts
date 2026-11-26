@@ -2,6 +2,7 @@ import { TERMINAL, type TaskRoute, TaskState } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  CONTINUE_CAP,
   IMPLEMENTER_CAP,
   LOOP_CAP,
   NO_RETRIES,
@@ -95,6 +96,19 @@ describe("typed escalations", () => {
     expect(again).toMatchObject({ state: "escalated", resumeTo: "implementing", escalation: "too_complex" });
     const capped = transition(at("implementing", { retries: { ...NO_RETRIES, total: IMPLEMENTER_CAP } }), { type: "stage_done", outcome: "escalated", escalation: "too_complex", reason: "r" });
     expect(capped.state).toBe("escalated");
+  });
+  it("a too_complex Build that committed slices in its run goes on, past the stronger engine's one shot and the implementer's cap (DISC-53: 13 slices, two or three a run)", () => {
+    const step = transition(at("implementing", { retries: { ...NO_RETRIES, total: IMPLEMENTER_CAP, stronger: 1 } }), { type: "stage_done", outcome: "escalated", escalation: "too_complex", progressed: true, reason: "a size problem: the rest needs another session" });
+    expect(step).toMatchObject({ state: "implementing", effect: { kind: "run", stage: "implementing" }, retries: { total: IMPLEMENTER_CAP, stronger: 1, continued: 1 } });
+    expect(step.retries.strongerNext).toBeFalsy();
+  });
+  it("a too_complex Build that committed nothing, or one past the continuation cap, does not go on that way", () => {
+    const stuck = transition(at("implementing", { retries: { ...NO_RETRIES, total: 2, stronger: 1 } }), { type: "stage_done", outcome: "escalated", escalation: "too_complex", progressed: false, reason: "r" });
+    expect(stuck.state).toBe("escalated");
+    const capped = transition(at("implementing", { retries: { ...NO_RETRIES, total: 2, stronger: 1, continued: CONTINUE_CAP } }), { type: "stage_done", outcome: "escalated", escalation: "too_complex", progressed: true, reason: "r" });
+    expect(capped.state).toBe("escalated");
+    const other = transition(at("implementing", { retries: { ...NO_RETRIES, total: 2, stronger: 1 } }), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", progressed: true, reason: "r" });
+    expect(other.state).not.toBe("implementing");
   });
   it("the stronger run's own end clears the flag, so the next attempt runs on the default engine", () => {
     const step = transition(at("implementing", { retries: { ...NO_RETRIES, total: 2, stronger: 1, strongerNext: true } }), { type: "stage_done", outcome: "pass" });

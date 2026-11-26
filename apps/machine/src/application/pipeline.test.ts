@@ -4978,3 +4978,21 @@ describe("the design sign-off's answers (RFC 0013 phase 3)", () => {
   });
 });
 
+
+describe("a big plan built a few slices a run", () => {
+  it("runs Build again when a too_complex escalation committed slices, and asks a person when a run commits none (DISC-53: Opus built slices 2-3 of 13 and stopped)", async () => {
+    const seen: TaskState[] = [];
+    const runnerFor = (stage: TaskState): StageRunner => async (ctx) => (seen.push(stage), stubs.runnerFor(stage)(ctx));
+    pipeline = new Pipeline(db, runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, revertCommit: async () => {} });
+    const size = (done: number) => ({ outcome: "escalated", workspace: { branch: "task/x", worktreePath: "/wt/x" }, detail: { escalation: "too_complex", reason: "a size problem: the rest needs another session", slices: { done, total: 5 } } }) as const;
+    // Two runs that each commit slices, then one that commits none, then the stronger engine's one shot, which commits none either.
+    stubs.plan("implementing", size(2), size(4), size(4), size(4));
+    const task = await newTask();
+    const ended = await startAndApprove(task.id);
+    const builds = seen.filter((s) => s === "implementing").length;
+    // 2 slices, then 4: both went on; the third run committed none, so the stronger engine's one shot ran (4 again) and a person is asked.
+    expect(builds).toBe(4);
+    expect(ended.state).toBe("escalated");
+    expect((await pipeline.get(task.id)).retries).toMatchObject({ continued: 2 });
+  });
+});

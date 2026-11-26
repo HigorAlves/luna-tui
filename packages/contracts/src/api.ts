@@ -324,6 +324,8 @@ export interface Retries {
   stronger?: number;
   /** The next implementing run is that one shot. */
   strongerNext?: boolean;
+  /** Build runs taken after a too_complex escalation that committed slices (a big plan, a few slices a run). */
+  continued?: number;
 }
 
 export interface Task extends CardFields {

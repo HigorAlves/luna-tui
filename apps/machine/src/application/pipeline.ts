@@ -3183,7 +3183,9 @@ export class Pipeline {
         // An escalation from Build, the machine's own included, carries a decided reason: a fact where one decides, else the typed decision.
         const decided = stage === "implementing" ? await this.decideBuildEscalation(id, result, planned, { secondScopeRed, stuck: stuck ?? null, loopGuard: stopped }) : null;
         const headSha = decided && this.headOf ? await this.headOf((await this.get(id)).worktreePath ?? "").catch(() => null) : null;
-        const next: PipelineEvent = decided ? { type: "stage_done", outcome: "escalated", reason: decided.reasonText, escalation: decided.decision.reason } : planned;
+        const chosen: PipelineEvent = decided ? { type: "stage_done", outcome: "escalated", reason: decided.reasonText, escalation: decided.decision.reason } : planned;
+        // A Build escalation says whether its run committed slices: a big plan that needs another run goes on (transition's CONTINUE_CAP).
+        const next: PipelineEvent = stage === "implementing" && chosen.type === "stage_done" && chosen.outcome === "escalated" && (await this.buildProgressed(id)) ? { ...chosen, progressed: true } : chosen;
         const detail =
           result.needsInput?.length || result.requested?.length || decided
             ? {
@@ -3467,6 +3469,22 @@ export class Pipeline {
   }
 
   /** The failures the browser run's or CI's loop may have before a person is asked: the repository's `verify.e2e_rounds` or `verify.ci_rounds`. */
+  /** Whether the Build run that just finished committed more of the plan's slices than the Build run before it. Its own finish row is the
+   *  newest (runStage writes it); a ledger with another slice count is another plan's, and counts from none. */
+  private async buildProgressed(id: string): Promise<boolean> {
+    const slicesOf = (row: EventRow | undefined) => {
+      const slices = objectOf(objectOf(row?.payload.detail)?.slices);
+      const done = Number(slices?.done);
+      const total = Number(slices?.total);
+      return Number.isFinite(done) && Number.isFinite(total) ? { done, total } : null;
+    };
+    const rows = (await this.store.findFinishedEvents(id)).filter((e) => e.payload.stage === "implementing");
+    const now = slicesOf(rows[0]);
+    if (!now) return false;
+    const before = slicesOf(rows[1]);
+    return now.done > (before && before.total === now.total ? before.done : 0);
+  }
+
   private async loopCap(id: string, stage: TaskState, result: StageResult): Promise<{ loopCap?: number }> {
     if (result.outcome !== "fail" || (stage !== "e2e" && stage !== "ci_watch")) return {};
     const { verify } = (await this.policyFor((await this.get(id)).repoPath)).factory;
