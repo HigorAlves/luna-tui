@@ -3616,24 +3616,28 @@ export class Pipeline {
     return events.slice(made + 1).some((e) => e.kind === "transition" && e.payload.from === "awaiting_approval" && e.payload.event === "approved");
   }
 
-  /** The locked test files a person approved changing: those the implementer's last test-change request names, once a plan was approved after it. */
+  /** The locked test files a person approved changing: those every test-change request names, each one a plan was approved after. They add up:
+   *  approving a second request does not lock the first one's files again (DISC-53's slice 21 needed both). */
   private async unlockedTestsOf(id: string): Promise<string[]> {
     const events = await this.events(id);
-    // Event ids are bigints as strings: order by position in the stream, never by comparing the ids as text.
-    const at = events.findLastIndex((e) => e.kind === "transition" && e.payload.to === "test_design" && e.payload.outcome === "test_change");
-    if (at === -1) return [];
-    const approvedAfter = events.slice(at + 1).some((e) => e.kind === "transition" && e.payload.from === "awaiting_approval" && e.payload.event === "approved");
-    if (!approvedAfter) return [];
-    const rows = (await this.store.findFinishedEvents(id)).filter((e) => e.payload.stage === "implementing");
-    const finished = rows.find((e) => typeof objectOf(e.payload.detail)?.request === "string");
-    const detail = objectOf(finished?.payload.detail);
+    const isFinishedBuild = (e: EventRow) => e.kind === "stage.finished" && e.payload.stage === "implementing";
     // The tests commit's files, which a test named without its folder resolves against: from every Build finish, since a resumed run
     // whose plan was renumbered maps no scenario to a file, and only the run that wrote the tests recorded them all.
-    const locked = rows.flatMap((row) => {
+    const locked = [...new Set(events.filter(isFinishedBuild).flatMap((row) => {
       const testsStep = objectOf(objectOf(row.payload.detail)?.testsStep);
       return Array.isArray(testsStep?.scenarioTests) ? testsStep.scenarioTests.map((t) => String(objectOf(t)?.file ?? "")) : [];
-    }).filter(Boolean);
-    return testPathsIn(String(detail?.request ?? ""), [...new Set(locked)]);
+    }).filter(Boolean))];
+    const unlocked = new Set<string>();
+    // Event ids are bigints as strings: order by position in the stream, never by comparing the ids as text.
+    events.forEach((e, at) => {
+      if (e.kind !== "transition" || e.payload.to !== "test_design" || e.payload.outcome !== "test_change") return;
+      const approvedAfter = events.slice(at + 1).some((x) => x.kind === "transition" && x.payload.from === "awaiting_approval" && x.payload.event === "approved");
+      if (!approvedAfter) return;
+      // The request is on the Build finish row just before this move.
+      const finished = events.slice(0, at).findLast((x) => isFinishedBuild(x) && typeof objectOf(x.payload.detail)?.request === "string");
+      for (const path of testPathsIn(String(objectOf(finished?.payload.detail)?.request ?? ""), locked)) unlocked.add(path);
+    });
+    return [...unlocked];
   }
 
   /** The scenarios the tests step recorded as already holding, from the newest implementing finish row that kept a tests commit. */

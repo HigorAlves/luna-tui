@@ -2483,6 +2483,23 @@ describe("a test change a person approves", () => {
     expect(retried.replan?.reason).toContain("web/cart.test.ts");
   });
 
+  it("keeps every approved request's tests unlocked, not only the last one's (DISC-53: approving a second request locked the first one's file again)", async () => {
+    const seen: Array<{ stage: string; ctx: StageContext }> = [];
+    const runnerFor = (stage: TaskState): StageRunner => async (ctx) => (seen.push({ stage, ctx }), stubs.runnerFor(stage)(ctx));
+    pipeline = new Pipeline(db, runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, revertCommit: async () => {} });
+    const ask = (file: string) => ({ outcome: "test_change", detail: { request: `Unlock ${file}: it mocks a retired procedure.`, summary: "a locked test mocks a retired procedure", reason: "the implementer asks to change a locked test" } }) as const;
+    stubs.plan("implementing", { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/wt/x" } }, ask("apps/client/src/a/Page.test.tsx"), ask("apps/client/src/a/store.test.ts"));
+    stubs.plan("verifying", { outcome: "fail", run: { inputCommit: "aaa", outputCommit: "bbb" }, detail: { findings: [] } });
+    const task = await newTask();
+    expect((await startAndApprove(task.id)).state).toBe("awaiting_approval");
+    await pipeline.decide(task.id, "approved");
+    // The second request's re-plan is at the gate now; approving it unlocks both files.
+    expect((await pipeline.get(task.id)).state).toBe("awaiting_approval");
+    await pipeline.decide(task.id, "approved");
+    const next = seen.filter((s) => s.stage === "implementing").at(-1)!.ctx;
+    expect([...(next.unlockedTests ?? [])].sort()).toEqual(["apps/client/src/a/Page.test.tsx", "apps/client/src/a/store.test.ts"]);
+  });
+
   it("unlocks a test the request names without its folder, from the files the tests step recorded (DISC-53: approving the plan unlocked nothing)", async () => {
     const seen: Array<{ stage: string; ctx: StageContext }> = [];
     const runnerFor = (stage: TaskState): StageRunner => async (ctx) => (seen.push({ stage, ctx }), stubs.runnerFor(stage)(ctx));
