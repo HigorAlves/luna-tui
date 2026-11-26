@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { SecretsMissingError } from "../../adapters/docker/docker.ts";
 import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
 import { InstallFailedError } from "../install.ts";
-import { runChecks, runSweep, selectSweep } from "./sweep.ts";
+import { runChecks, runSweep, selectSweep, tailOf } from "./sweep.ts";
 
 const check = (name: string, over: Partial<CheckSpec> = {}): CheckSpec => ({ name, run: `run-${name}`, ...over });
 const names = (list: CheckSpec[]) => list.map((c) => c.name);
@@ -186,5 +186,26 @@ describe("runSweep and the git identity", () => {
     let seen: Record<string, string | undefined> = {};
     await sweep({ name: "Ada L", email: "ada@x.dev" }, async (_c, _a, options) => ((seen = (options as { env: Record<string, string | undefined> }).env), { code: 0, stdout: "", stderr: "" }));
     expect(seen).toMatchObject({ PATH: "/bin", GIT_AUTHOR_NAME: "Ada L", GIT_AUTHOR_EMAIL: "ada@x.dev", GIT_COMMITTER_NAME: "Ada L", GIT_COMMITTER_EMAIL: "ada@x.dev" });
+  });
+});
+
+describe("tailOf: a long check output keeps its failures", () => {
+  // DISC-53: turbo's last 60 lines were all `outputs` warnings, and the implementer never saw which test failed.
+  const noise = Array.from({ length: 300 }, (_, i) => `WARNING no output files found for task @discover/pkg${i}#test:unit. Please check your \`outputs\` key in \`turbo.json\``);
+  const failing = [" FAIL  src/forms/forms.service.test.ts > save > writes the components", "AssertionError: expected 404 to be 200", " ❯ src/forms/forms.service.test.ts:42:17"];
+  const text = [...noise.slice(0, 120), ...failing, ...noise.slice(120), "ERROR run failed: command exited (1)"].join("\n");
+
+  it("ends with the failing lines from anywhere in the output, after the last lines", () => {
+    const tail = tailOf(text);
+    expect(tail).toContain("FAIL  src/forms/forms.service.test.ts > save > writes the components");
+    expect(tail).toContain("AssertionError: expected 404 to be 200");
+    expect(tail.trimEnd().split("\n").at(-1)).toMatch(/forms\.service\.test\.ts:42:17|AssertionError|FAIL/);
+    expect(tail).toContain("ERROR run failed: command exited (1)");
+  });
+
+  it("is the last lines as before for a short output, or one with no failing line", () => {
+    expect(tailOf("a\nb\nc")).toBe("a\nb\nc");
+    const quiet = noise.join("\n");
+    expect(tailOf(quiet)).toBe(noise.slice(-60).join("\n"));
   });
 });

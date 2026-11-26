@@ -248,3 +248,18 @@ export function sanitizeFacts(facts: ScopeFacts): ScopeFacts {
   const clean = (lines: string[]) => lines.map((l) => safe(l).slice(0, FACT_CAP));
   return { ...facts, todos: clean(facts.todos), switchedOff: clean(facts.switchedOff), newDependencies: clean(facts.newDependencies), secrets: clean(facts.secrets) };
 }
+
+/** The text a formatter does not change: no whitespace or line breaks, one quote kind, no semicolons, no trailing comma before a closer. */
+const formatless = (text: string): string => text.replace(/\s+/g, "").replace(/["'`]/g, "'").replace(/;/g, "").replace(/,(?=[)\]}])/g, "");
+
+/** The files whose change is a formatter's only (Biome, Prettier, rustfmt reflowing what was there): the removed and added lines say the same
+ *  once whitespace, quotes, semicolons and trailing commas are set aside. A change to what a test asserts is never one (DISC-53's S27). */
+export function formattingOnly(paths: readonly string[], added: readonly AddedLine[], removed: readonly AddedLine[]): Set<string> {
+  const only = new Set<string>();
+  for (const path of paths) {
+    const before = removed.filter((l) => l.path === path).map((l) => l.line).join("\n");
+    const after = added.filter((l) => l.path === path).map((l) => l.line).join("\n");
+    if ((before || after) && formatless(before) === formatless(after)) only.add(path);
+  }
+  return only;
+}

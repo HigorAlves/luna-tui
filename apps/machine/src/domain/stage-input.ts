@@ -86,7 +86,7 @@ export function limitsFor(opts: { pack: PackId; slices?: readonly unknown[]; app
 
 /** A failed sweep reaches the implementer as at most this many checks, each output cut to this many characters from the end. */
 const SWEEP_FAILURES_MAX = 5;
-const SWEEP_TAIL_CAP = 2000;
+const SWEEP_TAIL_CAP = 5000;
 
 /** Findings below this are not fed back to the implementer. */
 export const PRIOR_FINDING_CONFIDENCE = 0.8;

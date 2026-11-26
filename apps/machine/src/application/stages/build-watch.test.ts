@@ -905,3 +905,33 @@ describe("the final scope check and the tests a person unlocked", () => {
     expect([...facts.removedTests].sort()).toEqual(["apps/api/src/routers/__test__/forms.assets.test.ts", "apps/api/src/routers/__test__/kept.test.ts"]);
   });
 });
+
+describe("the final scope check and a scenario test the formatter changed", () => {
+  const file = "apps/lambdas/evaluation/src/ui.contract.test.ts";
+  const scenarioTests = [{ scenario: "S27", file }];
+  const reformat = [
+    `diff --git a/${file} b/${file}`, `--- a/${file}`, `+++ b/${file}`, "@@ -65,1 +65,8 @@",
+    "-\t\tconst bad = clientFor('admin', () => new Response(JSON.stringify({ unexpected: true }), { status: 200, headers: { 'content-type': 'application/json' } }))",
+    "+\t\tconst bad = clientFor(",
+    "+\t\t\t'admin',",
+    "+\t\t\t() =>",
+    "+\t\t\t\tnew Response(JSON.stringify({ unexpected: true }), {",
+    "+\t\t\t\t\tstatus: 200,",
+    "+\t\t\t\t\theaders: { 'content-type': 'application/json' },",
+    "+\t\t\t\t}),",
+    "+\t\t)",
+  ].join("\n");
+  const weaken = [`diff --git a/${file} b/${file}`, `--- a/${file}`, `+++ b/${file}`, "@@ -66,1 +66,1 @@", "-\t\tawait expect(bad.forms.search(ORG, {})).rejects.toThrow()", "+\t\tawait expect(bad.forms.search(ORG, {})).resolves.toBeDefined()"].join("\n");
+
+  it("does not count a change the formatter made (whitespace, line breaks, trailing commas) as a weakened test (DISC-53: Biome reformatted S27)", async () => {
+    const out = mkdtempSync(join(tmpdir(), "build-checks-"));
+    const c = checks(out, null, { planPresent: true, scenarioTests, protectedPaths: [file], planned: ["apps/lambdas/evaluation/src"], git: { nameStatus: async () => `M\t${file}`, diff: async () => reformat } });
+    expect((await c.finalFacts([])).weakened).toEqual([]);
+  });
+
+  it("still counts a change to what the test asserts", async () => {
+    const out = mkdtempSync(join(tmpdir(), "build-checks-"));
+    const c = checks(out, null, { planPresent: true, scenarioTests, protectedPaths: [file], planned: ["apps/lambdas/evaluation/src"], git: { nameStatus: async () => `M\t${file}`, diff: async () => weaken } });
+    expect((await c.finalFacts([])).weakened).toEqual(["S27"]);
+  });
+});

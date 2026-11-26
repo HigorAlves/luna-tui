@@ -15,7 +15,20 @@ import { type SessionExec, openChecksSession } from "./checks-session.ts";
 const TAIL_LINES = 60;
 const GATE_NAME = /lint|type-?check|tsc|format|fmt|prettier|eslint|biome/i;
 
-export const tailOf = (text: string): string => text.trimEnd().split("\n").slice(-TAIL_LINES).join("\n");
+/** A line that says what failed, in the common runners (vitest, jest, mocha, pytest, cargo, go, turbo, biome/eslint, tsc). */
+const FAILING_LINE = /\bFAIL\b|\bFAILED\b|✗|×|✖|AssertionError|\bError:|error TS\d+|\bpanicked\b|--- FAIL|exited \(\d+\)|Tests? +\d+ failed|\d+ failed|❯ \S+:\d+:\d+/;
+const FAILING_MAX = 40;
+
+/** The last lines of a check's output; a longer one that has failing lines ends with them, from wherever they are (DISC-53: turbo's last 60 lines were
+ *  all warnings, and the implementer never saw which test failed). The failing lines come last, as the input to Build keeps the end of the text. */
+export const tailOf = (text: string): string => {
+  const lines = text.trimEnd().split("\n");
+  const last = lines.slice(-TAIL_LINES);
+  if (lines.length <= TAIL_LINES) return last.join("\n");
+  const failing = lines.slice(0, -TAIL_LINES).filter((line) => FAILING_LINE.test(line)).slice(-FAILING_MAX);
+  if (failing.length === 0) return last.join("\n");
+  return [...last.slice(-20), "--- failing lines, from the whole output ---", ...failing].join("\n");
+};
 
 /** The checks the sweep runs, in the repo's order: those whose `paths` cover a changed or impacted file (every one with paths when the change is unknown),
  *  the whole-suite checks (no `paths`) whose `minutes` hint is within `wholeSuiteMinutes`, and the lint, typecheck and format checks.

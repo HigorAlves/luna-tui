@@ -12,7 +12,7 @@ import { scopeFacts as diffFacts } from "../../domain/scope-facts.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
 import type { CardHit } from "../../domain/card-search.ts";
 import { looksLikeTestPath } from "../../domain/locked-files.ts";
-import { type AddedLine, type ScopeFacts, type ScopeLocks, addedLinesOf, removedLinesOf, sanitizeFacts, scopeFacts } from "../../domain/scope.ts";
+import { type AddedLine, type ScopeFacts, type ScopeLocks, addedLinesOf, formattingOnly, removedLinesOf, sanitizeFacts, scopeFacts } from "../../domain/scope.ts";
 
 /** The most a request file the container writes may hold: a request is a few lines of JSON. */
 export const MAX_MAILBOX_BYTES = 64 * 1024;
@@ -748,8 +748,10 @@ export function buildChecks(deps: BuildChecksDeps) {
     const unlocked = new Set(deps.unlocked ?? []);
     const unlockedDirs = [...unlocked].map((p) => p.slice(0, p.lastIndexOf("/") + 1)).filter(Boolean);
     const isUnlocked = (path: string) => unlocked.has(path) || (/(^|\/)(__fixtures__|fixtures)\//.test(path) && unlockedDirs.some((dir) => path.startsWith(dir)));
-    const scenarioTests = (deps.scenarioTests ?? []).filter((t) => !isUnlocked(t.file));
-    const protectedPaths = (deps.protectedPaths ?? []).filter((p) => !isUnlocked(p));
+    // A scenario test the repo's formatter reflowed says the same as before: it is not weakened (the tests step's file failed Biome).
+    const reformatted = formattingOnly([...new Set([...(deps.scenarioTests ?? []).map((t) => t.file), ...(deps.protectedPaths ?? [])])], addedLines, removedLinesOf(diff));
+    const scenarioTests = (deps.scenarioTests ?? []).filter((t) => !isUnlocked(t.file) && !reformatted.has(t.file));
+    const protectedPaths = (deps.protectedPaths ?? []).filter((p) => !isUnlocked(p) && !reformatted.has(p));
     const raw = sanitizeFacts(scopeFacts({ nameStatus, addedLines, removedLines, ...(sets.length > 0 ? { locks, picked: deps.picked?.() ?? new Set<string>() } : {}), planned: deps.planned, declared, planPresent: deps.planPresent === true, ...(scenarioTests.length ? { scenarioTests } : {}), ...(protectedPaths.length ? { protectedPaths } : {}), ...(deps.inlineTests?.length ? { inlineTests: deps.inlineTests } : {}) }));
     const facts = unlocked.size ? { ...raw, removedTests: raw.removedTests.filter((p) => !isUnlocked(p)) } : raw;
     if (harness.size === 0) return facts;
