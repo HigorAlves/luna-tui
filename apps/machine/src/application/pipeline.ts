@@ -3616,8 +3616,10 @@ export class Pipeline {
     return events.slice(made + 1).some((e) => e.kind === "transition" && e.payload.from === "awaiting_approval" && e.payload.event === "approved");
   }
 
-  /** The locked test files a person approved changing: those every test-change request names, each one a plan was approved after. They add up:
-   *  approving a second request does not lock the first one's files again (DISC-53's slice 21 needed both). */
+  /** The locked test files a person approved changing: those every test-change request names, each one a plan was approved after, and each
+   *  existing test the approved plan names by its exact path (a change that retires code changes its tests, and the plan said so). They add
+   *  up: approving a second request does not lock the first one's files again. The tests step's own tests stay locked unless a request names
+   *  them, and a folder in the plan unlocks nothing. */
   private async unlockedTestsOf(id: string): Promise<string[]> {
     const events = await this.events(id);
     const isFinishedBuild = (e: EventRow) => e.kind === "stage.finished" && e.payload.stage === "implementing";
@@ -3637,6 +3639,13 @@ export class Pipeline {
       const finished = events.slice(0, at).findLast((x) => isFinishedBuild(x) && typeof objectOf(x.payload.detail)?.request === "string");
       for (const path of testPathsIn(String(objectOf(finished?.payload.detail)?.request ?? ""), locked)) unlocked.add(path);
     });
+    const approved = (await this.store.listApprovals(id)).findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
+    const plan = Plan.safeParse(approved?.requested.plan);
+    const planned = plan.success ? plan.data.steps.flatMap((step) => step.touchpoints) : (Array.isArray(approved?.requested.slices) ? approved.requested.slices : []).flatMap((slice) => (Array.isArray(objectOf(slice)?.touchpoints) ? (objectOf(slice)!.touchpoints as unknown[]).map(String) : []));
+    for (const path of planned) {
+      const exactFile = /\/[^/]+\.[A-Za-z0-9]+$/.test(path) && !path.startsWith("/") && !path.includes("..");
+      if (exactFile && looksLikeTestPath(path) && !locked.includes(path)) unlocked.add(path);
+    }
     return [...unlocked];
   }
 

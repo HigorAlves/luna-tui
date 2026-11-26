@@ -2483,6 +2483,22 @@ describe("a test change a person approves", () => {
     expect(retried.replan?.reason).toContain("web/cart.test.ts");
   });
 
+  it("unlocks an existing test the approved plan names by its exact path, but never the tests step's own tests or a folder (DISC-53: four planned test edits failed the run)", async () => {
+    const seen: Array<{ stage: string; ctx: StageContext }> = [];
+    const runnerFor = (stage: TaskState): StageRunner => async (ctx) => (seen.push({ stage, ctx }), stubs.runnerFor(stage)(ctx));
+    pipeline = new Pipeline(db, runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, revertCommit: async () => {} });
+    const slices = [{ title: "Retire the procedures", touchpoints: ["apps/api/src/routers/viewer.ts", "apps/api/src/routers/__test__/viewer.test.ts", "apps/lambdas/evaluation/src/app.test.ts", "apps/admin/src/__tests__"] }];
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], slices, rollback: "r", risk: { level: "low", scores: {} } } });
+    const testsStep = { status: "committed", commit: "t1", scenarioTests: [{ scenario: "S1", file: "apps/lambdas/evaluation/src/app.test.ts" }] };
+    stubs.plan("implementing", { outcome: "fail", workspace: { branch: "task/x", worktreePath: "/wt/x" }, detail: { testsStep } }, { outcome: "pass" });
+    const task = await newTask();
+    await pipeline.start(task.id);
+    expect((await pipeline.get(task.id)).state).toBe("awaiting_approval");
+    await pipeline.decide(task.id, "approved");
+    const second = seen.filter((s) => s.stage === "implementing")[1]?.ctx;
+    expect(second?.unlockedTests ?? []).toEqual(["apps/api/src/routers/__test__/viewer.test.ts"]);
+  });
+
   it("keeps every approved request's tests unlocked, not only the last one's (DISC-53: approving a second request locked the first one's file again)", async () => {
     const seen: Array<{ stage: string; ctx: StageContext }> = [];
     const runnerFor = (stage: TaskState): StageRunner => async (ctx) => (seen.push({ stage, ctx }), stubs.runnerFor(stage)(ctx));
