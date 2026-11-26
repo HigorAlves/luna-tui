@@ -203,6 +203,12 @@ describe("tailOf: a long check output keeps its failures", () => {
     expect(tail).toContain("ERROR run failed: command exited (1)");
   });
 
+  it("keeps the line before each failing line, where a linter names the file (DISC-53: Biome's `×` lines carry no path)", () => {
+    const biome = [...noise.slice(0, 100), "packages/domain/src/Task/index.ts:8:1 assist/source/organizeImports FIXABLE", "  × The imports and exports are not sorted.", ...noise.slice(100)].join("\n");
+    const tail = tailOf(biome);
+    expect(tail).toContain("packages/domain/src/Task/index.ts:8:1 assist/source/organizeImports FIXABLE\n  × The imports and exports are not sorted.");
+  });
+
   it("is the last lines as before for a short output, or one with no failing line", () => {
     expect(tailOf("a\nb\nc")).toBe("a\nb\nc");
     const quiet = noise.join("\n");

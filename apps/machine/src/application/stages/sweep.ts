@@ -25,7 +25,15 @@ export const tailOf = (text: string): string => {
   const lines = text.trimEnd().split("\n");
   const last = lines.slice(-TAIL_LINES);
   if (lines.length <= TAIL_LINES) return last.join("\n");
-  const failing = lines.slice(0, -TAIL_LINES).filter((line) => FAILING_LINE.test(line)).slice(-FAILING_MAX);
+  // Each failing line with the one before it, where a linter or a runner names the file (Biome prints the path above its `×`).
+  const head = lines.slice(0, -TAIL_LINES);
+  const keep = new Set<number>();
+  head.forEach((line, i) => {
+    if (!FAILING_LINE.test(line)) return;
+    if (i > 0) keep.add(i - 1);
+    keep.add(i);
+  });
+  const failing = [...keep].sort((a, b) => a - b).map((i) => head[i]!).slice(-FAILING_MAX * 2);
   if (failing.length === 0) return last.join("\n");
   return [...last.slice(-20), "--- failing lines, from the whole output ---", ...failing].join("\n");
 };
