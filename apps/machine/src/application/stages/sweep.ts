@@ -21,8 +21,12 @@ const FAILING_MAX = 40;
 
 /** The last lines of a check's output; a longer one that has failing lines ends with them, from wherever they are (DISC-53: turbo's last 60 lines were
  *  all warnings, and the implementer never saw which test failed). The failing lines come last, as the input to Build keeps the end of the text. */
+/** Terminal colour and cursor codes: a coloured `FAIL` reads `\u001b[41mFAIL`, which no word boundary finds (DISC-53's vitest output). */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: the escape character is what is being removed.
+const ANSI = /\u001b\[[0-9;?]*[A-Za-z]/g;
+
 export const tailOf = (text: string): string => {
-  const lines = text.trimEnd().split("\n");
+  const lines = text.replace(ANSI, "").trimEnd().split("\n");
   const last = lines.slice(-TAIL_LINES);
   if (lines.length <= TAIL_LINES) return last.join("\n");
   // Each failing line with the one before it, where a linter or a runner names the file (Biome prints the path above its `×`).

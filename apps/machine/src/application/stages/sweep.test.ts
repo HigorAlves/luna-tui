@@ -209,6 +209,13 @@ describe("tailOf: a long check output keeps its failures", () => {
     expect(tail).toContain("packages/domain/src/Task/index.ts:8:1 assist/source/organizeImports FIXABLE\n  × The imports and exports are not sorted.");
   });
 
+  it("finds a failing line the runner coloured, and keeps it without its colour codes (DISC-53: vitest's coloured FAIL never matched)", () => {
+    const coloured = [...noise.slice(0, 100), "\u001b[41m\u001b[1mFAIL\u001b[22m\u001b[49m src/forms/forms.service.test.ts > save", ...noise.slice(100)].join("\n");
+    const tail = tailOf(coloured);
+    expect(tail).toContain("FAIL src/forms/forms.service.test.ts > save");
+    expect(tail).not.toContain("\u001b[");
+  });
+
   it("is the last lines as before for a short output, or one with no failing line", () => {
     expect(tailOf("a\nb\nc")).toBe("a\nb\nc");
     const quiet = noise.join("\n");
