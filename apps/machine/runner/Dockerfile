@@ -11,7 +11,7 @@ ARG RUST_VERSION=1.99.1
 
 COPY apps/machine/runner/fetch-release.sh /tmp/fetch-release.sh
 RUN apt-get update \
- && apt-get install -y --no-install-recommends bash git ca-certificates ripgrep curl python3 python3-pip shellcheck \
+ && apt-get install -y --no-install-recommends bash git ca-certificates ripgrep curl python3 python3-pip shellcheck openssh-client \
  && arch="$(dpkg --print-architecture)" \
  && sh /tmp/fetch-release.sh cli/cli "v${GH_VERSION}" "gh_${GH_VERSION}_linux_${arch}.tar.gz" /tmp/gh.tar.gz \
  && tar -xzf /tmp/gh.tar.gz -C /usr/local --strip-components=1 "gh_${GH_VERSION}_linux_${arch}/bin/gh" && rm /tmp/gh.tar.gz \
