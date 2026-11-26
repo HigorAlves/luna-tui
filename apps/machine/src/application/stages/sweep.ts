@@ -16,7 +16,7 @@ const TAIL_LINES = 60;
 const GATE_NAME = /lint|type-?check|tsc|format|fmt|prettier|eslint|biome/i;
 
 /** A line that says what failed, in the common runners (vitest, jest, mocha, pytest, cargo, go, turbo, biome/eslint, tsc). */
-const FAILING_LINE = /\bFAIL\b|\bFAILED\b|✗|×|✖|AssertionError|\bError:|error TS\d+|\bpanicked\b|--- FAIL|exited \(\d+\)|Tests? +\d+ failed|\d+ failed|❯ \S+:\d+:\d+/;
+export const FAILING_LINE = /\bFAIL\b|\bFAILED\b|✗|×|✖|AssertionError|\bError:|error TS\d+|\bpanicked\b|--- FAIL|exited \(\d+\)|Tests? +\d+ failed|\d+ failed|❯ \S+:\d+:\d+/;
 const FAILING_MAX = 40;
 
 /** The last lines of a check's output; a longer one that has failing lines ends with them, from wherever they are (DISC-53: turbo's last 60 lines were

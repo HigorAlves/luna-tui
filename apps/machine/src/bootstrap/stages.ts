@@ -81,7 +81,8 @@ import { repoPrivateOf } from "../application/design-publish.ts";
 import { HOST_GIT, changedPaths, changedSince, diffSince, fileAtRev, diffNameStatus, originSlugOf, dirtyFiles, gitIdentity, blobsAtRepo, branchBase, commitAll, currentBranch, headCommit, lockfilesAt, nestedLockfilesAt, restoreFiles, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
 import { checkpointPush } from "../application/stages/checkpoint.ts";
 import { judgeRedCheck } from "../application/stages/build-watch.ts";
-import { runSweep } from "../application/stages/sweep.ts";
+import { runChecks, runSweep } from "../application/stages/sweep.ts";
+import { confirmOnBase } from "../application/stages/sweep-baseline.ts";
 import { noIdentityDetail } from "../application/env-broken.ts";
 import { rmSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
@@ -442,7 +443,8 @@ export async function buildRealStages(
       sweep: async (context) => {
         const { task } = context;
         if (!task.worktreePath || !task.repoPath) return { status: "skipped", ran: [], failed: [], note: "there was no worktree to sweep" };
-        return runSweep(
+        const onBlocked = (_check: string, rows: Parameters<typeof blockedPayloads>[0]) => void Promise.all(blockedPayloads(rows, "check").map((payload) => context.emit?.("sandbox.egress_blocked", payload))).catch(() => {});
+        const swept = await runSweep(
           {
             exec: checksExec,
             gitIdentity,
@@ -456,8 +458,24 @@ export async function buildRealStages(
               return { checks: policy.checks, services: policy.services, wholeSuiteMinutes: policy.factory.build.regression_full_suite_minutes };
             },
           },
-          { worktree: task.worktreePath, repoPath: task.repoPath, trust: trustOf(task), signal: context.signal, env: process.env, onBlocked: (_check, rows) => void Promise.all(blockedPayloads(rows, "check").map((payload) => context.emit?.("sandbox.egress_blocked", payload))).catch(() => {}) },
+          { worktree: task.worktreePath, repoPath: task.repoPath, trust: trustOf(task), signal: context.signal, env: process.env, onBlocked },
         );
+        // A failing check is asked again on the base, in a fresh clone the machine installs: one that fails there the same way is the repository's
+        // own and does not block Build (sweep-baseline.ts).
+        if (swept.status !== "failed" || !task.branch) return swept;
+        const policy = await policies.for(task.repoPath);
+        const worktree = task.worktreePath;
+        const repoPath = task.repoPath;
+        const branch = task.branch;
+        const confirmed = await confirmOnBase(swept, {
+          checks: policy.checks ?? [],
+          base: () => branchBase(worktree, repoPath),
+          clone: (sha) => hostBaselineWorkspace.clone(worktree, branch, `${context.runId}-sweepbase`, sha),
+          remove: (path) => hostBaselineWorkspace.remove(path),
+          run: (commands, cwd) => runChecks({ commands, exec: checksExec, cwd, signal: context.signal, env: process.env, services: policy.services, repoPath, trust: trustOf(task), stage: "implementing", timeoutMs: 30 * 60_000, onBlocked }),
+        });
+        if ("redOnBase" in confirmed && confirmed.redOnBase?.length) await context.emit?.("build.sweep_red_on_base", { checks: confirmed.redOnBase, base: confirmed.base ?? null }).catch(() => {});
+        return confirmed;
       },
       checkpoint: async (context, worktree, follows) => {
         if (!context.task.branch) return;
