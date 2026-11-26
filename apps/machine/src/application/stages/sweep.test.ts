@@ -216,6 +216,16 @@ describe("tailOf: a long check output keeps its failures", () => {
     expect(tail).not.toContain("\u001b[");
   });
 
+  it("leaves out a passing test's logged errors and keeps the runner's own failure lines (DISC-53: 'Error: db down' logs pushed vitest's FAIL out)", () => {
+    const logs = Array.from({ length: 200 }, (_, i) => `@discover/api:test:unit: stderr | src/m${i}.test.ts > logs and recovers\n@discover/api:test:unit: Failed to resolve the PDF password; sealing with a random one Error: db down`);
+    const out = [...logs.slice(0, 50), "@discover/api:test:unit:  FAIL  src/forms/forms.service.test.ts > save > writes the components", "@discover/api:test:unit: AssertionError: expected 404 to be 200", ...logs.slice(50), "@discover/api:test:unit:  Test Files  1 failed | 211 passed (212)", ...noise.slice(0, 70)].join("\n");
+    const tail = tailOf(out);
+    expect(tail).toContain("FAIL  src/forms/forms.service.test.ts > save > writes the components");
+    expect(tail).toContain("AssertionError: expected 404 to be 200");
+    expect(tail).toContain("Test Files  1 failed");
+    expect(tail).not.toContain("Error: db down");
+  });
+
   it("is the last lines as before for a short output, or one with no failing line", () => {
     expect(tailOf("a\nb\nc")).toBe("a\nb\nc");
     const quiet = noise.join("\n");

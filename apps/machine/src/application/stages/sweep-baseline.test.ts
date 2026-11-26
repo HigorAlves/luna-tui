@@ -22,7 +22,7 @@ describe("alsoOnBase: a failing check counts as already failing only when the ba
   });
 
   it("reads the failing lines of a test runner, durations and counts aside", () => {
-    expect(failingLinesOf(" FAIL  src/a.test.ts > x 12ms\nok\n × b 3ms")).toEqual(["FAIL src/a.test.ts > x", "ok | × b"]);
+    expect(failingLinesOf(" FAIL  src/a.test.ts > x 12ms\nok\n × b 3ms")).toEqual(["FAIL src/a.test.ts > x", "× b"]);
   });
 });
 

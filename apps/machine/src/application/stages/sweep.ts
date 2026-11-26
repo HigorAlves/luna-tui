@@ -16,7 +16,11 @@ const TAIL_LINES = 60;
 const GATE_NAME = /lint|type-?check|tsc|format|fmt|prettier|eslint|biome/i;
 
 /** A line that says what failed, in the common runners (vitest, jest, mocha, pytest, cargo, go, turbo, biome/eslint, tsc). */
-export const FAILING_LINE = /\bFAIL\b|\bFAILED\b|✗|×|✖|AssertionError|\bError:|error TS\d+|\bpanicked\b|--- FAIL|exited \(\d+\)|Tests? +\d+ failed|\d+ failed|❯ \S+:\d+:\d+/;
+export const FAILING_LINE = /\bFAIL\b|\bFAILED\b|✗|×|✖|AssertionError|error TS\d+|\bpanicked\b|--- FAIL|exited \(\d+\)|\bFailed: \S+#|Tests? +\d+ failed|Test Files +\d+ failed|\d+ (?:tests? )?failed\b|❯ \S+:\d+:\d+/;
+/** A line a passing test logs on purpose (vitest's `stderr |` header, a caught error it prints): not a failure, however it reads. */
+export const LOGGED_LINE = /\bstderr \|/;
+/** A file and a line: `src/a.ts:8:1`, `packages/x/y.tsx:12`. */
+export const LOCATION = /\S+\.[A-Za-z]{1,5}:\d+/;
 const FAILING_MAX = 40;
 
 /** The last lines of a check's output; a longer one that has failing lines ends with them, from wherever they are (DISC-53: turbo's last 60 lines were
@@ -33,8 +37,9 @@ export const tailOf = (text: string): string => {
   const head = lines.slice(0, -TAIL_LINES);
   const keep = new Set<number>();
   head.forEach((line, i) => {
-    if (!FAILING_LINE.test(line)) return;
-    if (i > 0) keep.add(i - 1);
+    if (!FAILING_LINE.test(line) || LOGGED_LINE.test(line)) return;
+    // The line before, only where it names a file and a line (Biome's `path:8:1 rule`): anything else above is a log, not the failure's place.
+    if (i > 0 && LOCATION.test(head[i - 1]!)) keep.add(i - 1);
     keep.add(i);
   });
   const failing = [...keep].sort((a, b) => a - b).map((i) => head[i]!).slice(-FAILING_MAX * 2);
