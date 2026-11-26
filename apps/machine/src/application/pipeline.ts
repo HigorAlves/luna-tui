@@ -3698,7 +3698,8 @@ export class Pipeline {
   /** When the plan stage runs because a plan was found wrong (the last move into it was a `plan_wrong`): who raised it, why, and what the raising
    *  stage's last run said, flattened and capped (`replanOf`). Null for any other run of the plan stage. */
   private async replanEvidence(id: string): Promise<ReturnType<typeof replanOf> | null> {
-    const entry = (await this.events(id)).findLast((e) => e.kind === "transition" && e.payload.to === "test_design");
+    // A person retrying an escalated plan stage moves it in from `escalated`: the move that brought the replan in is the one before.
+    const entry = (await this.events(id)).findLast((e) => e.kind === "transition" && e.payload.to === "test_design" && e.payload.from !== "escalated");
     // A test change the implementer asked for is evidence too: the planner and the person at the plan gate read the request.
     if (entry && entry.payload.outcome === "test_change") {
       const finished = (await this.store.findFinishedEvents(id)).find((e) => e.payload.stage === "implementing");

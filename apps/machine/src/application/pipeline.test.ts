@@ -2439,6 +2439,27 @@ describe("a test change a person approves", () => {
     expect(next.unlockedTests).toEqual(["site/src/components/landing/static-sections.test.tsx"]);
   });
 
+  it("keeps the request as the replan's evidence when the replan escalates and a person retries it (DISC-53: a graph failure mid-replan lost it)", async () => {
+    const seen: Array<{ stage: string; ctx: StageContext }> = [];
+    const runnerFor = (stage: TaskState): StageRunner => async (ctx) => (seen.push({ stage, ctx }), stubs.runnerFor(stage)(ctx));
+    pipeline = new Pipeline(db, runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, revertCommit: async () => {} });
+    const request = "In web/cart.test.ts, S8 contradicts S15; change S8.";
+    stubs.plan(
+      "implementing",
+      { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/wt/x" } },
+      { outcome: "test_change", detail: { request, summary: "two locked tests contradict", reason: "the implementer asks to change a locked test: two locked tests contradict" } },
+    );
+    stubs.plan("verifying", { outcome: "fail", run: { inputCommit: "aaa", outputCommit: "bbb" }, detail: { findings: [] } });
+    const ok = { outcome: "pass", detail: { brief: "b", criteria: ["c1"], risk: { level: "low", scores: {} } } } as const;
+    // The first plan passes, the replan fails as the graph build did, the retry passes.
+    stubs.plan("test_design", ok, { outcome: "fail", detail: { reason: "the code graph could not be built" } }, ok);
+    const task = await newTask();
+    expect((await startAndApprove(task.id)).state).toBe("escalated");
+    await pipeline.decide(task.id, "approved");
+    const retried = seen.filter((s) => s.stage === "test_design").at(-1)!.ctx;
+    expect(retried.replan?.reason).toContain("web/cart.test.ts");
+  });
+
   it("unlocks a test the request names without its folder, from the files the tests step recorded (DISC-53: approving the plan unlocked nothing)", async () => {
     const seen: Array<{ stage: string; ctx: StageContext }> = [];
     const runnerFor = (stage: TaskState): StageRunner => async (ctx) => (seen.push({ stage, ctx }), stubs.runnerFor(stage)(ctx));
