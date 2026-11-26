@@ -650,6 +650,9 @@ export interface BuildChecksDeps {
   /** Which of `paths` are the repo's own files (on its default branch). A deleted test only a card's branch had (one the harness wrote, such as a
    *  prose test on a docs card) is neither a removed test nor an undeclared change. Absent, every deleted test counts. */
   repoFiles?: (paths: string[]) => Promise<Set<string>>;
+  /** Tests a person unlocked (approved test-change requests, existing tests the approved plan names): changing or removing one is not a
+   *  weakened or removed test, and neither is changing a fixture in the folder of an unlocked test. */
+  unlocked?: readonly string[];
   /** Source files that hold Rust's inline tests (the tests step took them as test changes): changing one is not a weakened test. */
   inlineTests?: string[];
   /** Null when no decision can run: every check is skipped. Read at call time. */
@@ -741,7 +744,14 @@ export function buildChecks(deps: BuildChecksDeps) {
     const from = deps.inputCommit;
     // Each lock is judged against the commits since it began (a helper's, since its base), not the whole change; none is read for a card with no lock.
     const locks = await Promise.all(sets.map(async (l) => (l.other.length > 0 && commitFiles ? { ...l, commits: await commitFiles(l.since ?? from, "HEAD") } : l)));
-    const facts = sanitizeFacts(scopeFacts({ nameStatus, addedLines, removedLines, ...(sets.length > 0 ? { locks, picked: deps.picked?.() ?? new Set<string>() } : {}), planned: deps.planned, declared, planPresent: deps.planPresent === true, ...(deps.scenarioTests?.length ? { scenarioTests: deps.scenarioTests } : {}), ...(deps.protectedPaths?.length ? { protectedPaths: deps.protectedPaths } : {}), ...(deps.inlineTests?.length ? { inlineTests: deps.inlineTests } : {}) }));
+    // A test a person unlocked is the change's to edit or remove; so is a fixture in the folder of an unlocked test (DISC-53's callOp helper).
+    const unlocked = new Set(deps.unlocked ?? []);
+    const unlockedDirs = [...unlocked].map((p) => p.slice(0, p.lastIndexOf("/") + 1)).filter(Boolean);
+    const isUnlocked = (path: string) => unlocked.has(path) || (/(^|\/)(__fixtures__|fixtures)\//.test(path) && unlockedDirs.some((dir) => path.startsWith(dir)));
+    const scenarioTests = (deps.scenarioTests ?? []).filter((t) => !isUnlocked(t.file));
+    const protectedPaths = (deps.protectedPaths ?? []).filter((p) => !isUnlocked(p));
+    const raw = sanitizeFacts(scopeFacts({ nameStatus, addedLines, removedLines, ...(sets.length > 0 ? { locks, picked: deps.picked?.() ?? new Set<string>() } : {}), planned: deps.planned, declared, planPresent: deps.planPresent === true, ...(scenarioTests.length ? { scenarioTests } : {}), ...(protectedPaths.length ? { protectedPaths } : {}), ...(deps.inlineTests?.length ? { inlineTests: deps.inlineTests } : {}) }));
+    const facts = unlocked.size ? { ...raw, removedTests: raw.removedTests.filter((p) => !isUnlocked(p)) } : raw;
     if (harness.size === 0) return facts;
     return { ...facts, removedTests: facts.removedTests.filter((p) => !harness.has(p)), undeclared: facts.undeclared.filter((p) => !harness.has(p)) };
   };

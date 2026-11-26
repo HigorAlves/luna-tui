@@ -737,6 +737,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
           ...(helperCoordinator ? { locks: () => helperCoordinator.delegatedLockSets().map((l) => ({ other: l.files, owner: "ui-designer" as const, since: l.base })), picked: helperCoordinator.picked } : {}),
           ...(extra.scenarioTests?.length ? { scenarioTests: extra.scenarioTests } : {}),
           ...(extra.testsFiles?.length ? { protectedPaths: extra.testsFiles } : {}),
+          // The tests a person unlocked: the final scope check does not count their edits or removal against the change.
+          ...(context.unlockedTests?.length ? { unlocked: context.unlockedTests } : {}),
           ...(extra.inlineTests?.length ? { inlineTests: extra.inlineTests } : {}),
           ...(task.repoPath ? { repoFiles: (paths: string[]) => onDefaultBranch(task.repoPath!, paths) } : {}),
           get decide() {

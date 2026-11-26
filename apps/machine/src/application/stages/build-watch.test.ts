@@ -875,3 +875,33 @@ describe("writeMailboxFile", () => {
     expect(JSON.parse(readFileSync(join(out, "checks", "helper-state-3.json"), "utf8"))).toEqual({ state: "running", attempt: 1 });
   });
 });
+
+describe("the final scope check and the tests a person unlocked", () => {
+  const nameStatus = [
+    "M\tapps/lambdas/evaluation/src/app.test.ts",
+    "M\tapps/lambdas/evaluation/src/__fixtures__/operations.ts",
+    "M\tapps/lambdas/evaluation/src/other.test.ts",
+    "D\tapps/api/src/routers/__test__/forms.assets.test.ts",
+    "D\tapps/api/src/routers/__test__/kept.test.ts",
+  ].join("\n");
+  const diff = "diff --git a/apps/lambdas/evaluation/src/app.test.ts b/apps/lambdas/evaluation/src/app.test.ts\n--- a/apps/lambdas/evaluation/src/app.test.ts\n+++ b/apps/lambdas/evaluation/src/app.test.ts\n@@ -1 +1 @@\n-it('a')\n+it('b')";
+  const scenarioTests = [{ scenario: "S1", file: "apps/lambdas/evaluation/src/app.test.ts" }, { scenario: "S2", file: "apps/lambdas/evaluation/src/other.test.ts" }];
+  const protectedPaths = ["apps/lambdas/evaluation/src/app.test.ts", "apps/lambdas/evaluation/src/__fixtures__/operations.ts", "apps/lambdas/evaluation/src/other.test.ts"];
+
+  it("lets an unlocked scenario test and a fixture beside it change, and an unlocked test file go, but keeps flagging everything else (DISC-53: every approved change failed the last check)", async () => {
+    const out = mkdtempSync(join(tmpdir(), "build-checks-"));
+    const unlocked = ["apps/lambdas/evaluation/src/app.test.ts", "apps/api/src/routers/__test__/forms.assets.test.ts"];
+    const c = checks(out, null, { planPresent: true, scenarioTests, protectedPaths, unlocked, planned: ["apps/lambdas/evaluation/src", "apps/api/src/routers"], git: { nameStatus: async () => nameStatus, diff: async () => diff } });
+    const facts = await c.finalFacts([]);
+    expect(facts.weakened).toEqual(["S2"]);
+    expect(facts.removedTests).toEqual(["apps/api/src/routers/__test__/kept.test.ts"]);
+  });
+
+  it("flags them all with nothing unlocked", async () => {
+    const out = mkdtempSync(join(tmpdir(), "build-checks-"));
+    const c = checks(out, null, { planPresent: true, scenarioTests, protectedPaths, planned: ["apps/lambdas/evaluation/src", "apps/api/src/routers"], git: { nameStatus: async () => nameStatus, diff: async () => diff } });
+    const facts = await c.finalFacts([]);
+    expect([...facts.weakened].sort()).toEqual(["S1", "S2", "file:apps/lambdas/evaluation/src/__fixtures__/operations.ts"]);
+    expect([...facts.removedTests].sort()).toEqual(["apps/api/src/routers/__test__/forms.assets.test.ts", "apps/api/src/routers/__test__/kept.test.ts"]);
+  });
+});
