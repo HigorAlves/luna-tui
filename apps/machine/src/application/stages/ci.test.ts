@@ -357,6 +357,28 @@ describe("ci_watch on a conflicting PR", () => {
     expect(exec).toHaveBeenCalledWith("git", expect.arrayContaining(["push", "--force-with-lease", "origin", "hardness/t1"]));
   });
 
+  it("answers the conflict before it waits for CI: a conflicting PR runs no CI on its merge, so waiting first only loses the time (DISC-53)", async () => {
+    const { run, context, rebase, github } = setup({ polls: [green], mergeable: ["CONFLICTING", "MERGEABLE"] });
+    const order: string[] = [];
+    const prChecks = github.prChecks.getMockImplementation()!;
+    github.prChecks.mockImplementation(async (...args) => (order.push("checks"), prChecks(...args)));
+    rebase.mockImplementation(async () => (order.push("rebase"), { ok: true, onto: "origin/main" }));
+    const result = await run(context);
+    expect(result).toMatchObject({ outcome: "pass", detail: { rebased: true } });
+    expect(order[0]).toBe("rebase");
+  });
+
+  it("stops waiting for CI as soon as the PR starts to conflict (the base moved while checks ran), and answers the conflict", async () => {
+    const { run, context, rebase, github } = setup({ polls: [checks(["lint", "PENDING"]), green], mergeable: ["MERGEABLE", "CONFLICTING", "MERGEABLE"] });
+    const order: string[] = [];
+    const prChecks = github.prChecks.getMockImplementation()!;
+    github.prChecks.mockImplementation(async (...args) => (order.push("checks"), prChecks(...args)));
+    rebase.mockImplementation(async () => (order.push("rebase"), { ok: true, onto: "origin/main" }));
+    const result = await run(context);
+    expect(result).toMatchObject({ outcome: "pass", detail: { rebased: true } });
+    expect(order.slice(0, 2)).toEqual(["checks", "rebase"]);
+  });
+
   it("puts the branch back where it was when the forced push after the rebase fails, and pins the lease to that head", async () => {
     const BEFORE = "e".repeat(40);
     const { run, context, exec } = setup({

@@ -27,7 +27,7 @@ function setup(github: ReturnType<typeof fakeGitHub>, opts: { push?: ExecResult;
     approvals: [],
     signal: new AbortController().signal,
   } as StageContext;
-  return { run: deliverRunner({ exec, github, slugOf: async () => "acme/widgets", defaultBranch: async () => (opts.defaultBranch === undefined ? "main" : opts.defaultBranch), ...(opts.resolve ? { resolveConflicts: opts.resolve } : {}) }), context, calls };
+  return { run: deliverRunner({ exec, github, sleep: async () => {}, slugOf: async () => "acme/widgets", defaultBranch: async () => (opts.defaultBranch === undefined ? "main" : opts.defaultBranch), ...(opts.resolve ? { resolveConflicts: opts.resolve } : {}) }), context, calls };
 }
 
 describe("what the machine pushed", () => {
@@ -395,6 +395,17 @@ describe("delivering a branch that conflicts with the default branch", () => {
     const reset = calls.findIndex((c) => c.includes("reset"));
     expect(calls[reset]).toEqual([...G, "reset", "--hard", "--quiet", BEFORE]);
     expect(reset).toBeGreaterThan(calls.findIndex((c) => c.some((a) => a.startsWith("--force-with-lease"))));
+  });
+
+  it("waits for GitHub to finish computing whether the PR merges, then rebases a conflict (DISC-53: the new PR read UNKNOWN and Deliver moved on)", async () => {
+    const answers = ["UNKNOWN", "UNKNOWN", "CONFLICTING"];
+    let asked = 0;
+    const github = fakeGitHub({ findPr: async () => pr, prFacts: async () => ({ mergeable: answers[Math.min(asked++, answers.length - 1)] }) as never });
+    const { run, context, calls } = setup(github);
+    const result = await run(context);
+    expect(result.detail).toMatchObject({ rebased: true, onto: "origin/main" });
+    expect(asked).toBe(3);
+    expect(calls.some((c) => c.includes("rebase"))).toBe(true);
   });
 
   it("does nothing more on a mergeable PR, notes an UNKNOWN one, and ignores a prFacts that throws", async () => {

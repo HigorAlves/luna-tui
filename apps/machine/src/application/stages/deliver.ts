@@ -33,6 +33,8 @@ export interface DeliverDeps {
   /** A stacked card's parent (`stackFactsOf`), and what to do about it: drop the card's base, rebase, unstack (default: the host git helpers), the base commit the workspace records. Absent, a card's base is not looked at. */
   /** Resolves a conflict the rebase and the plain merge could not (`mergeRound`: the addressing pack resolves the files, the project's checks prove the result, the merge is pushed). Absent, a conflict asks a person. */
   resolveConflicts?: (context: StageContext, input: MergeInput) => Promise<MergeOutcome>;
+  /** Waits between asks while GitHub computes whether the PR merges; tests pass one that returns at once. */
+  sleep?: (ms: number) => Promise<void>;
   stacked?: {
     facts: (slug: string, task: TaskRow) => Promise<StackFacts | null>;
     clearBase: (taskId: string) => Promise<void>;
@@ -41,6 +43,10 @@ export interface DeliverDeps {
     baseSha?: (worktreePath: string) => Promise<string | null>;
   };
 }
+
+/** How many more times, and how far apart, a PR that reads `mergeable: UNKNOWN` is asked again: GitHub computes it in the background, usually within seconds. */
+const MERGEABLE_TRIES = 6;
+const MERGEABLE_WAIT_MS = 5_000;
 
 /** A command's output, or a hint when it produced none. */
 export function describe(result: ExecResult): string {
@@ -274,6 +280,7 @@ export function deliverRunner(deps: DeliverDeps): StageRunner {
   const defaultFor = (slug: string) => async (repoPath: string): Promise<string | null> =>
     deps.defaultBranch ? await deps.defaultBranch(repoPath, slug).catch(() => null) : await deps.github.defaultBranch(slug).catch(() => null);
   const slugOf = deps.slugOf ?? originSlugOf;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   return async (context) => {
     const { task } = context;
     if (!task.repoPath || !task.branch || !task.worktreePath) {
@@ -374,8 +381,13 @@ export function deliverRunner(deps: DeliverDeps): StageRunner {
         const now = (await deps.github.prFacts(slug, ref.number).catch(() => null))?.baseRefName ?? null;
         if (wanted && now !== null && now !== wanted) await deps.github.retargetPr(slug, ref.number, wanted);
       }
-      // GitHub knows whether the branch still merges: once a conflict is reported, rebase it once and push it back.
-      const facts = await deps.github.prFacts(slug, ref.number).catch(() => null);
+      // GitHub knows whether the branch still merges: once a conflict is reported, rebase it once and push it back. A PR just opened or pushed
+      // reads UNKNOWN while GitHub computes it (DISC-53's did, and Deliver moved on with a conflicting PR): it is asked again, a few times.
+      let facts = await deps.github.prFacts(slug, ref.number).catch(() => null);
+      for (let n = 0; facts?.mergeable === "UNKNOWN" && n < MERGEABLE_TRIES; n++) {
+        await sleep(MERGEABLE_WAIT_MS);
+        facts = await deps.github.prFacts(slug, ref.number).catch(() => facts);
+      }
       let rebase: Record<string, unknown> = facts?.mergeable === "UNKNOWN" ? { mergeable: "UNKNOWN" } : {};
       if (facts?.mergeable === "CONFLICTING") {
         const base = defaultFor(slug);

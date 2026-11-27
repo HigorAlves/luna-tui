@@ -88,7 +88,7 @@ const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(r
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
   value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 
-type Settled = { kind: "settled"; checks: Check[] } | { kind: "timeout" } | { kind: "aborted" } | { kind: "error"; error: string };
+type Settled = { kind: "settled"; checks: Check[] } | { kind: "conflict"; checks: Check[] } | { kind: "timeout" } | { kind: "aborted" } | { kind: "error"; error: string };
 
 export function ciWatchRunner(deps: CiDeps): StageRunner {
   const pollMs = deps.pollMs ?? 30_000;
@@ -144,7 +144,9 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
     /** Polls until nothing is pending. After a re-run, `before` (the checks as they stood when it was asked) must also be seen through: every
      *  check of it listed again, and none still red on its old link (the re-run's job has a new one), since GitHub first drops the re-run
      *  jobs from the list and may still show the old red for a moment; reading either as settled would call the re-run green, or red, unseen. */
-    async function settle(waitMs: number, before?: readonly Check[]): Promise<Settled> {
+    /** With `watchConflict`, every poll that finds checks still pending also asks whether the PR conflicts with its base: one that started to
+     *  (the base moved while CI ran) stops the wait at once, since a green run on a branch that does not merge says nothing about the merge. */
+    async function settle(waitMs: number, before?: readonly Check[], watchConflict = false): Promise<Settled> {
       const deadline = Date.now() + waitMs;
       const wasRed = before ? failedOf([...before]) : [];
       for (;;) {
@@ -163,6 +165,7 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
             : false;
           if (!missing && !rerunUnseen) return { kind: "settled", checks };
         }
+        if (watchConflict && (await conflicting())) return { kind: "conflict", checks };
         if (Date.now() >= deadline) return { kind: "timeout" };
         await sleep(pollMs);
       }
@@ -182,10 +185,7 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
 
     const gather = (checks: Check[], failed: Check[]) => ciContextOf(deps.github, slug, branch, checks, failed);
 
-    const first = await settle(maxWaitMs);
-    const early = stopped(first);
-    if (early) return early;
-    let checks = (first as { checks: Check[] }).checks;
+    let checks: Check[] = [];
 
     // A conflict with the base: GitHub runs no CI on it. Rebase the branch once, push it back, watch again.
     const conflicting = async (): Promise<boolean> => {
@@ -254,13 +254,24 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
       rebased = true;
       graceEnds = Date.now() + graceMs;
       expected = null;
-      const again = await settle(maxWaitMs);
+      // A conflict again while the rebased branch's CI runs ends the wait: the caller asks once more and a person decides.
+      const again = await settle(maxWaitMs, undefined, true);
       const stoppedAfter = stopped(again);
       if (stoppedAfter) return stoppedAfter;
       checks = (again as { checks: Check[] }).checks;
       return null;
     };
-    if (await conflicting()) {
+    // A PR that conflicts with its base runs no CI on its merge: the conflict is answered first, never after waiting up to `maxWaitMs` for
+    // checks that will not come (DISC-53 waited on CI, then found the conflict). A PR that merges is watched until its checks settle.
+    let conflictedNow = await conflicting();
+    if (!conflictedNow) {
+      const first = await settle(maxWaitMs, undefined, true);
+      const early = stopped(first);
+      if (early) return early;
+      checks = (first as { checks: Check[] }).checks;
+      conflictedNow = first.kind === "conflict";
+    }
+    if (conflictedNow || (await conflicting())) {
       // Rebasing and force-pushing is the repository's to allow (`verify.auto_rebase`); off, a person does it.
       const allowed = deps.policy ? (await deps.policy(task.repoPath ?? null)).autoRebase >= 1 : true;
       if (!allowed) return stuck("the branch conflicts with the default branch and the repository does not allow an automatic rebase (verify.auto_rebase is 0)");
