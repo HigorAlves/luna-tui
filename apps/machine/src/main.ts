@@ -141,7 +141,8 @@ import { createGitHub } from "./adapters/github/octokit.ts";
 import { taskDiff } from "./adapters/git/diff.ts";
 import { noTokenGitHub } from "./application/github.ts";
 import { designPairsPublished } from "./application/design-publish.ts";
-import { realDeliverRunner } from "./application/stages/deliver.ts";
+import { pushBranch, realDeliverRunner } from "./application/stages/deliver.ts";
+import { PrDesk } from "./application/pr-desk.ts";
 import { currentStackFacts } from "./application/stack.ts";
 import { similarCards } from "./application/size-estimate.ts";
 import { shipRunner } from "./application/stages/ship.ts";
@@ -631,6 +632,14 @@ const pulls = new GitHubPulls({
   publishAll: (snapshot) => bus.publish({ type: "github.prs.all", snapshot }),
   publishActivity: (activity) => bus.publish({ type: "github.activity", activity }),
 });
+/** One PR on demand for a client: its detail, Ready for review, a branch's PR, search, and a branch pushed with its PR opened. */
+const prDesk = new PrDesk({
+  github,
+  reposDir: config.reposDir,
+  repoll: () => pulls.pollOnce(),
+  originOf: originSlugOf,
+  push: (branch, cwd) => pushBranch(exec, branch, cwd),
+});
 /** Cards at `pr_watch` wait for their PR's merge or close; this loop reads each PR on the poller's interval and moves the card. */
 const prWatch = new PrWatch({
   github,
@@ -1053,6 +1062,8 @@ const approveBase = async (repo: string, base: string): Promise<{ ok: true } | {
 /** The MCP servers (RFC 0013): tokens in the state dir, the OAuth redirect at the board's address (`MACHINE_PUBLIC_URL`, else this machine's own port). */
 const { store: mcpStore, redirect: mcpRedirect, mcpFor } = mcpClients;
 const app = createApp({
+  prDesk,
+  reposDir: config.reposDir,
   policies,
   qaImage: qaImageReady,
   mcp: createMcpApi({ mcp: mcpFor(), store: mcpStore, redirectUrl: mcpRedirect }),

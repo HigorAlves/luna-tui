@@ -1,6 +1,8 @@
 // A pull request as the inbox shows it: the GraphQL node the host fetched, mapped to the
 // board's shape and placed in one split. Pure: no I/O, so every rule is unit tested.
-import type { ChecksState, PrActionState, PrCheck, PrMenuAction, PrSplit, PullRequest } from "@hardness/contracts";
+import type { ChecksState, PrActionState, PrCheck, PrFacts, PrMenuAction, PrSplit, PullRequest } from "@hardness/contracts";
+
+export type { PrFacts };
 
 /** How many of each nested list a PR's fields read. A query for one PR can afford a hundred; the bulk one reads hundreds of PRs a call and keeps GitHub's node limit and cost low. */
 export interface PrFieldLimits {
@@ -77,8 +79,6 @@ export interface PrNode {
   };
 }
 
-/** Everything about a PR but what the machine adds on top (its split, checkout, task and what can be done). */
-export type PrFacts = Omit<PullRequest, "split" | "localPath" | "task" | "actions">;
 
 const RUN_FAILED = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"]);
 const STATUS_FAILED = new Set(["FAILURE", "ERROR"]);

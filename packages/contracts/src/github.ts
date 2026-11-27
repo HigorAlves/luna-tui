@@ -124,6 +124,62 @@ export interface CloneStatus {
   error: string | null;
 }
 
+/** Everything about a PR but what the machine adds for the inbox (its split, checkout, task and menu). */
+export type PrFacts = Omit<PullRequest, "split" | "localPath" | "task" | "actions">;
+
+/** One review thread on a PR, resolved ones included. */
+export interface PrThread {
+  id: string;
+  path: string | null;
+  /** Null once the code has moved on (`outdated`). */
+  line: number | null;
+  resolved: boolean;
+  outdated: boolean;
+  comments: Array<{ author: string; body: string; at: string }>;
+}
+
+/** `GET /github/prs/{owner}/{name}/{number}`: one PR read now, for a client's PR tab. */
+export interface PrDetail {
+  /** `owner/name` */
+  repo: string;
+  number: number;
+  state: "open" | "closed" | "merged";
+  facts: PrFacts;
+  threads: PrThread[];
+  reviews: Array<{ author: string | null; state: string; at: string }>;
+  files: Array<{ path: string; additions: number; deletions: number; previousPath?: string }>;
+}
+
+/** A PR by its link: what lookup and open answer. */
+export interface PrLink {
+  url: string;
+  number: number;
+  isDraft: boolean;
+}
+
+/** One PR or issue a search found. */
+export interface IssueHit {
+  number: number;
+  title: string;
+  url: string;
+  state: "open" | "closed";
+  author: string | null;
+}
+
+export const IssueKind = z.enum(["pr", "issue"]);
+export type IssueKind = z.infer<typeof IssueKind>;
+
+/** `POST /github/pr`: push a branch of a checkout under the machine's repositories folder and open its PR. */
+export const OpenPrInput = z.object({
+  path: z.string().min(1),
+  branch: z.string().min(1).max(255).regex(/^[\w./-]+$/, "branch: letters, digits, . _ / - only"),
+  title: z.string().min(1).max(256),
+  body: z.string().max(65_536).default(""),
+  base: z.string().min(1).max(255).optional(),
+  draft: z.boolean().default(false),
+});
+export type OpenPrInput = z.infer<typeof OpenPrInput>;
+
 export const PrActionInput = z.object({ action: PrAction });
 export type PrActionInput = z.infer<typeof PrActionInput>;
 

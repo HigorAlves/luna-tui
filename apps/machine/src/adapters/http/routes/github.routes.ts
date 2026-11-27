@@ -1,11 +1,13 @@
 // The PR inbox.
 import { TaskNotFoundError } from "../../../application/pipeline.ts";
 import { createOpenApiRouter } from "../openapi/router.ts";
-import { allPrsRoute, cloneRoute, closePrRoute, mergePrRoute, prActionRoute, prsRoute, refreshAllPrsRoute, refreshPrsRoute } from "./github.openapi.ts";
+import { dirname } from "node:path";
+
+import { allPrsRoute, cloneRoute, closePrRoute, lookupPrRoute, mergePrRoute, openPrRoute, prActionRoute, prDetailRoute, prsRoute, readyPrRoute, refreshAllPrsRoute, refreshPrsRoute, searchIssuesRoute } from "./github.openapi.ts";
 import { prParams, type RouteDeps } from "./kit.ts";
 
 export function githubRoutes(deps: RouteDeps) {
-  const { pulls, prTasks, serialize } = deps;
+  const { pulls, prTasks, prDesk, serialize } = deps;
   const app = createOpenApiRouter();
   if (pulls) {
     // The PR inbox: what the last poll saw, a poll on demand, a merge, and a clone for a repo
@@ -39,8 +41,31 @@ export function githubRoutes(deps: RouteDeps) {
     }
     app.openapi(cloneRoute, async (c) => {
       const { repo, dest } = c.req.valid("json");
+      // The folder must be one the machine sees: a clone anywhere else lands only inside its container.
+      if (prDesk) await prDesk.inside(dirname(dest));
       await pulls.clone(repo, dest);
       return c.json({ repo, dest, cloning: true as const }, 202);
+    });
+  }
+  if (prDesk) {
+    // One PR on demand, beside the inbox: a client's PR tab, Ready for review, a branch's PR, @-mention search, push and open.
+    app.openapi(lookupPrRoute, async (c) => {
+      const { repo, branch } = c.req.valid("query");
+      return c.json({ pr: await prDesk.lookup(repo, branch) }, 200);
+    });
+    app.openapi(searchIssuesRoute, async (c) => {
+      const { repo, kind, q } = c.req.valid("query");
+      return c.json({ items: await prDesk.search(repo, kind, q) }, 200);
+    });
+    app.openapi(openPrRoute, async (c) => c.json(await prDesk.openPr(c.req.valid("json")), 201));
+    app.openapi(prDetailRoute, async (c) => {
+      const { owner, name, number } = prParams(c);
+      return c.json(await prDesk.detail(`${owner}/${name}`, number), 200);
+    });
+    app.openapi(readyPrRoute, async (c) => {
+      const { owner, name, number } = prParams(c);
+      await prDesk.ready(`${owner}/${name}`, number);
+      return c.json({ ready: true as const }, 200);
     });
   }
   return app;

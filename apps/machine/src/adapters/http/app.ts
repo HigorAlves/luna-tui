@@ -48,6 +48,7 @@ import { conformanceOn, responseConformance, violations } from "./openapi/confor
 import { createOpenApiRouter } from "./openapi/router.ts";
 import { BadRequest, CLIENT_CLOSED, body, fail, githubRefusal, type RouteDeps } from "./routes/kit.ts";
 import { GitHubError } from "../../application/github.ts";
+import { OutsideReposError, type PrDeskPort, PushFailedError } from "../../application/pr-desk.ts";
 import { machineRoutes } from "./routes/machine.routes.ts";
 import { eventsRoutes } from "./routes/events.routes.ts";
 import { reposRoutes } from "./routes/repos.routes.ts";
@@ -92,6 +93,10 @@ export interface AppDeps {
   stubs?: StubStages;
   /** The PR inbox's poller; without it the `/github/*` routes are absent. */
   pulls?: PullsPort;
+  /** One PR on demand (detail, ready, lookup, search, push and open); absent, those routes answer 404. */
+  prDesk?: PrDeskPort;
+  /** The repositories folder mounted into the machine, said on `/health` for a client's clone and push. */
+  reposDir?: string;
   /** Turns an action on a PR into a running PR task; without it `POST .../actions` is absent. */
   prTasks?: { dispatch(pr: PullRequest, action: PrAction): Promise<TaskRow> };
   /** The task branch's diff from its worktree; without it `GET /tasks/:id/diff` is absent. */
@@ -135,7 +140,7 @@ export interface AppDeps {
   sandboxPolicy?: MachinePolicy;
 }
 
-export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, compliance, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], chatRepos = async () => [], clock = () => new Date(), problems: problemsOf, sandboxPolicy, mcp, policies, qaImage = false }: AppDeps): Hono {
+export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, compliance, watcher, stubs, pulls, prDesk, reposDir, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, repoSignals = noRepoSignals(), knownRepos = async () => [], chatRepos = async () => [], clock = () => new Date(), problems: problemsOf, sandboxPolicy, mcp, policies, qaImage = false }: AppDeps): Hono {
   const app = createOpenApiRouter();
   // In the machine's tests every answer is held to the document (openapi/conformance.ts); first, so it sees the door's answers too.
   if (conformanceOn()) app.use(responseConformance(app, (violation) => violations.push(violation)));
@@ -199,6 +204,8 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     if (error instanceof ForkError) return fail(c, 409, "fork", error.message);
     if (error instanceof OwnPrError) return fail(c, 409, "own_pr", error.message);
     if (error instanceof CloneError) return fail(c, 400, "invalid_request", error.message);
+    if (error instanceof OutsideReposError) return fail(c, 400, "outside_repos", error.message);
+    if (error instanceof PushFailedError) return fail(c, 422, "push_failed", error.message);
     if (error instanceof GitHubError && error.status !== undefined) return githubRefusal(c, error);
     if (error instanceof SlackRefusedError) return fail(c, 409, "slack_refused", error.message);
     if (error instanceof BadRelationError) return fail(c, 400, "invalid_request", error.message);
@@ -233,7 +240,7 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     return fail(c, 500, "internal", error.message);
   });
 
-  const deps: RouteDeps = { repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, compliance, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials, engineBudgets, runs, configProofs, repoSignals, knownRepos, chatRepos, clock, problemsOf, sandboxPolicy, mcp, policies, qaImage, serialize };
+  const deps: RouteDeps = { repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, compliance, watcher, stubs, pulls, prDesk, reposDir, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials, engineBudgets, runs, configProofs, repoSignals, knownRepos, chatRepos, clock, problemsOf, sandboxPolicy, mcp, policies, qaImage, serialize };
   app.route("/", designRoutes({ runs, chatRepos, policies, qaImage }));
   app.route("/", machineRoutes(deps));
   app.route("/", eventsRoutes(deps));

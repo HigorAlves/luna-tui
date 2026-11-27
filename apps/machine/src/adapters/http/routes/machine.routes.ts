@@ -16,12 +16,12 @@ import { devStubsRoute, drainRoute, enginesRoute, foremanRoute, healthRoute, met
 import { ROUTE_ONLY_PACKS, ROUTE_OF, realOrNull, BadRequest, fail, CLIENT_NAME, type RouteDeps } from "./kit.ts";
 
 export function machineRoutes(deps: RouteDeps) {
-  const { repoHealth, economy, db, pipeline, stubs, credentials, engineBudgets, runs, knownRepos, chatRepos, problemsOf, sandboxPolicy } = deps;
+  const { repoHealth, economy, db, pipeline, stubs, credentials, engineBudgets, runs, knownRepos, chatRepos, problemsOf, sandboxPolicy, reposDir } = deps;
   const app = createOpenApiRouter();
   app.openapi(healthRoute, async (c) => {
     const problems = (await problemsOf?.()) ?? [];
     const idle = sandboxPolicy ? sandboxPolicyNotes(sandboxPolicy).notInForce : [];
-    const policy = sandboxPolicy ? { sandboxPolicy, ...(idle.length > 0 ? { notInForce: idle } : {}) } : {};
+    const policy = { ...(sandboxPolicy ? { sandboxPolicy, ...(idle.length > 0 ? { notInForce: idle } : {}) } : {}), ...(reposDir ? { reposDir } : {}) };
     if (problems.length === 0) return c.json({ ok: true as const, slots: pipeline.slots, ...policy }, 200);
     return c.json({ ok: false as const, problems, slots: pipeline.slots, ...policy }, 503);
   });
