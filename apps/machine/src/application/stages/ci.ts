@@ -25,6 +25,9 @@ const RERUN_WAIT_MS = 15 * MINUTE;
 const NEW_RUN_GRACE_MS = 3 * MINUTE;
 /** The pack reads a log tail, not a whole run: the end is where the failure is. */
 const LOG_TAIL_CHARS = 20_000;
+/** The CI bot comments the investigator gets beside the log, and how much of each: enough for a coverage or size table. */
+const BOT_COMMENTS = 2;
+const BOT_COMMENT_CHARS = 4_000;
 
 export interface CiDeps {
   github: GitHub;
@@ -77,10 +80,23 @@ export async function ciContextOf(github: GitHub, slug: string, branch: string, 
     logs.push(await github.failedRunLog(slug, id).catch((error: unknown) => `(the log of run ${id} could not be read: ${messageOf(error)})`));
   }
   const joined = logs.join("\n");
+  // What CI posted on the PR (a coverage table, a size report): a summary job's log often says only "see the PR comment" (DISC-53's
+  // "Coverage thresholds not met"), and the investigator has no GitHub access to read it. Bots only, the newest few, newest last; a person's
+  // comment is review, not CI.
+  const posted = pr
+    ? (await github.listPrComments(slug, pr.number).catch(() => []))
+        .filter((c) => c.author?.endsWith("[bot]"))
+        .slice(-BOT_COMMENTS)
+        // A long comment keeps its start and its end: a summary often puts the table that failed last.
+        .map((c) => `--- posted on the PR by ${c.author} ---\n${c.body.length > BOT_COMMENT_CHARS ? `${c.body.slice(0, BOT_COMMENT_CHARS / 2)}\n…\n${c.body.slice(-BOT_COMMENT_CHARS / 2)}` : c.body}`)
+        .join("\n\n")
+    : "";
+  const tail = joined ? joined.slice(-(LOG_TAIL_CHARS - posted.length)) : "";
+  const text = [posted, tail].filter(Boolean).join("\n\n--- the failed jobs' log ---\n");
   return {
     pr: pr ? { number: pr.number, url: pr.url } : null,
     checks: checks.map((c) => ({ name: c.name, state: c.state, url: c.link ?? null })),
-    logs: joined ? joined.slice(-LOG_TAIL_CHARS) : null,
+    logs: text || null,
   };
 }
 

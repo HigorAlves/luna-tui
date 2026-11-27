@@ -5,7 +5,7 @@ import type { Check } from "../github.ts";
 import { fakeGitHub } from "../../test/github.ts";
 import { type Learned, type TruthSink, tagged } from "../decision-truth.ts";
 import type { Decide } from "./check-decide.ts";
-import { ciWatchRunner } from "./ci.ts";
+import { ciContextOf, ciWatchRunner } from "./ci.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 
 const checks = (...states: Array<[string, string]>): Check[] =>
@@ -475,5 +475,25 @@ describe("ci_watch on a conflicting PR", () => {
     const { run, context, rebase } = setup({ polls: [green] });
     expect((await run(context)).outcome).toBe("pass");
     expect(rebase).not.toHaveBeenCalled();
+  });
+});
+
+describe("what the CI investigator is handed", () => {
+  it("carries what CI bots posted on the PR beside the failed log, newest last, and no person's comment (DISC-53: the summary job's log only said 'see the Test Coverage table in the PR comment')", async () => {
+    const github = fakeGitHub({
+      findPr: async () => ({ url: "https://github.com/o/r/pull/7", number: 7, isDraft: true }),
+      failedRunLog: async () => "##[error]Coverage thresholds not met — see the 📊 Test Coverage table in the PR comment for details",
+      listPrComments: async () => [
+        { id: 1, body: "old deploy preview", url: "u1", author: "vercel[bot]" },
+        { id: 2, body: "please also rename this", url: "u2", author: "a-reviewer" },
+        { id: 3, body: "### 📊 Test Coverage\n| ❌ | **`@discover/domain`** | 96.2% / 91% | 98.7% / 92% | 88.9% / 90% `(-1.1)` |", url: "u3", author: "github-actions[bot]" },
+      ],
+    });
+    const failed = [{ name: "📊 CI Summary", state: "FAILURE", link: "https://github.com/o/r/actions/runs/46058503414/job/1" }];
+    const ci = await ciContextOf(github, "o/r", "story/x", failed, failed);
+    expect(ci.logs).toContain("Coverage thresholds not met");
+    expect(ci.logs).toContain("`@discover/domain`** | 96.2% / 91% | 98.7% / 92% | 88.9% / 90%");
+    expect(ci.logs).not.toContain("please also rename this");
+    expect(ci.logs!.indexOf("old deploy preview")).toBeLessThan(ci.logs!.indexOf("Test Coverage"));
   });
 });
