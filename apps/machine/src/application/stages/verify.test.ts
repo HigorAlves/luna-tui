@@ -1016,7 +1016,7 @@ describe("a failing check asked again on the base", () => {
   const ok: ExecResult = { code: 0, stdout: "ok\n", stderr: "" };
 
   /** One verifyRunner whose checks run as `head` answers in the card's folder and as `base` answers in the throwaway clone at the base. */
-  function rig(opts: { head: (script: string) => ExecResult; base: (script: string) => ExecResult; checks?: Array<{ name: string; run: string }>; cache?: Map<string, never>; withBaseline?: boolean }) {
+  function rig(opts: { head: (script: string) => ExecResult; base: (script: string) => ExecResult; checks?: Array<{ name: string; run: string }>; cache?: Map<string, never>; withBaseline?: boolean; checksBudgetMs?: number; slow?: string }) {
     const stateDir = mkdtempSync(join(tmpdir(), "verify-base-"));
     const ran: Array<{ where: "head" | "base"; script: string; image?: string; services?: unknown; identity?: string }> = [];
     const clone = vi.fn(async (_card: string, _branch: string, _run: string, _sha: string) => ({ path: "/base-clone" }));
@@ -1028,8 +1028,11 @@ describe("a failing check asked again on the base", () => {
         const where = options.cwd === "/base-clone" ? "base" : "head";
         const script = args[args.length - 1]!;
         ran.push({ where, script, image: options.image, services: options.services, identity: options.env?.GIT_AUTHOR_NAME });
+        // A check that eats the budget: it outlasts it and fails, as a killed run does.
+        if (where === "head" && opts.slow && script.includes(opts.slow)) await new Promise((r) => setTimeout(r, (opts.checksBudgetMs ?? 0) + 30));
         return (where === "base" ? opts.base : opts.head)(script);
       },
+      ...(opts.checksBudgetMs !== undefined ? { checksBudgetMs: () => opts.checksBudgetMs! } : {}),
       runPack: pack,
       stateDir,
       gitIdentity: async () => ({ name: "Ada L", email: "ada@x.dev" }),
@@ -1097,6 +1100,24 @@ describe("a failing check asked again on the base", () => {
     expect(result.outcome).toBe("fail");
     expect(result.findings).toMatchObject([{ title: "lint failed" }]);
     expect(result.detail).toMatchObject({ failed: [{ name: "lint" }], redOnBase: [{ name: "machine tests", tests: ["src/clone.test.ts"] }] });
+  });
+
+  it("escalates, sending nothing to Build, when the only checks left failing are the ones the budget ran out on (DISC-53: client and admin checks were skipped, then counted as failures)", async () => {
+    const checks = [{ name: "backend unit tests", run: "pnpm backend" }, { name: "client unit tests", run: "pnpm client" }];
+    const { runner, context } = rig({ checks, head: (s) => (s.includes("backend") ? fail("killed") : ok), base: () => ok, checksBudgetMs: 20, slow: "backend", withBaseline: false });
+    const result = await runner(context);
+    expect(result.outcome).toBe("escalated");
+    expect(String(result.detail?.reason)).toMatch(/checks budget.*ran out.*client unit tests/);
+    expect(result.findings ?? []).toEqual([]);
+  });
+
+  it("sends Build only the real failures when some checks failed and others ran out of budget", async () => {
+    const checks = [{ name: "lint", run: "pnpm lint" }, { name: "backend unit tests", run: "pnpm backend" }, { name: "client unit tests", run: "pnpm client" }];
+    const { runner, context } = rig({ checks, head: (s) => (s.includes("lint") ? fail("lint: 3 problems") : s.includes("backend") ? fail("killed") : ok), base: () => ok, checksBudgetMs: 20, slow: "backend", withBaseline: false });
+    const result = await runner(context);
+    expect(result.outcome).toBe("fail");
+    expect(result.findings).toMatchObject([{ title: "lint failed" }]);
+    expect(result.detail).toMatchObject({ notRun: ["backend unit tests", "client unit tests"] });
   });
 
   it("asks the base once per (base, image, check, files): a second card on the same base reuses the answer", async () => {

@@ -1,7 +1,8 @@
 // The verifying stage, in the diagram's order: the review pack reads the change first, and only when no
 // blocker stands do the project's own checks run in the task worktree. A blocker fails the stage with the
 // findings and no suite run; a red check fails it with its output as a finding of category `tests`.
-import { FACTORY_DEFAULTS, type CheckSpec, type FactoryConfig, type CoverageSummary, type DecisionOverrides, type Finding, type ServiceSpec, mergeDuplicateFindings, normaliseFinding, severityOf } from "@hardness/contracts";
+import { FACTORY_DEFAULTS, type CheckSpec, type FactoryConfig, type CoverageSummary, type DecisionOverrides, type Finding, type ServiceSpec, mergeDuplicateFindings, normaliseFinding, severityOf, sizeScale } from "@hardness/contracts";
+import { approvedPlan, sizeLinesOf } from "../../domain/stage-input.ts";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
 import { alsoOnBase } from "./sweep-baseline.ts";
@@ -93,6 +94,15 @@ export interface VerifyDeps {
   };
   /** Runs finding_classify on a check context; null (or absent) leaves the review's severities unclassified. Read at call time. */
   decide?: Decide | null;
+  /** How long the repository's checks may run in all, from the card's approvals; default: CHECKS_TIMEOUT_MS times the card's size factor. */
+  checksBudgetMs?: (approvals: StageContext["approvals"]) => number;
+}
+
+/** The checks' budget grows with the card, as Build's limits do: a big plan's checks are a big repository's whole suite (DISC-53's client and
+ *  admin checks were skipped when the backend's used the 30 minutes). */
+export function checksBudgetOf(approvals: StageContext["approvals"]): number {
+  const plan = approvedPlan(approvals as never);
+  return CHECKS_TIMEOUT_MS * sizeScale(sizeLinesOf(plan?.slices, approvals as never));
 }
 
 interface CheckReport {
@@ -338,7 +348,9 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     const log: string[] = [];
     /** What each check ran and printed, for asking the base about the ones that fail. */
     const attempts = new Map<string, { argv: string[]; secrets: string[]; text: string; timedOut: boolean }>();
-    const deadline = Date.now() + CHECKS_TIMEOUT_MS;
+    const budgetMs = (deps.checksBudgetMs ?? checksBudgetOf)(context.approvals);
+    const budgetSaid = `${Math.round(budgetMs / MINUTE)} minute`;
+    const deadline = Date.now() + budgetMs;
     // The repo's services start once for every check, not once per check, and come down however the loop ends.
     let pass: Awaited<ReturnType<typeof openChecksSession<typeof checkExec>>>;
     try {
@@ -354,7 +366,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
         let result: ExecResult;
         let timedOut = false;
         if (remaining <= 0) {
-          result = { code: 1, stdout: "", stderr: "skipped: the 30 minute checks budget ran out" };
+          result = { code: 1, stdout: "", stderr: `skipped: the ${budgetSaid} checks budget ran out` };
           timedOut = true;
         } else {
           try {
@@ -391,7 +403,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
           };
         }
         const text = `${result.stdout}${result.stderr ? `\n${result.stderr}` : ""}`;
-        const tail = tailOf(timedOut ? `${text}\ntimed out: the 30 minute checks budget ran out` : text);
+        const tail = tailOf(timedOut ? `${text}\ntimed out: the ${budgetSaid} checks budget ran out` : text);
         log.push(`$ ${cmd}\n(exit ${result.code})\n${text}\n`);
         reports.push({ name, cmd, ok: result.code === 0, tail });
         attempts.set(name, { argv, secrets: declaredSecrets ?? [], text, timedOut });
@@ -472,6 +484,29 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     // What fails on the base the same way is the repository's own: Verify goes on to its review and says so (the user's call, DISC-53), as the
     // regression sweep does. Only a failure the change alone has goes back to Build.
     const baseNote = redOnBase.length > 0 ? { redOnBase, base: baseSha } : {};
+    // A check the budget ran out on says nothing about the change: it is not Build's to fix. When nothing else failed, a person decides
+    // (more time, fewer checks); otherwise only the real failures go back, and these are noted.
+    const notRun = failed.filter((r) => attempts.get(r.name ?? "")?.timedOut).map((r) => r.name ?? "");
+    if (notRun.length > 0) {
+      failed = failed.filter((r) => !notRun.includes(r.name ?? ""));
+      if (failed.length === 0) {
+        return {
+          outcome: "escalated",
+          detail: {
+            escalation: "env_broken",
+            envBroken: true,
+            step: "checks",
+            reason: `the ${budgetSaid} checks budget ran out before ${notRun.join(", ")} finished, so they say nothing about the change`,
+            notRun,
+            checks: reports,
+            ...baseNote,
+            options: ["retry: a check that ran long once may fit now", "narrow or speed up the repository's checks in luna.yaml (filters, --concurrency)"],
+          },
+          run: { transcriptPath },
+        };
+      }
+    }
+    const notRunNote = notRun.length > 0 ? { notRun } : {};
     if (failed.length > 0) {
       const checkFindings: Finding[] = failed.map((r) => ({
         path: "",
@@ -496,6 +531,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
           findings,
           checks: reports,
           ...(redOnBase.length > 0 ? { redOnBase, base: baseSha } : {}),
+          ...notRunNote,
         },
         findings,
         run: { transcriptPath },

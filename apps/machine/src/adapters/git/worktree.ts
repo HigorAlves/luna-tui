@@ -512,12 +512,37 @@ export async function branchBase(worktreePath: string, repoPath: string): Promis
   const repoHead = await exec("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "HEAD"]);
   if (repoHead.code !== 0) return null;
   const head = repoHead.stdout.trim();
-  // A clone shares no objects with the repo: when the repo moved on, bring its HEAD over (a read of the repo, never a write to it).
-  if ((await exec("git", [...HOST_GIT, ...at(worktreePath), "cat-file", "-e", `${head}^{commit}`])).code !== 0) {
-    await exec("git", [...HOST_GIT, ...at(worktreePath), "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--end-of-options", repoPath, head], { timeoutMs: FETCH_TIMEOUT_MS });
+  // The tips the card may have left: the repo's HEAD, and its remote's tip for the same branch (or the remote's HEAD). A user whose branch
+  // is behind its remote would otherwise move the base back to their own HEAD, and every commit of the remote since would read as the
+  // card's (DISC-53: develop was 19 behind origin, and Verify reviewed someone else's terraform as this task's).
+  const branch = await exec("git", [...HOST_GIT, "-C", repoPath, "symbolic-ref", "--quiet", "--short", "HEAD"]);
+  const remoteRefs = [...(branch.code === 0 && branch.stdout.trim() ? [`refs/remotes/origin/${branch.stdout.trim()}`] : []), "refs/remotes/origin/HEAD"];
+  let upstream: string | null = null;
+  for (const ref of remoteRefs) {
+    const found = await exec("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
+    if (found.code === 0 && found.stdout.trim()) {
+      upstream = found.stdout.trim();
+      break;
+    }
   }
-  const base = await exec("git", [...HOST_GIT, ...at(worktreePath), "merge-base", "HEAD", head]);
-  return base.code === 0 ? base.stdout.trim() || null : null;
+  const bases: string[] = [];
+  for (const tip of [...new Set([head, ...(upstream ? [upstream] : [])])]) {
+    // A clone shares no objects with the repo: when the repo moved on, bring the tip over (a read of the repo, never a write to it).
+    if ((await exec("git", [...HOST_GIT, ...at(worktreePath), "cat-file", "-e", `${tip}^{commit}`])).code !== 0) {
+      await exec("git", [...HOST_GIT, ...at(worktreePath), "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--end-of-options", repoPath, tip], { timeoutMs: FETCH_TIMEOUT_MS });
+    }
+    const merged = await exec("git", [...HOST_GIT, ...at(worktreePath), "merge-base", "HEAD", tip]);
+    if (merged.code === 0 && merged.stdout.trim()) bases.push(merged.stdout.trim());
+  }
+  if (bases.length === 0) return null;
+  // The newest of them is where the card left: the other is its ancestor.
+  let base = bases[0]!;
+  for (const other of bases.slice(1)) {
+    if (other === base) continue;
+    const older = await exec("git", [...HOST_GIT, ...at(worktreePath), "merge-base", "--is-ancestor", base, other]);
+    if (older.code === 0) base = other;
+  }
+  return base;
 }
 
 /**

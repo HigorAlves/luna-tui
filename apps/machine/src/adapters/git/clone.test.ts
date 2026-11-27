@@ -105,6 +105,30 @@ describe("a card's workspace is a folder and a repository of the machine's", () 
     expect(wgit(workspace.path, "remote", "get-url", "origin")).toBe(repo);
   });
 
+  it("answers the card's own fork point when the user's branch is behind its remote, not where the local branch stands (DISC-53: develop was 19 behind origin)", async () => {
+    const { repo, dir, remote } = withRemote("clone-");
+    const old = git(repo, "rev-parse", "HEAD");
+    // Someone else moves origin/main on; the user fetches but never pulls.
+    const other = join(dir, "..", "other");
+    execFileSync("git", ["clone", "-q", remote, other]);
+    writeFileSync(join(other, "infra.tfvars"), "x = 1\n");
+    git(other, "add", "-A");
+    git(other, "commit", "-q", "-m", "chore: someone else's change");
+    git(other, "push", "-q", "origin", "main");
+    git(repo, "fetch", "-q", "origin");
+    const upstream = git(repo, "rev-parse", "refs/remotes/origin/main");
+    // The card was cut from the remote's tip, and adds its own commit.
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureClone(repo, workspace);
+    wgit(workspace.path, "fetch", "-q", remote, "main");
+    wgit(workspace.path, "reset", "-q", "--hard", upstream);
+    writeFileSync(join(workspace.path, "b.txt"), "b\n");
+    await commitAll(workspace.path, "feat: b");
+    expect(git(repo, "rev-parse", "HEAD")).toBe(old);
+    expect(await branchBase(workspace.path, repo)).toBe(upstream);
+    expect(await changedPaths(workspace.path, repo)).toEqual(["b.txt"]);
+  });
+
   it("answers branchBase and changedPaths as a worktree did, even after the repository moved on", async () => {
     const { repo, dir } = repository("clone-");
     const workspace = workspaceFor(task, repo, dir);
