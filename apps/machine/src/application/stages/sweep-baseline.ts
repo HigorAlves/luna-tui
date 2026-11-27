@@ -5,7 +5,7 @@
 import type { CheckSpec } from "@hardness/contracts";
 
 import { checkCommand } from "../../domain/checks.ts";
-import { FAILING_LINE, LOCATION, LOGGED_LINE, type SweepOutcome } from "./sweep.ts";
+import { FAILING_LINE, LOGGED_LINE, placeOf, type SweepOutcome } from "./sweep.ts";
 
 /** A failing line as two runs can compare it: whitespace collapsed, durations and timings left out. */
 const comparable = (line: string): string =>
@@ -16,13 +16,13 @@ const comparable = (line: string): string =>
     .replace(/\s+/g, " ")
     .trim();
 
-/** The lines of an output that say what failed, each with the line before it (where a linter names the file), made comparable. */
+/** The lines of an output that say what failed, each with the line above that names its file (`placeOf`), made comparable. */
 export function failingLinesOf(text: string): string[] {
   const lines = text.split("\n");
   return lines.flatMap((line, i) => {
     if (!FAILING_LINE.test(line) || LOGGED_LINE.test(line)) return [];
-    const above = i > 0 ? lines[i - 1]! : "";
-    return [LOCATION.test(above) && !FAILING_LINE.test(above) ? `${comparable(above)} | ${comparable(line)}` : comparable(line)];
+    const place = placeOf(lines, i);
+    return [place !== null ? `${comparable(lines[place]!)} | ${comparable(line)}` : comparable(line)];
   }).filter(Boolean);
 }
 

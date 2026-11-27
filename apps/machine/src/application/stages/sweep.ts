@@ -21,6 +21,22 @@ export const FAILING_LINE = /\bFAIL\b|\bFAILED\b|✗|×|✖|AssertionError|error
 export const LOGGED_LINE = /\bstderr \|/;
 /** A file and a line: `src/a.ts:8:1`, `packages/x/y.tsx:12`. */
 export const LOCATION = /\S+\.[A-Za-z]{1,5}:\d+/;
+/** A linter's diagnostic header with no line number: Biome's `apps/x/a.test.ts format ━━━━`, a file, a rule, a rule of box characters. */
+const DIAGNOSTIC_HEADER = /^\s*\S+\.[A-Za-z]{1,5}\s+\S.*━{3,}\s*$/;
+
+/** Where the failing line at `i` happened: the nearest line above it, past up to two blank lines (Biome puts one between its header and its `×`),
+ *  when that line names a file (`path:8:1 rule`, or Biome's `path format ━━━`) and is not itself a failure; null for anything else above. */
+export function placeOf(lines: readonly string[], i: number): number | null {
+  for (let j = i - 1, blanks = 0; j >= 0; j--) {
+    const line = lines[j]!;
+    if (line.trim() === "") {
+      if (++blanks > 2) return null;
+      continue;
+    }
+    return !FAILING_LINE.test(line) && (LOCATION.test(line) || DIAGNOSTIC_HEADER.test(line)) ? j : null;
+  }
+  return null;
+}
 const FAILING_MAX = 40;
 
 /** The last lines of a check's output; a longer one that has failing lines ends with them, from wherever they are (DISC-53: turbo's last 60 lines were
@@ -38,8 +54,9 @@ export const tailOf = (text: string): string => {
   const keep = new Set<number>();
   head.forEach((line, i) => {
     if (!FAILING_LINE.test(line) || LOGGED_LINE.test(line)) return;
-    // The line before, only where it names a file and a line (Biome's `path:8:1 rule`): anything else above is a log, not the failure's place.
-    if (i > 0 && LOCATION.test(head[i - 1]!)) keep.add(i - 1);
+    // The line that names the file (Biome's `path:8:1 rule` or `path format ━━━`, a blank line above its `×`): anything else above is a log, not the failure's place.
+    const place = placeOf(head, i);
+    if (place !== null) keep.add(place);
     keep.add(i);
   });
   const failing = [...keep].sort((a, b) => a - b).map((i) => head[i]!).slice(-FAILING_MAX * 2);

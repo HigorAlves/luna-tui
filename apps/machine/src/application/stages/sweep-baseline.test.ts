@@ -16,6 +16,14 @@ describe("alsoOnBase: a failing check counts as already failing only when the ba
     expect(alsoOnBase(card, baseLint)).toBe(false);
   });
 
+  it("pairs Biome's own layout: the file on a header line, a blank line, then the failing line (DISC-53's card-added test file passed as the base's)", () => {
+    const header = (path: string, rule: string) => `${path} ${rule} ━━━━━━━━━━━━━━━━━━━━`;
+    const base = [header("packages/domain/src/Task/index.ts:8:1", "assist/source/organizeImports  FIXABLE "), "", "  × The imports and exports are not sorted.", "", header("apps/admin/src/a.ts", "format"), "", "  × Formatter would have printed the following content:", "    46 46 │   const op = OPERATIONS[0]"].join("\n");
+    const card = [base, "", header("apps/lambdas/evaluation/src/legacyContract.integration.test.ts", "format"), "", "  × Formatter would have printed the following content:", "    48    │ - const fixture = 1"].join("\n");
+    expect(alsoOnBase(card, base)).toBe(false);
+    expect(alsoOnBase(base, base)).toBe(true);
+  });
+
   it("is false when the base passes, or the card names no failing line it could compare", () => {
     expect(alsoOnBase(" FAIL  src/a.test.ts > x", "")).toBe(false);
     expect(alsoOnBase("ERROR run failed", baseLint)).toBe(false);
