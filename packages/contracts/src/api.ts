@@ -7,7 +7,7 @@ import type { DesignContext } from "./design.ts";
 import type { DesignSpec } from "./design-spec.ts";
 import type { Column, TaskState } from "./index.ts";
 import type { Tokens } from "./economy.ts";
-import type { PrSnapshot } from "./github.ts";
+import type { PrActivity, PrSnapshot } from "./github.ts";
 import type { SlackSnapshot } from "./slack.ts";
 import type { JiraLink, TaskSla } from "./jira.ts";
 import type { AgentPack, AgentRole, Pack } from "./packs.ts";
@@ -563,6 +563,7 @@ export interface TaskDetail {
  * - `task.closed`: the task is done or deleted; the board closes its watch tab.
  * - `budget.alert`: a spend crossed 80, 90 or 100% of a ceiling (a task's, a repo's month's, the day's).
  * - `github.prs`: the PR inbox changed; carries the whole snapshot.
+ * - `github.activity`: what changed in the inbox since the poll before, for a client to say.
  * - `slack.items`: the Slack inbox changed; carries the whole snapshot, watches included.
  * - `task.shipped`: the task's PR merged; what shipped, where, and how to check it.
  */
@@ -577,6 +578,8 @@ export type StreamMessage =
   | { type: "github.prs"; snapshot: PrSnapshot }
   /** Every open PR in the repos you can reach (`GET /github/prs/all`), polled beside the inbox. */
   | { type: "github.prs.all"; snapshot: PrSnapshot }
+  /** What changed in the inbox since the poll before, for a client to say out loud; never sent for the first poll. */
+  | { type: "github.activity"; activity: PrActivity[] }
   | { type: "slack.items"; snapshot: SlackSnapshot }
   | { type: "task.shipped"; shipped: TaskShipped };
 

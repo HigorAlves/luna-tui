@@ -4,7 +4,7 @@ import { createRoute, z } from "@hono/zod-openapi";
 
 import { errorResponses, expectSame, type Same } from "../openapi/schemas.ts";
 import { TaskSchema } from "../openapi/task.schema.ts";
-import { PrSnapshotSchema } from "./github.openapi.ts";
+import { PrActivitySchema, PrSnapshotSchema } from "./github.openapi.ts";
 import { MetricsSchema } from "./machine.openapi.ts";
 import { SlackSnapshotSchema } from "./slack.openapi.ts";
 import { TaskEventSchema } from "./tasks.openapi.ts";
@@ -49,6 +49,7 @@ export const StreamMessageSchema = z
     z.object({ type: z.literal("task.closed"), id: z.string() }),
     z.object({ type: z.literal("github.prs"), snapshot: PrSnapshotSchema }),
     z.object({ type: z.literal("github.prs.all"), snapshot: PrSnapshotSchema }),
+    z.object({ type: z.literal("github.activity"), activity: z.array(PrActivitySchema) }),
     z.object({ type: z.literal("slack.items"), snapshot: SlackSnapshotSchema }),
     z.object({ type: z.literal("task.shipped"), shipped: TaskShippedSchema }),
   ])

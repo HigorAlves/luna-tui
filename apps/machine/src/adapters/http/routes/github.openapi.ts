@@ -1,7 +1,7 @@
 // OpenAPI route definitions of the PR inbox: each route's request and every response it can give, in zod.
 // The response schemas are held to the contracts' types with `expectSame`.
-import { PrActionInput, type CloneStatus, type PrSnapshot, type PullRequest } from "@hardness/contracts";
-import { CloneInput, ChecksState, PrAction, PrMenuAction, PrSplit } from "@hardness/contracts";
+import { PrActionInput, type CloneStatus, type PrActivity, type PrSnapshot, type PullRequest } from "@hardness/contracts";
+import { CloneInput, ChecksState, PrAction, PrActivityKind, PrMenuAction, PrSplit } from "@hardness/contracts";
 import { createRoute, z } from "@hono/zod-openapi";
 
 import { TaskSchema } from "../openapi/task.schema.ts";
@@ -73,9 +73,22 @@ export const PrSnapshotSchema = z
     polledAt: z.string().nullable(),
     error: z.string().nullable(),
     clones: z.array(CloneStatusSchema).optional(),
+    digest: z.string().nullable().optional().openapi({ example: "2 PRs are waiting for your review · 1 is ready to merge", description: "One line of what waits on you; null when nothing does. The inbox only" }),
   })
   .openapi("PrSnapshot");
 expectSame<Same<z.infer<typeof PrSnapshotSchema>, PrSnapshot>>();
+
+export const PrActivitySchema = z
+  .object({
+    kind: PrActivityKind,
+    repo: z.string().openapi({ example: "acme/web", description: "`owner/name`" }),
+    number: z.number(),
+    title: z.string(),
+    url: z.string(),
+    at: z.string().openapi({ description: "When the poll that saw it ended" }),
+  })
+  .openapi("PrActivity");
+expectSame<Same<z.infer<typeof PrActivitySchema>, PrActivity>>();
 
 const PrParams = z.object({
   owner: z.string().openapi({ param: { name: "owner", in: "path" }, example: "acme" }),

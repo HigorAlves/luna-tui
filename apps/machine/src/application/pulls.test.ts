@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { PrSnapshot } from "@hardness/contracts";
+import type { PrActivity, PrSnapshot } from "@hardness/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { fakeGitHub } from "../test/github.ts";
@@ -127,6 +127,25 @@ describe("GitHubPulls.pollOnce", () => {
     await pulls.pollOnce();
     expect(published).toHaveLength(1);
     expect(pulls.snapshot.prs).toHaveLength(3);
+  });
+
+  it("says what changed since the poll before, never for the first poll, and sums the inbox up in one line", async () => {
+    const activity: PrActivity[][] = [];
+    let at = Date.parse("2026-11-27T10:00:00Z");
+    const world: World = { hits: [hit(1)], nodes: { 1: node(1, { reviewDecision: "REVIEW_REQUIRED" }) } };
+    const { pulls } = setup(world, { publishActivity: (a) => void activity.push(a), now: () => new Date((at += 60_000)) });
+    const first = await pulls.pollOnce();
+    expect(activity).toEqual([]);
+    expect(first.digest).toBeNull();
+    const red = { nodes: [{ commit: { statusCheckRollup: { state: "FAILURE", contexts: { nodes: [{ __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: null }] } } } }] };
+    world.nodes[1] = node(1, { reviewDecision: "REVIEW_REQUIRED", commits: red });
+    world.hits = [{ ...hit(1), updatedAt: "2026-11-27T10:01:30Z" }];
+    const second = await pulls.pollOnce();
+    expect(activity).toEqual([[{ kind: "checks_failed", repo: "o/a", number: 1, title: expect.any(String), url: expect.any(String), at: second.polledAt }]]);
+    expect(second.digest).toBe("1 of your PRs has failing checks");
+    // A poll that changed nothing says nothing.
+    await pulls.pollOnce();
+    expect(activity).toHaveLength(1);
   });
 
   it("fetches the PRs side by side, a few at a time, and keeps GitHub's order", async () => {

@@ -3012,6 +3012,27 @@
               "type": {
                 "type": "string",
                 "enum": [
+                  "github.activity"
+                ]
+              },
+              "activity": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PrActivity"
+                }
+              }
+            },
+            "required": [
+              "type",
+              "activity"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
                   "slack.items"
                 ]
               },
@@ -7371,6 +7392,14 @@
             "items": {
               "$ref": "#/components/schemas/CloneStatus"
             }
+          },
+          "digest": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "2 PRs are waiting for your review · 1 is ready to merge",
+            "description": "One line of what waits on you; null when nothing does. The inbox only"
           }
         },
         "required": [
@@ -7729,6 +7758,47 @@
           "startedAt",
           "finishedAt",
           "error"
+        ]
+      },
+      "PrActivity": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "review_requested",
+              "checks_failed",
+              "checks_passed",
+              "ready_to_merge",
+              "changes_requested"
+            ]
+          },
+          "repo": {
+            "type": "string",
+            "example": "acme/web",
+            "description": "`owner/name`"
+          },
+          "number": {
+            "type": "number"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string",
+            "description": "When the poll that saw it ended"
+          }
+        },
+        "required": [
+          "kind",
+          "repo",
+          "number",
+          "title",
+          "url",
+          "at"
         ]
       },
       "SlackSnapshot": {

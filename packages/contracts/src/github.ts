@@ -90,8 +90,26 @@ export interface PrSnapshot {
   prs: PullRequest[];
   polledAt: string | null;
   error: string | null;
+  /** One line of what waits on you ("2 PRs are waiting for your review · 1 is ready to merge"); null when nothing does. Absent from the all-list and an older machine. */
+  digest?: string | null;
   /** The clones the machine is running or ran lately (done and failed ones stay ten minutes), in both lists; absent from an older machine. */
   clones?: CloneStatus[];
+}
+
+/** What changed in the inbox that a client may say out loud. */
+export const PrActivityKind = z.enum(["review_requested", "checks_failed", "checks_passed", "ready_to_merge", "changes_requested"]);
+export type PrActivityKind = z.infer<typeof PrActivityKind>;
+
+/** One change between two polls of the inbox (`github.activity`). The machine notices; a client decides when to say it. */
+export interface PrActivity {
+  kind: PrActivityKind;
+  /** `owner/name` */
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  /** When the poll that saw it ended. */
+  at: string;
 }
 
 /** One `git clone` the board asked for. A failed one keeps its `error` here, since a poll rewrites the snapshot's own. */

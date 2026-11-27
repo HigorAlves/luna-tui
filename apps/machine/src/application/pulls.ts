@@ -5,10 +5,11 @@
 import { isAbsolute, dirname } from "node:path";
 import { realpath, stat } from "node:fs/promises";
 
-import type { CloneStatus, PrAction, PrSnapshot, PullRequest } from "@hardness/contracts";
+import type { CloneStatus, PrAction, PrActivity, PrSnapshot, PullRequest } from "@hardness/contracts";
 
 import { HOST_GIT } from "../adapters/git/worktree.ts";
 import { type ExecResult, exec as realExec } from "../adapters/process/exec.ts";
+import { activityOf, digestOf } from "../domain/pr-activity.ts";
 import { type PrNode, actionsOf, fromGraphQl, splitOf, summarizeChecks } from "../domain/pull-request.ts";
 import { type GitHub, type PrSearchHit, messageOf } from "./github.ts";
 import { PrBusyError } from "./pr-tasks.ts";
@@ -49,6 +50,8 @@ export interface GitHubPullsOptions {
   publish: (snapshot: PrSnapshot) => void;
   /** The same for the all-list. */
   publishAll: (snapshot: PrSnapshot) => void;
+  /** What changed in the inbox since the poll before (never for the first poll), when anything did. */
+  publishActivity?: (activity: PrActivity[]) => void;
   github: GitHub;
   /** Runs git for the clone; tests inject a fake. */
   exec?: (command: string, args: string[]) => Promise<ExecResult>;
@@ -245,6 +248,7 @@ export class GitHubPulls implements PullsPort {
     const clones = this.cloneList();
     const next: PrSnapshot = {
       ...given,
+      ...(feed === "inbox" ? { digest: digestOf(given) } : {}),
       // What can be done follows the checkout and the task, so it is worked out again whenever either may have moved.
       prs: given.prs.map((pr) => withActions(pr.localPath !== null && this.isCloning(pr.localPath) ? { ...pr, localPath: null } : pr)),
       clones,
@@ -254,6 +258,11 @@ export class GitHubPulls implements PullsPort {
     if (feed === "inbox") this.snapshot = next;
     else this.all = next;
     if (changed) (feed === "inbox" ? this.options.publish : this.options.publishAll)(next);
+    // Only a fresh poll is compared: a republish for a clone carries the same PRs and says nothing.
+    if (feed === "inbox" && given.polledAt !== before.polledAt && next.polledAt !== null) {
+      const activity = activityOf(before, next, next.polledAt);
+      if (activity.length > 0) this.options.publishActivity?.(activity);
+    }
     return next;
   }
 

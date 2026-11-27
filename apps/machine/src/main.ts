@@ -629,6 +629,7 @@ const pulls = new GitHubPulls({
   },
   publish: (snapshot) => bus.publish({ type: "github.prs", snapshot }),
   publishAll: (snapshot) => bus.publish({ type: "github.prs.all", snapshot }),
+  publishActivity: (activity) => bus.publish({ type: "github.activity", activity }),
 });
 /** Cards at `pr_watch` wait for their PR's merge or close; this loop reads each PR on the poller's interval and moves the card. */
 const prWatch = new PrWatch({
