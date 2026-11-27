@@ -217,6 +217,41 @@ describe("mergeRound: a branch that no longer merges", () => {
     expect(runPack).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps repairing, up to three rounds, while the merged tree still fails, and hands each round the repo's lint and failing checks to run first (DISC-53: the /docs fix added an import Biome orders elsewhere)", async () => {
+    const w = await world("conflict");
+    let calls = 0;
+    const { d, context, runPack } = deps(w, (path) => {
+      calls++;
+      writeFileSync(join(path, "doc.md"), `one\nresolved, round ${calls}\nthree\n`);
+    });
+    (d as { policies: unknown }).policies = { for: async () => ({ decisions: {}, checks: [{ name: "lint", run: "yarn lint" }, { name: "unit tests", run: "yarn test" }, { name: "e2e", run: "yarn e2e" }] }) };
+    (d.loop.checks as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ outcome: "fail", findings: [{ title: "unit tests failed", body: "S3 documents exactly the registered routes" }] })
+      .mockResolvedValueOnce({ outcome: "fail", findings: [{ title: "lint failed", body: "app.test.ts:1:1 assist/source/organizeImports" }] })
+      .mockResolvedValueOnce({ outcome: "pass" });
+    const out = await mergeRound(d, context, input(w));
+    expect(out).toMatchObject({ ok: true });
+    expect(runPack).toHaveBeenCalledTimes(3);
+    const body = (n: number) => (runPack.mock.calls[n]![2] as { threads: { threads: Array<{ comments: Array<{ body: string }> }> } }).threads.threads[0]!.comments[0]!.body;
+    expect(body(1)).toContain("- unit tests: `yarn test`");
+    expect(body(1)).toContain("- lint: `yarn lint`");
+    expect(body(1)).not.toContain("yarn e2e");
+    expect(body(2)).toContain("organizeImports");
+    expect(wgit(w.workspace.path, "show", `${git(w.remote, "rev-parse", "refs/heads/card")}:doc.md`)).toBe("one\nresolved, round 3\nthree");
+  });
+
+  it("stops after three repair rounds that leave the merged tree red, and says so", async () => {
+    const w = await world("conflict");
+    let calls = 0;
+    const { d, context, runPack } = deps(w, (path) => writeFileSync(join(path, "doc.md"), `one\nresolved, round ${++calls}\nthree\n`));
+    (d.loop.checks as ReturnType<typeof vi.fn>).mockResolvedValue({ outcome: "fail", detail: { error: "lint failed" } });
+    const out = await mergeRound(d, context, input(w));
+    expect(out.ok).toBe(false);
+    expect(runPack).toHaveBeenCalledTimes(4);
+    expect(String(out.result.detail?.reason)).toContain("3 rounds with the pack did not fix them");
+    expect(git(w.remote, "rev-parse", "refs/heads/card")).toBe(w.before);
+  });
+
   it("refuses a second round's edit to a file that neither conflicted nor is the card's, and pushes nothing", async () => {
     const w = await world("conflict");
     let calls = 0;

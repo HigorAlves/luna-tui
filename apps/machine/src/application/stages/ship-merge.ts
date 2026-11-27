@@ -4,7 +4,7 @@
 // host: it touched only those files, no conflict marker is left, the project's checks pass. One merge commit, with the branch's head and the
 // base as its parents and the resolved tree, is brought back to the card and pushed (never forced). The temporary commit the pack started
 // from, which holds the markers, never ships. Verify then runs again on the new head.
-import { PrAddressAnswer, type EvidencePack } from "@hardness/contracts";
+import { PrAddressAnswer, type CheckSpec, type EvidencePack } from "@hardness/contracts";
 
 import { at } from "../../adapters/git/machine-repo.ts";
 import { BASE_REF, HOST_GIT, type GitExec } from "../../adapters/git/worktree.ts";
@@ -22,6 +22,10 @@ const SHA = /^[0-9a-f]{40,64}$/;
 /** A line git writes for a conflict: the opening, the divider and the closing marker. */
 const MARKER = /^(<{7}( .*)?|={7}|>{7}( .*)?)$/m;
 const CONFLICTS_SHOWN = 50;
+/** Rounds the pack gets to fix what fails only on the merged tree (DISC-53: the second fixed the /docs test and added an import Biome orders elsewhere). */
+const MERGE_REPAIR_ROUNDS = 3;
+/** A check that holds every file to a rule (lint, types, format): a repair round runs it on its result before committing. */
+const GATE_CHECK = /lint|type-?check|tsc|format|fmt|prettier|eslint|biome/i;
 
 export interface MergeInput {
   slug: string;
@@ -147,8 +151,8 @@ export async function mergeRound(deps: FixDeps, context: StageContext, input: Me
     resolvedTree = (await git("rev-parse", `${after}^{tree}`)).stdout.trim();
   }
 
-  /** The second round: the pack fixes what fails only on the merged tree, then the gates, a new merge commit and the checks again. */
-  const repairRound = async (failedChecks: StageResult): Promise<{ final: string; checked: StageResult } | { stop: StageResult }> => {
+  /** A repair round: the pack fixes what fails only on the merged tree (it is handed the failures and the checks to run first), then the gates, a new merge commit and the checks again. */
+  const repairRound = async (failedChecks: StageResult, round: number): Promise<{ final: string; checked: StageResult } | { stop: StageResult }> => {
     const unread = await readPr();
     if (unread) return { stop: unread };
     const start = await headOfWorktree(run, work);
@@ -157,20 +161,26 @@ export async function mergeRound(deps: FixDeps, context: StageContext, input: Me
     const cardFiles = SHA.test(fork) ? (await git("diff", "--no-renames", "-z", "--name-only", fork, before)).stdout.split("\0").filter(Boolean) : [];
     const allowed = new Set([...conflicted, ...cardFiles]);
     const findings = (failedChecks.detail?.findings ?? failedChecks.findings ?? []) as Array<{ title?: string; body?: string }>;
+    // What the round runs before it commits: the checks that failed, and the repository's lint, type and format checks, so a fix that breaks a
+    // rule elsewhere (an import out of order) is caught in the folder, not by the next round of checks.
+    const failedNames = findings.map((f) => String(f.title ?? "").replace(/ failed$/, ""));
+    const specs = await (async () => ((await deps.policies.for(task.repoPath ?? null)) as { checks?: CheckSpec[] }).checks ?? [])().catch(() => [] as CheckSpec[]);
+    const verify = specs.filter((c) => failedNames.includes(c.name) || GATE_CHECK.test(c.name)).map((c) => `- ${c.name}: \`${c.run}\``);
     const failures = findings.length > 0 ? findings.map((f) => `### ${f.title ?? "a check failed"}\n${String(f.body ?? "").slice(-2500)}`).join("\n\n") : String(failedChecks.detail?.error ?? failedChecks.detail?.summary ?? "the checks failed");
     const body = [
       `The machine merged ${input.base.name} (${input.base.sha.slice(0, 7)}) into the branch and the conflicts are resolved, but these checks fail on the merged tree while they pass on the branch before the merge and on ${input.base.name}: the merge itself broke them.`,
       failures.slice(0, 4000),
+      ...(verify.length > 0 ? [`Before you commit, run these from the folder you are in and fix what they report in the files you changed (an error in a file you did not touch is not yours):\n${verify.join("\n")}`] : []),
       "Fix them. You may edit the files that had conflicts and the files this card's branch changes; no other file. Keep this card's change and keep what the base brought: where the card deleted or moved code that the base changed, leave it deleted (`git rm <path>`) and carry the base's change to where the card moved that code. Then commit. Run git as plain `git status` and `git commit` from the folder you are in; a command that starts `git -C` is refused.",
     ].join("\n\n");
-    const asked = await askPack("merge-fix", body, `merge-fix-${input.label}`, false, `the checks failed after merging ${input.base.name} and the pack could not fix them`, conflicted);
+    const asked = await askPack("merge-fix", body, `merge-fix-${input.label}${round > 1 ? `-${round}` : ""}`, false, `the checks failed after merging ${input.base.name} and the pack could not fix them`, conflicted);
     if (asked) return { stop: asked };
     const after = await headOfWorktree(run, work);
-    if (!after || after === start) return { stop: escalated(`the checks failed after merging ${input.base.name} and the second round committed nothing`, "other", { findings }) };
-    if ((await git("merge-base", "--is-ancestor", start, after)).code !== 0) return { stop: escalated("the second round does not build on the merge; nothing was pushed") };
+    if (!after || after === start) return { stop: escalated(`the checks failed after merging ${input.base.name} and round ${round} of the repair committed nothing`, "other", { findings }) };
+    if ((await git("merge-base", "--is-ancestor", start, after)).code !== 0) return { stop: escalated(`round ${round} of the repair does not build on the merge; nothing was pushed`) };
     const touched = (await git("diff", "--no-renames", "-z", "--name-only", start, after)).stdout.split("\0").filter(Boolean);
     const outside = touched.filter((p) => !allowed.has(p));
-    if (outside.length > 0) return { stop: escalated(`the second round changed files that neither conflicted nor are the card's (${outside.slice(0, 5).join(", ")}); nothing was pushed`, "other", { paths: outside.slice(0, 10) }) };
+    if (outside.length > 0) return { stop: escalated(`round ${round} of the repair changed files that neither conflicted nor are the card's (${outside.slice(0, 5).join(", ")}); nothing was pushed`, "other", { paths: outside.slice(0, 10) }) };
     const left: string[] = [];
     for (const path of touched) {
       const shown = await git("show", `${after}:${path}`);
@@ -183,7 +193,7 @@ export async function mergeRound(deps: FixDeps, context: StageContext, input: Me
     if (remade.code !== 0 || !SHA.test(head)) return { stop: escalated(`the merge commit could not be made: ${postable((remade.stderr || remade.stdout).trim(), 300)}`) };
     await git("update-ref", `refs/heads/${branch}`, head);
     await git("reset", "--hard", "--quiet", head);
-    const again = await deps.loop.checks!(subContext(ctxWork, `merge-checks-${input.label}-2`), before, input.base.sha);
+    const again = await deps.loop.checks!(subContext(ctxWork, `merge-checks-${input.label}-${round + 1}`), before, input.base.sha);
     return { final: head, checked: again };
   };
 
@@ -201,12 +211,12 @@ export async function mergeRound(deps: FixDeps, context: StageContext, input: Me
   let checked = deps.loop.checks ? await deps.loop.checks(subContext(ctxWork, `merge-checks-${input.label}`), before, input.base.sha) : null;
   if (!checked) return stop(escalated("no checks runner is wired to prove the merge"));
   // A failure only the merged tree has (DISC-53: develop's audit change to a router the card moved into a lambda, develop's new /docs route
-  // against the card's route test) gets one more round: the pack sees the failures and may edit the conflicted files and the files the card's
+  // against the card's route test) gets up to MERGE_REPAIR_ROUNDS more rounds: the pack sees the failures and may edit the conflicted files and the files the card's
   // branch changes, to carry the base's change to where the card moved that code. The same gates and checks follow; still red, a person decides.
-  let second = false;
-  if (checked.outcome === "fail") {
-    second = true;
-    const repaired = await repairRound(checked);
+  let rounds = 0;
+  while (checked.outcome === "fail" && rounds < MERGE_REPAIR_ROUNDS) {
+    rounds++;
+    const repaired = await repairRound(checked, rounds);
     if ("stop" in repaired) return stop(repaired.stop);
     final = repaired.final;
     checked = repaired.checked;
@@ -214,7 +224,7 @@ export async function mergeRound(deps: FixDeps, context: StageContext, input: Me
   if (checked.outcome === "escalated" && checked.detail?.red_on_base === true) {
     return stop(escalated(`${input.base.name} is red without this card: ${postable(String(checked.detail.reason ?? "its checks fail"), 300)}`, "env_broken", { red_on_base: true, base: input.base.sha, tests: checked.detail.tests ?? [] }));
   }
-  if (checked.outcome !== "pass") return stop(escalated(`the checks failed after merging ${input.base.name}${second ? " and a second round with the pack did not fix them" : ""}: ${failureGist(String(checked.detail?.error ?? checked.detail?.reason ?? checked.detail?.summary ?? checked.outcome), 300)}`, "other", { findings: checked.detail?.findings ?? checked.findings ?? [] }));
+  if (checked.outcome !== "pass") return stop(escalated(`the checks failed after merging ${input.base.name}${rounds > 0 ? ` and ${rounds} round${rounds === 1 ? "" : "s"} with the pack did not fix them` : ""}: ${failureGist(String(checked.detail?.error ?? checked.detail?.reason ?? checked.detail?.summary ?? checked.outcome), 300)}`, "other", { findings: checked.detail?.findings ?? checked.findings ?? [] }));
 
   const remoteNow = await deps.github.prHeadSha(input.slug, input.number).catch(() => null);
   if (remoteNow && remoteNow !== before) return stop(escalated(`someone pushed to the PR (${remoteNow.slice(0, 7)}) while the merge was checked; nothing was pushed`, "head_moved"));
