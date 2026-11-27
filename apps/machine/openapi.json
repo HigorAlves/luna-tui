@@ -7552,6 +7552,28 @@
           "updatedAt": {
             "type": "string"
           },
+          "createdAt": {
+            "type": "string",
+            "description": "When it was opened; its last update for a source that does not say"
+          },
+          "reviewRequestedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When your review (or a team's you are in) was last asked; null when it was not"
+          },
+          "threadsComplete": {
+            "type": "boolean",
+            "description": "Every review thread was read; false when GitHub counts more than the query listed"
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PrActionState"
+            },
+            "description": "Each menu action in its order (ci_fix, address, review, merge, close) and why it can't run"
+          },
           "headSha": {
             "type": [
               "string",
@@ -7598,6 +7620,10 @@
           "localPath",
           "task",
           "updatedAt",
+          "createdAt",
+          "reviewRequestedAt",
+          "threadsComplete",
+          "actions",
           "headSha",
           "headCommittedAt",
           "nodeId",
@@ -7624,6 +7650,43 @@
           "name",
           "state",
           "url"
+        ]
+      },
+      "PrActionState": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "ci_fix",
+              "address",
+              "review",
+              "merge",
+              "close"
+            ]
+          },
+          "allowed": {
+            "type": "boolean",
+            "description": "True exactly when `reason` is null"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "a check is red",
+            "description": "Why it can't run, in words for a person; null when it can"
+          },
+          "needsClone": {
+            "type": "boolean",
+            "description": "Off only for want of a checkout: a clone is all it needs"
+          }
+        },
+        "required": [
+          "action",
+          "allowed",
+          "reason",
+          "needsClone"
         ]
       },
       "CloneStatus": {

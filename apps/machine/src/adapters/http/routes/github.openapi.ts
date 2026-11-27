@@ -1,7 +1,7 @@
 // OpenAPI route definitions of the PR inbox: each route's request and every response it can give, in zod.
 // The response schemas are held to the contracts' types with `expectSame`.
 import { PrActionInput, type CloneStatus, type PrSnapshot, type PullRequest } from "@hardness/contracts";
-import { CloneInput, ChecksState, PrAction, PrSplit } from "@hardness/contracts";
+import { CloneInput, ChecksState, PrAction, PrMenuAction, PrSplit } from "@hardness/contracts";
 import { createRoute, z } from "@hono/zod-openapi";
 
 import { TaskSchema } from "../openapi/task.schema.ts";
@@ -10,6 +10,15 @@ import { errorResponses, expectSame, jsonBody, jsonContent, type Same } from "..
 const TAGS = ["GitHub"];
 
 const PrCheckSchema = z.object({ name: z.string(), state: z.string(), url: z.string().nullable() }).openapi("PrCheck");
+
+const PrActionStateSchema = z
+  .object({
+    action: PrMenuAction,
+    allowed: z.boolean().openapi({ description: "True exactly when `reason` is null" }),
+    reason: z.string().nullable().openapi({ example: "a check is red", description: "Why it can't run, in words for a person; null when it can" }),
+    needsClone: z.boolean().openapi({ description: "Off only for want of a checkout: a clone is all it needs" }),
+  })
+  .openapi("PrActionState");
 
 export const PullRequestSchema = z
   .object({
@@ -34,6 +43,10 @@ export const PullRequestSchema = z
     localPath: z.string().nullable().openapi({ description: "The checkout the machine would act in; null means read-only until cloned" }),
     task: z.object({ id: z.string(), state: z.string(), route: PrAction }).nullable().openapi({ description: "The PR task in flight for this PR, if any" }),
     updatedAt: z.string(),
+    createdAt: z.string().openapi({ description: "When it was opened; its last update for a source that does not say" }),
+    reviewRequestedAt: z.string().nullable().openapi({ description: "When your review (or a team's you are in) was last asked; null when it was not" }),
+    threadsComplete: z.boolean().openapi({ description: "Every review thread was read; false when GitHub counts more than the query listed" }),
+    actions: z.array(PrActionStateSchema).openapi({ description: "Each menu action in its order (ci_fix, address, review, merge, close) and why it can't run" }),
     headSha: z.string().nullable(),
     headCommittedAt: z.string().nullable(),
     nodeId: z.string().nullable(),

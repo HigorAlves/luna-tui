@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { type PrNode, canPush, fromGraphQl, needsMe, prFields, splitOf } from "./pull-request.ts";
+import type { PullRequest } from "@hardness/contracts";
+
+import { type PrNode, actionsOf, canPush, fromGraphQl, needsMe, prFields, splitOf } from "./pull-request.ts";
 
 const checkRun = (name: string, status: string, conclusion: string | null) => ({
   __typename: "CheckRun",
@@ -163,5 +165,97 @@ describe("needsMe and canPush", () => {
     expect(canPush({ fromFork: false, localPath: "/r/a" })).toBe(true);
     expect(canPush({ fromFork: true, localPath: "/r/a" })).toBe(false);
     expect(canPush({ fromFork: false, localPath: null })).toBe(false);
+  });
+});
+
+describe("when a PR began waiting, and whether its threads were read in full", () => {
+  it("carries when it was opened, and falls back on its last update when a fixture has none", () => {
+    expect(facts({ createdAt: "2026-10-20T08:00:00Z" }).createdAt).toBe("2026-10-20T08:00:00Z");
+    expect(facts({}).createdAt).toBe("2026-10-27T10:00:00Z");
+    expect(prFields({ requests: 1, threads: 1, contexts: 1 })).toContain("createdAt");
+  });
+
+  it("says when your review was last asked, by you or a team you are in, and null when it was not", () => {
+    const asked = (login: string | null, slug: string | null, createdAt: string) => ({ createdAt, requestedReviewer: login ? { login } : slug ? { slug } : null });
+    const timelineItems = { nodes: [asked("me", null, "2026-10-21T09:00:00Z"), asked("other", null, "2026-10-23T09:00:00Z"), asked(null, "core", "2026-10-22T09:00:00Z")] };
+    const pr = fromGraphQl(node({ author: { login: "them" }, timelineItems }), "o/a", "me", ["core"]);
+    expect(pr.reviewRequestedAt).toBe("2026-10-22T09:00:00Z");
+    expect(facts({ timelineItems: { nodes: [asked("other", null, "2026-10-23T09:00:00Z")] } }).reviewRequestedAt).toBeNull();
+    expect(facts({}).reviewRequestedAt).toBeNull();
+    expect(prFields({ requests: 1, threads: 1, contexts: 1 })).toContain("REVIEW_REQUESTED_EVENT");
+  });
+
+  it("knows threads were cut short when GitHub counts more than it listed, and sends such a PR of yours to changes requested", () => {
+    expect(facts({ reviewThreads: { totalCount: 1, nodes: [{ isResolved: true }] } }).threadsComplete).toBe(true);
+    expect(facts({}).threadsComplete).toBe(true);
+    const cut = facts({ contexts: green, reviewDecision: "APPROVED", reviewThreads: { totalCount: 140, nodes: [{ isResolved: true }] } });
+    expect(cut.threadsComplete).toBe(false);
+    expect(splitOf(cut)).toBe("changes_requested");
+    expect(prFields({ requests: 1, threads: 1, contexts: 1 })).toContain("totalCount");
+  });
+});
+
+describe("actionsOf: each action, and why it can't run", () => {
+  const base = (over: Partial<PullRequest> = {}): Omit<PullRequest, "actions"> => {
+    const f = facts({ contexts: red });
+    const pr = { ...f, split: splitOf(f), localPath: "/r/a", task: null, ...over };
+    return { ...pr, split: over.split ?? splitOf(pr) };
+  };
+  const reasons = (pr: Omit<PullRequest, "actions">) => Object.fromEntries(actionsOf(pr).map((a) => [a.action, a.reason]));
+
+  it("lists every action in the menu's order, allowed exactly when nothing stands in the way", () => {
+    const got = actionsOf(base());
+    expect(got.map((a) => a.action)).toEqual(["ci_fix", "address", "review", "merge", "close"]);
+    for (const a of got) expect(a.allowed).toBe(a.reason === null);
+  });
+
+  it("my red PR: Fix CI runs; the rest say why, in the TUI's words", () => {
+    expect(reasons(base())).toEqual({
+      ci_fix: null,
+      address: "no unresolved threads",
+      review: "review is for other people's PRs",
+      merge: "a check is red",
+      close: null,
+    });
+  });
+
+  it("Merge is off in GitHub's words when its merge state says so, and on only when ready to merge", () => {
+    expect(reasons(base({ mergeState: "BEHIND" })).merge).toBe("GitHub: the branch is behind its base; update it first");
+    expect(reasons(base({ mergeState: "BLOCKED" })).merge).toBe("GitHub: blocked, a required review or check is still missing");
+    expect(reasons(base({ split: "ready_to_merge" })).merge).toBeNull();
+  });
+
+  it("a task at work blocks every dispatch and Close; a card only watching the PR blocks nothing", () => {
+    const busy = reasons(base({ task: { id: "t1", state: "ci_watch", route: "ci_fix" } }));
+    expect([busy.ci_fix, busy.address, busy.review, busy.close]).toEqual(Array(4).fill("a task is already running for it"));
+    expect(reasons(base({ task: { id: "t1", state: "pr_watch", route: "ci_fix" } })).ci_fix).toBeNull();
+  });
+
+  it("no checkout: the agents wait for a clone, and say whether a clone is all they need", () => {
+    const got = actionsOf(base({ localPath: null }));
+    const fix = got.find((a) => a.action === "ci_fix")!;
+    expect(fix).toMatchObject({ allowed: false, reason: "no checkout", needsClone: true });
+    expect(got.find((a) => a.action === "review")).toMatchObject({ reason: "no checkout", needsClone: false });
+    expect(got.find((a) => a.action === "close")!.needsClone).toBe(false);
+  });
+
+  it("someone else's PR: review only, never close, threads or a fix on a fork", () => {
+    const theirs = reasons(base({ mine: false, reviewRequested: true, fromFork: true }));
+    expect(theirs).toMatchObject({
+      review: null,
+      close: "closing is for your own PRs",
+      address: "the head is in a fork; nothing can push to it",
+      ci_fix: "the head is in a fork; nothing can push to it",
+    });
+  });
+
+  it("Fix CI wants a red check; Answer threads wants a thread open or a change asked", () => {
+    const green = base({ checks: { state: "success", passed: 1, total: 1, failed: [], all: [] } });
+    expect(reasons(green).ci_fix).toBe("checks are green");
+    expect(reasons(base({ checks: { state: "pending", passed: 0, total: 1, failed: [], all: [] } })).ci_fix).toBe("checks are still running");
+    expect(reasons(base({ checks: { state: "none", passed: 0, total: 0, failed: [], all: [] } })).ci_fix).toBe("there are no checks");
+    expect(reasons(base({ unresolvedThreads: 2 })).address).toBeNull();
+    expect(reasons(base({ reviewDecision: "CHANGES_REQUESTED" })).address).toBeNull();
+    expect(reasons(base({ threadsComplete: false })).address).toBeNull();
   });
 });

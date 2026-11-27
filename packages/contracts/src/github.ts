@@ -19,6 +19,21 @@ export interface PrCheck {
 export const PrAction = z.enum(["ci_fix", "review", "address"]);
 export type PrAction = z.infer<typeof PrAction>;
 
+/** What a PR's menu can do, in its order: three start a PR task, Merge and Close run on the machine. */
+export const PrMenuAction = z.enum(["ci_fix", "address", "review", "merge", "close"]);
+export type PrMenuAction = z.infer<typeof PrMenuAction>;
+
+/** One action on one PR as a client shows it: greyed with the machine's reason, so a greyed one never round-trips to learn it would be refused. */
+export interface PrActionState {
+  action: PrMenuAction;
+  /** True exactly when `reason` is null. */
+  allowed: boolean;
+  /** Why it can't run, in words for a person ("a check is red", "GitHub: still a draft"); null when it can. */
+  reason: string | null;
+  /** Off only for want of a checkout: a clone is all it needs. */
+  needsClone: boolean;
+}
+
 /** One open PR involving you. */
 export interface PullRequest {
   /** `owner/name` */
@@ -51,6 +66,14 @@ export interface PullRequest {
   /** The PR task in flight for this PR, if any. */
   task: { id: string; state: string; route: PrAction } | null;
   updatedAt: string;
+  /** When it was opened; its last update for a source that does not say. */
+  createdAt: string;
+  /** When your review (or a team's you are in) was last asked; null when it was not. Waiting is counted from here for a review. */
+  reviewRequestedAt: string | null;
+  /** Every review thread was read; false when GitHub counts more than the query listed, so `unresolvedThreads` may be short. */
+  threadsComplete: boolean;
+  /** Each menu action and why it can't run, worked out by the machine (`actionsOf`). */
+  actions: PrActionState[];
   /** The head commit and its date; null from sources that do not say (older fixtures). */
   headSha: string | null;
   headCommittedAt: string | null;

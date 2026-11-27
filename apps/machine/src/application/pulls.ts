@@ -9,7 +9,7 @@ import type { CloneStatus, PrAction, PrSnapshot, PullRequest } from "@hardness/c
 
 import { HOST_GIT } from "../adapters/git/worktree.ts";
 import { type ExecResult, exec as realExec } from "../adapters/process/exec.ts";
-import { type PrNode, fromGraphQl, splitOf, summarizeChecks } from "../domain/pull-request.ts";
+import { type PrNode, actionsOf, fromGraphQl, splitOf, summarizeChecks } from "../domain/pull-request.ts";
 import { type GitHub, type PrSearchHit, messageOf } from "./github.ts";
 import { PrBusyError } from "./pr-tasks.ts";
 
@@ -245,7 +245,8 @@ export class GitHubPulls implements PullsPort {
     const clones = this.cloneList();
     const next: PrSnapshot = {
       ...given,
-      prs: given.prs.map((pr) => (pr.localPath !== null && this.isCloning(pr.localPath) ? { ...pr, localPath: null } : pr)),
+      // What can be done follows the checkout and the task, so it is worked out again whenever either may have moved.
+      prs: given.prs.map((pr) => withActions(pr.localPath !== null && this.isCloning(pr.localPath) ? { ...pr, localPath: null } : pr)),
       clones,
     };
     const changed =
@@ -280,7 +281,7 @@ export class GitHubPulls implements PullsPort {
       this.options.resolveRepo(repo).catch(() => null),
       this.options.findTask(repo, node.number).catch(() => null),
     ]);
-    return { ...facts, split: splitOf(facts), localPath, task };
+    return withActions({ ...facts, split: splitOf(facts), localPath, task });
   }
 
   /** The all-list: every open PR in the repos you reach, read in bulk (a call covers many PRs), so no PR costs a call of its own. */
@@ -426,6 +427,9 @@ export class GitHubPulls implements PullsPort {
 }
 
 /** True when `dir` is itself the top of a git working tree (not just a folder inside one). */
+/** The PR with its menu worked out from what it is now. */
+const withActions = (pr: Omit<PullRequest, "actions">): PullRequest => ({ ...pr, actions: actionsOf(pr) });
+
 async function isCheckoutRoot(exec: typeof realExec, dir: string): Promise<boolean> {
   const top = await exec("git", ["-C", dir, "rev-parse", "--show-toplevel"]);
   if (top.code !== 0) return false;
