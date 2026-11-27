@@ -67,8 +67,18 @@ export async function confirmOnBase(outcome: SweepOutcome, deps: SweepBaselineDe
       const there = ran.reports.find((r) => r.name === f.name);
       return there !== undefined && !there.ok && alsoOnBase(f.tail, there.tail);
     }).map((f) => f.name);
-    if (red.length === 0) return outcome;
-    const failed = outcome.failed.filter((f) => !red.includes(f.name));
+    // A check red on the base too, with lines only the change has: Build gets those lines last (its input keeps the end), so it fixes its own
+    // and leaves the repository's (DISC-53: the full lint list mixed develop's errors with the card's, inviting a repo-wide reformat).
+    const marked = outcome.failed.filter((f) => !red.includes(f.name)).map((f) => {
+      const there = ran.reports.find((r) => r.name === f.name);
+      if (!there || there.ok) return f;
+      const onBase = new Set(failingLinesOf(there.tail));
+      const own = failingLinesOf(f.tail).filter((line) => !onBase.has(line));
+      if (own.length === 0) return f;
+      return { ...f, tail: `${f.tail}\n--- only these failing lines are this change's; the others fail on the base (${base.slice(0, 8)}) too and are not yours to fix ---\n${[...new Set(own)].join("\n")}` };
+    });
+    if (red.length === 0) return { ...outcome, failed: marked };
+    const failed = marked;
     const note = `already failing on the base (${base.slice(0, 8)}) the same way, so not the change's: ${red.join(", ")}`;
     return { ...outcome, failed, status: failed.length > 0 ? "failed" : "passed", note: outcome.note ? `${outcome.note}; ${note}` : note, redOnBase: red, base };
   } catch {

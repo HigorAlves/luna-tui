@@ -58,6 +58,17 @@ describe("confirmOnBase: the sweep's failing checks asked again on the base", ()
     expect(removed).toEqual(["/clones/base"]);
   });
 
+  it("ends a check that is partly the base's with the failing lines that are the change's alone, so Build fixes only its own (DISC-53: the full lint list mixed develop's 22 errors with the card's)", async () => {
+    const cardLint = [baseLint, "apps/lambdas/evaluation/src/app.test.ts:1:1 assist/source/organizeImports", "  × The imports and exports are not sorted."].join("\n");
+    const result = await confirmOnBase({ ...outcome, failed: [{ name: "lint", tail: cardLint }] }, { checks, base: async () => "c".repeat(40), clone: async () => ({ path: "/c" }), remove: async () => {}, run: async () => ({ reports: [{ name: "lint", ok: false, tail: baseLint }] }) });
+    expect(result.failed).toHaveLength(1);
+    const tail = result.failed[0]!.tail;
+    const own = tail.slice(tail.lastIndexOf("---"));
+    expect(own).toContain("apps/lambdas/evaluation/src/app.test.ts:1:1");
+    expect(own).not.toContain("packages/domain/src/Task/index.ts");
+    expect(tail).toMatch(/fail on the base \(cccccccc\) too/);
+  });
+
   it("passes the sweep when every failure is the base's", async () => {
     const result = await confirmOnBase({ ...outcome, failed: [{ name: "lint", tail: lintTail }] }, { checks, base: async () => "b".repeat(40), clone: async () => ({ path: "/c" }), remove: async () => {}, run: async () => ({ reports: [{ name: "lint", ok: false, tail: baseLint }] }) });
     expect(result).toMatchObject({ status: "passed", failed: [], redOnBase: ["lint"] });
