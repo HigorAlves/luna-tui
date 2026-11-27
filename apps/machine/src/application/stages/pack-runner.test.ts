@@ -1721,6 +1721,14 @@ describe("the machine's install before a writable stage", () => {
     expect(order).toEqual(["sandbox"]);
   });
 
+  it("installs nothing for a run handed `install: false` (a merge round whose markers sit in a manifest)", async () => {
+    const order: string[] = [];
+    const inner = fakeSandbox(output());
+    const d: AgentDeps = { ...deps(async (run) => (order.push("sandbox"), inner(run))), install: async () => (order.push("install"), outcome) };
+    await runAgent(d, context("implementing"), "implementing", { install: false });
+    expect(order).toEqual(["sandbox"]);
+  });
+
   it("ends the stage as env_broken at step install, with the step's detail, and starts no container, when the install fails", async () => {
     let started = false;
     const d: AgentDeps = { ...deps(async (run) => ((started = true), fakeSandbox(output())(run))), install: async () => ({ ok: false, blocked: [], detail: { escalation: "env_broken", envBroken: true, step: "install", tool: "pnpm", lockfile: "pnpm-lock.yaml", reason: "x", logTail: "boom", options: [] } }) };

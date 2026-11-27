@@ -406,8 +406,8 @@ export async function buildRealStages(
     },
     runPack: (pack, subContext, extra) => {
       if (pack === "pr_reply") return runAgent(deps, subContext, "pr_reply", { ship: extra as ShipContext });
-      const more = extra as { threads?: AgentExtra["threads"]; baseCommit?: string; ci?: AgentExtra["ci"] };
-      return runAgent(deps, subContext, pack, { ...(more.threads ? { threads: more.threads } : {}), ...(more.baseCommit ? { baseCommit: more.baseCommit } : {}), ...(more.ci ? { ci: more.ci } : {}) });
+      const more = extra as { threads?: AgentExtra["threads"]; baseCommit?: string; ci?: AgentExtra["ci"]; install?: false };
+      return runAgent(deps, subContext, pack, { ...(more.threads ? { threads: more.threads } : {}), ...(more.baseCommit ? { baseCommit: more.baseCommit } : {}), ...(more.ci ? { ci: more.ci } : {}), ...(more.install === false ? { install: false as const } : {}) });
     },
     checks: deltaChecks,
     // A fix is made on a fresh clone at the PR's head and comes back as a fast-forward.

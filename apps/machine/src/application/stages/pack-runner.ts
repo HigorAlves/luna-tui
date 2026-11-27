@@ -199,6 +199,8 @@ export interface AgentExtra {
   history?: { ledger: Ledger | null; runs: RunSummary[] } | null;
   /** setup: run over the repo checkout itself, read-only, no task worktree or branch. */
   checkout?: boolean;
+  /** false: the machine installs nothing before this writable run (a merge round whose conflict markers sit in a manifest or lockfile the install reads). */
+  install?: false;
   /** The plan stage's packs: the plan under review (the test designer reads it as its plan; a second round carries the gaps or the review). */
   plan?: PlanContext;
   /** design_spec: the card's design reference, composed by the machine. */
@@ -827,7 +829,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   // The agent starts with a git repository of its own in the folder, made by the machine from the card's: the one the host never reads.
   if (!extra.checkout && !resume) await guard(() => refreshScratch(workspace.path, workspace.branch));
   // The machine installs the card's dependencies from its lockfile, no credential in that container: the agent then works with them.
-  if (deps.install && limits.writable && !extra.checkout && !resume) {
+  if (deps.install && limits.writable && !extra.checkout && extra.install !== false && !resume) {
     let installed: InstallOutcome;
     try {
       installed = await deps.install({ taskId: task.id, repoPath: task.repoPath, workspace: workspace.path, commit: inputCommit, trust, signal: context.signal });

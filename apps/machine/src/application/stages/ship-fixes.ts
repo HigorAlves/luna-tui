@@ -47,7 +47,7 @@ export type ShipDecisionPack = "event_class" | "comment_intent" | "fix_scope" | 
 export type ShipDecide = (pack: ShipDecisionPack, ship: ShipContext, repoPath: string | null) => Promise<Record<string, unknown>>;
 export type LoopPack = "pr_reply" | "addressing" | "verifying" | "ci_watch";
 /** What a sub-run is handed: the ship context for pr_reply; for the others the extra the pack reads. */
-export type LoopExtra = ShipContext | { threads?: ThreadsContext; baseCommit?: string; ci?: CiContext };
+export type LoopExtra = ShipContext | { threads?: ThreadsContext; baseCommit?: string; ci?: CiContext; /** false: no install before the run (`AgentExtra.install`). */ install?: false };
 
 /** What the review loop needs beyond the monitor's own: the decisions, the packs and the project's checks. */
 export interface ReviewLoop {

@@ -9,6 +9,7 @@ import { PrAddressAnswer, type EvidencePack } from "@hardness/contracts";
 import { at } from "../../adapters/git/machine-repo.ts";
 import { BASE_REF, HOST_GIT, type GitExec } from "../../adapters/git/worktree.ts";
 import { exec as realExec } from "../../adapters/process/exec.ts";
+import { LOCKFILES } from "../../domain/env-hash.ts";
 import { postable } from "../../domain/postable.ts";
 import { messageOf } from "../github.ts";
 import type { StageContext, StageResult } from "../ports.ts";
@@ -35,6 +36,10 @@ export interface MergeInput {
 export type MergeOutcome =
   | { ok: true; head: string; resolved: string[]; result: StageResult }
   | { ok: false; result: StageResult };
+
+/** The files a dependency install reads: a lockfile, a package manifest or a package manager's config. */
+const MANIFESTS = new Set<string>([...LOCKFILES, "package.json", "pnpm-workspace.yaml", ".yarnrc.yml", ".yarnrc", ".npmrc", "Cargo.toml", "go.mod", "pyproject.toml", "Pipfile", "Gemfile", "composer.json"]);
+const installReads = (path: string): boolean => MANIFESTS.has(path.split("/").at(-1) ?? "") || /(^|\/)requirements[^/]*\.txt$/.test(path);
 
 /** Merges `input.base` into the card's branch, resolving any conflict with the `addressing` pack; see the file's head. */
 export async function mergeRound(deps: FixDeps, context: StageContext, input: MergeInput): Promise<MergeOutcome> {
@@ -89,7 +94,10 @@ export async function mergeRound(deps: FixDeps, context: StageContext, input: Me
       "Resolve every conflict in those files and touch no other file. Keep this card's change. Carry in what the base added or changed: it is newer than the branch, so a fact, a section or a code path the base brought stays, written the way this card writes (its style, its rules). Remove every marker line. Then commit. Run git as plain `git status` and `git commit` from the folder you are in; a command that starts `git -C` is refused.",
     ].join("\n");
     const thread = { id: "merge", path: null, line: null, comments: [{ author: "machine", body: body.slice(0, 6000), at: new Date().toISOString() }] };
-    const addressed = await deps.loop.runPack("addressing", subContext(ctxWork, `merge-${input.label}`), { threads: { pr, threads: [thread] } });
+    // Markers in a manifest or lockfile break the machine's install before the pack begins (DISC-53: packages/ui/package.json, `yarn install
+    // --immutable`); the pack then resolves text without the dependencies, and the checks below install on the resolved tree.
+    const installBreaks = conflicted.some(installReads);
+    const addressed = await deps.loop.runPack("addressing", subContext(ctxWork, `merge-${input.label}`), { threads: { pr, threads: [thread] }, ...(installBreaks ? { install: false as const } : {}) });
     const answer = PrAddressAnswer.safeParse(addressed.detail?.answer);
     // A pack whose commit or `git status` was refused answers `env_broken` and leaves the resolution edited in the folder. Only that
     // escalation, and only with edits left, goes on to the host's commit and the same gates below; a pack that stopped because it could

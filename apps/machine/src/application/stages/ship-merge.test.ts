@@ -17,14 +17,14 @@ const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, 
 const wgit = (path: string, ...args: string[]) => execFileSync("git", ["--git-dir=" + machineGitDir(path), "--work-tree=" + path, "-C", path, ...ID, ...args], { encoding: "utf8" }).trim();
 
 /** A repository with a bare origin, a card's workspace on `card` with its own change to `doc.md`, and `main` moved on by someone else. */
-async function world(theirs: string) {
+async function world(theirs: string, file = "doc.md") {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "ship-merge-")));
   configureMachineRepos(join(root, "machine-repos"));
   const remote = join(root, "remote.git");
   const repo = join(root, "repo");
   execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]);
   execFileSync("git", ["init", "-q", "-b", "main", repo]);
-  writeFileSync(join(repo, "doc.md"), "one\ntwo\nthree\n");
+  writeFileSync(join(repo, file), "one\ntwo\nthree\n");
   writeFileSync(join(repo, "other.md"), "x\n");
   git(repo, "add", "-A");
   git(repo, "commit", "-q", "-m", "init");
@@ -32,12 +32,12 @@ async function world(theirs: string) {
   git(repo, "push", "-q", "origin", "main");
   const workspace = { path: join(root, "cards", "card"), branch: "card" };
   await ensureClone(repo, workspace);
-  writeFileSync(join(workspace.path, "doc.md"), "one\nTWO, the card's rewrite\nthree\n");
+  writeFileSync(join(workspace.path, file), "one\nTWO, the card's rewrite\nthree\n");
   wgit(workspace.path, "commit", "-q", "-am", "card: rewrite");
   wgit(workspace.path, "push", "-q", "origin", "card");
   const before = wgit(workspace.path, "rev-parse", "HEAD");
   // The default branch moves: someone else edits the same line, or another file.
-  writeFileSync(join(repo, theirs === "conflict" ? "doc.md" : "new.md"), theirs === "conflict" ? "one\ntwo, and a new fact\nthree\n" : "new\n");
+  writeFileSync(join(repo, theirs === "conflict" ? file : "new.md"), theirs === "conflict" ? "one\ntwo, and a new fact\nthree\n" : "new\n");
   git(repo, "add", "-A");
   git(repo, "commit", "-q", "-m", "main moves");
   git(repo, "push", "-q", "origin", "main");
@@ -93,6 +93,21 @@ describe("mergeRound: a branch that no longer merges", () => {
     expect(readFileSync(join(w.workspace.path, "doc.md"), "utf8")).toBe("one\nTWO, the card's rewrite, and a new fact\nthree\n");
     expect(wgit(w.workspace.path, "log", "--format=%s", head)).not.toContain("conflicts to resolve");
     expect(git(w.remote, "rev-parse", "refs/heads/card")).toBe(head);
+  });
+
+  it("runs the pack without the machine's install when a conflicted file is one the install reads (DISC-53: packages/ui/package.json with markers failed `yarn install --immutable` before the pack began)", async () => {
+    const w = await world("conflict", "package.json");
+    const { d, context, runPack } = deps(w, (path) => writeFileSync(join(path, "package.json"), "one\nTWO, the card's rewrite, and a new fact\nthree\n"));
+    const out = await mergeRound(d, context, input(w));
+    expect(out).toMatchObject({ ok: true, resolved: ["package.json"] });
+    expect(runPack.mock.calls[0]![2]).toMatchObject({ install: false });
+  });
+
+  it("keeps the install for a conflict in source files only, so the pack works with the dependencies", async () => {
+    const w = await world("conflict");
+    const { d, context, runPack } = deps(w, (path) => writeFileSync(join(path, "doc.md"), "one\nTWO, the card's rewrite, and a new fact\nthree\n"));
+    await mergeRound(d, context, input(w));
+    expect((runPack.mock.calls[0]![2] as { install?: boolean }).install).toBeUndefined();
   });
 
   it("commits the pack's edits itself when the pack could not (its tool rules refuse `git -C`), and still checks them", async () => {
