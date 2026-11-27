@@ -125,6 +125,18 @@ const failed = (stage: string, out: { code: number; stdout: string; stderr: stri
 
 const conflictsOf = (out: { stdout: string }): string[] => out.stdout.split("\n").map((l) => l.trim()).filter(Boolean);
 
+/** The files git refused to touch because the work tree has them changed ("Your local changes to the following files would be overwritten by …"), one per tab-indented line. */
+function overwrittenIn(said: string): string[] {
+  const at = said.search(/local changes to the following files would be overwritten/i);
+  if (at < 0) return [];
+  const files: string[] = [];
+  for (const line of said.slice(at).split("\n").slice(1)) {
+    if (!/^\t\S/.test(line)) break;
+    files.push(line.trim());
+  }
+  return files;
+}
+
 async function defaultTarget(defaultBranchOf: (repoPath: string) => Promise<string | null>, repoPath: string): Promise<string | RebaseResult> {
   const base = await defaultBranchOf(repoPath);
   return !base || !isBranchName(base) ? { ok: false, error: `no usable default branch: ${JSON.stringify(base ?? null)}`, conflicts: [] } : base;
@@ -133,9 +145,10 @@ async function defaultTarget(defaultBranchOf: (repoPath: string) => Promise<stri
 /** The rebase of a card that is, or was, stacked: `--onto <onto> refs/luna/base` replays only the card's own commits; aborted when it stops (the folder is left as it was), with the files in conflict. Its commits are unsigned, as every commit the machine makes is. */
 /** A stopped rebase, carried on while every file in conflict is one `parentWins` gives to the parent: that side is kept (or the file removed, when the
  *  parent removed it) and the rebase continues; a commit left empty is dropped. Any other conflict, or any other stop, is aborted as before. */
-async function settleRebase(run: GitExec, worktreePath: string, first: { code: number; stdout: string; stderr: string }, options: RebaseOptions): Promise<{ ok: true; resolved: string[] } | { ok: false; error: string; conflicts: string[] }> {
+export async function settleRebase(run: GitExec, worktreePath: string, first: { code: number; stdout: string; stderr: string }, options: RebaseOptions): Promise<{ ok: true; resolved: string[] } | { ok: false; error: string; conflicts: string[] }> {
   const git = (...args: string[]) => run("git", [...HOST_GIT, ...at(worktreePath), ...args]);
   const resolved = new Set<string>();
+  let refreshed = false;
   let step = first;
   for (let n = 0; step.code !== 0 && n < 200; n++) {
     const unmerged = conflictsOf(await git("diff", "--name-only", "--diff-filter=U"));
@@ -143,6 +156,20 @@ async function settleRebase(run: GitExec, worktreePath: string, first: { code: n
     if (unmerged.length === 0 && /nothing to commit|is now empty|empty commit|--allow-empty/i.test(said)) {
       step = await git("-c", "core.editor=true", "rebase", "--skip");
       continue;
+    }
+    // A pick refused over files git says would be overwritten, with nothing in conflict: on a workspace behind Docker Desktop's file share a
+    // file's stat can change with its content untouched, and git trusts the stat (DISC-53, pick 9 of 24). The index is refreshed and the pick
+    // tried again, once; refused again, those files are what the rebase stopped on, so a stage's merge round on a fresh clone can answer it.
+    const overwritten = unmerged.length === 0 ? overwrittenIn(said) : [];
+    if (overwritten.length > 0) {
+      if (!refreshed) {
+        refreshed = true;
+        await git("update-index", "-q", "--refresh");
+        step = await git("-c", "core.editor=true", "-c", "commit.gpgsign=false", "rebase", "--continue");
+        continue;
+      }
+      await git("rebase", "--abort");
+      return { ok: false, error: said.trim(), conflicts: overwritten };
     }
     if (!options.parentWins || unmerged.length === 0 || !unmerged.every(options.parentWins)) {
       await git("rebase", "--abort");
@@ -182,6 +209,7 @@ async function mergeBaseInstead(run: GitExec, worktreePath: string, ref: string,
  */
 async function replayOwn(run: GitExec, worktreePath: string, onto: string, label: string, options: RebaseOptions = {}): Promise<RebaseResult> {
   const useMerge = options.mergeFallback !== false;
+  let settledConflicts: string[] = [];
   const merges = useMerge ? await run("git", [...HOST_GIT, ...at(worktreePath), "rev-list", "--merges", "--max-count=1", `${BASE_REF}..HEAD`]) : null;
   if (!merges || merges.code !== 0 || merges.stdout.trim() === "") {
     const rebased = await run("git", [...HOST_GIT, ...at(worktreePath), "-c", "commit.gpgsign=false", "rebase", "--empty=drop", "--onto", onto, BASE_REF]);
@@ -189,10 +217,12 @@ async function replayOwn(run: GitExec, worktreePath: string, onto: string, label
     if (settled.ok) return { ok: true, onto: label, ...(settled.resolved.length ? { resolved: settled.resolved } : {}) };
     // Only the files the replay named can be a conflict the card does not really have: a merge compares final results and says.
     if (!useMerge || settled.conflicts.length === 0) return settled;
+    settledConflicts = settled.conflicts;
   }
   const instead = await mergeBaseInstead(run, worktreePath, onto, label);
   if (instead.ok) return { ok: true, onto: label, merged: true };
-  return { ok: false, error: `merging ${label} into the branch stopped on a conflict`, conflicts: instead.conflicts };
+  // A merge refused before it started (the same files said to be overwritten) names nothing: the replay's files stand.
+  return { ok: false, error: `merging ${label} into the branch stopped on a conflict`, conflicts: instead.conflicts.length > 0 ? instead.conflicts : settledConflicts };
 }
 
 /** The refusal a nested repository in the folder gets: a failed result, never a thrown error. */
