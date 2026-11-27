@@ -234,6 +234,20 @@ describe("tailOf: a long check output keeps its failures", () => {
     expect(tail).not.toContain("job-1 failed");
   });
 
+  it("keeps a run that failed with no failing test: unhandled errors, a worker that died, a heap out of memory (DISC-53: Build was handed only 'Failed: @discover/api#test:unit')", () => {
+    const crashes = [
+      "@discover/api:test:unit: ⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯",
+      "@discover/api:test:unit: Vitest caught 1 unhandled error during the test run.",
+      "@discover/api:test:unit: Error: [vitest-pool]: Timeout starting forks runner.",
+      "@discover/api:test:unit:       Errors  1 error",
+      "@discover/api:test:unit: FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory",
+      "@discover/api:test:unit: Error: Worker exited unexpectedly",
+    ];
+    const out = [...noise.slice(0, 100), ...crashes, ...noise.slice(100), "@discover/api:test:unit: Tasks: 17 successful, 18 total", "Failed: @discover/api#test:unit"].join("\n");
+    const tail = tailOf(out);
+    for (const line of crashes) expect(tail).toContain(line.replace("@discover/api:test:unit: ", ""));
+  });
+
   it("is the last lines as before for a short output, or one with no failing line", () => {
     expect(tailOf("a\nb\nc")).toBe("a\nb\nc");
     const quiet = noise.join("\n");

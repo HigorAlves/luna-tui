@@ -15,8 +15,10 @@ import { type SessionExec, openChecksSession } from "./checks-session.ts";
 const TAIL_LINES = 60;
 const GATE_NAME = /lint|type-?check|tsc|format|fmt|prettier|eslint|biome/i;
 
-/** A line that says what failed, in the common runners (vitest, jest, mocha, pytest, cargo, go, turbo, biome/eslint, tsc). */
-export const FAILING_LINE = /\bFAIL\b|\bFAILED\b|✗|×|✖|AssertionError|error TS\d+|\bpanicked\b|--- FAIL|exited \(\d+\)|\bFailed: \S+#|Tests? +\d+ failed|Test Files +\d+ failed|\(\d+ tests? \| \d+ failed\)|❯ \S+:\d+:\d+/;
+/** A line that says what failed, in the common runners (vitest, jest, mocha, pytest, cargo, go, turbo, biome/eslint, tsc), and a run that failed
+ *  with no failing test: vitest's unhandled errors and pool timeouts, a worker that died, a heap out of memory (DISC-53: Build was handed only
+ *  turbo's "Failed: @discover/api#test:unit"). */
+export const FAILING_LINE = /\bFAIL\b|\bFAILED\b|✗|×|✖|AssertionError|error TS\d+|\bpanicked\b|--- FAIL|exited \(\d+\)|\bFailed: \S+#|Tests? +\d+ failed|Test Files +\d+ failed|\(\d+ tests? \| \d+ failed\)|❯ \S+:\d+:\d+|⎯+ Unhandled (?:Errors?|Rejections?) ⎯|Vitest caught \d+ unhandled|\[vitest-(?:pool|worker)\]|\bErrors +\d+ errors?\b|JavaScript heap out of memory|FATAL ERROR:|Worker exited unexpectedly|Worker terminated due to reaching memory limit/;
 /** A line a passing test logs on purpose (vitest's `stderr |` header, a caught error it prints): not a failure, however it reads. */
 export const LOGGED_LINE = /\bstderr \|/;
 /** A file and a line: `src/a.ts:8:1`, `packages/x/y.tsx:12`. */
