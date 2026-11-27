@@ -5,13 +5,19 @@ const COLOUR = /\u001b\[[0-9;]*m/g;
 const FAIL_LINE = /\bFAIL\s+(?:\|[^|\s]*\|\s+)?([\w@./-]+\.(?:test|spec)\.\w+)/;
 /** Past this many failing files the cause is not one test: an environment fault (no database) fails them all, and the whole check is the better question. */
 export const FILES_CAP = 20;
+/** Turbo's prefix on every line a package's task prints: `@scope/pkg:test:unit: `. A file it names is relative to that package. */
+const TURBO_PREFIX = /^(@?[\w.-]+(?:\/[\w.-]+)?):[\w:-]+:\s/;
 
 /** The test files a check's output names as failing, once each, in order; empty when none is named or there are more than `FILES_CAP`. */
 export function failingTestFiles(text: string): string[] {
   const files = new Set<string>();
   for (const line of text.replace(COLOUR, "").split("\n")) {
     const match = FAIL_LINE.exec(line);
-    if (match) files.add(match[1]!);
+    if (!match) continue;
+    // Under turbo a file is its package's (DISC-53: nine lambdas have a src/app.test.ts): named with the package, it is never another's, and
+    // `narrowedArgv` refuses the name, so the base runs the whole check.
+    const pkg = TURBO_PREFIX.exec(line)?.[1];
+    files.add(pkg ? `${pkg}:${match[1]!}` : match[1]!);
   }
   return files.size > FILES_CAP ? [] : [...files];
 }

@@ -208,6 +208,15 @@ describe("mergeRound: a branch that no longer merges", () => {
     expect(d.loop.checks).toHaveBeenCalledTimes(2);
   });
 
+  it("says why when the checks could not answer (the budget ran out), and runs no second round for it", async () => {
+    const w = await world("conflict");
+    const { d, context, runPack } = deps(w, (path) => writeFileSync(join(path, "doc.md"), "one\nresolved\nthree\n"), { outcome: "escalated", detail: { escalation: "env_broken", reason: "the 60 minute checks budget ran out before admin unit tests finished, so they say nothing about the change" } });
+    const out = await mergeRound(d, context, input(w));
+    expect(out.ok).toBe(false);
+    expect(String(out.result.detail?.reason)).toContain("the 60 minute checks budget ran out before admin unit tests finished");
+    expect(runPack).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses a second round's edit to a file that neither conflicted nor is the card's, and pushes nothing", async () => {
     const w = await world("conflict");
     let calls = 0;

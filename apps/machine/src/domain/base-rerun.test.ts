@@ -13,6 +13,14 @@ describe("failingTestFiles", () => {
     expect(failingTestFiles(text)).toEqual(["src/a.test.ts", "src/b.spec.tsx"]);
   });
 
+  it("names a file with its turbo package, so one package's src/app.test.ts is never another's (DISC-53: nine lambdas have one, and the file lambda's fails on develop in the sandbox)", () => {
+    const out = ["@discover/lambdas-evaluation:test:unit:  FAIL  src/app.test.ts > evaluation lambda OpenAPI document > S3", "@discover/lambdas-file:test:unit:  FAIL  src/app.test.ts > uploads"].join("\n");
+    expect(failingTestFiles(out)).toEqual(["@discover/lambdas-evaluation:src/app.test.ts", "@discover/lambdas-file:src/app.test.ts"]);
+    expect(failingTestFiles("@discover/lambdas-file:test:unit:  FAIL  src/app.test.ts > uploads")).not.toContain("@discover/lambdas-evaluation:src/app.test.ts");
+    // A package-qualified name is no file a runner takes: the whole check runs on the base.
+    expect(narrowedArgv(["sh", "-c", "yarn turbo run test:unit"], failingTestFiles(out))).toBeNull();
+  });
+
   it("is empty when the output names no test file, and when too many files failed to name them (an environment fault fails them all)", () => {
     expect(failingTestFiles("error TS2304: Cannot find name 'x'")).toEqual([]);
     const many = Array.from({ length: 40 }, (_, n) => `FAIL src/f${n}.test.ts > x`).join("\n");

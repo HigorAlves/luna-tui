@@ -214,7 +214,7 @@ export async function mergeRound(deps: FixDeps, context: StageContext, input: Me
   if (checked.outcome === "escalated" && checked.detail?.red_on_base === true) {
     return stop(escalated(`${input.base.name} is red without this card: ${postable(String(checked.detail.reason ?? "its checks fail"), 300)}`, "env_broken", { red_on_base: true, base: input.base.sha, tests: checked.detail.tests ?? [] }));
   }
-  if (checked.outcome !== "pass") return stop(escalated(`the checks failed after merging ${input.base.name}${second ? " and a second round with the pack did not fix them" : ""}: ${failureGist(String(checked.detail?.error ?? checked.detail?.summary ?? checked.outcome), 300)}`, "other", { findings: checked.detail?.findings ?? checked.findings ?? [] }));
+  if (checked.outcome !== "pass") return stop(escalated(`the checks failed after merging ${input.base.name}${second ? " and a second round with the pack did not fix them" : ""}: ${failureGist(String(checked.detail?.error ?? checked.detail?.reason ?? checked.detail?.summary ?? checked.outcome), 300)}`, "other", { findings: checked.detail?.findings ?? checked.findings ?? [] }));
 
   const remoteNow = await deps.github.prHeadSha(input.slug, input.number).catch(() => null);
   if (remoteNow && remoteNow !== before) return stop(escalated(`someone pushed to the PR (${remoteNow.slice(0, 7)}) while the merge was checked; nothing was pushed`, "head_moved"));
