@@ -51,7 +51,8 @@ function deps(w: Awaited<ReturnType<typeof world>>, resolve: ((path: string) => 
     // The pack edits the files in the folder it is given and commits there (its commits come back like this).
     const path = context.task.worktreePath!;
     resolve?.(path);
-    if (packCommits) wgit(path, "commit", "-q", "-am", "resolve the conflict");
+    // A pack with nothing to commit (a second round that changed nothing) commits nothing.
+    if (packCommits && wgit(path, "status", "--porcelain") !== "") wgit(path, "commit", "-q", "-am", "resolve the conflict");
     // The pack stops on purpose and says why: its outcome is escalated, with the reason it gave (the shape the pack runner reports).
     if (escalates) return { outcome: "escalated", detail: { summary: "edits left", reason: "The edits are in the worktree but uncommitted", escalation: escalates, options: [] } } as StageResult;
     return { outcome: "pass", detail: { answer: { kind: "done", summary: "resolved", replies: [] } } } as StageResult;
@@ -153,7 +154,7 @@ describe("mergeRound: a branch that no longer merges", () => {
       for (const [name, resolve, checks, said] of [
         ["outside", (path: string) => { resolveDoc(path); writeFileSync(join(path, "other.md"), "sneaked\n"); }, { outcome: "pass" }, "changed files that had no conflict (other.md)"],
         ["markers", (path: string) => writeFileSync(join(path, "doc.md"), readFileSync(join(path, "doc.md"), "utf8").replace("three", "3")), { outcome: "pass" }, "conflict markers are left in doc.md"],
-        ["checks", resolveDoc, { outcome: "fail", detail: { error: "lint failed" } }, "the checks failed after merging main: lint failed"],
+        ["checks", resolveDoc, { outcome: "fail", detail: { error: "lint failed" } }, "the checks failed after merging main"],
       ] as const) {
         const w = await world("conflict");
         const { d, context } = deps(w, resolve, checks as StageResult, false, "env_broken");
@@ -185,6 +186,43 @@ describe("mergeRound: a branch that no longer merges", () => {
     expect(String(out.result.detail?.reason)).toMatch(/nothing was committed/);
   });
 
+  it("gives the pack a second round with the failures when the checks fail only on the merged tree, and ships the fix in one merge commit (DISC-53)", async () => {
+    const w = await world("conflict");
+    let calls = 0;
+    const { d, context, runPack } = deps(w, (path) => {
+      calls++;
+      writeFileSync(join(path, "doc.md"), calls === 1 ? "one\nresolved\nthree\n" : "one\nresolved, with the base's audit carried in\nthree\n");
+    });
+    const red: StageResult = { outcome: "fail", detail: { error: "1 check failed" }, findings: [{ title: "unit tests failed", body: "S3 documents exactly the registered routes: - GET /docs" }] as never };
+    (d.loop.checks as ReturnType<typeof vi.fn>).mockResolvedValueOnce(red).mockResolvedValueOnce({ outcome: "pass" });
+    const out = await mergeRound(d, context, input(w));
+    expect(out).toMatchObject({ ok: true, resolved: ["doc.md"] });
+    expect(runPack).toHaveBeenCalledTimes(2);
+    const second = (runPack.mock.calls[1]![2] as { threads: { threads: Array<{ id: string; comments: Array<{ body: string }> }> } }).threads.threads[0]!;
+    expect(second.id).toBe("merge-fix");
+    expect(second.comments[0]!.body).toContain("GET /docs");
+    expect(second.comments[0]!.body).toContain("carry the base's change to where the card moved that code");
+    const head = git(w.remote, "rev-parse", "refs/heads/card");
+    expect(wgit(w.workspace.path, "rev-list", "--parents", "-n", "1", head).split(" ").slice(1)).toEqual([w.before, w.base]);
+    expect(wgit(w.workspace.path, "show", `${head}:doc.md`)).toBe("one\nresolved, with the base's audit carried in\nthree");
+    expect(d.loop.checks).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses a second round's edit to a file that neither conflicted nor is the card's, and pushes nothing", async () => {
+    const w = await world("conflict");
+    let calls = 0;
+    const { d, context } = deps(w, (path) => {
+      calls++;
+      if (calls === 1) writeFileSync(join(path, "doc.md"), "one\nresolved\nthree\n");
+      else writeFileSync(join(path, "other.md"), "changed by the second round\n");
+    });
+    (d.loop.checks as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ outcome: "fail", detail: { error: "1 check failed" } });
+    const out = await mergeRound(d, context, input(w));
+    expect(out.ok).toBe(false);
+    expect(String(out.result.detail?.reason)).toContain("neither conflicted nor are the card's (other.md)");
+    expect(git(w.remote, "rev-parse", "refs/heads/card")).toBe(w.before);
+  });
+
   it("asks the checks about the base's own tip, and says the base is red when they fail there too (env_broken, not `other`)", async () => {
     const w = await world("conflict");
     const red: StageResult = { outcome: "escalated", detail: { escalation: "env_broken", red_on_base: true, reason: "machine tests fails on the base commit abc1234 too, so this change did not cause it (src/clone.test.ts)" } };
@@ -200,7 +238,7 @@ describe("mergeRound: a branch that no longer merges", () => {
     for (const [name, resolve, checks, said] of [
       ["markers", (path: string) => writeFileSync(join(path, "doc.md"), readFileSync(join(path, "doc.md"), "utf8").replace("three", "3")), { outcome: "pass" }, "conflict markers are left in doc.md"],
       ["outside", (path: string) => { writeFileSync(join(path, "doc.md"), "one\nresolved\nthree\n"); writeFileSync(join(path, "other.md"), "sneaked\n"); }, { outcome: "pass" }, "changed files that had no conflict (other.md)"],
-      ["checks", (path: string) => writeFileSync(join(path, "doc.md"), "one\nresolved\nthree\n"), { outcome: "fail", detail: { error: "lint failed" } }, "the checks failed after merging main: lint failed"],
+      ["checks", (path: string) => writeFileSync(join(path, "doc.md"), "one\nresolved\nthree\n"), { outcome: "fail", detail: { error: "lint failed" } }, "the checks failed after merging main"],
     ] as const) {
       const w = await world("conflict");
       const { d, context } = deps(w, resolve, checks as StageResult);

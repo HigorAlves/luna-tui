@@ -65,6 +65,41 @@ export async function mergeRound(deps: FixDeps, context: StageContext, input: Me
     return { ok: false, result };
   };
   const message = `Merge ${input.base.name} into ${branch}`;
+  let pr: Awaited<ReturnType<typeof gatherPr>> | null = null;
+  const readPr = async (): Promise<StageResult | null> => {
+    if (pr) return null;
+    try {
+      pr = await gatherPr(deps.github, input.slug, input.number);
+      return null;
+    } catch (error) {
+      return escalated(`the PR could not be read: ${messageOf(error)}`);
+    }
+  };
+  /**
+   * The addressing pack, asked once in the folder with one machine comment: null when it answered done (an edit it left uncommitted, its commit
+   * refused, is committed by the host), else the result to stop with. A pack whose commit or `git status` was refused answers `env_broken` and
+   * leaves its edits in the folder; only that escalation, and only with edits left, goes on to the host's commit and the gates after it. A pack
+   * that stopped because it could not decide never has its partial edits shipped, however the checks come out.
+   */
+  const askPack = async (id: string, body: string, label: string, noInstall: boolean, failed: string, paths: string[]): Promise<StageResult | null> => {
+    const thread = { id, path: null, line: null, comments: [{ author: "machine", body: body.slice(0, 6000), at: new Date().toISOString() }] };
+    const addressed = await deps.loop.runPack("addressing", subContext(ctxWork, label), { threads: { pr: pr!, threads: [thread] }, ...(noInstall ? { install: false as const } : {}) });
+    const answer = PrAddressAnswer.safeParse(addressed.detail?.answer);
+    const stoppedFor = addressed.outcome === "escalated" ? addressed.detail?.escalation : answer.success && answer.data.kind === "escalated" ? answer.data.escalation : undefined;
+    const leftEdits = stoppedFor === "env_broken" && (await git("status", "--porcelain")).stdout.trim() !== "";
+    if (!leftEdits) {
+      if (addressed.outcome !== "pass") return escalated(`${failed}: ${postable(String(addressed.detail?.error ?? addressed.detail?.reason ?? addressed.outcome), 300)}`, "other", { conflicts: paths.slice(0, 10) });
+      if (!answer.success) return escalated("the addressing pack gave no usable answer for the conflicts", "other", { conflicts: paths.slice(0, 10) });
+      if (answer.data.kind === "escalated") return escalated(postable(answer.data.reason || answer.data.summary || "the addressing pack asked for a person", 400), answer.data.escalation ?? "other", { conflicts: paths.slice(0, 10) });
+    }
+    // The pack's own commit can be refused (its tool rules match a plain `git commit`, not `git -C <dir> commit`), leaving the edits uncommitted.
+    // The host commits them: the gates and checks read the commit like the pack's own, and only its tree ships.
+    if ((await git("status", "--porcelain")).stdout.trim() !== "") {
+      await git("add", "-A");
+      await git("commit", "--quiet", "--no-verify", "--no-gpg-sign", "-m", `luna: ${message} (${id})`);
+    }
+    return null;
+  };
 
   const merged = await git("merge", "--no-ff", "--no-commit", "--no-verify", input.base.sha);
   const conflicted = (await git("diff", "--name-only", "-z", "--diff-filter=U")).stdout.split("\0").filter(Boolean);
@@ -81,41 +116,20 @@ export async function mergeRound(deps: FixDeps, context: StageContext, input: Me
     const withMarkers = await headOfWorktree(run, work);
     if (!withMarkers) return stop(escalated("the merge's head could not be read"));
 
-    let pr;
-    try {
-      pr = await gatherPr(deps.github, input.slug, input.number);
-    } catch (error) {
-      return stop(escalated(`the PR could not be read: ${messageOf(error)}`));
-    }
+    const unread = await readPr();
+    if (unread) return stop(unread);
     const listed = conflicted.slice(0, CONFLICTS_SHOWN).map((p) => `- ${p}`).join("\n");
     const body = [
       `The branch conflicts with ${input.base.name} (${input.base.sha.slice(0, 7)}), which moved since the branch left it. The machine merged it; git's conflict markers are committed in:`,
       listed,
       "Resolve every conflict in those files and touch no other file. Keep this card's change. Carry in what the base added or changed: it is newer than the branch, so a fact, a section or a code path the base brought stays, written the way this card writes (its style, its rules). Remove every marker line. Then commit. Run git as plain `git status` and `git commit` from the folder you are in; a command that starts `git -C` is refused.",
     ].join("\n");
-    const thread = { id: "merge", path: null, line: null, comments: [{ author: "machine", body: body.slice(0, 6000), at: new Date().toISOString() }] };
     // Markers in a manifest or lockfile break the machine's install before the pack begins (DISC-53: packages/ui/package.json, `yarn install
     // --immutable`); the pack then resolves text without the dependencies, and the checks below install on the resolved tree.
     const installBreaks = conflicted.some(installReads);
-    const addressed = await deps.loop.runPack("addressing", subContext(ctxWork, `merge-${input.label}`), { threads: { pr, threads: [thread] }, ...(installBreaks ? { install: false as const } : {}) });
-    const answer = PrAddressAnswer.safeParse(addressed.detail?.answer);
-    // A pack whose commit or `git status` was refused answers `env_broken` and leaves the resolution edited in the folder. Only that
-    // escalation, and only with edits left, goes on to the host's commit and the same gates below; a pack that stopped because it could
-    // not decide the resolution never has its partial edits shipped, however the checks come out.
-    const stoppedFor = addressed.outcome === "escalated" ? addressed.detail?.escalation : answer.success && answer.data.kind === "escalated" ? answer.data.escalation : undefined;
-    const leftEdits = stoppedFor === "env_broken" && (await git("status", "--porcelain")).stdout.trim() !== "";
-    if (!leftEdits) {
-      if (addressed.outcome !== "pass") return stop(escalated(`the conflicts with ${input.base.name} could not be resolved: ${postable(String(addressed.detail?.error ?? addressed.detail?.reason ?? addressed.outcome), 300)}`, "other", { conflicts: conflicted.slice(0, 10) }));
-      if (!answer.success) return stop(escalated("the addressing pack gave no usable answer for the conflicts", "other", { conflicts: conflicted.slice(0, 10) }));
-      if (answer.data.kind === "escalated") return stop(escalated(postable(answer.data.reason || answer.data.summary || "the addressing pack asked for a person", 400), answer.data.escalation ?? "other", { conflicts: conflicted.slice(0, 10) }));
-    }
+    const asked = await askPack("resolution", body, `merge-${input.label}`, installBreaks, `the conflicts with ${input.base.name} could not be resolved`, conflicted);
+    if (asked) return stop(asked);
 
-    // The pack's own commit can be refused (its tool rules match a plain `git commit`, not `git -C <dir> commit`), leaving the resolution edited and uncommitted.
-    // The host commits it: the checks below read the commit like the pack's own, and only its tree ships.
-    if ((await git("status", "--porcelain")).stdout.trim() !== "") {
-      await git("add", "-A");
-      await git("commit", "--quiet", "--no-verify", "--no-gpg-sign", "-m", `luna: ${message} (resolution)`);
-    }
     const after = await headOfWorktree(run, work);
     if (!after || after === withMarkers) return stop(escalated(`the conflicts with ${input.base.name} were not resolved: nothing was committed`, "other", { conflicts: conflicted.slice(0, 10) }));
     if ((await git("merge-base", "--is-ancestor", withMarkers, after)).code !== 0) return stop(escalated("the resolution does not build on the merge; nothing was pushed"));
@@ -133,9 +147,49 @@ export async function mergeRound(deps: FixDeps, context: StageContext, input: Me
     resolvedTree = (await git("rev-parse", `${after}^{tree}`)).stdout.trim();
   }
 
+  /** The second round: the pack fixes what fails only on the merged tree, then the gates, a new merge commit and the checks again. */
+  const repairRound = async (failedChecks: StageResult): Promise<{ final: string; checked: StageResult } | { stop: StageResult }> => {
+    const unread = await readPr();
+    if (unread) return { stop: unread };
+    const start = await headOfWorktree(run, work);
+    if (!start) return { stop: escalated("the merge's head could not be read") };
+    const fork = (await git("merge-base", before, input.base.sha)).stdout.trim();
+    const cardFiles = SHA.test(fork) ? (await git("diff", "--no-renames", "-z", "--name-only", fork, before)).stdout.split("\0").filter(Boolean) : [];
+    const allowed = new Set([...conflicted, ...cardFiles]);
+    const findings = (failedChecks.detail?.findings ?? failedChecks.findings ?? []) as Array<{ title?: string; body?: string }>;
+    const failures = findings.length > 0 ? findings.map((f) => `### ${f.title ?? "a check failed"}\n${String(f.body ?? "").slice(-2500)}`).join("\n\n") : String(failedChecks.detail?.error ?? failedChecks.detail?.summary ?? "the checks failed");
+    const body = [
+      `The machine merged ${input.base.name} (${input.base.sha.slice(0, 7)}) into the branch and the conflicts are resolved, but these checks fail on the merged tree while they pass on the branch before the merge and on ${input.base.name}: the merge itself broke them.`,
+      failures.slice(0, 4000),
+      "Fix them. You may edit the files that had conflicts and the files this card's branch changes; no other file. Keep this card's change and keep what the base brought: where the card deleted or moved code that the base changed, leave it deleted and carry the base's change to where the card moved that code. Then commit. Run git as plain `git status` and `git commit` from the folder you are in; a command that starts `git -C` is refused.",
+    ].join("\n\n");
+    const asked = await askPack("merge-fix", body, `merge-fix-${input.label}`, false, `the checks failed after merging ${input.base.name} and the pack could not fix them`, conflicted);
+    if (asked) return { stop: asked };
+    const after = await headOfWorktree(run, work);
+    if (!after || after === start) return { stop: escalated(`the checks failed after merging ${input.base.name} and the second round committed nothing`, "other", { findings }) };
+    if ((await git("merge-base", "--is-ancestor", start, after)).code !== 0) return { stop: escalated("the second round does not build on the merge; nothing was pushed") };
+    const touched = (await git("diff", "--no-renames", "-z", "--name-only", start, after)).stdout.split("\0").filter(Boolean);
+    const outside = touched.filter((p) => !allowed.has(p));
+    if (outside.length > 0) return { stop: escalated(`the second round changed files that neither conflicted nor are the card's (${outside.slice(0, 5).join(", ")}); nothing was pushed`, "other", { paths: outside.slice(0, 10) }) };
+    const left: string[] = [];
+    for (const path of touched) {
+      const shown = await git("show", `${after}:${path}`);
+      if (shown.code === 0 && MARKER.test(shown.stdout)) left.push(path);
+    }
+    if (left.length > 0) return { stop: escalated(`conflict markers are left in ${left.slice(0, 5).join(", ")}; nothing was pushed`, "other", { conflicts: left.slice(0, 10) }) };
+    const tree = (await git("rev-parse", `${after}^{tree}`)).stdout.trim();
+    const remade = await git("commit-tree", tree, "-p", before, "-p", input.base.sha, "-m", message);
+    const head = remade.stdout.trim();
+    if (remade.code !== 0 || !SHA.test(head)) return { stop: escalated(`the merge commit could not be made: ${postable((remade.stderr || remade.stdout).trim(), 300)}`) };
+    await git("update-ref", `refs/heads/${branch}`, head);
+    await git("reset", "--hard", "--quiet", head);
+    const again = await deps.loop.checks!(subContext(ctxWork, `merge-checks-${input.label}-2`), before, input.base.sha);
+    return { final: head, checked: again };
+  };
+
   // The one commit that ships: the resolved tree, with the branch's head and the base as its parents.
   const made = await git("commit-tree", resolvedTree, "-p", before, "-p", input.base.sha, "-m", message);
-  const final = made.stdout.trim();
+  let final = made.stdout.trim();
   if (made.code !== 0 || !SHA.test(final)) return stop(escalated(`the merge commit could not be made: ${postable((made.stderr || made.stdout).trim(), 300)}`));
   await git("merge", "--abort").catch(() => {});
   await git("update-ref", `refs/heads/${branch}`, final);
@@ -144,12 +198,23 @@ export async function mergeRound(deps: FixDeps, context: StageContext, input: Me
   // The project's checks run on exactly what will be pushed.
   // A red check is asked again on the base's own tip and on the branch's head from before the merge: a failure either already had is not the
   // merge's (the base red without this card, or the card's own, which CI watch sends back to Build), so the merge ships and only what it broke stops it.
-  const checked = deps.loop.checks ? await deps.loop.checks(subContext(ctxWork, `merge-checks-${input.label}`), before, input.base.sha) : null;
+  let checked = deps.loop.checks ? await deps.loop.checks(subContext(ctxWork, `merge-checks-${input.label}`), before, input.base.sha) : null;
   if (!checked) return stop(escalated("no checks runner is wired to prove the merge"));
+  // A failure only the merged tree has (DISC-53: develop's audit change to a router the card moved into a lambda, develop's new /docs route
+  // against the card's route test) gets one more round: the pack sees the failures and may edit the conflicted files and the files the card's
+  // branch changes, to carry the base's change to where the card moved that code. The same gates and checks follow; still red, a person decides.
+  let second = false;
+  if (checked.outcome === "fail") {
+    second = true;
+    const repaired = await repairRound(checked);
+    if ("stop" in repaired) return stop(repaired.stop);
+    final = repaired.final;
+    checked = repaired.checked;
+  }
   if (checked.outcome === "escalated" && checked.detail?.red_on_base === true) {
     return stop(escalated(`${input.base.name} is red without this card: ${postable(String(checked.detail.reason ?? "its checks fail"), 300)}`, "env_broken", { red_on_base: true, base: input.base.sha, tests: checked.detail.tests ?? [] }));
   }
-  if (checked.outcome !== "pass") return stop(escalated(`the checks failed after merging ${input.base.name}: ${failureGist(String(checked.detail?.error ?? checked.detail?.summary ?? checked.outcome), 300)}`, "other", { findings: checked.detail?.findings ?? checked.findings ?? [] }));
+  if (checked.outcome !== "pass") return stop(escalated(`the checks failed after merging ${input.base.name}${second ? " and a second round with the pack did not fix them" : ""}: ${failureGist(String(checked.detail?.error ?? checked.detail?.summary ?? checked.outcome), 300)}`, "other", { findings: checked.detail?.findings ?? checked.findings ?? [] }));
 
   const remoteNow = await deps.github.prHeadSha(input.slug, input.number).catch(() => null);
   if (remoteNow && remoteNow !== before) return stop(escalated(`someone pushed to the PR (${remoteNow.slice(0, 7)}) while the merge was checked; nothing was pushed`, "head_moved"));
