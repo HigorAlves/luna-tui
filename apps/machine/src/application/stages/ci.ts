@@ -286,7 +286,7 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
       if (checks.length === 0) {
         return { outcome: "pass", detail: { step: "checks", checks, note: "no CI checks are configured on this PR" } };
       }
-      const failed = failedOf(checks);
+      let failed = failedOf(checks);
       if (failed.length === 0) {
         // Green after a Build fix: the red the last round named was a real failure, if it was the same job.
         const before = acted || rebased || !deps.lastRed ? null : await deps.lastRed(task.id).catch(() => null);
@@ -295,7 +295,7 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
       }
 
       // Red: what kind of red is a typed decision on the failing job and its log; only a real failure asks the investigator for the fix.
-      const ci = await gather(checks, failed);
+      let ci = await gather(checks, failed);
       const settings = deps.policy ? await deps.policy(task.repoPath ?? null) : { reruns: 1, autoRebase: 1 };
       const decide = deps.decide ?? null;
       const asked = decide
@@ -327,7 +327,11 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
           checks = (next as { checks: Check[] }).checks;
           if (failedOf(checks).length === 0) return { outcome: "pass", detail: { step: "checks", verdict: "infra", class: "infra", checks, note: "infrastructure failure, re-run passed" } };
         }
-        return infraEscalation(runId && settings.reruns > 0 ? `; it stayed red after ${settings.reruns} re-run${settings.reruns === 1 ? "" : "s"}` : "");
+        if (!runId || settings.reruns < 1) return infraEscalation("");
+        // Still red after the re-run: not transient, so the class was likely wrong (DISC-53: "Coverage thresholds not met" read as infra). The
+        // investigator reads the job as for a real failure; it may still find the infrastructure at fault, and then a person decides with its reason.
+        failed = failedOf(checks);
+        ci = await gather(checks, failed);
       }
       if (kind === "drift") {
         if (rebased || settings.autoRebase < 1) return person("the base branch moved under the change and the branch was not rebased automatically", "other", ["rebase the branch by hand and approve", "merge the default branch into the branch and approve"]);

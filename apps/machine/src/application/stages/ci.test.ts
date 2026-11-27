@@ -212,22 +212,30 @@ describe("ci_watch classifies a red run by a typed decision", () => {
   it("does not read a re-run as green while GitHub lists only the other checks, nor as red while it still shows the old job", async () => {
     // PR #216 (2026-11-08): right after the re-run the list held only Vercel and GitGuardian; "nothing red" passed while fresh-clone was queued.
     const gap = setup({ polls: red([{ name: "vercel", state: "SUCCESS", link: "https://vercel.com/x" }], checks(["lint", "FAILURE"])), classOf: "infra" });
-    expect(await gap.run(gap.context)).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken" } });
+    // The re-run's red is the answer once it is listed: the investigator reads it (green by default here), never the partial list.
+    expect(await gap.run(gap.context)).not.toMatchObject({ detail: { note: "infrastructure failure, re-run passed" } });
+    expect(gap.runPack).toHaveBeenCalledTimes(1);
     const stale = setup({ polls: red(checks(["lint", "FAILURE"]), checks(["lint", "SUCCESS"])), classOf: "flake", staleAfterRerun: 1 });
     // The first poll after the re-run still shows the old red job: that is not the re-run's answer, so the green one after it is.
     expect(await stale.run(stale.context)).toMatchObject({ outcome: "pass", detail: { note: "flake, re-run passed" } });
   });
 
-  it("sends an infrastructure failure to a person when it stays red after the re-run, or when no re-run is allowed", async () => {
-    const red2 = setup({ polls: red(checks(["lint", "FAILURE"])), classOf: "infra" });
-    const result = await red2.run(red2.context);
-    expect(red2.github.rerunFailedJobs).toHaveBeenCalledTimes(1);
-    expect(red2.runPack).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ outcome: "escalated", detail: { class: "infra", escalation: "env_broken" } });
-    expect((result.detail as { reason: string }).reason).toContain("stayed red after 1 re-run");
+  it("hands an infrastructure failure that stays red after the re-run to the investigator, since it is not transient (DISC-53: 'Coverage thresholds not met' was classed infra)", async () => {
+    const fixable = setup({ polls: red(checks(["lint", "FAILURE"])), classOf: "infra", pack: pack({ verdict: "fixable", summary: "@discover/domain functions 88.9% < 90%", findings: [finding] }) });
+    const result = await fixable.run(fixable.context);
+    expect(fixable.github.rerunFailedJobs).toHaveBeenCalledTimes(1);
+    expect(fixable.runPack).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ outcome: "fail", detail: { verdict: "fixable", class: "infra" } });
+    // The investigator may still find the infrastructure at fault: a person decides with its reason.
+    const infra = setup({ polls: red(checks(["lint", "FAILURE"])), classOf: "infra", pack: pack({ verdict: "infra", summary: "the registry is down", reason: "the registry is down" }) });
+    expect(await infra.run(infra.context)).toMatchObject({ outcome: "escalated", detail: { verdict: "infra", reason: "the registry is down" } });
+  });
+
+  it("sends an infrastructure failure to a person when no re-run is allowed", async () => {
     const none = setup({ polls: red(), classOf: "infra", reruns: 0 });
     expect(await none.run(none.context)).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken" } });
     expect(none.github.rerunFailedJobs).not.toHaveBeenCalled();
+    expect(none.runPack).not.toHaveBeenCalled();
   });
 
   it("rebases on a drift when verify.auto_rebase allows, and watches again; otherwise a person decides", async () => {
