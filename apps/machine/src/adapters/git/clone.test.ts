@@ -656,7 +656,8 @@ describe("scopeStartOf", () => {
     wgit(workspace.path, "merge", "-q", "--no-edit", "FETCH_HEAD");
     wgit(workspace.path, "update-ref", "refs/luna/base", main);
     const from = await scopeStartOf(workspace.path, repo, start);
-    expect(from).toBe(main);
+    // The card's start with main merged in (main was merged, not rebased onto): it holds main, and only the card's own change is measured.
+    expect(wgit(workspace.path, "merge-base", "--is-ancestor", main, from)).toBe("");
     expect(wgit(workspace.path, "diff", "--name-only", `${from}..HEAD`)).toBe("card.md");
     // A base ref the branch does not hold (main moved on, not merged) is not taken.
     git(repo, "commit", "-q", "--allow-empty", "-m", "later");

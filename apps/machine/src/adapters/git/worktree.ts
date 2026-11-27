@@ -583,13 +583,34 @@ export async function branchBase(worktreePath: string, repoPath: string): Promis
  * card's (PR #213: about 130 paths, two scope reds, an escalation). The base is a commit of the repository's or the machine's own ref, never
  * one the card made, so moving to it cannot hide the card's own change.
  */
+/** `start` with `base` merged in, as a commit (never on a branch) the scope is measured from; null when `start` is not in HEAD's history or is
+ *  already below `base` (a rebase, or nothing merged), or when git cannot make it. A file both sides changed keeps git's merge of it, markers
+ *  and all, so the card's resolution of it is measured as the card's: it is. */
+async function mergedStart(worktreePath: string, start: string, base: string): Promise<string | null> {
+  const git = (...args: string[]) => exec("git", [...HOST_GIT, ...at(worktreePath), ...args]);
+  if ((await git("merge-base", "--is-ancestor", start, "HEAD")).code !== 0) return null;
+  if ((await git("merge-base", "--is-ancestor", start, base)).code === 0) return null;
+  // `merge-tree --write-tree` prints the merged tree first, and exits 1 when files conflict; the tree is written either way.
+  const tree = (await git("merge-tree", "--write-tree", start, base)).stdout.split("\n")[0]?.trim() ?? "";
+  if (!/^[0-9a-f]{40,64}$/.test(tree)) return null;
+  const made = await git("commit-tree", tree, "-p", start, "-p", base, "-m", "luna: the card's start with its base merged in (scope)");
+  const sha = made.stdout.trim();
+  return made.code === 0 && /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
+}
+
 export async function scopeStartOf(worktreePath: string, repoPath: string, start: string): Promise<string> {
   if (!/^[0-9a-f]{7,64}$/.test(start)) return start;
   // The machine's own base ref, when the branch holds it: only the machine writes it (a cut, a rebase, a merge round), so it needs no tie to
   // `start`. A card that started on a parent's tip which was then squash-merged (PR #214) has a start that is in no default-branch history.
   const own = await exec("git", [...HOST_GIT, ...at(worktreePath), "rev-parse", "--verify", "--quiet", `${BASE_REF}^{commit}`]);
   const ownSha = own.code === 0 ? own.stdout.trim() : "";
-  if (/^[0-9a-f]{40,64}$/.test(ownSha) && ownSha !== start && (await exec("git", [...HOST_GIT, ...at(worktreePath), "merge-base", "--is-ancestor", ownSha, "HEAD"])).code === 0) return ownSha;
+  if (/^[0-9a-f]{40,64}$/.test(ownSha) && ownSha !== start && (await exec("git", [...HOST_GIT, ...at(worktreePath), "merge-base", "--is-ancestor", ownSha, "HEAD"])).code === 0) {
+    // The base was merged into the branch, not rebased onto: `start` is still in the branch's history and is not below the base. Measured from
+    // the base, everything the card added before `start` reads as new (DISC-53: the tests commit's scenario tests read as "changed after the tests
+    // commit"). The scope starts at the card's start with the base merged in, so only the card's own change since then is measured.
+    const merged = await mergedStart(worktreePath, start, ownSha);
+    return merged ?? ownSha;
+  }
   const base = await branchBase(worktreePath, repoPath);
   if (!base || base === start) return start;
   const descends = await exec("git", [...HOST_GIT, ...at(worktreePath), "merge-base", "--is-ancestor", start, base]);
