@@ -1152,6 +1152,23 @@ describe("a failing check asked again on the base", () => {
     expect(second.clone).not.toHaveBeenCalled();
   });
 
+  it("keeps a red answer for a lint, type or format check for hours: no service can fix it, and the next merge round asks nothing (DISC-53)", async () => {
+    const lint = { name: "lint", run: "pnpm run lint" };
+    const red = "packages/domain/src/Task/index.ts:8:1 organizeImports\n  × The imports and exports are not sorted.";
+    const cache = new Map<string, never>();
+    const first = rig({ head: () => fail(red), base: () => fail(red), checks: [lint], cache });
+    await first.runner(first.context);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.now() + 40 * 60_000);
+      const second = rig({ head: () => fail(red), base: () => fail(red), checks: [lint], cache });
+      expect((await second.runner(second.context)).detail).toMatchObject({ redOnBase: [{ name: "lint" }] });
+      expect(second.ran.filter((r) => r.where === "base")).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("asks again once a red answer is a couple of minutes old: the environment it blamed may have been fixed since", async () => {
     const cache = new Map<string, never>();
     const first = rig({ head: () => fail(RED), base: () => fail(RED), cache });

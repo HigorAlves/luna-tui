@@ -126,6 +126,8 @@ export interface BaseAnswer {
   at: number;
   /** What it printed when it failed (capped), so each card compares its own failing lines with it. */
   output?: string;
+  /** A check that reads only the code (lint, types, format): its answer lasts `STEADY_TTL_MS`. */
+  steady?: boolean;
 }
 const SHA = /^[0-9a-f]{40,64}$/;
 const BASE_CACHE_CAP = 500;
@@ -133,6 +135,10 @@ const BASE_CHECK_TIMEOUT_MS = 15 * MINUTE;
 /** A green answer holds for a while (a base commit does not change). A red one is short-lived: the environment it names (a service that was down) is fixed without the image or the commit changing, and the retry must ask again. */
 const GREEN_TTL_MS = 30 * MINUTE;
 const RED_TTL_MS = 2 * MINUTE;
+/** A lint, type or format check reads only the code: no service or network it could be waiting on, so its answer for a (base, image) holds for
+ *  hours, red or green, and a merge round's later checks ask nothing again (DISC-53 cloned, installed and linted develop once per round). */
+const STEADY_TTL_MS = 6 * 60 * MINUTE;
+const STEADY_CHECK = /lint|type-?check|check-types|tsc|format|fmt|prettier|eslint|biome/i;
 /** How much of a failing base run is kept to compare against: the end of it, where runners print what failed. */
 const BASE_OUTPUT_CAP = 200_000;
 const baseCache = new Map<string, BaseAnswer>();
@@ -140,7 +146,7 @@ const remember = (cache: Map<string, BaseAnswer>, key: string, answer: BaseAnswe
   if (cache.size >= BASE_CACHE_CAP) cache.delete(cache.keys().next().value!);
   cache.set(key, answer);
 };
-const stillFresh = (answer: BaseAnswer | undefined): answer is BaseAnswer => !!answer && Date.now() - answer.at < (answer.red ? RED_TTL_MS : GREEN_TTL_MS);
+const stillFresh = (answer: BaseAnswer | undefined): answer is BaseAnswer => !!answer && Date.now() - answer.at < (answer.steady ? STEADY_TTL_MS : answer.red ? RED_TTL_MS : GREEN_TTL_MS);
 
 /** How much code finding_classify gets around each finding. */
 const EXCERPT_RADIUS = 8;
@@ -486,7 +492,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
                   if (signal.aborted) return aborted();
                   // A run that timed out or could not start says nothing.
                   if (ran.code === 127 || (ran.code !== 0 && Date.now() - started >= BASE_CHECK_TIMEOUT_MS)) continue;
-                  answer = { red: ran.code !== 0, at: Date.now(), ...(ran.code !== 0 ? { output: `${ran.stdout}\n${ran.stderr}`.slice(-BASE_OUTPUT_CAP) } : {}) };
+                  answer = { red: ran.code !== 0, at: Date.now(), ...(STEADY_CHECK.test(`${r.name ?? ""} ${attempt.argv.join(" ")}`) ? { steady: true } : {}), ...(ran.code !== 0 ? { output: `${ran.stdout}\n${ran.stderr}`.slice(-BASE_OUTPUT_CAP) } : {}) };
                   remember(cache, key, answer);
                 }
                 if (!answer.red || !answer.output) continue;
