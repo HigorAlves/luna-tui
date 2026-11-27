@@ -142,7 +142,8 @@ export async function mergeRound(deps: FixDeps, context: StageContext, input: Me
   await git("reset", "--hard", "--quiet", final);
 
   // The project's checks run on exactly what will be pushed.
-  // A red check is asked again on the base's own tip: the same failure there means the base is red without this card, not that the merge broke it.
+  // A red check is asked again on the base's own tip and on the branch's head from before the merge: a failure either already had is not the
+  // merge's (the base red without this card, or the card's own, which CI watch sends back to Build), so the merge ships and only what it broke stops it.
   const checked = deps.loop.checks ? await deps.loop.checks(subContext(ctxWork, `merge-checks-${input.label}`), before, input.base.sha) : null;
   if (!checked) return stop(escalated("no checks runner is wired to prove the merge"));
   if (checked.outcome === "escalated" && checked.detail?.red_on_base === true) {

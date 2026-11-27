@@ -392,8 +392,9 @@ export async function buildRealStages(
       exec: checksExec,
       runPack: null,
       stateDir: config.stateDir,
-      // A red check is asked again on the base: a merge round names the base's own tip, a fix the commit the branch left.
-      baseline: { ...hostBaselineWorkspace, ...(base ? { base: async () => base } : {}) },      policy: async (repoPath) => {
+      // A red check is asked again on the base: a merge round names the base's own tip, a fix the commit the branch left. A merge round asks the
+      // branch's head from before the merge too (`since`): what the branch already failed on is not the merge's (DISC-53: the card's own lint).
+      baseline: { ...hostBaselineWorkspace, ...(base ? { base: async () => base, also: async () => since } : {}) },      policy: async (repoPath) => {
         const { checks, services, decisions, factory } = await policies.for(repoPath);
         return { checks, services, decisions, verify: factory.verify };
       },

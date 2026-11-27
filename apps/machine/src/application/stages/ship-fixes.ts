@@ -55,7 +55,8 @@ export interface ReviewLoop {
   decide: ShipDecide | null;
   runPack: (pack: LoopPack, context: StageContext, extra: LoopExtra) => Promise<StageResult>;
   /** The project's checks over what changed since `since` (a commit): a verifying run with no review pack. Absent, no fix is trusted.
-   *  A red check is asked again on `base` (a commit the machine read; by default where the branch left the repository's), and red there too comes back `escalated` with `red_on_base`. */
+   *  A red check is asked again on `base` (a commit the machine read; by default where the branch left the repository's), and red there too is noted in `redOnBase`;
+   *  with a `base` given (a merge round), on `since` too, so a failure the branch already had is not the merge's. */
   checks?: (context: StageContext, since: string, base?: string) => Promise<StageResult>;
   /** A fresh clone of the card's clone at the PR's head, where a fix is made; absent, the fix runs in the card's own folder. */
   fresh?: {

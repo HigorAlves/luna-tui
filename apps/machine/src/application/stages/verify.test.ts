@@ -1016,21 +1016,21 @@ describe("a failing check asked again on the base", () => {
   const ok: ExecResult = { code: 0, stdout: "ok\n", stderr: "" };
 
   /** One verifyRunner whose checks run as `head` answers in the card's folder and as `base` answers in the throwaway clone at the base. */
-  function rig(opts: { head: (script: string) => ExecResult; base: (script: string) => ExecResult; checks?: Array<{ name: string; run: string }>; cache?: Map<string, never>; withBaseline?: boolean; checksBudgetMs?: number; slow?: string }) {
+  function rig(opts: { head: (script: string) => ExecResult; base: (script: string) => ExecResult; also?: { sha: string; answer: (script: string) => ExecResult }; checks?: Array<{ name: string; run: string }>; cache?: Map<string, never>; withBaseline?: boolean; checksBudgetMs?: number; slow?: string }) {
     const stateDir = mkdtempSync(join(tmpdir(), "verify-base-"));
-    const ran: Array<{ where: "head" | "base"; script: string; image?: string; services?: unknown; identity?: string }> = [];
-    const clone = vi.fn(async (_card: string, _branch: string, _run: string, _sha: string) => ({ path: "/base-clone" }));
+    const ran: Array<{ where: "head" | "base" | "also"; script: string; image?: string; services?: unknown; identity?: string }> = [];
+    const clone = vi.fn(async (_card: string, _branch: string, _run: string, sha: string) => ({ path: opts.also && sha === opts.also.sha ? "/also-clone" : "/base-clone" }));
     const remove = vi.fn(async (_path: string) => {});
     const pack = vi.fn(async () => ({ outcome: "pass" as const, detail: { answer: { verdict: "pass", summary: "fine", findings: [] } } }));
     const checks = opts.checks ?? [{ name: "machine tests", run: "pnpm --filter @hardness/machine test" }];
     const runner = verifyRunner({
       exec: async (_command, args, options) => {
-        const where = options.cwd === "/base-clone" ? "base" : "head";
+        const where = options.cwd === "/base-clone" ? "base" : options.cwd === "/also-clone" ? "also" : "head";
         const script = args[args.length - 1]!;
         ran.push({ where, script, image: options.image, services: options.services, identity: options.env?.GIT_AUTHOR_NAME });
         // A check that eats the budget: it outlasts it and fails, as a killed run does.
         if (where === "head" && opts.slow && script.includes(opts.slow)) await new Promise((r) => setTimeout(r, (opts.checksBudgetMs ?? 0) + 30));
-        return (where === "base" ? opts.base : opts.head)(script);
+        return (where === "base" ? opts.base : where === "also" ? opts.also!.answer : opts.head)(script);
       },
       ...(opts.checksBudgetMs !== undefined ? { checksBudgetMs: () => opts.checksBudgetMs! } : {}),
       runPack: pack,
@@ -1039,7 +1039,7 @@ describe("a failing check asked again on the base", () => {
       policy: async () => ({ checks: checks.map((c) => ({ ...c, minutes: 1 })) as never, services: { db: { image: "postgres" } } }),
       changedPaths: async () => null,
       imageOf: async () => "sha256:image",
-      ...(opts.withBaseline === false ? {} : { baseline: { base: async () => BASE, clone, remove, cache: (opts.cache ?? new Map()) as never } }),
+      ...(opts.withBaseline === false ? {} : { baseline: { base: async () => BASE, ...(opts.also ? { also: async () => opts.also!.sha } : {}), clone, remove, cache: (opts.cache ?? new Map()) as never } }),
     });
     const context = { task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
     return { runner, context, ran, clone, remove, pack };
@@ -1088,6 +1088,27 @@ describe("a failing check asked again on the base", () => {
     const result = await runner(context);
     expect(result.outcome).toBe("fail");
     expect(result.findings).toMatchObject([{ title: "lint failed" }]);
+  });
+
+  it("asks a second commit too when it is given one, and a failing line found on either is not the change's (DISC-53's merge round: lint errors the card's head already had, and develop's own)", async () => {
+    const lint = { name: "lint", run: "pnpm run lint" };
+    const HEAD = "c".repeat(40);
+    const developLint = "packages/domain/src/Task/index.ts:8:1 organizeImports\n  × The imports and exports are not sorted.";
+    const cardOwn = "apps/lambdas/evaluation/src/legacyContract.integration.test.ts:1:1 format\n  × Formatter would have printed the following content:";
+    const merged = `${developLint}\n${cardOwn}`;
+    const { runner, context, ran } = rig({ head: () => fail(merged), base: () => fail(developLint), also: { sha: HEAD, answer: () => fail(cardOwn) }, checks: [lint] });
+    const result = await runner(context);
+    expect(result.outcome).not.toBe("fail");
+    expect(result.detail).toMatchObject({ redOnBase: [{ name: "lint" }] });
+    expect(ran.filter((r) => r.where === "also")).toHaveLength(1);
+  });
+
+  it("still blames the change for a line neither commit has (the merge itself broke it)", async () => {
+    const lint = { name: "lint", run: "pnpm run lint" };
+    const developLint = "packages/domain/src/Task/index.ts:8:1 organizeImports\n  × The imports and exports are not sorted.";
+    const merged = `${developLint}\ninfra/cdk/lib/discover-stack.ts:40:1 format\n  × Formatter would have printed the following content:`;
+    const { runner, context } = rig({ head: () => fail(merged), base: () => fail(developLint), also: { sha: "c".repeat(40), answer: () => fail(developLint) }, checks: [lint] });
+    expect((await runner(context)).outcome).toBe("fail");
   });
 
   it("sends back only the checks the change broke when others fail on the base too, and says which were the base's", async () => {

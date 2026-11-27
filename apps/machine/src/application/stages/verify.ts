@@ -86,6 +86,9 @@ export interface VerifyDeps {
   baseline?: {
     /** The commit the change is measured from; null when unknown. Default: where the branch left the repository's HEAD (or its parent's branch, for a stacked card). */
     base?: (worktreePath: string, repoPath: string) => Promise<string | null>;
+    /** A second commit a failing check is asked on when the base alone does not account for it: a failing line or test file found on either is
+     *  not the change's. A merge round names the card's head from before the merge, so what the branch already failed on is not the merge's. */
+    also?: () => Promise<string | null>;
     /** A throwaway clone of the card's repository at `sha`, on `branch`: made like the fresh clone Verify runs in, never the card's own folder. */
     clone: (cardPath: string, branch: string, runId: string, sha: string) => Promise<{ path: string }>;
     remove: (path: string) => Promise<void>;
@@ -118,8 +121,11 @@ interface CheckReport {
 
 /** Whether a check fails on the base too, and when that was asked. */
 export interface BaseAnswer {
+  /** The check failed on that commit. */
   red: boolean;
   at: number;
+  /** What it printed when it failed (capped), so each card compares its own failing lines with it. */
+  output?: string;
 }
 const SHA = /^[0-9a-f]{40,64}$/;
 const BASE_CACHE_CAP = 500;
@@ -127,6 +133,8 @@ const BASE_CHECK_TIMEOUT_MS = 15 * MINUTE;
 /** A green answer holds for a while (a base commit does not change). A red one is short-lived: the environment it names (a service that was down) is fixed without the image or the commit changing, and the retry must ask again. */
 const GREEN_TTL_MS = 30 * MINUTE;
 const RED_TTL_MS = 2 * MINUTE;
+/** How much of a failing base run is kept to compare against: the end of it, where runners print what failed. */
+const BASE_OUTPUT_CAP = 200_000;
 const baseCache = new Map<string, BaseAnswer>();
 const remember = (cache: Map<string, BaseAnswer>, key: string, answer: BaseAnswer): void => {
   if (cache.size >= BASE_CACHE_CAP) cache.delete(cache.keys().next().value!);
@@ -431,52 +439,70 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       if (base && SHA.test(base)) {
         baseSha = base;
         const cache = baseline.cache ?? baseCache;
-        let clone: { path: string } | null = null;
-        try {
-          for (const r of failed) {
-            const attempt = attempts.get(r.name ?? "");
-            if (!attempt || attempt.timedOut) continue;
-            const files = failingTestFiles(attempt.text);
-            const narrowed = narrowedArgv(attempt.argv, files);
-            const key = [base, state.image ?? "", r.name, narrowed ? "files" : "whole", files.join(",")].join("\0");
-            let answer = cache.get(key);
-            if (!stillFresh(answer)) {
-              answer = undefined;
-              const started = Date.now();
-              let ran: ExecResult;
-              try {
-                clone ??= await baseline.clone(cwd, task.branch, `${context.runId}-base`, base);
-                const argv = narrowed ?? attempt.argv;
-                ran = await checkExec(argv[0]!, argv.slice(1), {
-                  cwd: clone.path,
-                  signal,
-                  timeoutMs: BASE_CHECK_TIMEOUT_MS,
-                  env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" },
-                  services,
-                  repoPath: task.repoPath,
-                  trust: trustOf(task),
-                  ...(attempt.secrets.length > 0 ? { secrets: attempt.secrets } : {}),
-                  ...(state.image ? { image: state.image } : {}),
-                });
-              } catch {
-                // The base could not be asked (no clone, no sandbox): the answer is unknown, so the check stays the change's.
-                if (signal.aborted) return aborted();
-                continue;
+        {
+          const also = baseline.also ? await baseline.also().catch(() => null) : null;
+          const commits = [base, ...(also && SHA.test(also) && also !== base ? [also] : [])];
+          const clones = new Map<string, { path: string }>();
+          try {
+            for (const r of failed) {
+              const attempt = attempts.get(r.name ?? "");
+              if (!attempt || attempt.timedOut) continue;
+              const files = failingTestFiles(attempt.text);
+              const narrowed = narrowedArgv(attempt.argv, files);
+              // Each commit's failing output, joined: the change's failure is not its own when every test file it failed on is named there, and
+              // (with no test file to name: a lint, a typecheck) every failing line it shows is in that output too, so a lint error only the change
+              // has never hides behind a base whose lint is red (DISC-53's develop had 24 lint errors of its own).
+              const seen: string[] = [];
+              for (const commit of commits) {
+                const key = [commit, state.image ?? "", r.name, narrowed ? "files" : "whole", files.join(",")].join("\0");
+                let answer = cache.get(key);
+                if (!stillFresh(answer)) {
+                  answer = undefined;
+                  const started = Date.now();
+                  let ran: ExecResult;
+                  try {
+                    let clone = clones.get(commit);
+                    if (!clone) {
+                      clone = await baseline.clone(cwd, task.branch, `${context.runId}-${commit === base ? "base" : "also"}`, commit);
+                      clones.set(commit, clone);
+                    }
+                    const argv = narrowed ?? attempt.argv;
+                    ran = await checkExec(argv[0]!, argv.slice(1), {
+                      cwd: clone.path,
+                      signal,
+                      timeoutMs: BASE_CHECK_TIMEOUT_MS,
+                      env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" },
+                      services,
+                      repoPath: task.repoPath,
+                      trust: trustOf(task),
+                      ...(attempt.secrets.length > 0 ? { secrets: attempt.secrets } : {}),
+                      ...(state.image ? { image: state.image } : {}),
+                    });
+                  } catch {
+                    // The commit could not be asked (no clone, no sandbox): the answer is unknown, so it accounts for nothing.
+                    if (signal.aborted) return aborted();
+                    continue;
+                  }
+                  if (signal.aborted) return aborted();
+                  // A run that timed out or could not start says nothing.
+                  if (ran.code === 127 || (ran.code !== 0 && Date.now() - started >= BASE_CHECK_TIMEOUT_MS)) continue;
+                  answer = { red: ran.code !== 0, at: Date.now(), ...(ran.code !== 0 ? { output: `${ran.stdout}\n${ran.stderr}`.slice(-BASE_OUTPUT_CAP) } : {}) };
+                  remember(cache, key, answer);
+                }
+                if (!answer.red || !answer.output) continue;
+                seen.push(answer.output);
+                const together = seen.join("\n");
+                const named = failingTestFiles(together);
+                const sameLines = files.length > 0 || alsoOnBase(attempt.text, together);
+                if (files.every((f) => named.includes(f)) && sameLines) {
+                  redOnBase.push({ name: r.name ?? "", tests: files });
+                  break;
+                }
               }
-              if (signal.aborted) return aborted();
-              // A run that timed out or could not start says nothing. A run that fails must name every file the change failed on: a file the card added is not on the base.
-              if (ran.code === 127 || (ran.code !== 0 && Date.now() - started >= BASE_CHECK_TIMEOUT_MS)) continue;
-              const named = failingTestFiles(`${ran.stdout}\n${ran.stderr}`);
-              // With no test file to name (a lint, a typecheck), every failing line the change shows must be in the base's output too: a lint error
-              // only the change has never hides behind a base whose lint is red (DISC-53's develop had 24 lint errors of its own).
-              const sameLines = files.length > 0 || alsoOnBase(attempt.text, `${ran.stdout}\n${ran.stderr}`);
-              answer = { red: ran.code !== 0 && files.every((f) => named.includes(f)) && sameLines, at: Date.now() };
-              remember(cache, key, answer);
             }
-            if (answer.red) redOnBase.push({ name: r.name ?? "", tests: files });
+          } finally {
+            for (const c of clones.values()) await baseline.remove(c.path).catch(() => {});
           }
-        } finally {
-          if (clone) await baseline.remove(clone.path).catch(() => {});
         }
         failed = failed.filter((r) => !redOnBase.some((red) => red.name === r.name));
       }
