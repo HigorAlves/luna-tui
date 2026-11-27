@@ -86,7 +86,7 @@ export const refreshPrsRoute = createRoute({
   path: "/github/prs/refresh",
   tags: TAGS,
   summary: "Poll GitHub now",
-  responses: { 200: jsonContent(PrSnapshotSchema, "The fresh snapshot"), ...errorResponses() },
+  responses: { 200: jsonContent(PrSnapshotSchema, "The fresh snapshot"), ...errorResponses(429, 502) },
 });
 
 export const allPrsRoute = createRoute({
@@ -117,7 +117,7 @@ export const mergePrRoute = createRoute({
   summary: "Merge a PR",
   description: "Merges the PR the way its repo allows (squash, else a merge commit, else a rebase) and deletes its branch; 409 `not_ready` unless its split is `ready_to_merge`.",
   request: { params: PrParams },
-  responses: { 200: jsonContent(z.object({ merged: z.literal(true) }), "Merged"), ...errorResponses(400, 404, 409) },
+  responses: { 200: jsonContent(z.object({ merged: z.literal(true) }), "Merged"), ...errorResponses(400, 404, 409, 429, 502) },
 });
 
 export const closePrRoute = createRoute({
@@ -128,7 +128,7 @@ export const closePrRoute = createRoute({
   summary: "Close a PR without merging",
   description: "Closes the PR; its branch stays. 409 `pr_busy` while a PR task runs for it, 404 `no_pull` for a PR not in the inbox.",
   request: { params: PrParams },
-  responses: { 200: jsonContent(z.object({ closed: z.literal(true) }), "Closed"), ...errorResponses(400, 404, 409) },
+  responses: { 200: jsonContent(z.object({ closed: z.literal(true) }), "Closed"), ...errorResponses(400, 404, 409, 429, 502) },
 });
 
 export const prActionRoute = createRoute({
@@ -139,7 +139,7 @@ export const prActionRoute = createRoute({
   summary: "Run a PR task on a PR",
   description: "Creates and starts a PR task (`ci_fix`, `review`, `address`) on the PR's own head branch. 409 `pr_busy` while a task runs for the PR, `no_checkout` without a clone, `fork` for a fix or an address on a fork head, `own_pr` for a review of your own PR.",
   request: { params: PrParams, ...jsonBody(PrActionInput) },
-  responses: { 201: jsonContent(TaskSchema, "The PR task"), ...errorResponses(400, 404, 409, 422, 429, 503) },
+  responses: { 201: jsonContent(TaskSchema, "The PR task"), ...errorResponses(400, 404, 409, 422, 429, 502, 503) },
 });
 
 export const cloneRoute = createRoute({

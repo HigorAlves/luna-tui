@@ -46,7 +46,8 @@ import { swaggerUI } from "@hono/swagger-ui";
 import { HTTPException } from "hono/http-exception";
 import { conformanceOn, responseConformance, violations } from "./openapi/conformance.ts";
 import { createOpenApiRouter } from "./openapi/router.ts";
-import { BadRequest, CLIENT_CLOSED, body, fail, type RouteDeps } from "./routes/kit.ts";
+import { BadRequest, CLIENT_CLOSED, body, fail, githubRefusal, type RouteDeps } from "./routes/kit.ts";
+import { GitHubError } from "../../application/github.ts";
 import { machineRoutes } from "./routes/machine.routes.ts";
 import { eventsRoutes } from "./routes/events.routes.ts";
 import { reposRoutes } from "./routes/repos.routes.ts";
@@ -198,6 +199,7 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     if (error instanceof ForkError) return fail(c, 409, "fork", error.message);
     if (error instanceof OwnPrError) return fail(c, 409, "own_pr", error.message);
     if (error instanceof CloneError) return fail(c, 400, "invalid_request", error.message);
+    if (error instanceof GitHubError && error.status !== undefined) return githubRefusal(c, error);
     if (error instanceof SlackRefusedError) return fail(c, 409, "slack_refused", error.message);
     if (error instanceof BadRelationError) return fail(c, 400, "invalid_request", error.message);
     if (error instanceof NoItemError) return fail(c, 404, "no_item", error.message);

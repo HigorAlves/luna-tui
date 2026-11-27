@@ -2,6 +2,7 @@ import type { PrSnapshot, PullRequest } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { GitHubError } from "../../application/github.ts";
 import { Pipeline } from "../../application/pipeline.ts";
 import { PrBusyError } from "../../application/pr-tasks.ts";
 import { CloneError, NoPullError, NotReadyError, type PullsPort } from "../../application/pulls.ts";
@@ -157,6 +158,25 @@ describe("the PR inbox over HTTP", () => {
     expect(await started.json()).toEqual({ repo: "o/b", dest: "/r/b", cloning: true });
     expect((await app.request("/github/clone", post({ repo: "o/b", dest: "r/b" }))).status).toBe(400);
     expect((await app.request("/github/clone", post({ repo: "nope", dest: "/r/b" }))).status).toBe(400);
+  });
+
+  it("answers GitHub's own refusals in its words, never as the machine failing", async () => {
+    const refusing = (error: GitHubError): PullsPort => ({ ...fakePulls([pr(1, "ready_to_merge")]), merge: async () => Promise.reject(error) });
+    const answer = async (error: GitHubError) => {
+      const app = createApp({ db, pipeline, bus: new Bus(), pulls: refusing(error) });
+      const got = await app.request("/github/prs/o/a/1/merge", post({}));
+      return { status: got.status, body: (await got.json()) as { error: string; message: string } };
+    };
+    expect(await answer(new GitHubError("merging o/a#1 failed (422): Base branch was modified", 422))).toEqual({
+      status: 502,
+      body: { error: "github_failed", message: "merging o/a#1 failed (422): Base branch was modified" },
+    });
+    expect((await answer(new GitHubError("merging o/a#1 failed (401): Bad credentials", 401))).body.error).toBe("github_unauthorized");
+    const limited = await answer(new GitHubError("merging o/a#1 failed (403): API rate limit exceeded", 403));
+    expect(limited).toMatchObject({ status: 429, body: { error: "github_rate_limited" } });
+    expect((await answer(new GitHubError("merging o/a#1 failed (429): slow down", 429))).status).toBe(429);
+    // An error the machine raised itself, with no status from GitHub, is still the machine failing.
+    expect((await answer(new GitHubError("GitHub answered no data"))).status).toBe(500);
   });
 
   it("answers 404 for the inbox when the poller is off", async () => {

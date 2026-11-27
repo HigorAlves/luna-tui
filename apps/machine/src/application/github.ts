@@ -7,9 +7,12 @@ import type { ReviewContext, ThreadsContext } from "@hardness/contracts";
 import type { PrNode } from "../domain/pull-request.ts";
 
 export class GitHubError extends Error {
-  constructor(message: string) {
+  /** GitHub's HTTP status when GitHub itself refused; absent for a failure the machine raised. */
+  readonly status: number | undefined;
+  constructor(message: string, status?: number) {
     super(message);
     this.name = "GitHubError";
+    this.status = status;
   }
 }
 

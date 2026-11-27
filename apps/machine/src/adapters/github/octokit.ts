@@ -103,7 +103,7 @@ async function call<T>(what: string, run: () => Promise<T>): Promise<T> {
     if (error instanceof GitHubError) throw error;
     const message = (error as { message?: string })?.message ?? String(error);
     const status = (error as { status?: number })?.status;
-    throw new GitHubError(`${what} failed${status ? ` (${status})` : ""}: ${message}`);
+    throw new GitHubError(`${what} failed${status ? ` (${status})` : ""}: ${message}`, status);
   }
 }
 
@@ -490,7 +490,7 @@ export class OctokitGitHub implements GitHub {
       const { status, message = "" } = error as { status?: number; message?: string };
       // A repo with a merge queue refuses a direct merge; the queue merges it, and its branch is not ours to delete yet. With `queue: false` the refusal is the answer.
       if (status === 405 && /merge queue/i.test(message) && pr.node_id && options.queue !== false) return this.enqueuePr(pr.node_id, options.sha);
-      throw new GitHubError(`merging ${slug}#${number} failed${status ? ` (${status})` : ""}: ${message || String(error)}`);
+      throw new GitHubError(`merging ${slug}#${number} failed${status ? ` (${status})` : ""}: ${message || String(error)}`, status);
     }
     // The branch goes with it, as `gh pr merge --delete-branch` did; a fork's branch is not ours to delete.
     if (options.deleteBranch !== false && head.repo?.full_name.toLowerCase() === slug.toLowerCase()) {

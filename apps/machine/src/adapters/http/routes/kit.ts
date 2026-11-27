@@ -1,4 +1,5 @@
 // What the route modules share: the error helpers, the body parser, the id checks and the inputs only a route reads.
+import type { GitHubError } from "../../../application/github.ts";
 import { type ApiError, EngineId, TaskSource } from "@hardness/contracts";
 import { TicketChatContext, ForemanContext } from "@hardness/contracts";
 import { realpath } from "node:fs/promises";
@@ -55,6 +56,14 @@ export const CLIENT_CLOSED = 499;
 /** An error answer. The status stays its literal type, so an OpenAPI route's handler type-checks it against the statuses the route declares. */
 export const fail = <S extends 400 | 404 | 409 | 422 | 429 | 500 | 502 | 503 | typeof CLIENT_CLOSED>(c: Context, status: S, error: string, message: string, extra: Record<string, unknown> = {}) =>
   c.json<ApiError, S & ContentfulStatusCode>({ error, message, ...extra }, status as S & ContentfulStatusCode);
+
+/** GitHub refused (the error carries its status): a rate limit is 429 `github_rate_limited`, a refused token 502
+ *  `github_unauthorized`, anything else 502 `github_failed`, each in GitHub's words. Never 500: the machine did not fail. */
+export function githubRefusal(c: Context, { status, message }: GitHubError) {
+  if (status === 429 || (status === 403 && /rate limit/i.test(message))) return fail(c, 429, "github_rate_limited", message);
+  if (status === 401) return fail(c, 502, "github_unauthorized", message);
+  return fail(c, 502, "github_failed", message);
+}
 
 /** `X-Luna-Client`: who calls `POST /runs` (`notch`), for its record. */
 export const CLIENT_NAME = /^[\w.-]{1,64}$/;

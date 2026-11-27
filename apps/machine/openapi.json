@@ -14175,7 +14175,7 @@
             }
           },
           "429": {
-            "description": "Too many runs: the queue is full, a budget is spent, or the engine is rate limited",
+            "description": "Too many runs: the queue is full, a budget is spent, the engine is rate limited, or GitHub is (`github_rate_limited`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14205,7 +14205,7 @@
             }
           },
           "502": {
-            "description": "The model gave no valid answer",
+            "description": "The model gave no valid answer, or GitHub refused (`github_failed`, `github_unauthorized`, in GitHub's words)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14345,7 +14345,7 @@
             }
           },
           "429": {
-            "description": "Too many runs: the queue is full, a budget is spent, or the engine is rate limited",
+            "description": "Too many runs: the queue is full, a budget is spent, the engine is rate limited, or GitHub is (`github_rate_limited`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14375,7 +14375,7 @@
             }
           },
           "502": {
-            "description": "The model gave no valid answer",
+            "description": "The model gave no valid answer, or GitHub refused (`github_failed`, `github_unauthorized`, in GitHub's words)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15177,7 +15177,7 @@
             }
           },
           "429": {
-            "description": "Too many runs: the queue is full, a budget is spent, or the engine is rate limited",
+            "description": "Too many runs: the queue is full, a budget is spent, the engine is rate limited, or GitHub is (`github_rate_limited`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15343,7 +15343,7 @@
             }
           },
           "429": {
-            "description": "Too many runs: the queue is full, a budget is spent, or the engine is rate limited",
+            "description": "Too many runs: the queue is full, a budget is spent, the engine is rate limited, or GitHub is (`github_rate_limited`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15373,7 +15373,7 @@
             }
           },
           "502": {
-            "description": "The model gave no valid answer",
+            "description": "The model gave no valid answer, or GitHub refused (`github_failed`, `github_unauthorized`, in GitHub's words)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15644,7 +15644,7 @@
             }
           },
           "429": {
-            "description": "Too many runs: the queue is full, a budget is spent, or the engine is rate limited",
+            "description": "Too many runs: the queue is full, a budget is spent, the engine is rate limited, or GitHub is (`github_rate_limited`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15674,7 +15674,7 @@
             }
           },
           "502": {
-            "description": "The model gave no valid answer",
+            "description": "The model gave no valid answer, or GitHub refused (`github_failed`, `github_unauthorized`, in GitHub's words)",
             "content": {
               "application/json": {
                 "schema": {
@@ -33162,8 +33162,28 @@
               }
             }
           },
+          "429": {
+            "description": "Too many runs: the queue is full, a budget is spent, the engine is rate limited, or GitHub is (`github_rate_limited`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "500": {
             "description": "The machine failed (`internal`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The model gave no valid answer, or GitHub refused (`github_failed`, `github_unauthorized`, in GitHub's words)",
             "content": {
               "application/json": {
                 "schema": {
@@ -33420,8 +33440,28 @@
               }
             }
           },
+          "429": {
+            "description": "Too many runs: the queue is full, a budget is spent, the engine is rate limited, or GitHub is (`github_rate_limited`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "500": {
             "description": "The machine failed (`internal`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The model gave no valid answer, or GitHub refused (`github_failed`, `github_unauthorized`, in GitHub's words)",
             "content": {
               "application/json": {
                 "schema": {
@@ -33554,8 +33594,28 @@
               }
             }
           },
+          "429": {
+            "description": "Too many runs: the queue is full, a budget is spent, the engine is rate limited, or GitHub is (`github_rate_limited`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "500": {
             "description": "The machine failed (`internal`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The model gave no valid answer, or GitHub refused (`github_failed`, `github_unauthorized`, in GitHub's words)",
             "content": {
               "application/json": {
                 "schema": {
@@ -33711,7 +33771,7 @@
             }
           },
           "429": {
-            "description": "Too many runs: the queue is full, a budget is spent, or the engine is rate limited",
+            "description": "Too many runs: the queue is full, a budget is spent, the engine is rate limited, or GitHub is (`github_rate_limited`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -33722,6 +33782,16 @@
           },
           "500": {
             "description": "The machine failed (`internal`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The model gave no valid answer, or GitHub refused (`github_failed`, `github_unauthorized`, in GitHub's words)",
             "content": {
               "application/json": {
                 "schema": {
