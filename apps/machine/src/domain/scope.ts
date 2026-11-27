@@ -111,6 +111,12 @@ export function removedLinesOf(diff: string): AddedLine[] {
   return removed;
 }
 
+/** A lint or format config file, and a line in one that turns a check off: a rule set to off, a tool disabled, a path ignored (DISC-53: biome.json
+ *  turned the formatter off for a scenario test so lint would pass). An ignore file's every added line ignores a path. */
+const CHECK_CONFIG = /(?:^|\/)(?:biome\.jsonc?|\.eslintrc(?:\.\w+)?|eslint\.config\.\w+|\.prettierrc(?:\.\w+)?|prettier\.config\.\w+|\.stylelintrc(?:\.\w+)?|ruff\.toml|\.rubocop\.yml|\.golangci\.ya?ml)$/;
+const IGNORE_FILE = /(?:^|\/)\.(?:prettier|eslint|biome|stylelint)ignore$/;
+const CHECK_OFF = /"enabled"\s*:\s*false|:\s*["']off["']|:\s*0\s*[,}]?\s*$|["']?ignore(?:Patterns|s)?["']?\s*:|"!\S|# *noqa|disable/i;
+const checkSwitchedOff = (l: { path: string; line: string }): boolean => (IGNORE_FILE.test(l.path) ? l.line.trim() !== "" && !l.line.trim().startsWith("#") : CHECK_CONFIG.test(l.path) && CHECK_OFF.test(l.line));
 const SWITCHED_OFF = /\b(?:it|test|describe)\.(?:skip|only|skipIf|runIf|todo|fixme|fails)\b|\bx(?:it|describe|test)\(|@Ignore\b|@Disabled\b|\bt\.Skip(?:Now|f)?\(|#\[ignore\b|pytest\.mark\.(?:skip|skipif|xfail)|\bpytest\.skip\(|@unittest\.(?:skip|skipIf|skipUnless|expectedFailure)|\bthis\.skip\(/;
 const ISSUE_CAP = 120;
 const SCENARIO_TAG = /@scenario:([A-Za-z0-9_-]+)/g;
@@ -185,7 +191,7 @@ export function scopeFacts(input: { nameStatus: string; addedLines: AddedLine[];
       ...changed.filter((p) => !deleted.has(p) && SECRET_FILE.test(p)),
       ...input.addedLines.filter((l) => TOKEN.test(l.line)).map((l) => `${l.path}: ${TOKEN.exec(l.line)![0].slice(0, 4)}\u2026`),
     ],
-    switchedOff: input.addedLines.filter((l) => SWITCHED_OFF.test(l.line)).map((l) => `${l.path}: ${l.line.trim()}`),
+    switchedOff: input.addedLines.filter((l) => SWITCHED_OFF.test(l.line) || checkSwitchedOff(l)).map((l) => `${l.path}: ${l.line.trim()}`),
     lockedTouched: lockedTouchedOf(input.locks, input.commits ?? [], input.picked ?? new Set()),
     weakened: weakenedOf(input.removedLines ?? [], input.addedLines, input.nameStatus, input.scenarioTests ?? [], input.protectedPaths ?? [], input.inlineTests ?? []),
   };

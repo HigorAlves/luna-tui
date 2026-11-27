@@ -137,6 +137,14 @@ describe("tests switched off in place", () => {
   ])("lists %s on an added line of a file", (text) => {
     expect(scopeFacts({ ...none, nameStatus: "M\tsrc/cart.test.ts", addedLines: line(text) }).switchedOff).toEqual([`src/cart.test.ts: ${text}`]);
   });
+  it("lists a lint or format check switched off in its config file (DISC-53: biome.json turned the formatter off for a scenario test to make lint pass)", () => {
+    const biome = [{ path: "biome.json", line: '\t\t\t"includes": ["apps/lambdas/evaluation/src/ui.contract.test.ts"],' }, { path: "biome.json", line: '\t\t\t\t"enabled": false' }];
+    expect(scopeFacts({ ...none, nameStatus: "M\tbiome.json", addedLines: biome }).switchedOff).toEqual(['biome.json: "enabled": false']);
+    const eslint = [{ path: "eslint.config.mjs", line: "    'no-unused-vars': 'off'," }, { path: ".prettierignore", line: "src/legacy/**" }];
+    expect(scopeFacts({ ...none, nameStatus: "M\teslint.config.mjs\nM\t.prettierignore", addedLines: eslint }).switchedOff).toEqual(["eslint.config.mjs: 'no-unused-vars': 'off',", ".prettierignore: src/legacy/**"]);
+    // A rule turned up, or the same words in an ordinary source file, are not a check switched off.
+    expect(scopeFacts({ ...none, nameStatus: "M\tbiome.json\nM\tsrc/a.ts", addedLines: [{ path: "biome.json", line: '"noUnusedImports": "error"' }, { path: "src/a.ts", line: "const enabled = false" }] }).switchedOff).toEqual([]);
+  });
   it("leaves an ordinary test and a word that only contains skip alone", () => {
     expect(scopeFacts({ ...none, nameStatus: "M\tsrc/a.ts", addedLines: [{ path: "src/a.ts", line: "const skipped = true; it('x', () => {})" }] }).switchedOff).toEqual([]);
   });
