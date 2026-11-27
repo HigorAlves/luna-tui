@@ -192,8 +192,8 @@ describe("a graph and the image that builds it", () => {
   });
 });
 
-describe("a graph is only as fresh as the image it was built in", () => {
-  it("rebuilds when the repository's image changed at the same commit, and says so in isFresh", async () => {
+describe("a graph is only as fresh as the Graphify it was built with", () => {
+  it("rebuilds when the repository's image changed at the same commit and Graphify's version cannot be read, and says so in isFresh", async () => {
     let image = "img:1";
     const { graph, repo, seen } = setup(0, { image: async () => image, imageId: async (i) => `sha256:id-of-${i}` });
     const first = await graph.build(repo);
@@ -206,6 +206,16 @@ describe("a graph is only as fresh as the image it was built in", () => {
     expect(seen).toHaveLength(2);
     expect(seen[1]?.image).toBe("img:2");
     expect(second.image).toBe("sha256:id-of-img:2");
+  });
+
+  it("keeps the graph across an image change when the image's Graphify is the same version: a runner rebuild does not change a code-only graph (DISC-53: each rebuild cost an hour of graph CPU beside the checks)", async () => {
+    let image = "img:1";
+    const { graph, repo, seen } = setup(0, { image: async () => image, imageId: async (i) => `sha256:id-of-${i}`, graphifyVersion: async () => "0.9.34" });
+    const first = await graph.build(repo);
+    image = "img:2";
+    expect(await graph.isFresh(repo, first, first.commit)).toBe(true);
+    await graph.build(repo);
+    expect(seen).toHaveLength(1);
   });
 
   it("stamps the id of the image the sandbox ran in, resolved once", async () => {

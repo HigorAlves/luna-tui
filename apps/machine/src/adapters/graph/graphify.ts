@@ -148,7 +148,8 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
     }
     const have = await readStamp(target);
     const expected = (await deps.graphifyVersion?.().catch(() => null)) ?? null;
-    if (have && (expected === null || have.graphify === expected) && (imageName === null || have.image === imageName)) {
+    // The same rule as `isFresh`: Graphify's version decides; the image only when the version cannot be read.
+    if (have && (expected !== null ? have.graphify === expected : imageName === null || have.image === imageName)) {
       const previous = current(repoPath);
       if (previous !== target) await point(repoDir, commit);
       return have;
@@ -297,8 +298,10 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
     async isFresh(repoPath, stamp, baseCommit) {
       const expected = (await deps.graphifyVersion?.().catch(() => null)) ?? null;
       if (expected !== null && stamp.graphify !== expected) return false;
-      // The image the repository's stages run in now: a graph built in another one (its base was approved anew) is stale, and one that cannot be compared is too.
-      if (deps.imageId) {
+      // The graph is code-only, built by the Graphify pinned in the machine's layer, which every image carries: with that version known and the
+      // same, another image builds the same graph (DISC-53: every runner rebuild cost an hour of graph CPU beside the checks). Only when the version
+      // cannot be read is the image the proxy: a graph built in another one is stale, and one that cannot be compared is too.
+      if (expected === null && deps.imageId) {
         const now = await (async () => deps.imageId!(typeof deps.image === "function" ? await deps.image(repoPath) : deps.image))().catch(() => null);
         if (now === null || stamp.image !== now) return false;
       }
