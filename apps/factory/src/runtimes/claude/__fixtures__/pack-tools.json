@@ -840,7 +840,11 @@
       "Bash(cargo:*)",
       "Bash(pip:*)",
       "Bash(pytest:*)",
-      "Bash(make:*)"
+      "Bash(make:*)",
+      "Bash(git rm:*)",
+      "Bash(git -C /work rm:*)",
+      "Bash(git mv:*)",
+      "Bash(git -C /work mv:*)"
     ],
     "tools": [
       "Read",

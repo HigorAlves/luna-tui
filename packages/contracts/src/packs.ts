@@ -1800,7 +1800,9 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     agent: "code-fixer",
     helpers: [{ role: "reply-drafter", engine: "claude:haiku" }],
     skills: ["receiving-code-review", "verification-before-completion", "tdd", "code-discovery"],
-    access: access(READ_ONLY, { agent: true, write: true, luna: LEDGER_TOOLS, commands: ["git add", "git commit", "git restore", "git diff", "git status", "git log", ...CHECK_COMMANDS] }),
+    // `git rm` and `git mv`: a resolution may have to remove or move a tracked file (DISC-53's merge: the card deleted a router the base had
+    // changed, and the pack, with Edit, Write and `git restore` only, could not delete it again). The merge round's gates still bound the files.
+    access: access(READ_ONLY, { agent: true, write: true, luna: LEDGER_TOOLS, commands: ["git add", "git commit", "git rm", "git mv", "git restore", "git diff", "git status", "git log", ...CHECK_COMMANDS] }),
     writable: true,
     maxTurns: 60,
     timeoutMs: 25 * MINUTE,

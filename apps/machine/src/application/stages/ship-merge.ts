@@ -122,7 +122,7 @@ export async function mergeRound(deps: FixDeps, context: StageContext, input: Me
     const body = [
       `The branch conflicts with ${input.base.name} (${input.base.sha.slice(0, 7)}), which moved since the branch left it. The machine merged it; git's conflict markers are committed in:`,
       listed,
-      "Resolve every conflict in those files and touch no other file. Keep this card's change. Carry in what the base added or changed: it is newer than the branch, so a fact, a section or a code path the base brought stays, written the way this card writes (its style, its rules). Remove every marker line. Then commit. Run git as plain `git status` and `git commit` from the folder you are in; a command that starts `git -C` is refused.",
+      "Resolve every conflict in those files and touch no other file. Keep this card's change. Carry in what the base added or changed: it is newer than the branch, so a fact, a section or a code path the base brought stays, written the way this card writes (its style, its rules). Remove every marker line. A file one side deleted is removed with `git rm <path>`. Then commit. Run git as plain `git status` and `git commit` from the folder you are in; a command that starts `git -C` is refused.",
     ].join("\n");
     // Markers in a manifest or lockfile break the machine's install before the pack begins (DISC-53: packages/ui/package.json, `yarn install
     // --immutable`); the pack then resolves text without the dependencies, and the checks below install on the resolved tree.
@@ -161,7 +161,7 @@ export async function mergeRound(deps: FixDeps, context: StageContext, input: Me
     const body = [
       `The machine merged ${input.base.name} (${input.base.sha.slice(0, 7)}) into the branch and the conflicts are resolved, but these checks fail on the merged tree while they pass on the branch before the merge and on ${input.base.name}: the merge itself broke them.`,
       failures.slice(0, 4000),
-      "Fix them. You may edit the files that had conflicts and the files this card's branch changes; no other file. Keep this card's change and keep what the base brought: where the card deleted or moved code that the base changed, leave it deleted and carry the base's change to where the card moved that code. Then commit. Run git as plain `git status` and `git commit` from the folder you are in; a command that starts `git -C` is refused.",
+      "Fix them. You may edit the files that had conflicts and the files this card's branch changes; no other file. Keep this card's change and keep what the base brought: where the card deleted or moved code that the base changed, leave it deleted (`git rm <path>`) and carry the base's change to where the card moved that code. Then commit. Run git as plain `git status` and `git commit` from the folder you are in; a command that starts `git -C` is refused.",
     ].join("\n\n");
     const asked = await askPack("merge-fix", body, `merge-fix-${input.label}`, false, `the checks failed after merging ${input.base.name} and the pack could not fix them`, conflicted);
     if (asked) return { stop: asked };
