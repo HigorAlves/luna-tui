@@ -41,6 +41,8 @@ export interface StageContext {
   planChangedSinceTests?: boolean;
   /** For implementing: locked test files a person approved changing (the plan approved after the implementer's test change named them). */
   unlockedTests?: string[];
+  /** For implementing: files outside the plan that earlier Build runs of the card declared, in runs whose scope did not fail: still declared now. */
+  acceptedOutOfMap?: string[];
   /** For implementing: the minutes Build's budget has left; a run's time limit is the smaller of its own and this. */
   budgetMinutes?: number;
   /** For delivering: what the draft PR's body is fed, from the rows of the stages before it (the open findings, the files outside the map, each scenario's test file). */

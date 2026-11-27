@@ -632,6 +632,8 @@ export interface CheckAnswer {
 export type { Decide };
 
 export interface BuildChecksDeps {
+  /** Files outside the plan that earlier Build runs of the card declared, in runs the scope check did not fail: still declared in this one. */
+  accepted?: string[];
   /** The run's `/out` on the host: answers go to `checks/` beside the requests. */
   outDir: string;
   repoPath: string | null;
@@ -726,7 +728,9 @@ export function buildChecks(deps: BuildChecksDeps) {
     return { verdict: verdict === "proceed" && problems.length > 0 ? "flag" : verdict, problems };
   };
 
-  const factsFor = async (declared: { path: string }[]): Promise<ScopeFacts> => {
+  const factsFor = async (declaredNow: { path: string }[]): Promise<ScopeFacts> => {
+    // What earlier runs of the card declared stays declared: this run's scope is the card's whole change since its start, not this run's alone.
+    const declared = [...declaredNow, ...(deps.accepted ?? []).map((path) => ({ path }))];
     if (deps.inputCommit === null) throw new Error("there is no commit the card's change can be measured from");
     const [nameStatus, diff] = await Promise.all([deps.git.nameStatus(deps.inputCommit, "HEAD"), deps.git.diff(deps.inputCommit, "HEAD")]);
     const addedLines: AddedLine[] = addedLinesOf(diff);

@@ -72,6 +72,14 @@ describe("the files the implementer declared to scope_check", () => {
   });
 });
 
+describe("files earlier Build runs of the card declared", () => {
+  it("stay declared: a later run measures the card's whole change, and need not declare them again (DISC-53: an accepted client types file read as undeclared)", async () => {
+    const out = mkdtempSync(join(tmpdir(), "build-checks-"));
+    expect((await checks(out, null, { planPresent: true }).finalFacts([])).undeclared).toEqual(["src/extra.ts"]);
+    expect((await checks(out, null, { planPresent: true, accepted: ["src/extra.ts"] }).finalFacts([])).undeclared).toEqual([]);
+  });
+});
+
 describe("a scenario's red check", () => {
   const scenarioCheck: CheckContext = { kind: "red", scenario: { id: "S1", title: "t" }, exists: true, output: "TypeError: x is not a function" };
 

@@ -3506,7 +3506,9 @@ export class Pipeline {
    *  row with the very same error is going nowhere; a human is cheaper than the rest of the
    *  retry cap. Returns the escalation reason, or null when the failures differ. */
   private async stuckReason(id: string, stage: TaskState): Promise<string | null> {
-    const finished = await this.store.findFinishedEvents(id);
+    // Counted from the last approved escalation: a person's go-ahead asks for a retry, so failures before it are not this loop's.
+    const since = await this.lastGoAhead(id);
+    const finished = (await this.store.findFinishedEvents(id)).filter((e) => e.at.getTime() > since);
     const errors: string[] = [];
     for (const event of finished) {
       if (event.payload.stage !== stage) continue;
@@ -3595,8 +3597,17 @@ export class Pipeline {
   }
 
   /** How many implementing runs of the card ended in a scope red (a blocker the scope check found). */
+  /** Scope reds since a person last approved an escalation: an approval is the person's go-ahead, so the next run gets its fix pass again (DISC-53:
+   *  four false reds, before the merge-base fix, made the first real one escalate at once). */
   private async scopeReds(id: string): Promise<number> {
-    return (await this.store.findFinishedEvents(id)).filter((e) => e.payload.stage === "implementing" && objectOf(e.payload.detail)?.scopeRed === true).length;
+    const since = await this.lastGoAhead(id);
+    return (await this.store.findFinishedEvents(id)).filter((e) => e.payload.stage === "implementing" && objectOf(e.payload.detail)?.scopeRed === true && e.at.getTime() > since).length;
+  }
+
+  /** When a person last approved an escalation of this card (epoch ms; 0 for never): the loop guards count from there, since the approval asks for a retry. */
+  private async lastGoAhead(id: string): Promise<number> {
+    const approved = (await this.store.listApprovals(id)).filter((a) => a.kind === "escalated" && a.decision === "approved" && a.decidedAt !== null).map((a) => a.decidedAt!.getTime());
+    return approved.length > 0 ? Math.max(...approved) : 0;
   }
 
   /** The commit the card's first implementing run started from, from the machine's own `stage_runs` rows (the host read it before the container ran); undefined before any run has one. */
@@ -3620,6 +3631,24 @@ export class Pipeline {
    *  existing test the approved plan names by its exact path (a change that retires code changes its tests, and the plan said so). They add
    *  up: approving a second request does not lock the first one's files again. The tests step's own tests stay locked unless a request names
    *  them, and a folder in the plan unlocks nothing. */
+  /** The files outside the plan that the card's earlier Build runs declared, in runs whose scope check did not fail (DISC-53: a later run measures the
+   *  card's whole change since its start, and an accepted declaration read as undeclared). */
+  private async acceptedOutOfMapOf(id: string): Promise<string[]> {
+    const paths = new Set<string>();
+    for (const event of await this.store.findFinishedEvents(id)) {
+      if (event.payload.stage !== "implementing") continue;
+      const detail = objectOf(event.payload.detail);
+      if (detail?.scopeRed === true) continue;
+      const outOfMap = objectOf(detail?.answer)?.outOfMap;
+      if (!Array.isArray(outOfMap)) continue;
+      for (const entry of outOfMap) {
+        const path = objectOf(entry)?.path;
+        if (typeof path === "string" && path) paths.add(path);
+      }
+    }
+    return [...paths];
+  }
+
   private async unlockedTestsOf(id: string): Promise<string[]> {
     const events = await this.events(id);
     const isFinishedBuild = (e: EventRow) => e.kind === "stage.finished" && e.payload.stage === "implementing";
@@ -3789,6 +3818,7 @@ export class Pipeline {
       const testsHoldsToday = testsCommit && stage === "implementing" ? await this.testsHoldsTodayOf(id) : [];
       const planChangedSinceTests = testsCommit && stage === "implementing" ? await this.planChangedSinceTestsOf(id) : false;
       const unlockedTests = stage === "implementing" ? await this.unlockedTestsOf(id) : [];
+      const acceptedOutOfMap = stage === "implementing" ? await this.acceptedOutOfMapOf(id) : [];
       const firstInputCommit = stage === "implementing" && task.route === "feature" ? await this.firstInputCommitOf(id) : undefined;
       // The entry contract of Build: the feature route builds only from what Plan hands over; what is missing goes back to the planner (once per card), then to a person.
       const entry = stage === "implementing" && task.route === "feature" && !resume ? buildEntryOf(approvals, task.record) : null;
@@ -3811,6 +3841,7 @@ export class Pipeline {
         ...(testsHoldsToday.length ? { testsHoldsToday } : {}),
         ...(planChangedSinceTests ? { planChangedSinceTests } : {}),
         ...(unlockedTests.length ? { unlockedTests } : {}),
+        ...(acceptedOutOfMap.length ? { acceptedOutOfMap } : {}),
         ...(firstInputCommit ? { firstInputCommit } : {}),
         signal,
         ...(resume ? { resume: { container: resume.container, inputCommit: resume.inputCommit, engine: resume.engine } } : {}),

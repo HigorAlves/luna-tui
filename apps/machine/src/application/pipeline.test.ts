@@ -526,6 +526,19 @@ describe("a scope problem gets one fix pass, then a person", () => {
     expect(asked).toEqual([]);
   });
 
+  it("counts scope reds afresh after a person approves the escalation: the next run gets its fix pass again (DISC-53: four false reds before a fix made the first real one escalate at once)", async () => {
+    const ran: Array<number> = [];
+    const p = new Pipeline(db, (stage) => (stage === "implementing" ? async () => (ran.push(1), red) : stubs.runnerFor(stage)), { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    expect(ran).toHaveLength(2);
+    expect((await p.get(task.id)).state).toBe("escalated");
+    await p.decide(task.id, "approved");
+    expect(ran).toHaveLength(4);
+    expect((await p.get(task.id)).state).toBe("escalated");
+  });
+
   it("does not count a red that is not a scope red (a failing run of any other kind) against the one fix pass", async () => {
     const ran: Array<number> = [];
     const p = new Pipeline(db, (stage) => (stage === "implementing" ? async () => (ran.push(1), ran.length === 1 ? red : { outcome: "fail" as const }) : stubs.runnerFor(stage)), { inline: true, policies: previewOn, hasConfig: () => true });

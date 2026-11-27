@@ -273,7 +273,7 @@ const SCOPE_TITLES: Record<ScopeIssue["kind"], string> = {
   undeclared_file: "file outside the plan, not declared",
   locked_file: "file another agent holds",
   test_removed: "test removed",
-  switched_off_test: "test switched off in place",
+  switched_off_test: "test or check switched off in place",
   test_weakened: "scenario test changed after the tests commit",
   secret: "secret-looking addition",
   new_dependency: "dependency the plan did not name",
@@ -284,7 +284,7 @@ const SCOPE_ADVICE: Partial<Record<ScopeIssue["kind"], string>> = {
   undeclared_file: "The plan's slices and the code map do not name this file and the answer did not declare it. Revert it, or declare it in outOfMap with the reason the slice needs it.",
   locked_file: "Another agent holds this file for its slice. Revert your change to it; the machine puts the other agent's work on the branch.",
   test_removed: "The change removes this test; restore it.",
-  switched_off_test: "A test was switched off in place (skip, only, ignore, disabled). Turn it back on and fix the code instead.",
+  switched_off_test: "A test or a check was switched off in place (skip, only, ignore, disabled; a lint or format rule turned off or a path ignored in its config). Turn it back on and fix the code instead.",
   test_weakened: "A scenario's tagged test was changed or dropped after the tests commit. Restore it and make it pass.",
   secret: "The change adds something that looks like a secret. Remove it.",
 };
@@ -741,6 +741,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
           ...(extra.testsFiles?.length ? { protectedPaths: extra.testsFiles } : {}),
           // The tests a person unlocked: the final scope check does not count their edits or removal against the change.
           ...(context.unlockedTests?.length ? { unlocked: context.unlockedTests } : {}),
+          // What earlier runs of the card declared: this run's scope is the card's whole change, so their files stay declared.
+          ...(context.acceptedOutOfMap?.length ? { accepted: context.acceptedOutOfMap } : {}),
           ...(extra.inlineTests?.length ? { inlineTests: extra.inlineTests } : {}),
           ...(task.repoPath ? { repoFiles: (paths: string[]) => onDefaultBranch(task.repoPath!, paths) } : {}),
           get decide() {
