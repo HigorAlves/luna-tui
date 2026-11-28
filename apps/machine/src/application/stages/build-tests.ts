@@ -98,6 +98,7 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       return minutes.length > 0 ? { ...context, budgetMinutes: Math.min(...minutes) } : context;
     };
     /** The implementer, and after its last slice the regression sweep: a failing check sends it round again with the check's name and output. */
+    const SWEEP_FINDING_TAIL = 5_000;
     const implementSwept = async (extra: Parameters<BuildTestsDeps["implement"]>[1]): Promise<StageResult> => {
       const first = await budgeted();
       if (!first) return spentResult();
@@ -122,7 +123,20 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
         // The budget is read before each fix run, and the run gets the minutes that are left.
         const next = fixes >= MAX_SWEEP_FIXES ? null : await budgeted();
         if (!next) {
-          return done({ outcome: "fail", detail: { error: `the regression sweep failed: ${names.join(", ")}`, sweepFailures: names } });
+          // Each failing check, with its output, is a finding: the next Build run (a person's retry, a stronger engine) starts from what failed
+          // (DISC-53: the run after a spent budget was handed "Prior findings: (none)").
+          const findings = sweep.failed.map((f) => ({
+            path: "",
+            line: 0,
+            start_line: null,
+            severity: "test" as const,
+            category: "tests" as const,
+            title: `${safe(f.name).slice(0, 60)} failed in the regression sweep`,
+            body: safe(f.tail).slice(-SWEEP_FINDING_TAIL),
+            suggestion_code: null,
+            confidence: 1,
+          }));
+          return { ...done({ outcome: "fail", detail: { error: `the regression sweep failed: ${names.join(", ")}`, sweepFailures: names } }), findings };
         }
         result = await deps.implement(next, { ...extra, sweepFailures: sweep.failed });
         usage = addUsage(usage, result.usage);

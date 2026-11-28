@@ -351,6 +351,8 @@ describe("the regression sweep in Build", () => {
     const result = await buildTestsStep(f.deps)(context([v2]));
     expect(f.calls.filter((c) => c === "implement")).toHaveLength(3);
     expect(result).toMatchObject({ outcome: "fail", detail: { error: expect.stringMatching(/regression sweep failed: lint/), sweep: { status: "failed" } } });
+    // The next Build run is handed what failed (DISC-53: the run after a spent budget was told "Prior findings: (none)").
+    expect(result.findings).toEqual([expect.objectContaining({ title: "lint failed in the regression sweep", body: expect.stringContaining("no-unused-vars at a.ts:3"), severity: "test" })]);
   });
 
   it("returns the summed usage when a fix run fails, and puts only the check names on the stage's result", async () => {
