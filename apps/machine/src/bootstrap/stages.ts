@@ -85,6 +85,7 @@ import { runChecks, runSweep } from "../application/stages/sweep.ts";
 import { confirmOnBase } from "../application/stages/sweep-baseline.ts";
 import { noIdentityDetail } from "../application/env-broken.ts";
 import { rmSync } from "node:fs";
+import { appendFile, mkdir } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
 import { readRegularFile } from "../adapters/fs/bounded.ts";
 import { testExcerpt } from "../domain/test-excerpt.ts";
@@ -461,6 +462,11 @@ export async function buildRealStages(
           },
           { worktree: task.worktreePath, repoPath: task.repoPath, trust: trustOf(task), signal: context.signal, env: process.env, onBlocked },
         );
+        // The sweep's full log (each command, its exit and output) goes in the run's folder: a failure Build cannot read is still on record (DISC-53).
+        if (swept.log?.length) {
+          const dir = join(config.stateDir, "runs", context.runId);
+          await mkdir(dir, { recursive: true }).then(() => appendFile(join(dir, "sweep.log"), `=== ${new Date().toISOString()}\n${swept.log!.join("\n")}\n`)).catch(() => {});
+        }
         // A failing check is asked again on the base, in a fresh clone the machine installs: one that fails there the same way is the repository's
         // own and does not block Build (sweep-baseline.ts).
         if (swept.status !== "failed" || !task.branch) return swept;

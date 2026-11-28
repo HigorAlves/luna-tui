@@ -141,7 +141,9 @@ async function runCommands(opts: RunChecksOptions): Promise<CheckRun> {
       return { reports, log, aborted: false, missingTool };
     }
     log.push(`$ ${cmd}\n(exit ${result.code})\n${text}\n`);
-    reports.push({ name, cmd, ok: result.code === 0, tail: tailOf(timedOut ? `${text}\ntimed out: the checks budget ran out` : text) });
+    // A check that failed having printed nothing still says how it ended (DISC-53: three unit-test checks failed with empty tails).
+    const said = text || (result.code === 0 ? "" : `(the check printed nothing and exited ${result.code}${EXIT_MEANING[result.code] ? `: ${EXIT_MEANING[result.code]}` : ""})`);
+    reports.push({ name, cmd, ok: result.code === 0, tail: tailOf(timedOut ? `${said}\ntimed out: the checks budget ran out` : said) });
   }
   return { reports, log, aborted: false, ...(missingTool ? { missingTool } : {}) };
 }
@@ -166,9 +168,13 @@ export interface SweepOutcome {
   aborted?: boolean;
   /** The environment, not the change, stopped a check (an install that failed, a declared secret that is missing, no isolated network): the stage escalates with this detail. */
   escalated?: Record<string, unknown>;
+  /** Every command the sweep ran, with its exit and output, for the stage's record. */
+  log?: string[];
 }
 
 const SWEEP_TIMEOUT_MS = 30 * 60_000;
+/** What an exit code says when a check printed nothing. */
+const EXIT_MEANING: Record<number, string> = { 137: "killed (SIGKILL), most likely out of memory", 143: "terminated (SIGTERM)", 139: "crashed (SIGSEGV)", 134: "aborted (SIGABRT)" };
 
 export async function runSweep(deps: SweepDeps, input: { worktree: string; repoPath: string; trust?: Trust; signal?: AbortSignal; env: NodeJS.ProcessEnv; onBlocked?: (check: string, rows: BlockedRow[]) => void }): Promise<SweepOutcome> {
   const { checks, services, wholeSuiteMinutes } = await deps.policy(input.repoPath);
@@ -189,5 +195,5 @@ export async function runSweep(deps: SweepDeps, input: { worktree: string; repoP
     return { status: "failed", ran: [], failed: [], escalated };
   }
   const failed = run.reports.filter((r) => !r.ok).map((r) => ({ name: r.name, tail: r.tail }));
-  return { status: failed.length > 0 ? "failed" : "passed", ran: run.reports.map((r) => r.name), failed, ...(run.missingTool ? { missingTool: run.missingTool } : {}), ...(run.aborted ? { aborted: true } : {}) };
+  return { status: failed.length > 0 ? "failed" : "passed", ran: run.reports.map((r) => r.name), failed, log: run.log, ...(run.missingTool ? { missingTool: run.missingTool } : {}), ...(run.aborted ? { aborted: true } : {}) };
 }

@@ -70,6 +70,19 @@ describe("runChecks", () => {
     expect(out.aborted).toBe(false);
   });
 
+  it("says so, with the exit code, when a check fails having printed nothing (DISC-53: three unit-test checks failed with empty tails, and no one could tell why)", async () => {
+    const out = await runChecks({
+      commands: [{ name: "killed", cmd: "k", argv: ["k"] }, { name: "silent", cmd: "s", argv: ["s"] }],
+      exec: async (c) => (c === "k" ? { code: 137, stdout: "", stderr: "" } : { code: 1, stdout: "", stderr: "" }),
+      cwd: "/w",
+      env: {},
+      stage: "implementing",
+      timeoutMs: 60_000,
+    });
+    expect(out.reports[0]!.tail).toMatch(/printed nothing and exited 137.*killed/);
+    expect(out.reports[1]!.tail).toMatch(/printed nothing and exited 1\b/);
+  });
+
   it("stops and says aborted when the stage's signal aborts", async () => {
     const controller = new AbortController();
     const out = await runChecks({ commands: [{ name: "a", cmd: "a", argv: ["a"] }], exec: async () => (controller.abort(), ok), cwd: "/w", env: {}, stage: "implementing", timeoutMs: 1000, signal: controller.signal });
@@ -94,6 +107,12 @@ describe("runSweep", () => {
   it("fails with the failing check's name and the tail of its output", async () => {
     const exec = async (_c: string, args: string[]) => (args[1]!.includes("lint") ? { code: 1, stdout: "", stderr: "lint: unexpected var" } : ok);
     expect(await runSweep(base({ exec }), input)).toMatchObject({ status: "failed", failed: [{ name: "lint", tail: "lint: unexpected var" }] });
+  });
+
+  it("hands back the full log of what ran, each command with its exit and output, for the stage's record", async () => {
+    const exec = async (_c: string, args: string[]) => (args[1]!.includes("lint") ? { code: 1, stdout: "", stderr: "lint: unexpected var" } : ok);
+    const out = await runSweep(base({ exec }), input);
+    expect(out.log?.join("\n")).toMatch(/\(exit 1\)\nlint: unexpected var/);
   });
 
   it("skips, and says so, for a repo with no checks", async () => {
