@@ -7,6 +7,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { branchLinkOf, jiraBranch, slug } from "../../domain/jira-link.ts";
 import { DEFAULT_JIRA_BRANCH } from "../../domain/policy.ts";
 import { rustTestRegions } from "../../domain/rust-test-regions.ts";
+import { addedLinesOf, formattingOnly, removedLinesOf } from "../../domain/scope.ts";
 import { exec, execOrThrow } from "../process/exec.ts";
 import { assertNoNestedRepository, at, isUnderWorkspaces, machineGitDir } from "./machine-repo.ts";
 
@@ -870,6 +871,19 @@ export async function readCommitDiff(path: string, sha: string): Promise<{ nameS
     execOrThrow("git", [...HOST_GIT, ...at(path), "rev-parse", `${sha}^`]).catch(() => ""),
   ]);
   return { nameStatus, diff, modes: modesOf(raw), testRegions: await rustRegionsOf(path, rustFilesOf(nameStatus, "after"), sha), testRegionsBefore: parent ? await rustRegionsOf(path, rustFilesOf(nameStatus, "before"), parent) : {}, parent };
+}
+
+/** The files of `sha` (the tests commit) changed since only in formatting: the repo's formatter reflowed them, and nothing they say changed. */
+export async function reformattedSince(path: string, sha: string): Promise<string[]> {
+  if (!/^[0-9a-f]{7,64}$/.test(sha)) return [];
+  const files = (await exec("git", [...HOST_GIT, ...at(path), "show", "--name-only", "--format=", sha])).stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (files.length === 0) return [];
+  const diff = await exec("git", [...HOST_GIT, ...at(path), "diff", "--no-color", "--no-ext-diff", sha, "HEAD", "--", ...files]);
+  if (diff.code !== 0 || !diff.stdout.trim()) return [];
+  const added = addedLinesOf(diff.stdout);
+  const removed = removedLinesOf(diff.stdout);
+  const touched = [...new Set([...added, ...removed].map((l) => l.path))];
+  return [...formattingOnly(touched, added, removed)];
 }
 
 /** The branch the worktree is on (`HEAD` when detached). */

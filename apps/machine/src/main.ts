@@ -102,7 +102,7 @@ import { homedir } from "node:os";
 import { removeRunNetwork } from "./adapters/docker/egress.ts";
 import { sweepRunSecrets } from "./adapters/docker/leftover-secrets.ts";
 import { LOCKFILES, type EnvRecord, envOf } from "./domain/env-hash.ts";
-import { lockfilesAt } from "./adapters/git/worktree.ts";
+import { lockfilesAt, reformattedSince } from "./adapters/git/worktree.ts";
 import { GraphWatch } from "./application/graph-watch.ts";
 import { approveRepoBase } from "./application/approve-base.ts";
 import { repoHealthOf } from "./application/repo-health.ts";
@@ -425,6 +425,8 @@ const realVerifyRunner = verifyRunner({
   fresh: keptFresh,
   // A failing check is asked again on the base, in a throwaway clone: a failure that is there too is the environment's, not the card's.
   baseline: hostBaselineWorkspace,
+  // A locked test the formatter reflowed: the review's findings on it are dropped (DISC-53).
+  reformattedTests: reformattedSince,
   // The environment Build recorded, and the one Verify's fresh clone has.
   buildEnv: async (taskId) => {
     const env = (await pipeline.latestStageFinish(taskId, "implementing"))?.detail?.env as EnvRecord | undefined;

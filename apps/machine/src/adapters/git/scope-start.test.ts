@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import { ensureClone } from "./clone.ts";
 import { configureMachineRepos, machineGitDir } from "./machine-repo.ts";
-import { BASE_REF, scopeStartOf } from "./worktree.ts";
+import { BASE_REF, reformattedSince, scopeStartOf } from "./worktree.ts";
 
 const ID = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"];
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...ID, ...args], { encoding: "utf8" }).trim();
@@ -67,5 +67,25 @@ describe("where Build's scope starts once the base was merged into the branch", 
     wgit(c.workspace.path, "rebase", "-q", tip);
     wgit(c.workspace.path, "update-ref", BASE_REF, tip);
     expect(await scopeStartOf(c.workspace.path, c.repo, c.start)).toBe(tip);
+  });
+});
+
+describe("the tests commit's files the formatter alone changed since", () => {
+  it("names a locked test only reflowed, never one whose words changed (DISC-53: Verify asked for a reflow back)", async () => {
+    const c = await card();
+    writeFileSync(join(c.workspace.path, "other.test.ts"), "test('S2', () => { expect(1).toBe(1) })\n");
+    wgit(c.workspace.path, "add", "-A");
+    wgit(c.workspace.path, "commit", "-q", "-m", "test: more scenarios");
+    const tests = wgit(c.workspace.path, "rev-parse", "HEAD");
+    // The formatter reflows one; the other's assertion changes.
+    writeFileSync(join(c.workspace.path, "scenario.test.ts"), "test('S1', () => {})\n");
+    writeFileSync(join(c.workspace.path, "other.test.ts"), "test('S2', () => {\n  expect(1).toBe(1)\n})\n");
+    wgit(c.workspace.path, "add", "-A");
+    wgit(c.workspace.path, "commit", "-q", "-m", "style: format");
+    expect(await reformattedSince(c.workspace.path, tests)).toEqual(["other.test.ts"]);
+    writeFileSync(join(c.workspace.path, "other.test.ts"), "test('S2', () => {\n  expect(1).toBe(2)\n})\n");
+    wgit(c.workspace.path, "add", "-A");
+    wgit(c.workspace.path, "commit", "-q", "-m", "weaken");
+    expect(await reformattedSince(c.workspace.path, tests)).toEqual([]);
   });
 });

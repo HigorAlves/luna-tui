@@ -97,6 +97,8 @@ export interface VerifyDeps {
   };
   /** Runs finding_classify on a check context; null (or absent) leaves the review's severities unclassified. Read at call time. */
   decide?: Decide | null;
+  /** The tests commit's files whose change since is formatting alone (the repo's formatter reflowed them): the review's findings on them are dropped. */
+  reformattedTests?: (worktreePath: string, testsCommit: string) => Promise<string[]>;
   /** How long the repository's checks may run in all, from the card's approvals; default: CHECKS_TIMEOUT_MS times the card's size factor. */
   checksBudgetMs?: (approvals: StageContext["approvals"]) => number;
 }
@@ -342,6 +344,10 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
           classification = { compliance: { regimesRun: compliance.regimesRun, summary: compliance.summary, findings: compliance.findings.length, notes: compliance.notes } };
         }
       }
+      // A locked test the repo's formatter reflowed says what it said, and lint requires the reflow: the review is no place to ask for it back
+      // (DISC-53: "revert this formatting edit" sent Build to undo it, then to switch the formatter off for the file).
+      const reflowed = context.testsCommit && deps.reformattedTests ? new Set(await deps.reformattedTests(cwd, context.testsCommit).catch(() => [] as string[])) : null;
+      if (reflowed && reflowed.size > 0) reviewed = reviewed.filter((f) => !reflowed.has(f.path));
       classification = { ...classification, ...(await classify(reviewed)) };
       if (pack.outcome === "fail") return { ...pack, detail: { ...pack.detail, step: "review", ...classification } };
       // The docs-keeper names the doc sections the change made stale: nits after the classification, so no check or verdict reads them.

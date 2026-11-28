@@ -54,6 +54,8 @@ function setup(opts: {
   docsDrift?: NonNullable<Parameters<typeof verifyRunner>[0]["docsDrift"]>;
   /** An exec that can open a session of checks sharing one set of services. */
   session?: () => Promise<{ exec: (command: string, args: string[], options?: unknown) => Promise<ExecResult>; close: () => Promise<void> }>;
+  /** The tests commit's files the repo's formatter alone changed since, and the tests commit the context names. */
+  reformatted?: string[];
 }) {
   const stateDir = mkdtempSync(join(tmpdir(), "verify-"));
   const calls: string[][] = [];
@@ -75,6 +77,7 @@ function setup(opts: {
     ...("decide" in opts ? { decide: opts.decide } : {}),
     changedPaths: async () => ("changed" in opts ? opts.changed! : null),
     ...(opts.diffSince ? { diffSince: opts.diffSince } : {}),
+    ...(opts.reformatted ? { reformattedTests: async () => opts.reformatted! } : {}),
   });
   const controller = opts.controller ?? new AbortController();
   const context: StageContext = {
@@ -84,6 +87,7 @@ function setup(opts: {
     runId: "run-1",
     approvals: opts.approvals ?? [],
     signal: controller.signal,
+    ...(opts.reformatted ? { testsCommit: "c".repeat(40) } : {}),
   };
   return { run, context, exec, runPack, calls, stateDir };
 }
@@ -111,6 +115,19 @@ describe("verifying stage", () => {
       expect(passed.findings).toHaveLength(2);
       const hard = setup({ pack: answer([finding({ severity: "blocker", confidence: 0.9 })]) });
       expect((await hard.run(hard.context)).outcome).toBe("fail");
+    });
+  });
+
+  describe("a locked test the repo's formatter reflowed", () => {
+    const answer = (findings: unknown[]): StageResult => ({ outcome: "pass", detail: { answer: { summary: "s", findings } } });
+    it("is not the review's to ask back: its findings are dropped, the others stand (DISC-53: 'revert this formatting edit' sent Build to undo what lint requires)", async () => {
+      const locked = "apps/lambdas/evaluation/src/ui.contract.test.ts";
+      const { run, context } = setup({
+        pack: answer([finding({ path: locked, severity: "should_fix", title: "Forbidden locked UI-contract test was changed", confidence: 1 }), finding({ path: "src/instances.ts", severity: "should_fix", title: "real", confidence: 1 })]),
+        reformatted: [locked],
+      });
+      const result = await run(context);
+      expect((result.findings ?? []).map((f) => f.path)).toEqual(["src/instances.ts"]);
     });
   });
 
