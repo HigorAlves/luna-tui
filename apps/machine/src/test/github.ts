@@ -41,6 +41,7 @@ const METHODS: Array<keyof GitHub> = [
   "defaultBranch",
   "repoPrivate",
   "findPr",
+  "searchIssues",
   "openPr",
   "retargetPr",
   "markPrReady",

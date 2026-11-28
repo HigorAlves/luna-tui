@@ -27,10 +27,10 @@ const ERROR_DESCRIPTIONS = {
   409: "The card or item is not in a state that allows this",
   415: "A body that is not `application/json` (`unsupported_media_type`)",
   422: "Understood, but refused (a secret in a draft, an invalid config, a failed run)",
-  429: "Too many runs: the queue is full, a budget is spent, or the engine is rate limited",
+  429: "Too many runs: the queue is full, a budget is spent, the engine is rate limited, or GitHub is (`github_rate_limited`)",
   499: "The client closed the request before the run ended (`client_closed`)",
   500: "The machine failed (`internal`)",
-  502: "The model gave no valid answer",
+  502: "The model gave no valid answer, or GitHub refused (`github_failed`, `github_unauthorized`, in GitHub's words)",
   503: "The feature is off on this machine (no agents, no sandbox, no compliance…)",
 } as const;
 export type ErrorStatus = keyof typeof ERROR_DESCRIPTIONS;

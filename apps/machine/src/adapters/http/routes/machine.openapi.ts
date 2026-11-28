@@ -23,7 +23,11 @@ export const SlotsSchema = z
   .openapi("Slots");
 expectSame<Same<z.infer<typeof SlotsSchema>, Slots>>();
 
-const policy = { sandboxPolicy: MachinePolicySchema.optional(), notInForce: z.array(z.string()).optional() };
+const policy = {
+  sandboxPolicy: MachinePolicySchema.optional(),
+  notInForce: z.array(z.string()).optional(),
+  reposDir: z.string().optional().openapi({ example: "/Users/me/Developer", description: "The repositories folder the machine sees: a clone or a push outside it is refused (`outside_repos`)" }),
+};
 
 export const healthRoute = createRoute({
   operationId: "getHealth",

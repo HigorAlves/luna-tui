@@ -19,6 +19,21 @@ export interface PrCheck {
 export const PrAction = z.enum(["ci_fix", "review", "address"]);
 export type PrAction = z.infer<typeof PrAction>;
 
+/** What a PR's menu can do, in its order: three start a PR task, Merge and Close run on the machine. */
+export const PrMenuAction = z.enum(["ci_fix", "address", "review", "merge", "close"]);
+export type PrMenuAction = z.infer<typeof PrMenuAction>;
+
+/** One action on one PR as a client shows it: greyed with the machine's reason, so a greyed one never round-trips to learn it would be refused. */
+export interface PrActionState {
+  action: PrMenuAction;
+  /** True exactly when `reason` is null. */
+  allowed: boolean;
+  /** Why it can't run, in words for a person ("a check is red", "GitHub: still a draft"); null when it can. */
+  reason: string | null;
+  /** Off only for want of a checkout: a clone is all it needs. */
+  needsClone: boolean;
+}
+
 /** One open PR involving you. */
 export interface PullRequest {
   /** `owner/name` */
@@ -51,6 +66,14 @@ export interface PullRequest {
   /** The PR task in flight for this PR, if any. */
   task: { id: string; state: string; route: PrAction } | null;
   updatedAt: string;
+  /** When it was opened; its last update for a source that does not say. */
+  createdAt: string;
+  /** When your review (or a team's you are in) was last asked; null when it was not. Waiting is counted from here for a review. */
+  reviewRequestedAt: string | null;
+  /** Every review thread was read; false when GitHub counts more than the query listed, so `unresolvedThreads` may be short. */
+  threadsComplete: boolean;
+  /** Each menu action and why it can't run, worked out by the machine (`actionsOf`). */
+  actions: PrActionState[];
   /** The head commit and its date; null from sources that do not say (older fixtures). */
   headSha: string | null;
   headCommittedAt: string | null;
@@ -67,8 +90,26 @@ export interface PrSnapshot {
   prs: PullRequest[];
   polledAt: string | null;
   error: string | null;
+  /** One line of what waits on you ("2 PRs are waiting for your review · 1 is ready to merge"); null when nothing does. Absent from the all-list and an older machine. */
+  digest?: string | null;
   /** The clones the machine is running or ran lately (done and failed ones stay ten minutes), in both lists; absent from an older machine. */
   clones?: CloneStatus[];
+}
+
+/** What changed in the inbox that a client may say out loud. */
+export const PrActivityKind = z.enum(["review_requested", "checks_failed", "checks_passed", "ready_to_merge", "changes_requested"]);
+export type PrActivityKind = z.infer<typeof PrActivityKind>;
+
+/** One change between two polls of the inbox (`github.activity`). The machine notices; a client decides when to say it. */
+export interface PrActivity {
+  kind: PrActivityKind;
+  /** `owner/name` */
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  /** When the poll that saw it ended. */
+  at: string;
 }
 
 /** One `git clone` the board asked for. A failed one keeps its `error` here, since a poll rewrites the snapshot's own. */
@@ -82,6 +123,77 @@ export interface CloneStatus {
   finishedAt: string | null;
   error: string | null;
 }
+
+/** Everything about a PR but what the machine adds for the inbox (its split, checkout, task and menu). */
+export type PrFacts = Omit<PullRequest, "split" | "localPath" | "task" | "actions">;
+
+/** One review thread on a PR, resolved ones included. */
+export interface PrThread {
+  id: string;
+  path: string | null;
+  /** Null once the code has moved on (`outdated`). */
+  line: number | null;
+  resolved: boolean;
+  outdated: boolean;
+  comments: Array<{ author: string; body: string; at: string }>;
+}
+
+/** `GET /github/prs/{owner}/{name}/{number}`: one PR read now, for a client's PR tab. */
+export interface PrDetail {
+  /** `owner/name` */
+  repo: string;
+  number: number;
+  state: "open" | "closed" | "merged";
+  facts: PrFacts;
+  threads: PrThread[];
+  reviews: Array<{ author: string | null; state: string; at: string }>;
+  files: Array<{ path: string; additions: number; deletions: number; previousPath?: string }>;
+}
+
+/** A PR by its link: what lookup and open answer. */
+export interface PrLink {
+  url: string;
+  number: number;
+  isDraft: boolean;
+}
+
+/** One PR or issue a search found. */
+export interface IssueHit {
+  number: number;
+  title: string;
+  url: string;
+  state: "open" | "closed";
+  author: string | null;
+}
+
+export const IssueKind = z.enum(["pr", "issue"]);
+export type IssueKind = z.infer<typeof IssueKind>;
+
+/** A branch name git takes as a name and never as an option: letters, digits and `. _ / -`, never starting with `-`
+ *  or `/`, no `..` or `//`, not ending in `/` or `.lock`. `--mirror` passed as a branch would make a push delete the
+ *  remote's other branches. */
+export function isSafeBranch(branch: string): boolean {
+  return (
+    /^[\w./-]{1,255}$/.test(branch) &&
+    !branch.startsWith("-") &&
+    !branch.startsWith("/") &&
+    !branch.endsWith("/") &&
+    !branch.endsWith(".lock") &&
+    !branch.includes("..") &&
+    !branch.includes("//")
+  );
+}
+
+/** `POST /github/pr`: push a branch of a checkout under the machine's repositories folder and open its PR. */
+export const OpenPrInput = z.object({
+  path: z.string().min(1),
+  branch: z.string().refine(isSafeBranch, "branch: letters, digits and . _ / -, never starting with - or /, no .., not ending in / or .lock"),
+  title: z.string().min(1).max(256),
+  body: z.string().max(65_536).default(""),
+  base: z.string().min(1).max(255).optional(),
+  draft: z.boolean().default(false),
+});
+export type OpenPrInput = z.infer<typeof OpenPrInput>;
 
 export const PrActionInput = z.object({ action: PrAction });
 export type PrActionInput = z.infer<typeof PrActionInput>;

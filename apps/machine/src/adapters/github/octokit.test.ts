@@ -95,6 +95,14 @@ describe("OctokitGitHub", () => {
     expect(slugFromRepositoryUrl("https://api.github.com/repos/o/a")).toBe("o/a");
   });
 
+  it("searches one repository's PRs or issues, and keeps a query from naming another repo", async () => {
+    const { github, calls } = stub({
+      "search.issuesAndPullRequests": { items: [{ number: 4, repository_url: "https://api.github.com/repos/o/a", updated_at: "t", title: "Crash", html_url: "https://github.com/o/a/issues/4", state: "open", user: { login: "r" } }] },
+    });
+    expect(await github.searchIssues("o/a", "issue", "crash repo:other/secret is:pr")).toEqual([{ number: 4, title: "Crash", url: "https://github.com/o/a/issues/4", state: "open", author: "r" }]);
+    expect(calls[0]?.[1]).toMatchObject({ q: "repo:o/a is:issue crash", sort: "updated", order: "desc", per_page: 20 });
+  });
+
   it("pages through every search result and stops at a short page", async () => {
     const full = (from: number) => Array.from({ length: 100 }, (_, i) => item("o/a", from + i));
     const { github, calls } = stub({

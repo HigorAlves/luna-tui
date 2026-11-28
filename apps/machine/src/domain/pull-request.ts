@@ -1,6 +1,8 @@
 // A pull request as the inbox shows it: the GraphQL node the host fetched, mapped to the
 // board's shape and placed in one split. Pure: no I/O, so every rule is unit tested.
-import type { ChecksState, PrCheck, PrSplit, PullRequest } from "@hardness/contracts";
+import type { ChecksState, PrActionState, PrCheck, PrFacts, PrMenuAction, PrSplit, PullRequest } from "@hardness/contracts";
+
+export type { PrFacts };
 
 /** How many of each nested list a PR's fields read. A query for one PR can afford a hundred; the bulk one reads hundreds of PRs a call and keeps GitHub's node limit and cost low. */
 export interface PrFieldLimits {
@@ -10,11 +12,12 @@ export interface PrFieldLimits {
 }
 
 /** The fields of a PR the inbox needs, shared by the per-PR query and the bulk one so both map through `fromGraphQl` alike. */
-export const prFields = ({ requests, threads, contexts }: PrFieldLimits): string => `id number title body url isDraft updatedAt baseRefName headRefName
+export const prFields = ({ requests, threads, contexts }: PrFieldLimits): string => `id number title body url isDraft createdAt updatedAt baseRefName headRefName
     author{login} authorAssociation headRepository{nameWithOwner}
     reviewDecision mergeable mergeStateStatus
     reviewRequests(first:${requests}){nodes{requestedReviewer{__typename ... on User{login} ... on Team{slug}}}}
-    reviewThreads(first:${threads}){nodes{isResolved}}
+    timelineItems(itemTypes:[REVIEW_REQUESTED_EVENT],last:10){nodes{... on ReviewRequestedEvent{createdAt requestedReviewer{__typename ... on User{login} ... on Team{slug}}}}}
+    reviewThreads(first:${threads}){totalCount nodes{isResolved}}
     commits(last:1){nodes{commit{oid committedDate statusCheckRollup{state contexts(first:${contexts}){nodes{__typename
       ... on CheckRun{name status conclusion detailsUrl}
       ... on StatusContext{context state targetUrl}}}}}}}`;
@@ -50,6 +53,8 @@ export interface PrNode {
   body?: string | null;
   url: string;
   isDraft: boolean;
+  /** Absent from older fixtures. */
+  createdAt?: string | null;
   updatedAt: string;
   baseRefName: string;
   headRefName: string;
@@ -63,7 +68,10 @@ export interface PrNode {
   /** Absent from older fixtures. */
   mergeStateStatus?: PullRequest["mergeState"] | null;
   reviewRequests: { nodes: Array<{ requestedReviewer: { login?: string; slug?: string } | null }> };
-  reviewThreads: { nodes: Array<{ isResolved: boolean }> };
+  /** When a review was asked of whom; absent from older fixtures. */
+  timelineItems?: { nodes: Array<{ createdAt?: string; requestedReviewer?: { login?: string; slug?: string } | null }> } | null;
+  /** `totalCount` is absent from older fixtures, which read as complete. */
+  reviewThreads: { totalCount?: number; nodes: Array<{ isResolved: boolean }> };
   commits: {
     nodes: Array<{
       commit: { oid?: string | null; committedDate?: string | null; statusCheckRollup: { state: string; contexts: { nodes: Array<CheckRunNode | StatusContextNode> } } | null };
@@ -71,8 +79,6 @@ export interface PrNode {
   };
 }
 
-/** Everything about a PR but what the machine adds on top (its split, checkout and task). */
-export type PrFacts = Omit<PullRequest, "split" | "localPath" | "task">;
 
 const RUN_FAILED = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"]);
 const STATUS_FAILED = new Set(["FAILURE", "ERROR"]);
@@ -112,12 +118,17 @@ export function summarizeChecks(nodes: Array<CheckRunNode | StatusContextNode>):
 export function fromGraphQl(node: PrNode, repo: string, me: string, teams: string[]): PrFacts {
   const author = node.author?.login ?? "ghost";
   const teamSet = new Set(teams.map((t) => t.toLowerCase()));
-  const reviewRequested = node.reviewRequests.nodes.some((r) => {
-    const who = r.requestedReviewer;
+  const isMe = (who: { login?: string; slug?: string } | null | undefined): boolean => {
     if (!who) return false;
     if (who.login) return who.login.toLowerCase() === me.toLowerCase();
     return who.slug !== undefined && teamSet.has(who.slug.toLowerCase());
-  });
+  };
+  const reviewRequested = node.reviewRequests.nodes.some((r) => isMe(r.requestedReviewer));
+  const askedAt = (node.timelineItems?.nodes ?? [])
+    .filter((e) => e.createdAt && isMe(e.requestedReviewer))
+    .map((e) => e.createdAt as string)
+    .sort();
+  const threads = node.reviewThreads;
   const head = node.headRepository?.nameWithOwner ?? null;
   return {
     repo,
@@ -136,8 +147,11 @@ export function fromGraphQl(node: PrNode, repo: string, me: string, teams: strin
     mergeable: node.mergeable ?? "UNKNOWN",
     mergeState: node.mergeStateStatus ?? "UNKNOWN",
     checks: summarizeChecks(node.commits.nodes[0]?.commit.statusCheckRollup?.contexts.nodes ?? []),
-    unresolvedThreads: node.reviewThreads.nodes.filter((t) => !t.isResolved).length,
+    unresolvedThreads: threads.nodes.filter((t) => !t.isResolved).length,
     updatedAt: node.updatedAt,
+    createdAt: node.createdAt ?? node.updatedAt,
+    reviewRequestedAt: askedAt.at(-1) ?? null,
+    threadsComplete: threads.totalCount === undefined || threads.nodes.length >= threads.totalCount,
     headSha: node.commits.nodes[0]?.commit.oid ?? null,
     headCommittedAt: node.commits.nodes[0]?.commit.committedDate ?? null,
     nodeId: node.id ?? null,
@@ -171,7 +185,8 @@ export function readyToMerge(pr: PrFacts): boolean {
 export function splitOf(pr: PrFacts): PrSplit {
   if (!pr.mine) return pr.reviewRequested ? "review_requested" : "mine";
   if (pr.checks.state === "failure") return "ci_failed";
-  if (pr.reviewDecision === "CHANGES_REQUESTED" || pr.unresolvedThreads > 0) return "changes_requested";
+  // Threads cut short count as open: the ones not read may be.
+  if (pr.reviewDecision === "CHANGES_REQUESTED" || threadsMayBeOpen(pr)) return "changes_requested";
   if (readyToMerge(pr)) return "ready_to_merge";
   if (pr.checks.state === "pending") return "ci_running";
   return "mine";
@@ -182,3 +197,67 @@ export const needsMe = (split: PrSplit): boolean => split !== "mine" && split !=
 
 /** Whether the machine can push a fix to this PR's branch: a checkout, and not a fork. */
 export const canPush = (pr: Pick<PullRequest, "fromFork" | "localPath">): boolean => !pr.fromFork && pr.localPath !== null;
+
+/** An unresolved thread, or threads not all read. */
+export const threadsMayBeOpen = (pr: Pick<PullRequest, "unresolvedThreads" | "threadsComplete">): boolean => pr.unresolvedThreads > 0 || !pr.threadsComplete;
+
+/** The menu's order: the three PR tasks, then Merge and Close. */
+export const MENU: readonly PrMenuAction[] = ["ci_fix", "address", "review", "merge", "close"];
+
+/** Why Merge is off, in GitHub's words when it said so: its merge state is the authority. */
+function mergeBlocker(pr: Omit<PullRequest, "actions">): string {
+  switch (pr.mergeState) {
+    case "BLOCKED":
+      return "GitHub: blocked, a required review or check is still missing";
+    case "BEHIND":
+      return "GitHub: the branch is behind its base; update it first";
+    case "DIRTY":
+      return "GitHub: the branch has conflicts with its base";
+    case "DRAFT":
+      return "GitHub: still a draft";
+    default:
+      return pr.checks.state === "failure" ? "a check is red" : pr.checks.state === "pending" ? "checks are still running" : "not ready to merge";
+  }
+}
+
+/** A task at work on the PR; a card only watching it (`pr_watch`) runs nothing and blocks nothing. */
+const busy = (pr: Omit<PullRequest, "actions">): boolean => pr.task !== null && pr.task.state !== "pr_watch";
+
+/**
+ * Why an action is off for this PR, or null when it can run: the board's refusals (they mirror the
+ * machine's own, so a greyed key never round-trips to a 409), then the notch's: Fix CI wants a red
+ * check, Answer threads a thread open or a change asked. `checkedOut` stands in for `localPath`.
+ */
+function blocker(pr: Omit<PullRequest, "actions">, action: PrMenuAction, checkedOut = pr.localPath !== null): string | null {
+  const running = "a task is already running for it";
+  if (action === "merge") return pr.split === "ready_to_merge" ? null : mergeBlocker(pr);
+  if (action === "close") return !pr.mine ? "closing is for your own PRs" : busy(pr) ? running : null;
+  if (busy(pr)) return running;
+  // A fork can't be pushed to whether or not it is cloned, so it is said before the checkout.
+  if (action !== "review" && pr.fromFork) return "the head is in a fork; nothing can push to it";
+  if (!checkedOut) return "no checkout";
+  if (action === "review") return pr.mine ? "review is for other people's PRs" : null;
+  if (action === "address") {
+    if (!pr.mine) return "threads are answered on your own PRs";
+    return threadsMayBeOpen(pr) || pr.reviewDecision === "CHANGES_REQUESTED" ? null : "no unresolved threads";
+  }
+  switch (pr.checks.state) {
+    case "failure":
+      return null;
+    case "success":
+      return "checks are green";
+    case "pending":
+      return "checks are still running";
+    case "none":
+      return "there are no checks";
+  }
+}
+
+/** Each menu action on the PR and why it can't run, as a client greys it. */
+export function actionsOf(pr: Omit<PullRequest, "actions">): PrActionState[] {
+  return MENU.map((action) => {
+    const reason = blocker(pr, action);
+    const task = action !== "merge" && action !== "close";
+    return { action, allowed: reason === null, reason, needsClone: task && reason === "no checkout" && blocker(pr, action, true) === null };
+  });
+}

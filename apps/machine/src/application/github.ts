@@ -2,14 +2,18 @@
 // implements it; tests pass a fake. Pushing and cloning stay git on the host (your own
 // credentials), so they are not here. Every method throws a `GitHubError` with GitHub's own
 // words when a call fails; callers that report instead of throwing catch it.
+import type { IssueHit, IssueKind } from "@hardness/contracts";
 import type { ReviewContext, ThreadsContext } from "@hardness/contracts";
 
 import type { PrNode } from "../domain/pull-request.ts";
 
 export class GitHubError extends Error {
-  constructor(message: string) {
+  /** GitHub's HTTP status when GitHub itself refused; absent for a failure the machine raised. */
+  readonly status: number | undefined;
+  constructor(message: string, status?: number) {
     super(message);
     this.name = "GitHubError";
+    this.status = status;
   }
 }
 
@@ -240,6 +244,8 @@ export interface GitHub {
   createIssue(slug: string, issue: { title: string; body: string; labels?: string[] }): Promise<{ number: number; url: string }>;
   /** The open PR whose head is `branch`, or null. */
   findPr(slug: string, branch: string): Promise<PrRef | null>;
+  /** The repository's PRs or issues matching `query`, most recently updated first, twenty at most. */
+  searchIssues(slug: string, kind: IssueKind, query: string): Promise<IssueHit[]>;
   openPr(slug: string, pr: NewPr): Promise<PrRef>;
   /** Changes the branch an open PR targets (a stacked card's PR, once its parent merged). */
   retargetPr(slug: string, number: number, base: string): Promise<void>;
@@ -326,6 +332,7 @@ export function noTokenGitHub(): GitHub {
     repoPrivate: async () => null,
     createIssue: refuse,
     findPr: refuse,
+    searchIssues: refuse,
     openPr: refuse,
     retargetPr: refuse,
     markPrReady: refuse,

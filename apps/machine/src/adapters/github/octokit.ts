@@ -2,6 +2,7 @@
 // The client is injected so a test can hand in a stub shaped like Octokit; `createGitHub`
 // builds the real one from a token.
 import { isShipCommand, type ReviewRule } from "../../domain/review-rule.ts";
+import type { IssueHit, IssueKind } from "@hardness/contracts";
 import { Octokit } from "octokit";
 
 import { PR_QUERY, type PrNode, prFields } from "../../domain/pull-request.ts";
@@ -32,7 +33,11 @@ export interface OctokitLike {
   rest: {
     users: { getAuthenticated(): Promise<{ data: { login: string } }> };
     teams: { listForAuthenticatedUser: unknown; listMembersInOrg: unknown };
-    search: { issuesAndPullRequests(params: { q: string; per_page?: number; page?: number }): Promise<{ data: { items: Array<{ number: number; repository_url: string; updated_at: string }> } }> };
+    search: {
+      issuesAndPullRequests(params: { q: string; per_page?: number; page?: number; sort?: "updated"; order?: "asc" | "desc" }): Promise<{
+        data: { items: Array<{ number: number; repository_url: string; updated_at: string; title?: string; html_url?: string; state?: string; user?: { login: string } | null }> };
+      }>;
+    };
     pulls: {
       get(params: Record<string, unknown>): Promise<{ data: unknown }>;
       list(params: Record<string, unknown>): Promise<{ data: Array<{ html_url: string; number: number; draft?: boolean }> }>;
@@ -103,7 +108,7 @@ async function call<T>(what: string, run: () => Promise<T>): Promise<T> {
     if (error instanceof GitHubError) throw error;
     const message = (error as { message?: string })?.message ?? String(error);
     const status = (error as { status?: number })?.status;
-    throw new GitHubError(`${what} failed${status ? ` (${status})` : ""}: ${message}`);
+    throw new GitHubError(`${what} failed${status ? ` (${status})` : ""}: ${message}`, status);
   }
 }
 
@@ -490,7 +495,7 @@ export class OctokitGitHub implements GitHub {
       const { status, message = "" } = error as { status?: number; message?: string };
       // A repo with a merge queue refuses a direct merge; the queue merges it, and its branch is not ours to delete yet. With `queue: false` the refusal is the answer.
       if (status === 405 && /merge queue/i.test(message) && pr.node_id && options.queue !== false) return this.enqueuePr(pr.node_id, options.sha);
-      throw new GitHubError(`merging ${slug}#${number} failed${status ? ` (${status})` : ""}: ${message || String(error)}`);
+      throw new GitHubError(`merging ${slug}#${number} failed${status ? ` (${status})` : ""}: ${message || String(error)}`, status);
     }
     // The branch goes with it, as `gh pr merge --delete-branch` did; a fork's branch is not ours to delete.
     if (options.deleteBranch !== false && head.repo?.full_name.toLowerCase() === slug.toLowerCase()) {
@@ -695,6 +700,16 @@ export class OctokitGitHub implements GitHub {
   async retargetPr(slug: string, number: number, base: string): Promise<void> {
     const { owner, repo } = repoRef(slug);
     await call(`retargeting ${slug}#${number} to ${base}`, () => this.octokit.rest.pulls.update({ owner, repo, pull_number: number, base }));
+  }
+
+  async searchIssues(slug: string, kind: IssueKind, query: string): Promise<IssueHit[]> {
+    repoRef(slug);
+    // The words are GitHub's search syntax already; only the repository and the kind are fixed here, so a query can never reach another repo.
+    const words = query.replace(/\b(?:repo|org|user|is):\S*/gi, " ").trim();
+    const { data } = await call(`searching ${slug}`, () =>
+      this.octokit.rest.search.issuesAndPullRequests({ q: `repo:${slug} is:${kind} ${words}`.trim(), sort: "updated", order: "desc", per_page: 20 }),
+    );
+    return data.items.map((item) => ({ number: item.number, title: item.title ?? "", url: item.html_url ?? "", state: item.state === "open" ? "open" : "closed", author: item.user?.login ?? null }));
   }
 
   async markPrReady(slug: string, number: number): Promise<void> {
