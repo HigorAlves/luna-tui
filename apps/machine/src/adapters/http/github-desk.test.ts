@@ -149,6 +149,21 @@ describe("one PR on demand over HTTP", () => {
     expect(rejected.status).toBe(422);
     expect(await rejected.json()).toMatchObject({ error: "push_failed", message: "git push failed: rejected" });
     expect((await app.request("/github/pr", post({ path: "/repos/a", branch: "has space", title: "Feat" }))).status).toBe(400);
+    // A branch git would read as an option (`--mirror` deletes the remote's other branches) never reaches git.
+    for (const branch of ["--mirror", "-f", "a..b", "feat/", "x.lock"]) {
+      expect((await app.request("/github/pr", post({ path: "/repos/a", branch, title: "Feat" }))).status, branch).toBe(400);
+    }
+    expect(desk.did).toEqual(["open /repos/a feat/x draft=false"]);
+  });
+
+  it("refuses a clone into a folder outside the one the machine sees, a `..` name included", async () => {
+    const pulls = { clone: async () => undefined } as never;
+    const app = createApp({ db, pipeline, bus: new Bus(), prDesk: fakeDesk(), pulls });
+    for (const dest of ["/elsewhere/b", "/repos/..", "/repos/a/.."]) {
+      const got = await app.request("/github/clone", post({ repo: "o/b", dest }));
+      expect(got.status, dest).toBe(400);
+      expect(await got.json()).toMatchObject({ error: "outside_repos" });
+    }
   });
 
   it("answers 404 for every desk route when the machine has none", async () => {

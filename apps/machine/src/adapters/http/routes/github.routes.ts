@@ -1,7 +1,9 @@
 // The PR inbox.
 import { TaskNotFoundError } from "../../../application/pipeline.ts";
 import { createOpenApiRouter } from "../openapi/router.ts";
-import { dirname } from "node:path";
+import { basename, dirname, resolve } from "node:path";
+
+import { OutsideReposError } from "../../../application/pr-desk.ts";
 
 import { allPrsRoute, cloneRoute, closePrRoute, lookupPrRoute, mergePrRoute, openPrRoute, prActionRoute, prDetailRoute, prsRoute, readyPrRoute, refreshAllPrsRoute, refreshPrsRoute, searchIssuesRoute } from "./github.openapi.ts";
 import { prParams, type RouteDeps } from "./kit.ts";
@@ -42,7 +44,12 @@ export function githubRoutes(deps: RouteDeps) {
     app.openapi(cloneRoute, async (c) => {
       const { repo, dest } = c.req.valid("json");
       // The folder must be one the machine sees: a clone anywhere else lands only inside its container.
-      if (prDesk) await prDesk.inside(dirname(dest));
+      // A `.` or `..` name would name the folder above once resolved, so it is refused before the parent is checked.
+      if (prDesk) {
+        const name = basename(dest);
+        if (name === "." || name === ".." || name === "") throw new OutsideReposError(dest, "the repositories folder");
+        await prDesk.inside(dirname(resolve(dest)));
+      }
       await pulls.clone(repo, dest);
       return c.json({ repo, dest, cloning: true as const }, 202);
     });

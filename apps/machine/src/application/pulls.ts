@@ -349,7 +349,8 @@ export class GitHubPulls implements PullsPort {
   async close(repo: string, number: number): Promise<void> {
     const pr = this.find(repo, number);
     if (!pr) throw new NoPullError(repo, number);
-    if (pr.task) throw new PrBusyError(repo, number, pr.task.id);
+    // A card only watching the PR (`pr_watch`) runs nothing: it hears the close and ends, as the menu says.
+    if (pr.task && pr.task.state !== "pr_watch") throw new PrBusyError(repo, number, pr.task.id);
     await this.options.github.closePr(repo, number);
     await this.pollAfterChange();
   }
@@ -435,10 +436,10 @@ export class GitHubPulls implements PullsPort {
   }
 }
 
-/** True when `dir` is itself the top of a git working tree (not just a folder inside one). */
 /** The PR with its menu worked out from what it is now. */
 const withActions = (pr: Omit<PullRequest, "actions">): PullRequest => ({ ...pr, actions: actionsOf(pr) });
 
+/** True when `dir` is itself the top of a git working tree (not just a folder inside one). */
 async function isCheckoutRoot(exec: typeof realExec, dir: string): Promise<boolean> {
   const top = await exec("git", ["-C", dir, "rev-parse", "--show-toplevel"]);
   if (top.code !== 0) return false;

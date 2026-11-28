@@ -128,6 +128,17 @@ describe("PrDesk.openPr: push a local branch and open its PR", () => {
     await expect(desk.openPr({ path: inside, branch: "b", title: "t", body: "", draft: false })).rejects.toThrow(PushFailedError);
   });
 
+  it("never hands git a branch it would read as an option, and refuses a sibling folder sharing the name's start", async () => {
+    const { reposDir, root } = repos();
+    const pushed: string[] = [];
+    const desk = new PrDesk({ github: fakeGitHub({ findPr: async () => null }), reposDir, originOf: async () => "o/a", push: async (b) => { pushed.push(b); return null; } });
+    await expect(desk.openPr({ path: join(reposDir, "a"), branch: "--mirror", title: "t", body: "", draft: false })).rejects.toThrow(PushFailedError);
+    expect(pushed).toEqual([]);
+    mkdirSync(join(root, "Developer2"));
+    await expect(desk.inside(join(root, "Developer2"))).rejects.toBeInstanceOf(OutsideReposError);
+    await expect(desk.inside(join(reposDir, "a", "..", ".."))).rejects.toBeInstanceOf(OutsideReposError);
+  });
+
   it("refuses a folder with no GitHub origin", async () => {
     const { reposDir, inside } = repos();
     const desk = new PrDesk({ github: fakeGitHub(), reposDir, originOf: async () => null, push: async () => null });

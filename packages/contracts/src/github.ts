@@ -169,10 +169,25 @@ export interface IssueHit {
 export const IssueKind = z.enum(["pr", "issue"]);
 export type IssueKind = z.infer<typeof IssueKind>;
 
+/** A branch name git takes as a name and never as an option: letters, digits and `. _ / -`, never starting with `-`
+ *  or `/`, no `..` or `//`, not ending in `/` or `.lock`. `--mirror` passed as a branch would make a push delete the
+ *  remote's other branches. */
+export function isSafeBranch(branch: string): boolean {
+  return (
+    /^[\w./-]{1,255}$/.test(branch) &&
+    !branch.startsWith("-") &&
+    !branch.startsWith("/") &&
+    !branch.endsWith("/") &&
+    !branch.endsWith(".lock") &&
+    !branch.includes("..") &&
+    !branch.includes("//")
+  );
+}
+
 /** `POST /github/pr`: push a branch of a checkout under the machine's repositories folder and open its PR. */
 export const OpenPrInput = z.object({
   path: z.string().min(1),
-  branch: z.string().min(1).max(255).regex(/^[\w./-]+$/, "branch: letters, digits, . _ / - only"),
+  branch: z.string().refine(isSafeBranch, "branch: letters, digits and . _ / -, never starting with - or /, no .., not ending in / or .lock"),
   title: z.string().min(1).max(256),
   body: z.string().max(65_536).default(""),
   base: z.string().min(1).max(255).optional(),

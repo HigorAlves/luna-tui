@@ -174,7 +174,7 @@ export const cloneRoute = createRoute({
   path: "/github/clone",
   tags: TAGS,
   summary: "Clone a repo the machine has no checkout of",
-  description: "Clones in the background (202); the next `github.prs` and `github.prs.all` events show the checkout. 400 for a relative `dest`, a missing parent or an existing target.",
+  description: "Clones in the background (202); the next `github.prs` and `github.prs.all` events show the checkout. 400 for a relative `dest`, a missing parent or an existing target; 400 `outside_repos` for a folder outside the one the machine sees (`reposDir` on `/health`).",
   request: jsonBody(CloneInput),
   responses: { 202: jsonContent(z.object({ repo: z.string(), dest: z.string(), cloning: z.literal(true) }), "The clone started"), ...errorResponses(400) },
 });

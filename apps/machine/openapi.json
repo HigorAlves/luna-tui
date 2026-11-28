@@ -33963,7 +33963,7 @@
           "GitHub"
         ],
         "summary": "Clone a repo the machine has no checkout of",
-        "description": "Clones in the background (202); the next `github.prs` and `github.prs.all` events show the checkout. 400 for a relative `dest`, a missing parent or an existing target.",
+        "description": "Clones in the background (202); the next `github.prs` and `github.prs.all` events show the checkout. 400 for a relative `dest`, a missing parent or an existing target; 400 `outside_repos` for a folder outside the one the machine sees (`reposDir` on `/health`).",
         "requestBody": {
           "required": true,
           "content": {

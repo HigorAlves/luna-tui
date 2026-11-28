@@ -1,7 +1,7 @@
 // What a client asks of one PR on demand, beside the inbox the poller keeps: its detail for a PR
 // tab, Ready for review, the open PR of a branch, a search for mentions, and a local branch pushed
 // with its PR opened. Every call is a person's click in the client; nothing here runs by itself.
-import type { IssueHit, IssueKind, OpenPrInput, PrDetail, PrLink } from "@hardness/contracts";
+import { type IssueHit, type IssueKind, type OpenPrInput, type PrDetail, type PrLink, isSafeBranch } from "@hardness/contracts";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, sep } from "node:path";
 
@@ -93,6 +93,8 @@ export class PrDesk implements PrDeskPort {
   }
 
   async openPr(input: OpenPrInput): Promise<PrLink> {
+    // Held here too, whoever calls: git reads a branch starting with `-` as an option.
+    if (!isSafeBranch(input.branch)) throw new PushFailedError(`"${input.branch.slice(0, 80)}" is not a branch name git would push`);
     const cwd = await this.inside(input.path);
     const { originOf, push } = this.options;
     if (!originOf || !push) throw new PushFailedError("this machine cannot push: no git is wired to the PR desk");

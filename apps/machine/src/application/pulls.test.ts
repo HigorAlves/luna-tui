@@ -416,6 +416,15 @@ describe("GitHubPulls.close", () => {
     await expect(busy.pulls.close("o/a", 1)).rejects.toThrow(PrBusyError);
     expect(busy.calls.some((c) => c[0] === "close")).toBe(false);
   });
+
+  it("closes a PR whose card only watches it, as its menu offers", async () => {
+    const world: World = { hits: [hit(1)], nodes: { 1: node(1, { reviewDecision: "REVIEW_REQUIRED" }) } };
+    const watched = setup(world, { findTask: async () => ({ id: "t1234567", state: "pr_watch", route: "ci_fix" }) });
+    const snapshot = await watched.pulls.pollOnce();
+    expect(snapshot.prs[0]?.actions.find((a) => a.action === "close")?.allowed).toBe(true);
+    await watched.pulls.close("o/a", 1);
+    expect(watched.calls).toContainEqual(["close", "o/a", "1"]);
+  });
 });
 
 describe("GitHubPulls.clone", () => {

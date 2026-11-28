@@ -237,6 +237,8 @@ describe("actionsOf: each action, and why it can't run", () => {
     expect(fix).toMatchObject({ allowed: false, reason: "no checkout", needsClone: true });
     expect(got.find((a) => a.action === "review")).toMatchObject({ reason: "no checkout", needsClone: false });
     expect(got.find((a) => a.action === "close")!.needsClone).toBe(false);
+    // A fork can't be pushed to, cloned or not: that is its reason, and no clone would help.
+    expect(actionsOf(base({ localPath: null, fromFork: true })).find((a) => a.action === "ci_fix")).toMatchObject({ reason: "the head is in a fork; nothing can push to it", needsClone: false });
   });
 
   it("someone else's PR: review only, never close, threads or a fix on a fork", () => {

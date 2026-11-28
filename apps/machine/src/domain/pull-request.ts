@@ -233,9 +233,10 @@ function blocker(pr: Omit<PullRequest, "actions">, action: PrMenuAction, checked
   if (action === "merge") return pr.split === "ready_to_merge" ? null : mergeBlocker(pr);
   if (action === "close") return !pr.mine ? "closing is for your own PRs" : busy(pr) ? running : null;
   if (busy(pr)) return running;
+  // A fork can't be pushed to whether or not it is cloned, so it is said before the checkout.
+  if (action !== "review" && pr.fromFork) return "the head is in a fork; nothing can push to it";
   if (!checkedOut) return "no checkout";
   if (action === "review") return pr.mine ? "review is for other people's PRs" : null;
-  if (pr.fromFork) return "the head is in a fork; nothing can push to it";
   if (action === "address") {
     if (!pr.mine) return "threads are answered on your own PRs";
     return threadsMayBeOpen(pr) || pr.reviewDecision === "CHANGES_REQUESTED" ? null : "no unresolved threads";
